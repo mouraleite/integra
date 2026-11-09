@@ -1,0 +1,59 @@
+name: Publicar versão
+
+# O mesmo caminho do deploy.bat, rodando no GitHub:
+# sobe o patch no index.html, grava a data de São Paulo,
+# cria a tag vX.Y.Z e envia para o main. A Vercel publica esse push.
+#
+# O código novo precisa já estar no main. Este fluxo não vê
+# arquivo que ficou só na máquina.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar-versao
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Incrementar a versão
+        id: versao
+        shell: pwsh
+        run: |
+          $saida = & ./_version_bump.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ver = "$saida".Trim()
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "Versao inesperada: $ver" }
+          $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('E. South America Standard Time')
+          $hoje = [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz).ToString('dd/MM/yyyy')
+          "versao=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          "hoje=$hoje" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          Write-Host "Nova versao: v$ver ($hoje)"
+
+      - name: Commit, tag e push
+        shell: pwsh
+        env:
+          VER: ${{ steps.versao.outputs.versao }}
+          HOJE: ${{ steps.versao.outputs.hoje }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- index.html
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { throw "O index.html nao mudou." }
+          git commit -m "v$env:VER - $env:HOJE"
+          git tag -a "v$env:VER" -m "Versao $env:VER - $env:HOJE"
+          git push origin HEAD:main
+          git push origin "refs/tags/v$env:VER"

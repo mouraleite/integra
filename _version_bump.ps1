@@ -18,7 +18,8 @@ if ($content -match 'v(\d+)\.(\d+)\.(\d+)\s*&nbsp;') {
 }
 
 $newVer   = "$major.$minor.$patch"
-$today    = Get-Date -Format "dd/MM/yyyy"
+$tz       = [System.TimeZoneInfo]::FindSystemTimeZoneById('E. South America Standard Time')
+$today    = [System.TimeZoneInfo]::ConvertTime([DateTime]::UtcNow, $tz).ToString('dd/MM/yyyy')
 $newBadge = "v$newVer &nbsp;&middot;&nbsp; $today"
 
 # Substitui o badge de versao

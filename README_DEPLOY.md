@@ -2,11 +2,19 @@
 
 ## ✅ Qual arquivo usar?
 
-### `deploy.bat` — **USE SEMPRE ESTE**
+### Workflow **Publicar versão** — use este
+No GitHub: **Actions → Publicar versão → Run workflow**.
+
+Faz o mesmo que o `deploy.bat` em cima do que já está no `main`: incrementa a versão, cria o commit `vX.Y.Z - data`, cria a tag e dá push. A Vercel publica esse push.
+
+O código novo precisa já ter sido enviado ao `main`. O workflow não vê arquivo que ficou só na máquina.
+
+### `deploy.bat` — o mesmo fluxo, na máquina
 - Incrementa a versão automaticamente no badge do sistema
 - Cria commit com mensagem versionada
 - Cria tag no GitHub (snapshot da pasta inteira)
 - Faz push para GitHub → Vercel atualiza automaticamente
+- Também grava no commit o que ainda não tinha sido enviado
 
 ### `upload_config.bat` — Use quando mudar configurações de regras
 - Sobe configurações do sistema para o Firebase
@@ -53,7 +61,7 @@ git checkout main        ← volta ao atual
 ## Publicação na Vercel
 O deploy usa só o que está na raiz, em `api/` e em `lib/`. A pasta `arquivo/` guarda cópia antiga, script avulso e imagem de referência. Ela não entra na publicação.
 
-Para publicar, use `deploy.bat` na raiz. O envio de emergência continua em `deploy_emergencia.bat`.
+Para publicar, rode **Publicar versão** no GitHub. O `deploy.bat` na raiz continua fazendo o mesmo fluxo na máquina. O envio de emergência continua em `deploy_emergencia.bat`.
 
 ## Cópias antigas de deploy
 - `arquivo/legado/deploy_vercel.bat` — substituído por `deploy.bat`
