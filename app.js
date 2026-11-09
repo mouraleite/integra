@@ -21236,10 +21236,11 @@ function renegAplicarFaixaModalidade() {
       deslocar: "Deslocar exige mais de " + mods.deslocar.pctPagoMin + "% pago e no máximo " + mods.deslocar.maxAcordos + " acordo.",
       somar: "Somar é para quem pagou menos de " + mods.somar.pctPagoMax + "% do contrato."
     };
+    const adminEscolhe = typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal();
     Array.from(sel.options).forEach((opt) => {
-      if (opt.value === "cartao") {
+      if (opt.value === "cartao" || adminEscolhe) {
         opt.disabled = false;
-        opt.title = "";
+        opt.title = adminEscolhe && opt.value !== "cartao" ? "O administrador pode escolher qualquer plano." : "";
         return;
       }
       const ok = !!perm[opt.value] || window.renegModalidadeFoiLiberada(opt.value);
@@ -21256,6 +21257,174 @@ function renegAplicarFaixaModalidade() {
   window._renegFaixa = faixa;
   if (typeof window.atualizarAlertaModalidadeReneg === "function") window.atualizarAlertaModalidadeReneg();
   return faixa;
+}
+
+function renegCentavos(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function renegIsoRecibo(r) {
+  return String((r && (r.paymentDate || r.receiptDate || r.date || r.creditDate)) || "").slice(0, 10);
+}
+
+function renegValorRecibo(r) {
+  if (!r || (typeof window.isWriteOffReceipt === "function" && window.isWriteOffReceipt(r))) return 0;
+  const net = Number(r.netReceiptValue != null ? r.netReceiptValue : (r.netAmount != null ? r.netAmount : NaN));
+  if (Number.isFinite(net) && net > 0.009) return net;
+  const bruto = Number(r.receiptValue != null ? r.receiptValue : (r.value != null ? r.value : 0)) || 0;
+  const acresc = Number(r.additionalValue) || 0;
+  const desc = Number(r.discountValue) || 0;
+  const soma = bruto + acresc - desc;
+  return soma > 0.009 ? soma : 0;
+}
+
+function renegParcelasParaSinal() {
+  const map = new Map();
+  const por = (inst) => {
+    if (!inst) return;
+    const id = String(inst.installmentId != null ? inst.installmentId : (inst.installmentNumber != null ? inst.installmentNumber : (inst.installmentNum != null ? inst.installmentNum : "")));
+    const due = String(inst.dueDate || "").slice(0, 10);
+    const key = id || due;
+    if (!key) return;
+    const prev = map.get(key);
+    if (!prev || ((inst.receipts || []).length > (prev.receipts || []).length)) map.set(key, inst);
+  };
+  renegParcelasDoContrato(g_renegSale).forEach(por);
+  (g_renegBills || []).forEach(por);
+  return Array.from(map.values());
+}
+
+/** Data em que os recebimentos do contrato fecham o valor do sinal. */
+function renegDataPagamentoSinal(sinal, parcelas) {
+  const alvo = Math.round((Number(sinal) || 0) * 100);
+  if (!(alvo > 0)) return "";
+  const porData = new Map();
+  (parcelas || []).forEach((inst) => {
+    (inst.receipts || []).forEach((r) => {
+      const v = renegValorRecibo(r);
+      const d = renegIsoRecibo(r);
+      if (!(v > 0.009) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      if (!porData.has(d)) porData.set(d, []);
+      porData.get(d).push(Math.round(v * 100));
+    });
+  });
+  let achou = "";
+  porData.forEach((cents, data) => {
+    if (achou) return;
+    const n = cents.length;
+    if (!n || n > 18) return;
+    const limite = 1 << n;
+    for (let m = 1; m < limite; m++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) if (m & (1 << i)) s += cents[i];
+      if (Math.abs(s - alvo) <= 5) { achou = data; return; }
+    }
+  });
+  if (achou) return achou;
+  const quandoDe = (iso) => new Date(iso + "T12:00:00");
+  const datas = Array.from(porData.keys());
+  datas.forEach((data) => {
+    if (achou) return;
+    const quando = quandoDe(data);
+    let soma = 0;
+    parcelas.forEach((inst) => {
+      let pago = 0;
+      (inst.receipts || []).forEach((r) => {
+        if (renegIsoRecibo(r) !== data) return;
+        pago += renegValorRecibo(r);
+      });
+      if (!(pago > 0.009)) return;
+      const dias = typeof window.daysOverdueUntilTarget === "function" ? window.daysOverdueUntilTarget(inst, quando) : 0;
+      const principal = renegPrincipalAntesDoSinal(inst, data);
+      const ch = dias > 0 ? window.computeLateCharges(principal, dias, 1) : { multa: 0, juros: 0 };
+      const corrigido = renegCentavos(principal + (ch.multa || 0) + (ch.juros || 0));
+      soma += Math.min(pago, corrigido > 0.009 ? corrigido : pago);
+    });
+    if (Math.abs(Math.round(soma * 100) - alvo) <= 5) achou = data;
+  });
+  return achou;
+}
+
+function renegPrincipalAntesDoSinal(inst, data) {
+  const original = Number(inst.originalValue != null ? inst.originalValue : inst.value) || 0;
+  const saldoBruto = Number(inst.currentBalance != null ? inst.currentBalance : inst.balanceDue);
+  const saldo = Number.isFinite(saldoBruto) ? saldoBruto : 0;
+  let pagoDia = 0;
+  (inst.receipts || []).forEach((r) => {
+    if (renegIsoRecibo(r) !== data) return;
+    pagoDia += renegValorRecibo(r);
+  });
+  const soma = saldo + pagoDia;
+  if (original > 0.009 && soma > original + 0.05) return renegCentavos(original);
+  if (soma > 0.009) return renegCentavos(soma);
+  return renegCentavos(original);
+}
+
+/**
+ * O sinal entra antes do valor já pago. Nas parcelas vencidas na data do pagamento,
+ * da mais antiga para a mais nova: quita as integrais (principal, juros e multa daquela data)
+ * e o que sobra abate a seguinte. A diluição usa o principal que restou, com juros e multa de hoje.
+ */
+function renegExplicarAbatimentoSinal(sinalValor) {
+  const sinal = renegCentavos(sinalValor);
+  if (!(sinal > 0.009)) return null;
+  const parcelas = renegParcelasParaSinal();
+  const data = renegDataPagamentoSinal(sinal, parcelas);
+  if (!data) return null;
+  const quando = new Date(data + "T12:00:00");
+  const ordenadas = parcelas.slice().sort((a, b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
+  let resto = sinal;
+  const linhas = [];
+  const porId = new Map();
+  ordenadas.forEach((inst) => {
+    if (resto <= 0.009) return;
+    const dias = typeof window.daysOverdueUntilTarget === "function" ? window.daysOverdueUntilTarget(inst, quando) : 0;
+    if (!(dias > 0)) return;
+    const principal = renegPrincipalAntesDoSinal(inst, data);
+    if (!(principal > 0.009)) return;
+    const ch = window.computeLateCharges(principal, dias, 1);
+    const corrigido = renegCentavos(principal + (ch.multa || 0) + (ch.juros || 0));
+    if (!(corrigido > 0.009)) return;
+    const usa = renegCentavos(Math.min(resto, corrigido));
+    const integral = usa >= corrigido - 0.009;
+    const id = String(inst.installmentId != null ? inst.installmentId : (inst.installmentNumber != null ? inst.installmentNumber : (inst.installmentNum != null ? inst.installmentNum : "")));
+    const due = String(inst.dueDate || "").slice(0, 10);
+    const vencimento = due ? new Date(due + "T12:00:00").toLocaleDateString("pt-BR") : "—";
+    linhas.push({
+      id: id,
+      due: due,
+      vencimento: vencimento,
+      valor: usa,
+      integral: integral,
+      juros: renegCentavos(ch.juros || 0),
+      multa: renegCentavos(ch.multa || 0)
+    });
+    porId.set(id || due, { valor: usa, integral: integral, due: due });
+    resto = renegCentavos(resto - usa);
+  });
+  if (!linhas.length) return null;
+  const dinheiro = (n) => renegCentavos(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const partes = linhas.map((l) => l.integral
+    ? ("a parcela integral de " + l.vencimento + " no valor de " + dinheiro(l.valor) + " (com juros e multa)")
+    : ("a parcela parcial de " + l.vencimento + " no valor de " + dinheiro(l.valor)));
+  const meio = partes.length === 1
+    ? partes[0]
+    : (partes.slice(0, -1).join(", ") + " e " + partes[partes.length - 1]);
+  const dataBr = new Date(data + "T12:00:00").toLocaleDateString("pt-BR");
+  const texto = "O sinal de " + dinheiro(sinal) + ", pago em " + dataBr + ", foi abatido " + meio + ". O restante será diluído nas parcelas.";
+  return { sinal: sinal, data: data, dataBr: dataBr, linhas: linhas, porId: porId, texto: texto };
+}
+
+function renegDepoisDoAbatimento(bill, corte) {
+  const principalCheio = Number(bill.value) || 0;
+  const corrigidoCheio = Number(bill.computedCorrected != null ? bill.computedCorrected : principalCheio) || 0;
+  if (!corte || !(corte.valor > 0.009)) return { principal: principalCheio, corrigido: corrigidoCheio };
+  if (corte.integral) return { principal: 0, corrigido: 0 };
+  const principalDepois = renegCentavos(Math.max(0, principalCheio - Math.min(corte.valor, principalCheio)));
+  if (!(principalDepois > 0.009)) return { principal: 0, corrigido: 0 };
+  const dias = typeof window.daysOverdueUntilTarget === "function" ? window.daysOverdueUntilTarget(bill, new Date()) : 0;
+  const ch = window.computeLateCharges(principalDepois, dias, 1);
+  return { principal: principalDepois, corrigido: renegCentavos(principalDepois + (ch.multa || 0) + (ch.juros || 0)) };
 }
 
 function calculateRenegotiation() {
@@ -21396,8 +21565,19 @@ function calculateRenegotiation() {
   const instQty = cenario === "diluir" ? futurasDestino.length : (Number(qtySelect.value) || 1);
 
   const debtBills = selectedBills;
-  const principal = debtBills.reduce((acc, b) => acc + (b.value || 0), 0);
-  const updatedTotal = debtBills.reduce((acc, b) => acc + (b.computedCorrected || b.value || 0), 0);
+  const sinalValue = isCartao ? 0 : sinalValorInformado;
+  const abatimentoSinal = isCartao ? null : renegExplicarAbatimentoSinal(sinalValue);
+  let principal = 0;
+  let updatedTotal = 0;
+  debtBills.forEach((b) => {
+    const id = String(b.installmentId != null ? b.installmentId : (b.installmentNum != null ? b.installmentNum : ""));
+    const due = String(b.dueDate || "").slice(0, 10);
+    const corte = abatimentoSinal && (abatimentoSinal.porId.get(id) || abatimentoSinal.porId.get(due));
+    const pos = renegDepoisDoAbatimento(b, corte);
+    if (!(pos.corrigido > 0.009)) return;
+    principal += pos.principal;
+    updatedTotal += pos.corrigido;
+  });
   const charges = updatedTotal - principal;
   
   // Desconto sobre encargos
@@ -21405,9 +21585,8 @@ function calculateRenegotiation() {
   const adjustedCharges = charges - discountValue;
   const grossDebt = principal + adjustedCharges;
   
-  // Sinal
-  const sinalValue = isCartao ? 0 : sinalValorInformado;
-  const remainingAfterSinal = grossDebt - sinalValue;
+  // O sinal já pago foi abatido nas parcelas (antes do recebimento). Não entra de novo na diluição.
+  const remainingAfterSinal = abatimentoSinal ? grossDebt : (grossDebt - sinalValue);
 
   // Taxa de cartão (repasse embutido na divisão, se configurado)
   let cardFee = {
@@ -21464,6 +21643,17 @@ function calculateRenegotiation() {
   const cardFeeValEl = document.getElementById("reneg-math-card-fee-val");
 
   if (mathSinalValEl) mathSinalValEl.textContent = fmt(sinalValue);
+  const sinalRotuloEl = document.getElementById("reneg-math-sinal-rotulo");
+  if (sinalRotuloEl) {
+    if (abatimentoSinal) {
+      sinalRotuloEl.innerHTML = "Sinal já abatido em " + abatimentoSinal.dataBr;
+    } else {
+      sinalRotuloEl.innerHTML = "&minus; Sinal (<span id=\"reneg-header-sinal-pct\">" + renegFmtPct(sinalPct) + "</span>%)";
+    }
+  }
+  if (cenarioHint && abatimentoSinal) {
+    cenarioHint.textContent = (cenarioHint.textContent ? cenarioHint.textContent + " " : "") + abatimentoSinal.texto;
+  }
   const mathTaxaSuffixEl = document.getElementById("reneg-math-taxa-suffix");
   
   // Total das parcelas do acordo = N × valor_parcela com juros (interno) ou com taxa cartão embutida
@@ -21528,8 +21718,13 @@ function calculateRenegotiation() {
 
   if (mathNoInterestEl && mathWithInterestEl) {
     if (instQty > 0 && selectedCount > 0) {
-      mathNoInterestEl.textContent = `${fmt(grossDebt)} - ${fmt(sinalValue)} = ${instQty} parcelas de ${fmt(remainingAfterSinal / instQty)} (sem encargo)`;
-      mathWithInterestEl.textContent = `${fmt(grossDebt)} - ${fmt(sinalValue)} = ${instQty} parcelas de ${fmt(installmentValue)} (com encargo de ${renegFormatTaxa(interestRate)} a.m.)`;
+      if (abatimentoSinal) {
+        mathNoInterestEl.textContent = abatimentoSinal.texto;
+        mathWithInterestEl.textContent = `${fmt(remainingAfterSinal)} diluídos em ${instQty} parcelas de ${fmt(installmentValue)} (com encargo de ${renegFormatTaxa(interestRate)} a.m.)`;
+      } else {
+        mathNoInterestEl.textContent = `${fmt(grossDebt)} - ${fmt(sinalValue)} = ${instQty} parcelas de ${fmt(remainingAfterSinal / instQty)} (sem encargo)`;
+        mathWithInterestEl.textContent = `${fmt(grossDebt)} - ${fmt(sinalValue)} = ${instQty} parcelas de ${fmt(installmentValue)} (com encargo de ${renegFormatTaxa(interestRate)} a.m.)`;
+      }
     } else {
       mathNoInterestEl.textContent = 'Selecione as condições para simular.';
       mathWithInterestEl.textContent = '';
@@ -21625,7 +21820,9 @@ function calculateRenegotiation() {
     // 1. Sinal (Ato)
     if (sinalPct > 0 && sinalValue > 0) {
       rowNum++;
-      const sinalDateDisplay = sinalDueStr ? new Date(sinalDueStr + 'T12:00:00').toLocaleDateString('pt-BR') : '–';
+      const sinalDateDisplay = abatimentoSinal
+        ? abatimentoSinal.dataBr
+        : (sinalDueStr ? new Date(sinalDueStr + 'T12:00:00').toLocaleDateString('pt-BR') : '–');
       greenTotalParcelas++;
       greenTotalPagar += sinalValue;
       greenLastDate = sinalDateDisplay;
@@ -21847,8 +22044,10 @@ function calculateRenegotiation() {
       return `${faixa(vals)}${vals.length > 1 && iguais ? " cada" : ""}`;
     };
     const nome = cenario === "diluir" ? "diluída" : "somada";
-    if (greenSinalLabelEl && sinalPct > 0 && sinalValue > 0 && sinalDueStr) {
-      greenSinalLabelEl.textContent = `1 Sinal em ${new Date(sinalDueStr + "T12:00:00").toLocaleDateString("pt-BR")}`;
+    if (greenSinalLabelEl && sinalPct > 0 && sinalValue > 0 && (abatimentoSinal || sinalDueStr)) {
+      greenSinalLabelEl.textContent = abatimentoSinal
+        ? `1 Sinal pago em ${abatimentoSinal.dataBr}`
+        : `1 Sinal em ${new Date(sinalDueStr + "T12:00:00").toLocaleDateString("pt-BR")}`;
     }
     if (greenAcordoLabelEl) greenAcordoLabelEl.textContent = periodo(diluidasResumo, nome);
     if (greenAcordoValEl) greenAcordoValEl.textContent = valorCada(diluidasResumo.map((d) => d.total));
@@ -21885,7 +22084,14 @@ function calculateRenegotiation() {
     cardFee,
     totalAcordo,
     amountToFinance,
-    financingCost
+    financingCost,
+    abatimentoSinal: abatimentoSinal ? {
+      sinal: abatimentoSinal.sinal,
+      data: abatimentoSinal.data,
+      dataBr: abatimentoSinal.dataBr,
+      texto: abatimentoSinal.texto,
+      linhas: abatimentoSinal.linhas
+    } : null
   };
 }
 
@@ -23241,20 +23447,27 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
   pdf.setTextColor(15, 23, 42);
   pdf.text("Condições", m, y);
   y += 5;
+  const abatido = results.abatimentoSinal && results.abatimentoSinal.texto ? results.abatimentoSinal : null;
   const clausulas = [
     "Esta proposta apresenta as condições para regularizar as parcelas em aberto da unidade indicada acima. Ela não é o acordo e não substitui o termo de confissão de dívida.",
-    temSinal
-      ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
-      : "A proposta só tem validade com o pagamento do sinal, pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale.",
-    "O pagamento do sinal é o aceite do cliente. Não há assinatura nesta proposta.",
+    abatido
+      ? abatido.texto
+      : (temSinal
+        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
+        : "A proposta só tem validade com o pagamento do sinal, pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale."),
+    abatido
+      ? "O pagamento do sinal em " + abatido.dataBr + " é o aceite do cliente. Não há assinatura nesta proposta."
+      : "O pagamento do sinal é o aceite do cliente. Não há assinatura nesta proposta.",
     "O termo de confissão de dívida será emitido após o pagamento do sinal e formaliza o acordo, reconhece o saldo e fixa o cronograma descrito neste documento.",
     "As parcelas seguem os vencimentos e os valores do cronograma proposto." + (linhaIndice ? " O saldo permanece no " + linhaIndice.charAt(0).toLowerCase() + linhaIndice.slice(1) : ""),
-    "Enquanto o sinal não for pago, o contrato permanece como está. Nada desta proposta altera parcelas, vencimentos ou saldo antes desse pagamento e da emissão do termo."
+    abatido
+      ? "O sinal já pago não é cobrado de novo. O saldo que restou depois desse abatimento é o que está diluído no cronograma proposto."
+      : "Enquanto o sinal não for pago, o contrato permanece como está. Nada desta proposta altera parcelas, vencimentos ou saldo antes desse pagamento e da emissão do termo."
   ];
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(8.5);
   pdf.setTextColor(30, 41, 59);
-  clausulas.forEach(function(texto, i) {
+  clausulas.filter(Boolean).forEach(function(texto, i) {
     const bloco = pdf.splitTextToSize((i + 1) + ".  " + texto, largura);
     const alto = bloco.length * 3.8;
     if (y + alto > 282) {
@@ -23364,7 +23577,10 @@ function generateAgreementPDF() {
   if (typeof window.centerDistratoSignatures === "function") {
     textTemplate = window.centerDistratoSignatures(textTemplate);
   }
-  const avisoProposta = modo === "proposta"
+  const avisoAbatimento = (results.abatimentoSinal && results.abatimentoSinal.texto)
+    ? `<p style="margin:0 0 14px;">${results.abatimentoSinal.texto}</p>`
+    : "";
+  const avisoProposta = modo === "proposta" && !(results.abatimentoSinal && results.abatimentoSinal.texto)
     ? `<p style="margin:0 0 14px;"><b>Esta proposta não é o acordo.</b> Ela só se converte em confissão de dívida se o sinal de ${Number(results.sinalValue || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} for pago até ${renegIsoBr(results.sinalDueStr)}. Sem esse pagamento, a proposta expira em ${renegIsoBr(renegIsoMaisDias(results.sinalDueStr, 2))} e o acordo não é válido. Cartão de crédito não depende deste sinal.</p>`
     : "";
 
@@ -23375,6 +23591,7 @@ function generateAgreementPDF() {
     </div>
     <div style="text-align: justify; margin-bottom: 2rem; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.55;">
       ${avisoProposta}
+      ${avisoAbatimento}
       ${textTemplate.replace(/\n/g, "<br>")}
     </div>
   `;
