@@ -1755,7 +1755,7 @@ const GerarPagamentoApp = {
       const aviso = this.avisoQueBloqueia(c, it);
       if (aviso) return aviso;
     }
-    if (p.fiscal && p.fiscal.nivel === "erro") return "Impostos: " + p.fiscal.resumo;
+    // Conferência fiscal não barra o lote: quem libera é o fiscal, pela autorização no Sienge.
     return "";
   },
 
@@ -1890,7 +1890,6 @@ const GerarPagamentoApp = {
           fiscal = await NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor }).catch(falhaFiscal);
           if (gen !== s.gen) return;
         }
-        if (fiscal && fiscal.falhaConsulta) s.validacao.falhas += 1;
         if (fiscal && fiscal.retidoPagamento > 0.009) check = BoletoCheck.validar(payment, Object.assign({}, ctx, { retido: fiscal.retidoPagamento }));
         if (gen !== s.gen) return;
         let notaBenef = fiscal && fiscal.nota;
@@ -1900,7 +1899,7 @@ const GerarPagamentoApp = {
         }
         await this.alertarBeneficiarioBoleto(check, payment, notaBenef, r.titulo);
         if (gen !== s.gen) return;
-        s.pagInfo[chave] = { payment, check, fiscal, tipoSienge: forma.tipo || "", falha: !!(check && check.falhaConsulta) || !!(fiscal && fiscal.falhaConsulta) };
+        s.pagInfo[chave] = { payment, check, fiscal, tipoSienge: forma.tipo || "", falha: !!(check && check.falhaConsulta) };
         const soAntecipado = (check.antecipado || check.vencimentoPosterior) && check.nivel === "aviso" && !(check.erros || []).length
           && (check.avisos || []).every((a) => /pagamento antecipado|boleto vence em/i.test(a));
         const avisoLivre = check.nivel === "aviso" && !(check.erros || []).length && !this.avisoQueBloqueia(check, { chave });
@@ -3852,7 +3851,6 @@ const GerarPagamentoApp = {
               ? `<span class="gp-pill gp-wait" title="Está no lote ${this.esc(this.lotePendenteDe(it.chave).id)}, que não foi gerado no Sienge. Ao gerar de novo, ele sai daquele lote.">Em aberto</span><small>Lote não gerado no Sienge</small>`
               : `<span class="gp-pill gp-wait">Em aberto</span>`));
         const pagSelo = this.pagSeloDe(it);
-        const fiscalSelo = this.fiscalSeloDe(it);
         const retido = this.retidoDe(it);
         return `<tr class="gp-click${it.emLote ? " gp-em-lote" : ""}${this.bloqueioVisivel(it) ? " gp-row-bad" : ""}" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Clique para ver o resumo do título">
           <td style="text-align:center;" onclick="event.stopPropagation()"><input type="checkbox" ${it.marcado ? "checked" : ""} ${sem || it.emLote || it.bloqueio || gerando ? "disabled" : ""}
@@ -3865,7 +3863,6 @@ const GerarPagamentoApp = {
           <td class="gp-status">${this.ccsCelulaHtml(it)}</td>
           <td style="text-align:right;"${retido ? ` title="${this.esc(`Líquido: bruto ${this.money(it.aPagar)} − impostos retidos ${this.money(retido)}`)}"` : ""}>${this.money(this.valorPagar(it))}${retido ? `<br><small class="gp-muted" style="white-space:nowrap;">retido ${this.money(retido)}</small>` : ""}</td>
           <td class="gp-status">${pagSelo}</td>
-          <td class="gp-status">${fiscalSelo}</td>
           <td class="gp-status">${this.autorizacaoSeloHtml(it)}</td>
           <td class="gp-status">${tag}</td>
         </tr>`;
@@ -3916,7 +3913,7 @@ const GerarPagamentoApp = {
           <div style="overflow:auto;">
           <table class="gp-table gp-titulos gp-card-tab">
             <colgroup><col style="width:3%"><col style="width:8%"><col style="width:7%"><col style="width:12%"><col style="width:9%"><col style="width:11%"><col style="width:9%"><col style="width:10%"><col style="width:9%"><col style="width:12%"><col style="width:10%"></colgroup>
-            <thead><tr><th></th><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th>Rateio</th><th style="text-align:right;">A pagar</th><th>Pagamento</th><th title="Imposto retido lançado no Sienge × nota fiscal anexada × CNAE do prestador">Fiscal</th><th>Autorização</th><th>Situação</th></tr></thead>
+            <thead><tr><th></th><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th>Rateio</th><th style="text-align:right;">A pagar</th><th>Pagamento</th><th>Autorização</th><th>Situação</th></tr></thead>
             <tbody>${linhas}</tbody>
           </table>
           </div>

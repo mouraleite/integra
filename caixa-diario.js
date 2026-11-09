@@ -218,6 +218,7 @@ const FluxoCaixaDiarioApp = {
   openingDate: "",
   recItems: [],
   outras: [],
+  aReceber: [],
   movs: [],
   payItems: [],
   progress: "",
@@ -279,9 +280,8 @@ const FluxoCaixaDiarioApp = {
   },
 
   setAba(id) {
-    this.aba = id === "receber" || id === "pagar" ? id : "movimento";
+    this.aba = id === "receber" ? "receber" : "movimento";
     this.render();
-    if (this.aba === "receber") this.carregarHistorico();
   },
 
   setRadarYm(ym) {
@@ -560,7 +560,45 @@ const FluxoCaixaDiarioApp = {
   },
 
   abasHtml() {
-    return "";
+    const tabs = [
+      { id: "movimento", label: "Fluxo de caixa diário", icon: "calendar-days" },
+      { id: "receber", label: "Valor a Receber", icon: "banknote" }
+    ];
+    const atual = this.aba === "receber" ? "receber" : "movimento";
+    return `<div class="ml-tabs cxd-abas" role="tablist">${tabs.map((t) => `
+      <button type="button" role="tab" aria-selected="${atual === t.id ? "true" : "false"}"
+        class="ml-tab${atual === t.id ? " is-active" : ""}"
+        onclick="FluxoCaixaDiarioApp.setAba('${t.id}')"><i data-lucide="${t.icon}"></i> ${t.label}</button>`).join("")}</div>`;
+  },
+
+  valorAReceberHtml() {
+    const excl = this.excludedCcs();
+    const lista = (this.aReceber || []).filter((it) => !it.cc || !excl.has(String(it.cc)));
+    if (!lista.length) {
+      return `<p class="cxd-vazio">${this.progress ? "Lendo os títulos a receber…" : "Nenhum título ou previsão a receber fora de CT e TC neste período."}</p>`;
+    }
+    const total = lista.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+    const linhas = lista.map((it) => `<tr>
+      <td>${caixaEsc(it.empresa || "—")}</td>
+      <td>${caixaEsc(it.doc || "—")}</td>
+      <td class="cxd-desc">${caixaEsc(it.descricao || "—")}</td>
+      <td>${caixaEsc(it.titulo || "—")}</td>
+      <td>${caixaFmtDate(it.vencimento)}</td>
+      <td class="cxd-num">${caixaMoney(it.valor)}</td>
+      <td class="cxd-desc">${caixaEsc(it.cliente || "—")}</td>
+    </tr>`).join("");
+    return `<p class="cxd-title">VALOR A RECEBER <span>· títulos e previsões em aberto que não são CT nem TC · ${caixaEsc(this.rotuloPeriodo())}</span></p>
+      <div class="cxd-wrap">
+        <table class="cxd-analitico">
+          <thead><tr>
+            <th>Empresa</th><th>Documento</th><th>Descrição</th><th>Título</th><th>Vencimento</th><th class="cxd-num">Valor a Receber</th><th>Cliente</th>
+          </tr></thead>
+          <tbody>
+            ${linhas}
+            <tr class="cxd-row-acum"><td colspan="5">Total</td><td class="cxd-num">${caixaMoney(total)}</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>`;
   },
 
   mesesRadarHtml() {
@@ -864,6 +902,14 @@ const FluxoCaixaDiarioApp = {
     return this.paresAvare().some((p) => p[0] === cc);
   },
 
+  /** Centro do parceiro em Avaré. 13701/13801 fase 1, 13901/14001 fase 2. */
+  ccParceiroAvare(id) {
+    const cc = String(id || "");
+    if (cc === "13701" || cc === "13801") return 1;
+    if (cc === "13901" || cc === "14001") return 2;
+    return 0;
+  },
+
   contaExclusiva(num) {
     const d = String(num || "").replace(/\D/g, "");
     return d === "993916" || d === "0993916";
@@ -894,6 +940,10 @@ const FluxoCaixaDiarioApp = {
     return lista.reduce((s, x) => {
       const cc = String(x.cc || "");
       if (!excl.has(cc)) return s;
+      // Pago pela conta final 1-6, mas o centro é da parceria de Avaré.
+      // O dinheiro saiu da conta que está no caixa. A transferência da conta da parceria
+      // para a 1-6 entra no mesmo caixa e zera essa dívida. Não tirar só o pagamento.
+      if (empresa1 && this.contaExclusiva(item && item.conta) && this.ccParceiroAvare(cc)) return s;
       if (empresa1 && this.ccBaseAvare(cc) && !rateio && !this.ehRepasse(item)) {
         const conta = item && item.conta;
         if (conta && !this.contaExclusiva(conta)) return s + (Number(x.share) || 0);
@@ -1101,6 +1151,7 @@ const FluxoCaixaDiarioApp = {
     this.accounts = [];
     this.recItems = [];
     this.outras = [];
+    this.aReceber = [];
     this.movs = [];
     this.payItems = [];
     this.openingDate = "";
@@ -1488,7 +1539,7 @@ const FluxoCaixaDiarioApp = {
     if (typeof window.siengeFetchWithRetry !== "function") return;
     const inicio = hoje > b.start ? hoje : b.start;
     const horizonte = b.end > caixaAddDays(hoje, 35) ? b.end : caixaAddDays(hoje, 35);
-    const buscaIni = caixaAddDays(inicio, -4);
+    const buscaIni = b.start < caixaAddDays(inicio, -4) ? b.start : caixaAddDays(inicio, -4);
     const buscaFim = caixaAddDays(horizonte, 4);
     const fora = { CT: 1, PFIN: 1, TC: 1, CIPT: 1, CREG: 1, IPTU: 1 };
     const meio = (s, e) => {
@@ -1529,25 +1580,50 @@ const FluxoCaixaDiarioApp = {
     if (this._gen !== gen) return;
     const seen = {};
     const out = [];
+    const aReceber = [];
+    const vistoReceber = {};
     rows.forEach((r) => {
       if (!r) return;
       const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
-      if (fora[doc]) return;
+      const recs = Array.isArray(r.receipts) ? r.receipts : [];
+      const recebido = recs.some((x) => x && x.operationTypeName);
+      const due = String(r.dueDate || "").slice(0, 10);
+      const companyId = r.companyId != null ? String(r.companyId) : "";
+      const titulo = r.billId != null ? String(r.billId) : "";
+      const parcela = r.installmentId != null ? String(r.installmentId) : "";
       const numero = String(r.documentNumber || "");
       const numUp = numero.toUpperCase();
-      if (numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0) return;
-      const recs = Array.isArray(r.receipts) ? r.receipts : [];
-      if (recs.some((x) => x && x.operationTypeName)) return;
-      const due = String(r.dueDate || "").slice(0, 10);
+      const grupoContrato = numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0;
+      const valorAberto = Number(r.correctedBalanceAmount != null ? r.correctedBalanceAmount : (r.balanceAmount != null ? r.balanceAmount : r.originalAmount)) || 0;
+      if (doc !== "CT" && doc !== "TC" && !grupoContrato && !recebido && due && due >= b.start && due <= b.end && (!companyId || this.companyWanted(companyId)) && valorAberto > 0.009) {
+        const chave = titulo + "|" + parcela + "|" + due;
+        if (!vistoReceber[chave]) {
+          vistoReceber[chave] = true;
+          const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
+          const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
+          aReceber.push({
+            empresa: r.companyName || this.companyName(companyId),
+            companyId,
+            doc,
+            descricao: numero,
+            titulo,
+            parcela,
+            vencimento: due,
+            valor: valorAberto,
+            cliente: r.clientName || "",
+            cc: cat.costCenterId != null ? String(cat.costCenterId) : ""
+          });
+        }
+      }
+      if (fora[doc]) return;
+      if (grupoContrato) return;
+      if (recebido) return;
       if (!due) return;
       const prev = caixaDiaUtil(due, 1);
       if (prev < inicio || prev > horizonte) return;
-      const companyId = r.companyId != null ? String(r.companyId) : "";
       if (companyId && !this.companyWanted(companyId)) return;
       const valor = Number(r.originalAmount) || 0;
       if (!(valor > 0.009)) return;
-      const titulo = r.billId != null ? String(r.billId) : "";
-      const parcela = r.installmentId != null ? String(r.installmentId) : "";
       const key = titulo + "|" + parcela + "|" + due;
       if (seen[key]) return;
       seen[key] = true;
@@ -1579,6 +1655,8 @@ const FluxoCaixaDiarioApp = {
       });
     });
     this.outras = out;
+    aReceber.sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+    this.aReceber = aReceber;
     this.rebuild();
     this.render();
   },
@@ -3369,15 +3447,16 @@ const FluxoCaixaDiarioApp = {
         <div class="cxd-head">
           <p>Mês atual e os próximos 3 meses, de ${caixaEsc(this.rotuloPeriodo())}. Saldo inicial no 1º dia. Nos dias anteriores, o extrato das contas ligadas; de hoje em diante, a previsão.</p>
         </div>
-        ${this.abasHtml()}
         <div class="cxd-body">
+          ${this.abasHtml()}
           <div class="cxd-tools">
             ${filtro}
-            ${filtroCc}
+            ${this.aba === "receber" ? "" : filtroCc}
           </div>
           <p id="cxd-progress" style="margin:0 0 10px;color:#105436;font-size:0.8rem;font-weight:600;" ${this.progress ? "" : "hidden"}>${caixaEsc(this.progress || "")}</p>
           ${this.error ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(this.error)}</div>` : ""}
-          <div class="cxd-miolo-mov">
+          ${this.aba === "receber" ? this.valorAReceberHtml() : ""}
+          <div class="cxd-miolo-mov" ${this.aba === "receber" ? "hidden" : ""}>
           <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
           ${this.contasHtml()}
           <div class="cxd-saldo-ini"><span>${iniLabel}</span><span>${caixaMoney(saldoInicial)}</span></div>
