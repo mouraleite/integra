@@ -3803,6 +3803,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     anexos: "Assistente de Anexos",
     "contas-pagar": "Assistente de Contas a Pagar",
     "gerar-pagamento": "Gerar Pagamento",
+    "cartao-credito": "Cartão de crédito",
     contabil: "Contábil",
     rydoo: "Rydoo",
     "pagar-reembolso": "Pagar reembolso",
@@ -3898,6 +3899,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     anexos: "paperclip",
     "contas-pagar": "landmark",
     "gerar-pagamento": "wallet",
+    "cartao-credito": "credit-card",
     contabil: "book-open",
     rydoo: "receipt",
     "pagar-reembolso": "wallet",
@@ -4203,7 +4205,9 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   } else if (tabId === "contabil-config") {
     if (window.ContabilEquiv && typeof ContabilEquiv.init === "function") ContabilEquiv.init();
   } else if (tabId === "gerar-pagamento") {
-    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init();
+    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("lotes");
+  } else if (tabId === "cartao-credito") {
+    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("cartao");
   } else if (tabId === "parametrizacao-parceiro") {
     if (typeof ParametrizacaoParceiroApp !== "undefined") ParametrizacaoParceiroApp.init();
   } else if (tabId === "estrutura-societaria") {
@@ -23048,6 +23052,68 @@ async function renegAnexarPdf(bytes, extraBytes) {
   return new Uint8Array(await out.save());
 }
 
+function renegTestemunhaDaPessoa(u) {
+  if (!u) return { id: "", nome: "", rg: "" };
+  return {
+    id: String(u.id || ""),
+    nome: u.name || u.nome || "",
+    rg: u.doc_rg || u.rg || ""
+  };
+}
+
+function renegPedirTestemunhas() {
+  return new Promise(function(resolve) {
+    const overlay = document.getElementById("reneg-testemunha-overlay");
+    const t1 = document.getElementById("reneg-testemunha-1");
+    const t2 = document.getElementById("reneg-testemunha-2");
+    const gerar = document.getElementById("reneg-testemunha-confirmar");
+    const fecharBtn = document.getElementById("reneg-testemunha-fechar");
+    if (!overlay || !t1 || !t2 || !gerar) {
+      resolve(null);
+      return;
+    }
+    const atual = (window.AppState && AppState.currentUser) || {};
+    const lista = typeof getDistratoWitnessUsers === "function" ? getDistratoWitnessUsers() : [];
+    const eu = lista.find(function(u) {
+      if (atual.id && String(u.id) === String(atual.id)) return true;
+      if (atual.email && u.email && String(u.email).toLowerCase() === String(atual.email).toLowerCase()) return true;
+      return !!(atual.name && u.name && String(u.name).toUpperCase() === String(atual.name).toUpperCase());
+    }) || atual;
+    const w1 = renegTestemunhaDaPessoa(eu);
+    const outras = lista.filter(function(u) { return !w1.id || String(u.id) !== w1.id; });
+    t1.value = w1.nome ? (w1.nome + (w1.rg ? " — RG " + w1.rg : "")) : "Quem está gerando o termo";
+    t2.innerHTML = ['<option value="">Selecione a segunda testemunha...</option>'].concat(outras.map(function(u) {
+      const rg = u.doc_rg || u.rg || "";
+      const nome = String(u.name || "").replace(/[&<>"]/g, "");
+      return '<option value="' + String(u.id).replace(/"/g, "") + '">' + nome + (rg ? " — RG " + String(rg).replace(/[&<>"]/g, "") : "") + "</option>";
+    })).join("");
+    let feito = false;
+    const fechar = function(val) {
+      if (feito) return;
+      feito = true;
+      overlay.classList.remove("active");
+      resolve(val || null);
+    };
+    if (fecharBtn) fecharBtn.onclick = function() { fechar(null); };
+    gerar.onclick = function() {
+      const id = t2.value;
+      if (!id) {
+        alert("Selecione a segunda testemunha.");
+        return;
+      }
+      const u2 = outras.find(function(u) { return String(u.id) === String(id); });
+      if (!u2) return;
+      const w2 = renegTestemunhaDaPessoa(u2);
+      if ((w1.id && w2.id && w1.id === w2.id) || (w1.nome && w2.nome && w1.nome.toUpperCase() === w2.nome.toUpperCase())) {
+        alert("As duas testemunhas não podem ser a mesma pessoa. Escolha testemunhas diferentes.");
+        return;
+      }
+      fechar({ w1: w1, w2: w2 });
+    };
+    overlay.classList.add("active");
+  });
+}
+
 function renegPedirPdfPix() {
   return new Promise(function(resolve) {
     const overlay = document.getElementById("reneg-pix-overlay");
@@ -23681,6 +23747,9 @@ function generateAgreementPDF() {
     window.atualizarBotaoReneg();
     return;
   }
+  const testemunhas = await renegPedirTestemunhas();
+  if (!testemunhas) return;
+  window._renegTestemunhasDoc = testemunhas;
   if (typeof window.enrichCustomerForLegalDocs === "function" && g_renegCustomer) {
     g_renegCustomer = await window.enrichCustomerForLegalDocs(g_renegCustomer);
   }
@@ -23728,26 +23797,34 @@ function generateAgreementPDF() {
       .replace(/presente confiss[aã]o/gi, "presente proposta")
       .replace(/objeto da presente confiss[aã]o/gi, "objeto da presente proposta");
   }
+  const fraseAbatimento = (results.abatimentoSinal && results.abatimentoSinal.texto) ? results.abatimentoSinal.texto : "";
+  if (fraseAbatimento && textTemplate.indexOf(fraseAbatimento) < 0) {
+    textTemplate = textTemplate.replace(/(CL[ÁA]USULA\s+3ª[^\n]*\n)/i, "$1" + fraseAbatimento + "\n");
+  }
   if (typeof window.centerDistratoSignatures === "function") {
     textTemplate = window.centerDistratoSignatures(textTemplate);
   }
-  const avisoAbatimento = (results.abatimentoSinal && results.abatimentoSinal.texto)
-    ? `<p style="margin:0 0 14px;">${results.abatimentoSinal.texto}</p>`
-    : "";
-  const avisoProposta = modo === "proposta" && !(results.abatimentoSinal && results.abatimentoSinal.texto)
+  const avisoProposta = modo === "proposta" && !fraseAbatimento
     ? `<p style="margin:0 0 14px;"><b>Esta proposta não é o acordo.</b> Ela só se converte em confissão de dívida se o sinal de ${Number(results.sinalValue || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} for pago até ${renegIsoBr(results.sinalDueStr)}. Sem esse pagamento, a proposta expira em ${renegIsoBr(renegIsoMaisDias(results.sinalDueStr, 2))} e o acordo não é válido. Cartão de crédito não depende deste sinal.</p>`
     : "";
+  let corpoTermo = textTemplate;
+  let blocoAssinaturas = "";
+  const corteAssinatura = corpoTermo.indexOf('<div class="pdf-sign-keep"');
+  if (corteAssinatura >= 0) {
+    blocoAssinaturas = corpoTermo.slice(corteAssinatura);
+    corpoTermo = corpoTermo.slice(0, corteAssinatura);
+  }
 
   const docHtml = `
     <div style="text-align: center; margin-bottom: 2rem;">
       <h2 style="color: #105436; font-size: 16pt; font-weight: bold; margin-bottom: 5px;">${docTitle}</h2>
       <h3 style="font-size: 12pt; color: #666; margin: 0;">${docSubtitle}</h3>
     </div>
-    <div style="text-align: justify; margin-bottom: 2rem; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.55;">
+    <div style="text-align: left; margin-bottom: 2rem; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.55;">
       ${avisoProposta}
-      ${avisoAbatimento}
-      ${textTemplate.replace(/\n/g, "<br>")}
+      ${corpoTermo.replace(/\n/g, "<br>")}
     </div>
+    ${blocoAssinaturas}
   `;
 
   const unitName = unit.name || unit.unitName || g_renegSale.unitName || "";
@@ -23777,6 +23854,7 @@ function generateAgreementPDF() {
   }
   } finally {
     window._renegGerando = false;
+    window._renegTestemunhasDoc = null;
   }
   })().catch(function(e) {
     alert("Não consegui gerar o termo: " + ((e && e.message) || e));
@@ -27499,18 +27577,44 @@ function buildRenegAgreementExtraMap(results) {
       diaVenc = String(Object.keys(bag).sort((a, b) => bag[b] - bag[a])[0]).padStart(2, "0");
     }
   }
-  const w1 = (typeof getDistratoWitnessBySelect === "function") ? getDistratoWitnessBySelect("dist-testemunha-1") : null;
-  const w2 = (typeof getDistratoWitnessBySelect === "function") ? getDistratoWitnessBySelect("dist-testemunha-2") : null;
+  const escolhidas = window._renegTestemunhasDoc || null;
+  const w1 = escolhidas && escolhidas.w1 ? escolhidas.w1 : ((typeof getDistratoWitnessBySelect === "function") ? getDistratoWitnessBySelect("dist-testemunha-1") : null);
+  const w2 = escolhidas && escolhidas.w2 ? escolhidas.w2 : ((typeof getDistratoWitnessBySelect === "function") ? getDistratoWitnessBySelect("dist-testemunha-2") : null);
   const witnessUsers = (typeof getDistratoWitnessUsers === "function") ? getDistratoWitnessUsers() : [];
   const tw1 = w1 || witnessUsers[0] || {};
   const tw2 = w2 || witnessUsers[1] || {};
+  const cenarioDoc = results.cenario || "";
+  let valorParcelaDoc = Number(results.installmentValue) || 0;
+  let dataPrimeiraDiluida = "";
+  if (cenarioDoc === "diluir" || cenarioDoc === "somar") {
+    const futurasDoc = typeof renegFuturasOrdenadas === "function" ? renegFuturasOrdenadas(bills) : aVencer;
+    const marcadas = new Set(Array.from(document.querySelectorAll(".reneg-bill-check:not([disabled])")).filter(function(c) { return c.checked; }).map(function(c) { return String(c.value); }));
+    const destinoDoc = futurasDoc.filter(function(b) { return !marcadas.has(String(b.installmentId || b.installmentNum || "")); });
+    const usadas = cenarioDoc === "somar" ? destinoDoc.slice(0, Number(results.instQty) || destinoDoc.length) : destinoDoc;
+    if (usadas[0] && usadas[0].dueDate) {
+      const d0 = new Date(String(usadas[0].dueDate).slice(0, 10) + "T12:00:00");
+      if (!isNaN(d0.getTime())) {
+        dataPrimeiraDiluida = d0.toLocaleDateString("pt-BR");
+        diaVenc = String(d0.getDate()).padStart(2, "0");
+      }
+    }
+    const origens = usadas.map(function(b) { return Number(b.value) || 0; }).filter(function(v) { return v > 0.009; });
+    if (origens.length) {
+      const freq = {};
+      origens.forEach(function(v) { const k = v.toFixed(2); freq[k] = (freq[k] || 0) + 1; });
+      const moda = Object.keys(freq).sort(function(a, b) { return freq[b] - freq[a]; })[0];
+      valorParcelaDoc += Number(moda);
+    }
+  }
+  const fraseAbatimento = (results.abatimentoSinal && results.abatimentoSinal.texto) ? results.abatimentoSinal.texto : "";
   const map = {
     PARCELAS_ACORDO: String(results.instQty),
-    DATA_PRIMEIRA_PARCELA: firstDue && !isNaN(firstDue.getTime())
+    DATA_PRIMEIRA_PARCELA: dataPrimeiraDiluida || (firstDue && !isNaN(firstDue.getTime())
       ? firstDue.toLocaleDateString("pt-BR")
-      : String(results.firstDueDate || "____"),
+      : String(results.firstDueDate || "____")),
     VALOR_DIVIDA: moneyBRL(results.newDebtBalance),
-    VALOR_PARCELA_ACORDO: moneyBRL(results.installmentValue),
+    VALOR_PARCELA_ACORDO: moneyBRL(valorParcelaDoc),
+    TEXTO_ABATIMENTO_SINAL: fraseAbatimento ? (fraseAbatimento + " ") : "",
     DIA_VENCIMENTO: diaVenc,
     MES_ANO_INADIMPLENCIA: mesAnoInad,
     QTD_PARCELAS_VENCIDAS: String(overdue.length),
@@ -27530,7 +27634,7 @@ function buildRenegAgreementExtraMap(results) {
   };
   if (typeof valorPorExtensoBRL === "function") {
     map.VALOR_DIVIDA_EXTENSO = valorPorExtensoBRL(results.newDebtBalance);
-    map.VALOR_PARCELA_EXTENSO = valorPorExtensoBRL(results.installmentValue);
+    map.VALOR_PARCELA_EXTENSO = valorPorExtensoBRL(valorParcelaDoc);
     map.VALOR_VENCIDAS_EXTENSO = valorPorExtensoBRL(valorVencidas);
     map.VALOR_VINCENDO_EXTENSO = valorPorExtensoBRL(valorVincendo);
     map.VALOR_PARCELA_VINCENDA_EXTENSO = valorPorExtensoBRL(parcelaVincenda);
@@ -28073,6 +28177,7 @@ window.centerDistratoSignatures = function(html) {
     break;
   }
   if (!parties.length) return s;
+  const testemunhasEscolhidas = window._renegTestemunhasDoc || null;
   let w1Name = "";
   let w2Name = "";
   let w1Rg = "";
@@ -28087,8 +28192,10 @@ window.centerDistratoSignatures = function(html) {
     }
     if (/nome\s*:/i.test(line)) {
       const names = splitDistratoWitnessFields(line, "Nome");
-      w1Name = names[0] || w1Name;
-      w2Name = names[1] || w2Name;
+      names.forEach(function(n) {
+        if (!w1Name) w1Name = n;
+        else if (!w2Name) w2Name = n;
+      });
       i++;
       continue;
     }
@@ -28103,16 +28210,28 @@ window.centerDistratoSignatures = function(html) {
     }
     if (/rg\s*:/i.test(line)) {
       const rgs = splitDistratoWitnessFields(line, "RG");
-      w1Rg = rgs[0] || w1Rg;
-      w2Rg = rgs[1] || w2Rg;
+      rgs.forEach(function(n) {
+        if (!w1Rg) w1Rg = n;
+        else if (!w2Rg) w2Rg = n;
+      });
       i++;
       continue;
     }
     i++;
   }
+  if (testemunhasEscolhidas && testemunhasEscolhidas.w1) {
+    w1Name = testemunhasEscolhidas.w1.nome || w1Name;
+    w1Rg = testemunhasEscolhidas.w1.rg || w1Rg;
+    hasWitnessTitle = true;
+  }
+  if (testemunhasEscolhidas && testemunhasEscolhidas.w2) {
+    w2Name = testemunhasEscolhidas.w2.nome || w2Name;
+    w2Rg = testemunhasEscolhidas.w2.rg || w2Rg;
+    hasWitnessTitle = true;
+  }
   const blocoAssinatura = (p) => `
-      <div style="border-top: 1px solid #111; padding-top: 10px; font-weight: 700;">${p.name}</div>
-      <div style="font-size: 10.5pt; font-weight: 400; margin-top: 4px;">${p.role}</div>`;
+      <div style="border-top: 1px solid #111; padding-top: 4px; font-weight: 700; line-height: 1.2; white-space: normal;">${p.name}</div>
+      <div style="font-size: 10.5pt; font-weight: 400; margin-top: 2px; line-height: 1.2;">${p.role}</div>`;
   const gruposAss = [];
   parties.forEach((p) => {
     const vendedor = /vendedor/i.test(p.role);
@@ -28121,34 +28240,34 @@ window.centerDistratoSignatures = function(html) {
     else gruposAss.push({ vendedor: vendedor, itens: [p] });
   });
   const partyHtml = gruposAss.map((g, idx) => {
-    const topo = idx === 0 ? 22 : 40;
+    const topo = idx === 0 ? 16 : 22;
     if (g.vendedor && g.itens.length > 1) {
       const nomes = g.itens.map((p) => `<div style="font-weight: 700;">${p.name}</div>`).join("");
       return `<div style="margin: ${topo}px auto 0; text-align: center;">
         <div style="display: inline-block; min-width: 260px; max-width: 520px; text-align: center;">
-          <div style="border-top: 1px solid #111; padding-top: 10px;">
+          <div style="border-top: 1px solid #111; padding-top: 4px; line-height: 1.2; white-space: normal;">
             ${nomes}
-            <div style="font-size: 10.5pt; font-weight: 400; margin-top: 4px;">${g.itens[0].role}</div>
+            <div style="font-size: 10.5pt; font-weight: 400; margin-top: 2px;">${g.itens[0].role}</div>
           </div>
         </div>
       </div>`;
     }
     return g.itens.map((p, i) => `
-    <div style="margin: ${i === 0 ? topo : 40}px auto 0; max-width: 420px; text-align: center;">
+    <div style="margin: ${i === 0 ? topo : 18}px auto 0; max-width: 420px; text-align: center;">
       ${blocoAssinatura(p)}
     </div>`).join("");
   }).join("");
   const witnessesHtml = (hasWitnessTitle || w1Name || w2Name) ? `
-    <div style="margin-top: 28px; text-align: center; font-weight: 700;">Testemunhas</div>
-    <table style="width: 100%; max-width: 680px; margin: 14px auto 0; border-collapse: collapse; white-space: normal;">
+    <div style="margin-top: 18px; text-align: center; font-weight: 700;">Testemunhas</div>
+    <table style="width: 100%; max-width: 680px; margin: 8px auto 0; border-collapse: collapse; white-space: normal;">
       <tr>
-        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 12px;">
-          <div>${w1Name || "________________"}</div>
-          <div>RG: ${w1Rg || "________________"}</div>
+        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 18px;">
+          <div style="border-top: 1px solid #111; margin-top: 28px; padding-top: 4px; line-height: 1.2;">${w1Name || "________________"}</div>
+          <div style="margin-top: 2px; line-height: 1.2;">RG: ${w1Rg || "________________"}</div>
         </td>
-        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 12px;">
-          <div>${w2Name || "________________"}</div>
-          <div>RG: ${w2Rg || "________________"}</div>
+        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 18px;">
+          <div style="border-top: 1px solid #111; margin-top: 28px; padding-top: 4px; line-height: 1.2;">${w2Name || "________________"}</div>
+          <div style="margin-top: 2px; line-height: 1.2;">RG: ${w2Rg || "________________"}</div>
         </td>
       </tr>
     </table>` : "";
@@ -28156,7 +28275,7 @@ window.centerDistratoSignatures = function(html) {
     ? `<div style="white-space: normal; text-align: center; margin: 18px 0 8px; font-weight: 500;">${dateLine}</div>`
     : "";
   const clauseKeepHtml = lastClause
-    ? `<div class="pdf-distrato-last-clause" style="white-space: pre-wrap; text-align: justify;">${lastClause}</div>`
+    ? `<div class="pdf-distrato-last-clause" style="white-space: pre-wrap; text-align: left;">${lastClause}</div>`
     : "";
   return `${before}
 <div class="pdf-sign-keep" style="page-break-inside: avoid; break-inside: avoid; page-break-before: auto;">

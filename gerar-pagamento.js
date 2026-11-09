@@ -21,6 +21,7 @@ const GerarPagamentoApp = {
     previsoesIgnoradas: 0,
     filtro: "todos",
     visao: "lotes",
+    tela: "lotes",
     abaLotes: "gerar",
     ordemLotes: "baixa-desc",
     abaEmpresa: "",
@@ -856,7 +857,13 @@ const GerarPagamentoApp = {
       });
   },
 
-  init() {
+  rootEl() {
+    const id = this.state.tela === "cartao" ? "cartao-credito-root" : "gerar-pagamento-root";
+    return document.getElementById(id);
+  },
+
+  init(tela) {
+    if (tela === "cartao" || tela === "lotes") this.state.tela = tela;
     const padrao = this.periodoPadrao();
     this.state.startDate = padrao.start;
     this.state.endDate = padrao.end;
@@ -973,9 +980,10 @@ const GerarPagamentoApp = {
     const frases = this.FRASES_CARGA;
     const pct = Math.max(0, Math.min(0.999, s.progressoPct || 0));
     s.progresso = frases[Math.min(frases.length - 1, Math.floor(pct * frases.length))];
-    const el = document.getElementById("gp-progresso");
+    const root = this.rootEl();
+    const el = root ? root.querySelector("#gp-progresso") : null;
     if (el) el.textContent = s.progresso || "";
-    const bar = document.getElementById("gp-progresso-barra");
+    const bar = root ? root.querySelector("#gp-progresso-barra") : null;
     if (bar) bar.style.width = Math.max(2, Math.min(99, Math.round(pct * 100))) + "%";
   },
 
@@ -2632,7 +2640,10 @@ const GerarPagamentoApp = {
         const fantasia = cad && (cad.tradeName || cad.name) ? " · " + (cad.tradeName || cad.name) : "";
         const st = this.statusEmpresa(e.id, base);
         const frase = st === "erro" ? "Tem lote com erro." : (st === "ok" ? "Classificação conferida." : (st === "pendente" ? "Falta marcar Conferido." : ""));
-        const dica = this.nomeAbaEmpresa(e.id) + fantasia + " · " + e.contas + " conta(s) de parceria · " + e.titulos + " título(s)" + (frase ? " " + frase : "");
+        const soCartao = (grupos || []).length > 0 && (grupos || []).every((g) => String(g.key || "").indexOf("__cartao") === 0);
+        const dica = soCartao
+          ? this.nomeAbaEmpresa(e.id) + fantasia + " · " + e.titulos + " título(s) no cartão"
+          : this.nomeAbaEmpresa(e.id) + fantasia + " · " + e.contas + " conta(s) de parceria · " + e.titulos + " título(s)" + (frase ? " " + frase : "");
         const icone = st === "erro" ? "circle-x" : (st === "ok" ? "circle-check" : (st === "pendente" ? "circle-alert" : ""));
         const cls = st === "erro" ? " gp-tab-erro" : (st === "ok" ? " gp-tab-ok" : (st === "pendente" ? " gp-tab-pend" : ""));
         const selo = icone ? `<i data-lucide="${icone}" class="gp-tab-selo"></i>` : "";
@@ -3791,6 +3802,24 @@ const GerarPagamentoApp = {
     return [...mapa.values()];
   },
 
+  cartaoTelaHtml() {
+    const s = this.state;
+    if (s.consultando) return this.carregandoHtml();
+    if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
+    if (!s.consultado) {
+      return `<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Escolha o período e clique em <strong>Buscar títulos</strong>.</div>`;
+    }
+    const itens = this.itensCartao(this.gruposLote(), "");
+    const empresas = this.gruposCartaoEmpresa(itens);
+    const abas = this.abasEmpresaHtml(empresas, []);
+    const emp = this.state.abaEmpresa;
+    const vis = itens.filter((it) => !emp || String(it.companyId || "") === emp);
+    if (!vis.length) {
+      return `${abas}<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Nenhum título de cartão de crédito${emp ? " nesta empresa" : ""} no período carregado.</div>`;
+    }
+    return `${abas}${this.cartaoPainelHtml(vis)}`;
+  },
+
   cartaoPainelHtml(itens) {
     if (!itens.length) return "";
     const total = itens.reduce((t, it) => t + this.valorPagar(it), 0);
@@ -3803,12 +3832,7 @@ const GerarPagamentoApp = {
       <td><span class="bchk bchk-info">Cartão de crédito</span></td>
     </tr>`).join("");
     return `<section class="gp-lotes-painel gp-cartao">
-      <header class="gp-lotes-topo">
-        <div>
-          <h3>Cartão de crédito</h3>
-          <p>${itens.length} título(s) · ${this.money(total)}. A forma no Sienge é cartão de crédito, então não entram no lote do banco.</p>
-        </div>
-      </header>
+      <p class="gp-nota">${itens.length} título(s) · ${this.money(total)}. A forma no Sienge é cartão de crédito, então não entram no lote do banco.</p>
       <div style="overflow:auto;">
         <table class="gp-table gp-titulos gp-card-tab">
           <thead><tr><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th style="text-align:right;">A pagar</th><th>Pagamento</th></tr></thead>
@@ -3929,16 +3953,13 @@ const GerarPagamentoApp = {
     const emLote = this.recortarGrupos(
       grupos.map((g) => ({ ...g, key: g.key + "#lote", itens: g.itens.filter((it) => it.emLote) })).filter((g) => g.itens.length && g.key !== "__cartao#lote"),
       noPeriodo);
-    const cartaoVista = this.itensCartao(grupos, s.diaRetro);
-    const fonteEmpresa = (s.diaRetro ? aGerarRetro : aGerar.concat(emLote)).concat(this.gruposCartaoEmpresa(cartaoVista));
+    const fonteEmpresa = s.diaRetro ? aGerarRetro : aGerar.concat(emLote);
     const baseStatus = s.diaRetro ? aGerarRetro : aGerar;
     const abasEmpresa = this.abasEmpresaHtml(fonteEmpresa, baseStatus);
     const emp = this.state.abaEmpresa;
     const soEmpresa = (lista) => this.filtrarEmpresa(lista, emp);
     const aGerarVis = soEmpresa(aGerar);
     const retroVis = soEmpresa(aGerarRetro);
-    const cartaoVis = cartaoVista.filter((it) => !emp || String(it.companyId || "") === emp);
-    const painelCartao = this.cartaoPainelHtml(cartaoVis);
     const faixa = (extra) => `<div class="gp-faixa">${abasEmpresa}${extra || ""}</div>`;
     const vazio = (txt) => `<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">${txt}</div>`;
     const chaves = new Set(s.titulos.filter((r) => noPeriodo(String(r.vencimento || "").slice(0, 10))).map((r) => this.chaveTitulo(r.titulo, r.parcela)));
@@ -3971,8 +3992,7 @@ const GerarPagamentoApp = {
           <button type="button" class="btn btn-outline btn-sm" onclick="GerarPagamentoApp.setDiaRetro('')"><i data-lucide="arrow-left" style="width:14px;height:14px;"></i> Voltar ao período ${this.dataBr(s.startDate)}${s.endDate !== s.startDate ? " a " + this.dataBr(s.endDate) : ""}</button>
         </div>
         ${this.resumoAGerarHtml(retroVis)}
-        <div class="gp-lotes-painel" style="margin-top:0;">${retroVis.map(card).join("")}</div>
-        ${painelCartao}`;
+        <div class="gp-lotes-painel" style="margin-top:0;">${retroVis.map(card).join("")}</div>`;
     } else {
       const vazioPeriodo = this.state.titulos.some((r) => noPeriodo(String(r.vencimento || "").slice(0, 10)) && !r.pago && r.aPagar > 0.009)
         ? "Nenhum título a gerar lote nesta empresa no período: todos já estão em lote."
@@ -3980,7 +4000,7 @@ const GerarPagamentoApp = {
       const blocoAGerar = this.resumoAGerarHtml(aGerarVis) + (aGerarVis.length
         ? `<div class="gp-lotes-painel" style="margin-top:0;">${aGerarVis.map(card).join("")}</div>`
         : vazio(vazioPeriodo));
-      corpo = `${faixa()}${alerta}${blocoAGerar}${painelCartao}`;
+      corpo = `${faixa()}${alerta}${blocoAGerar}`;
     }
     return `${this.conferenciaHtml()}${abasLote}${corpo}`;
   },
@@ -4584,6 +4604,7 @@ const GerarPagamentoApp = {
 
   titulosHtml() {
     const s = this.state;
+    if (s.tela === "cartao") return this.cartaoTelaHtml();
     if (s.consultando) return this.carregandoHtml();
     if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
     if (!s.consultado) {
@@ -4628,13 +4649,14 @@ const GerarPagamentoApp = {
   },
 
   paintTitulos() {
-    const box = document.getElementById("gp-titulos-box");
+    const root = this.rootEl();
+    const box = root ? root.querySelector("#gp-titulos-box") : null;
     if (box) box.innerHTML = this.titulosHtml();
     if (window.lucide && box) lucide.createIcons({ root: box });
   },
 
   render() {
-    const root = document.getElementById("gerar-pagamento-root");
+    const root = this.rootEl();
     if (!root) return;
     const s = this.state;
     const busy = s.consultando;
@@ -4648,53 +4670,53 @@ const GerarPagamentoApp = {
         ? `<div class="crm-card" style="padding:20px;color:#b91c1c;">${this.esc(s.error)}</div>`
         : `
         <style>
-          #gerar-pagamento-root .gp-table { width:100%; border-collapse:collapse; font-size:0.9rem; }
-          #gerar-pagamento-root .gp-table thead th { position:sticky; top:0; background:#1b8253; color:#fff; padding:12px; text-align:left; font-weight:600; z-index:2; white-space:nowrap; }
-          #gerar-pagamento-root .gp-table tbody tr { border-bottom:1px solid #e0e5e0; }
-          #gerar-pagamento-root .gp-table tbody tr:nth-child(even) { background:#f4f6f4; }
-          #gerar-pagamento-root .gp-table td { padding:10px 12px; vertical-align:middle; }
-          #gerar-pagamento-root .gp-titulos { table-layout:fixed; min-width:1100px; font-size:0.82rem; }
-          #gerar-pagamento-root .gp-titulos td { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-          #gerar-pagamento-root .gp-titulos td.gp-status { white-space:normal; }
-          #gerar-pagamento-root .gp-titulos tbody tr.gp-row-bad { background:#fef2f2; }
-          #gerar-pagamento-root .gp-muted { color:#64748b; font-weight:400; }
-          #gerar-pagamento-root .gp-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
-          #gerar-pagamento-root .gp-ok { background:#dcfce7; color:#105436; }
-          #gerar-pagamento-root .gp-bad { background:#fee2e2; color:#b91c1c; }
-          #gerar-pagamento-root .gp-wait { background:#e2e8f0; color:#334155; }
-          #gerar-pagamento-root .gp-status small { display:block; margin-top:3px; color:#64748b; font-size:0.72rem; line-height:1.3; }
-          #gerar-pagamento-root .gp-busca { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:16px 20px; border-bottom:1px solid #e2e8f0; }
-          #gerar-pagamento-root .gp-busca .form-group { margin:0; display:flex; flex-direction:column; gap:4px; }
-          #gerar-pagamento-root .gp-busca label { font-size:0.75rem; font-weight:700; color:#475569; }
-          #gerar-pagamento-root .gp-busca .form-control { height:38px; min-width:150px; }
-          #gerar-pagamento-root .gp-filtros { display:flex; gap:8px; flex-wrap:wrap; padding:14px 20px 4px; }
-          #gerar-pagamento-root .gp-filtro { height:32px; padding:0 12px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#334155; font-size:0.8rem; font-weight:600; cursor:pointer; }
-          #gerar-pagamento-root .gp-filtro b { margin-left:4px; }
-          #gerar-pagamento-root .gp-filtro.is-active { background:#105436; border-color:#105436; color:#fff; }
-          #gerar-pagamento-root .gp-filtro.is-bad.is-active { background:#b91c1c; border-color:#b91c1c; }
-          #gerar-pagamento-root .gp-nota { margin:6px 20px 10px; color:#64748b; font-size:0.78rem; }
-          #gerar-pagamento-root .gp-alerta-conta { margin:12px 20px 0; padding:12px 14px; border:1px solid #fecaca; border-radius:10px; background:#fef2f2; color:#7f1d1d; font-size:0.82rem; line-height:1.45; }
-          #gerar-pagamento-root .gp-alerta-conta strong { display:block; color:#b91c1c; font-size:0.9rem; margin-bottom:2px; }
-          #gerar-pagamento-root .gp-alerta-conta span { display:block; margin-bottom:6px; }
-          #gerar-pagamento-root .gp-alerta-conta ul { margin:0; padding-left:18px; }
-          #gerar-pagamento-root .gp-alerta-conta li { margin:2px 0; }
-          #gerar-pagamento-root .gp-acerto { margin:0 16px 12px; padding:12px 14px; border:1px solid #fdba74; border-radius:10px; background:#fff7ed; color:#9a3412; font-size:0.82rem; line-height:1.45; }
-          #gerar-pagamento-root .gp-acerto strong { color:#c2410c; }
-          #gerar-pagamento-root .gp-acerto span { display:block; margin-top:2px; }
-          #gerar-pagamento-root .gp-acerto ul { margin:6px 0 0; padding-left:18px; }
-          #gerar-pagamento-root .gp-acerto li { margin:4px 0; }
-          #gerar-pagamento-root .gp-acerto-mini { color:#c2410c; font-weight:600; }
-          #gerar-pagamento-root .gp-abas-lote { margin:0; }
-          #gerar-pagamento-root .gp-abas-lotes { margin:12px 16px 0; }
-          #gerar-pagamento-root .gp-faixa { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px 16px; margin:8px 20px 4px; }
-          #gerar-pagamento-root .gp-abas-empresa { margin:0; flex:1 1 100%; }
-          #gerar-pagamento-root .ml-tab.gp-tab-pend { color:#a16207; background:#fef9c3; border-radius:8px 8px 0 0; }
-          #gerar-pagamento-root .ml-tab.gp-tab-pend.is-active { color:#a16207; border-bottom-color:#eab308; }
-          #gerar-pagamento-root .ml-tab.gp-tab-ok { color:#105436; background:#ecfdf5; border-radius:8px 8px 0 0; }
-          #gerar-pagamento-root .ml-tab.gp-tab-ok.is-active { color:#105436; border-bottom-color:#105436; }
-          #gerar-pagamento-root .ml-tab.gp-tab-erro { color:#b91c1c; background:#fef2f2; border-radius:8px 8px 0 0; }
-          #gerar-pagamento-root .ml-tab.gp-tab-erro.is-active { color:#b91c1c; border-bottom-color:#b91c1c; }
-          #gerar-pagamento-root .gp-tab-selo { width:15px; height:15px; }
+          .gp-root .gp-table { width:100%; border-collapse:collapse; font-size:0.9rem; }
+          .gp-root .gp-table thead th { position:sticky; top:0; background:#1b8253; color:#fff; padding:12px; text-align:left; font-weight:600; z-index:2; white-space:nowrap; }
+          .gp-root .gp-table tbody tr { border-bottom:1px solid #e0e5e0; }
+          .gp-root .gp-table tbody tr:nth-child(even) { background:#f4f6f4; }
+          .gp-root .gp-table td { padding:10px 12px; vertical-align:middle; }
+          .gp-root .gp-titulos { table-layout:fixed; min-width:1100px; font-size:0.82rem; }
+          .gp-root .gp-titulos td { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .gp-root .gp-titulos td.gp-status { white-space:normal; }
+          .gp-root .gp-titulos tbody tr.gp-row-bad { background:#fef2f2; }
+          .gp-root .gp-muted { color:#64748b; font-weight:400; }
+          .gp-root .gp-pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
+          .gp-root .gp-ok { background:#dcfce7; color:#105436; }
+          .gp-root .gp-bad { background:#fee2e2; color:#b91c1c; }
+          .gp-root .gp-wait { background:#e2e8f0; color:#334155; }
+          .gp-root .gp-status small { display:block; margin-top:3px; color:#64748b; font-size:0.72rem; line-height:1.3; }
+          .gp-root .gp-busca { display:flex; align-items:flex-end; gap:12px; flex-wrap:wrap; padding:16px 20px; border-bottom:1px solid #e2e8f0; }
+          .gp-root .gp-busca .form-group { margin:0; display:flex; flex-direction:column; gap:4px; }
+          .gp-root .gp-busca label { font-size:0.75rem; font-weight:700; color:#475569; }
+          .gp-root .gp-busca .form-control { height:38px; min-width:150px; }
+          .gp-root .gp-filtros { display:flex; gap:8px; flex-wrap:wrap; padding:14px 20px 4px; }
+          .gp-root .gp-filtro { height:32px; padding:0 12px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#334155; font-size:0.8rem; font-weight:600; cursor:pointer; }
+          .gp-root .gp-filtro b { margin-left:4px; }
+          .gp-root .gp-filtro.is-active { background:#105436; border-color:#105436; color:#fff; }
+          .gp-root .gp-filtro.is-bad.is-active { background:#b91c1c; border-color:#b91c1c; }
+          .gp-root .gp-nota { margin:6px 20px 10px; color:#64748b; font-size:0.78rem; }
+          .gp-root .gp-alerta-conta { margin:12px 20px 0; padding:12px 14px; border:1px solid #fecaca; border-radius:10px; background:#fef2f2; color:#7f1d1d; font-size:0.82rem; line-height:1.45; }
+          .gp-root .gp-alerta-conta strong { display:block; color:#b91c1c; font-size:0.9rem; margin-bottom:2px; }
+          .gp-root .gp-alerta-conta span { display:block; margin-bottom:6px; }
+          .gp-root .gp-alerta-conta ul { margin:0; padding-left:18px; }
+          .gp-root .gp-alerta-conta li { margin:2px 0; }
+          .gp-root .gp-acerto { margin:0 16px 12px; padding:12px 14px; border:1px solid #fdba74; border-radius:10px; background:#fff7ed; color:#9a3412; font-size:0.82rem; line-height:1.45; }
+          .gp-root .gp-acerto strong { color:#c2410c; }
+          .gp-root .gp-acerto span { display:block; margin-top:2px; }
+          .gp-root .gp-acerto ul { margin:6px 0 0; padding-left:18px; }
+          .gp-root .gp-acerto li { margin:4px 0; }
+          .gp-root .gp-acerto-mini { color:#c2410c; font-weight:600; }
+          .gp-root .gp-abas-lote { margin:0; }
+          .gp-root .gp-abas-lotes { margin:12px 16px 0; }
+          .gp-root .gp-faixa { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px 16px; margin:8px 20px 4px; }
+          .gp-root .gp-abas-empresa { margin:0; flex:1 1 100%; }
+          .gp-root .ml-tab.gp-tab-pend { color:#a16207; background:#fef9c3; border-radius:8px 8px 0 0; }
+          .gp-root .ml-tab.gp-tab-pend.is-active { color:#a16207; border-bottom-color:#eab308; }
+          .gp-root .ml-tab.gp-tab-ok { color:#105436; background:#ecfdf5; border-radius:8px 8px 0 0; }
+          .gp-root .ml-tab.gp-tab-ok.is-active { color:#105436; border-bottom-color:#105436; }
+          .gp-root .ml-tab.gp-tab-erro { color:#b91c1c; background:#fef2f2; border-radius:8px 8px 0 0; }
+          .gp-root .ml-tab.gp-tab-erro.is-active { color:#b91c1c; border-bottom-color:#b91c1c; }
+          .gp-root .gp-tab-selo { width:15px; height:15px; }
           #gp-fila-conf { position:fixed; inset:0; z-index:2147483000; display:flex; align-items:center; justify-content:center; background:rgba(12,41,29,0.55); padding:16px; }
           #gp-fila-conf .gp-fila-box { background:#fff; border-radius:12px; width:100%; max-width:460px; max-height:min(78vh, 640px); display:flex; flex-direction:column; padding:18px 18px 14px; box-shadow:0 18px 40px rgba(0,0,0,0.22); }
           #gp-fila-conf h3 { margin:0; color:#105436; font-size:1rem; }
@@ -4707,120 +4729,120 @@ const GerarPagamentoApp = {
           #gp-fila-conf .gp-fila-linha strong { text-align:right; }
           #gp-fila-conf .gp-fila-nota { color:#64748b; }
           #gp-fila-conf .gp-fila-acoes { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
-          #gerar-pagamento-root .gp-lote-acoes .btn:disabled { opacity:0.45; cursor:not-allowed; }
-          #gerar-pagamento-root .gp-conferido { height:36px; padding:0 12px; border-radius:8px; border:1px solid #eab308; background:#fef9c3; color:#a16207; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
-          #gerar-pagamento-root .gp-conferido.is-on { border-color:#105436; background:#105436; color:#fff; }
-          #gerar-pagamento-root .gp-cc-rotulo { display:inline-block; margin-right:6px; padding:1px 7px; border-radius:999px; background:#e2e8f0; color:#334155; font-size:0.68rem; font-weight:800; letter-spacing:.02em; text-transform:uppercase; }
-          #gerar-pagamento-root .gp-lote-linhas { display:flex; flex-direction:column; gap:6px; padding:10px 14px 12px; background:#fff; }
-          #gerar-pagamento-root .gp-conta-linha { font-size:0.82rem; color:#0f172a; font-weight:700; }
-          #gerar-pagamento-root .gp-conta-linha b { color:#64748b; font-size:0.68rem; text-transform:uppercase; letter-spacing:.02em; margin-right:6px; }
-          #gerar-pagamento-root .gp-titulo-linha { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; width:100%; text-align:left; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; cursor:pointer; font:inherit; color:#0f172a; }
-          #gerar-pagamento-root .gp-titulo-linha:hover { background:#ecfdf5; border-color:#86efac; }
-          #gerar-pagamento-root .gp-tl-id { font-weight:800; min-width:88px; }
-          #gerar-pagamento-root .gp-tl-credor { color:#334155; flex:1 1 140px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-          #gerar-pagamento-root .gp-tl-meta { color:#334155; font-size:0.78rem; }
-          #gerar-pagamento-root .gp-tl-meta b { display:block; color:#64748b; font-size:0.66rem; text-transform:uppercase; letter-spacing:.02em; }
-          #gerar-pagamento-root .gp-tl-val { margin-left:auto; font-weight:800; color:#105436; white-space:nowrap; }
-          #gerar-pagamento-root .gp-conf { display:flex; gap:10px; align-items:flex-start; margin:12px 20px 4px; padding:12px 14px; border:1px solid #bbf7d0; border-left:4px solid #105436; border-radius:10px; background:#f0fdf4; color:#14532d; font-size:0.82rem; line-height:1.45; }
-          #gerar-pagamento-root .gp-conf.is-erro { border-color:#fecaca; border-left-color:#b91c1c; background:#fef2f2; color:#7f1d1d; }
-          #gerar-pagamento-root .gp-conf-spin { width:16px; height:16px; flex:none; margin-top:2px; border:2px solid rgba(16,84,54,0.2); border-top-color:#105436; border-radius:50%; animation:spin 0.8s linear infinite; }
-          #gerar-pagamento-root .gp-retro { display:flex; gap:10px; align-items:flex-start; margin:12px 20px 4px; padding:12px 14px; border:1px solid #fed7aa; border-left:4px solid #f37021; border-radius:10px; background:#fff7ed; color:#7c2d12; font-size:0.82rem; line-height:1.45; }
-          #gerar-pagamento-root .gp-retro-ic { width:18px; height:18px; color:#ea580c; flex-shrink:0; margin-top:1px; }
-          #gerar-pagamento-root .gp-retro-corpo { display:flex; flex-direction:column; gap:8px; min-width:0; }
-          #gerar-pagamento-root .gp-retro-txt strong { color:#9a3412; }
-          #gerar-pagamento-root .gp-retro-dias { display:flex; flex-wrap:wrap; gap:6px; }
-          #gerar-pagamento-root .gp-retro-dia { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:999px; border:1px solid #fdba74; background:#fff; color:#9a3412; font-size:0.78rem; font-weight:700; cursor:pointer; }
-          #gerar-pagamento-root .gp-retro-dia b { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:18px; padding:0 5px; border-radius:999px; background:#ffedd5; color:#9a3412; font-size:0.7rem; }
-          #gerar-pagamento-root .gp-retro-dia.has-bad b { background:#fee2e2; color:#b91c1c; }
-          #gerar-pagamento-root .gp-retro-dia:hover { background:#ffedd5; }
-          #gerar-pagamento-root .gp-retro-dia.is-on { background:#f37021; border-color:#f37021; color:#fff; }
-          #gerar-pagamento-root .gp-retro-dia.is-on b { background:#fff; color:#c2410c; }
-          #gerar-pagamento-root .gp-retro-mais { height:28px; padding:0 10px; border:0; background:transparent; color:#9a3412; font-size:0.78rem; font-weight:700; text-decoration:underline; cursor:pointer; }
-          #gerar-pagamento-root .gp-retro-vendo { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 20px 0; padding:8px 12px; border-radius:8px; background:#f1f5f9; color:#334155; font-size:0.82rem; }
-          #gerar-pagamento-root .gp-retro-vendo span { display:inline-flex; align-items:center; gap:6px; }
-          #gerar-pagamento-root .gp-warn { background:#ffedd5; color:#c2410c; }
-          #gerar-pagamento-root .btn:disabled { opacity:0.55; cursor:not-allowed; }
-          #gerar-pagamento-root .gp-visoes { display:flex; gap:8px; padding:14px 20px 0; }
-          #gerar-pagamento-root .gp-visao { height:34px; padding:0 14px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#334155; font-size:0.82rem; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
-          #gerar-pagamento-root .gp-visao.is-active { background:#105436; border-color:#105436; color:#fff; }
-          #gerar-pagamento-root .gp-lotes-painel { margin:8px 16px 16px; }
-          #gerar-pagamento-root .gp-lotes-topo { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
-          #gerar-pagamento-root .gp-lotes-topo h3 { margin:0 0 4px; color:#0f172a; font-size:1.15rem; }
-          #gerar-pagamento-root .gp-lotes-topo p { margin:0; max-width:640px; color:#64748b; font-size:0.82rem; line-height:1.4; }
-          #gerar-pagamento-root .gp-lotes-periodo { display:inline-flex; align-items:center; gap:8px; height:38px; padding:0 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#334155; font-size:0.82rem; font-weight:700; }
-          #gerar-pagamento-root .gp-lotes-periodo i { width:16px; height:16px; color:#64748b; }
-          #gerar-pagamento-root .gp-kpis { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; margin-bottom:16px; }
-          #gerar-pagamento-root .gp-kpi { display:flex; align-items:center; gap:12px; padding:14px 16px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
-          #gerar-pagamento-root .gp-kpi small { display:block; color:#64748b; font-size:0.75rem; font-weight:600; }
-          #gerar-pagamento-root .gp-kpi strong { display:block; margin-top:2px; color:#0f172a; font-size:1.25rem; }
-          #gerar-pagamento-root .gp-kpi-ic { width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; flex:none; }
-          #gerar-pagamento-root .gp-kpi-ic i { width:18px; height:18px; }
-          #gerar-pagamento-root .gp-kpi-ok .gp-kpi-ic { background:#ecfdf5; color:#105436; }
-          #gerar-pagamento-root .gp-kpi-wait .gp-kpi-ic { background:#fef9c3; color:#a16207; }
-          #gerar-pagamento-root .gp-kpi-info .gp-kpi-ic { background:#eff6ff; color:#1d4ed8; }
-          #gerar-pagamento-root .gp-kpi-money .gp-kpi-ic { background:#f0fdf4; color:#105436; }
-          #gerar-pagamento-root .gp-lotes-barra { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin:4px 0 10px; }
-          #gerar-pagamento-root .gp-lotes-barra h3 { margin:0; font-size:0.95rem; color:#0f172a; }
-          #gerar-pagamento-root .gp-lotes-barra label { display:inline-flex; align-items:center; gap:8px; color:#64748b; font-size:0.75rem; font-weight:700; }
-          #gerar-pagamento-root .gp-lotes-barra select { height:36px; border:1px solid #e2e8f0; border-radius:8px; padding:0 10px; background:#fff; color:#0f172a; font-size:0.82rem; font-weight:600; }
-          #gerar-pagamento-root .gp-card { margin:0 0 12px; border:1px solid #e2e8f0; border-radius:14px; background:#fff; overflow:hidden; }
-          #gerar-pagamento-root .gp-card-bad { background:#fff7f7; border-color:#fecaca; }
-          #gerar-pagamento-root .gp-card-ok { background:#f0fdf4; border-color:#bbf7d0; }
-          #gerar-pagamento-root .gp-card-wait { background:#f8fbff; border-color:#bfdbfe; }
-          #gerar-pagamento-root .gp-card-h { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:14px 16px; cursor:pointer; }
-          #gerar-pagamento-root .gp-card-ic { width:36px; height:36px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:none; background:#fff; }
-          #gerar-pagamento-root .gp-card-ic i { width:18px; height:18px; }
-          #gerar-pagamento-root .gp-card-bad .gp-card-ic { color:#dc2626; }
-          #gerar-pagamento-root .gp-card-ok .gp-card-ic { color:#105436; }
-          #gerar-pagamento-root .gp-card-wait .gp-card-ic { color:#2563eb; }
-          #gerar-pagamento-root .gp-card-id { min-width:180px; display:flex; flex-direction:column; gap:2px; }
-          #gerar-pagamento-root .gp-card-id small { color:#64748b; font-size:0.68rem; font-weight:700; text-transform:uppercase; }
-          #gerar-pagamento-root .gp-card-id strong { color:#0f172a; font-size:0.92rem; }
-          #gerar-pagamento-root .gp-card-id span { color:#64748b; font-size:0.75rem; }
-          #gerar-pagamento-root .gp-card-meta { display:flex; align-items:center; gap:8px; min-width:110px; color:#334155; }
-          #gerar-pagamento-root .gp-card-meta i { width:16px; height:16px; color:#64748b; }
-          #gerar-pagamento-root .gp-card-meta small { display:block; color:#64748b; font-size:0.68rem; }
-          #gerar-pagamento-root .gp-card-meta b { font-size:0.88rem; }
-          #gerar-pagamento-root .gp-card-status { margin-left:auto; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
-          #gerar-pagamento-root .gp-card-status small { color:#64748b; font-size:0.72rem; }
-          #gerar-pagamento-root .gp-card-badge { display:inline-flex; align-items:center; gap:6px; font-weight:800; font-size:0.82rem; }
-          #gerar-pagamento-root .gp-card-badge i { width:16px; height:16px; }
-          #gerar-pagamento-root .gp-card-badge-bad { color:#dc2626; }
-          #gerar-pagamento-root .gp-card-badge-ok { color:#105436; }
-          #gerar-pagamento-root .gp-card-badge-wait { color:#2563eb; }
-          #gerar-pagamento-root .gp-card-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-          #gerar-pagamento-root .gp-card-data { height:32px; border:1px solid #cbd5e1; border-radius:8px; padding:0 8px; font-size:0.82rem; color:#0f172a; background:#fff; }
-          #gerar-pagamento-root .gp-card-seta { width:18px; height:18px; color:#94a3b8; transition:transform .15s ease; }
-          #gerar-pagamento-root .gp-card.is-open .gp-card-seta { transform:rotate(180deg); }
-          #gerar-pagamento-root .gp-mais { position:relative; }
-          #gerar-pagamento-root .gp-mais summary { list-style:none; width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#64748b; }
-          #gerar-pagamento-root .gp-mais summary::-webkit-details-marker { display:none; }
-          #gerar-pagamento-root .gp-mais summary i { width:16px; height:16px; }
-          #gerar-pagamento-root .gp-mais div { position:absolute; right:0; top:36px; z-index:5; min-width:140px; padding:6px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; box-shadow:0 10px 24px rgba(15,23,42,.12); }
-          #gerar-pagamento-root .gp-mais button { display:block; width:100%; height:32px; border:0; background:transparent; text-align:left; padding:0 8px; border-radius:6px; cursor:pointer; font-weight:700; color:#334155; }
-          #gerar-pagamento-root .gp-mais button.is-danger { color:#b91c1c; }
-          #gerar-pagamento-root .gp-mais button:hover { background:#f8fafc; }
-          #gerar-pagamento-root .gp-card-body { background:#fff; border-top:1px solid #e2e8f0; }
-          #gerar-pagamento-root .gp-card-sub { padding:10px 16px 0; font-size:0.78rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.03em; }
-          #gerar-pagamento-root .gp-card-tab { min-width:760px; }
-          #gerar-pagamento-root .gp-card-tab thead th { background:#f8fafc; color:#64748b; font-size:0.72rem; text-transform:uppercase; }
-          #gerar-pagamento-root .gp-lotes-vazio { padding:22px 8px; color:#64748b; font-size:0.85rem; }
-          #gerar-pagamento-root .gp-lotes-dica { display:flex; align-items:flex-start; gap:8px; margin:8px 0 0; padding:12px 14px; border-radius:10px; background:#f8fafc; color:#64748b; font-size:0.78rem; }
-          #gerar-pagamento-root .gp-lotes-dica i { width:16px; height:16px; color:#2563eb; flex:none; }
-          @media (max-width: 1100px) { #gerar-pagamento-root .gp-kpis { grid-template-columns:1fr 1fr; } }
-          #gerar-pagamento-root .gp-lote { margin:12px 20px; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; background:#fff; }
-          #gerar-pagamento-root .gp-lote-sem { border-color:#fecaca; }
-          #gerar-pagamento-root .gp-lote-h { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 14px; background:#f0f7f3; border-bottom:1px solid #e2e8f0; }
-          #gerar-pagamento-root .gp-lote-h[role="button"] { cursor:pointer; user-select:none; }
-          #gerar-pagamento-root .gp-lote-h[role="button"]:hover { filter:brightness(0.98); }
-          #gerar-pagamento-root .gp-lote:not(.is-open) .gp-lote-h { border-bottom:0; }
-          #gerar-pagamento-root .gp-lote-tit { display:flex; align-items:center; gap:10px; min-width:0; }
-          #gerar-pagamento-root .gp-lote-seta { width:18px; height:18px; color:#105436; flex-shrink:0; transition:transform .15s ease; }
-          #gerar-pagamento-root .gp-lote.is-open .gp-lote-seta { transform:rotate(90deg); }
-          #gerar-pagamento-root .gp-cc-outro { color:#64748b; font-weight:600; }
-          #gerar-pagamento-root .gp-aut { display:inline-flex; align-items:center; gap:2px; flex-wrap:wrap; }
-          #gerar-pagamento-root .gp-aut-seta { width:12px; height:12px; color:#94a3b8; }
-          #gerar-pagamento-root .gp-cc-lista { display:inline-flex; flex-direction:column; align-items:flex-start; gap:3px; cursor:help; font-size:0.85rem; }
+          .gp-root .gp-lote-acoes .btn:disabled { opacity:0.45; cursor:not-allowed; }
+          .gp-root .gp-conferido { height:36px; padding:0 12px; border-radius:8px; border:1px solid #eab308; background:#fef9c3; color:#a16207; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+          .gp-root .gp-conferido.is-on { border-color:#105436; background:#105436; color:#fff; }
+          .gp-root .gp-cc-rotulo { display:inline-block; margin-right:6px; padding:1px 7px; border-radius:999px; background:#e2e8f0; color:#334155; font-size:0.68rem; font-weight:800; letter-spacing:.02em; text-transform:uppercase; }
+          .gp-root .gp-lote-linhas { display:flex; flex-direction:column; gap:6px; padding:10px 14px 12px; background:#fff; }
+          .gp-root .gp-conta-linha { font-size:0.82rem; color:#0f172a; font-weight:700; }
+          .gp-root .gp-conta-linha b { color:#64748b; font-size:0.68rem; text-transform:uppercase; letter-spacing:.02em; margin-right:6px; }
+          .gp-root .gp-titulo-linha { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; width:100%; text-align:left; padding:8px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#f8fafc; cursor:pointer; font:inherit; color:#0f172a; }
+          .gp-root .gp-titulo-linha:hover { background:#ecfdf5; border-color:#86efac; }
+          .gp-root .gp-tl-id { font-weight:800; min-width:88px; }
+          .gp-root .gp-tl-credor { color:#334155; flex:1 1 140px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+          .gp-root .gp-tl-meta { color:#334155; font-size:0.78rem; }
+          .gp-root .gp-tl-meta b { display:block; color:#64748b; font-size:0.66rem; text-transform:uppercase; letter-spacing:.02em; }
+          .gp-root .gp-tl-val { margin-left:auto; font-weight:800; color:#105436; white-space:nowrap; }
+          .gp-root .gp-conf { display:flex; gap:10px; align-items:flex-start; margin:12px 20px 4px; padding:12px 14px; border:1px solid #bbf7d0; border-left:4px solid #105436; border-radius:10px; background:#f0fdf4; color:#14532d; font-size:0.82rem; line-height:1.45; }
+          .gp-root .gp-conf.is-erro { border-color:#fecaca; border-left-color:#b91c1c; background:#fef2f2; color:#7f1d1d; }
+          .gp-root .gp-conf-spin { width:16px; height:16px; flex:none; margin-top:2px; border:2px solid rgba(16,84,54,0.2); border-top-color:#105436; border-radius:50%; animation:spin 0.8s linear infinite; }
+          .gp-root .gp-retro { display:flex; gap:10px; align-items:flex-start; margin:12px 20px 4px; padding:12px 14px; border:1px solid #fed7aa; border-left:4px solid #f37021; border-radius:10px; background:#fff7ed; color:#7c2d12; font-size:0.82rem; line-height:1.45; }
+          .gp-root .gp-retro-ic { width:18px; height:18px; color:#ea580c; flex-shrink:0; margin-top:1px; }
+          .gp-root .gp-retro-corpo { display:flex; flex-direction:column; gap:8px; min-width:0; }
+          .gp-root .gp-retro-txt strong { color:#9a3412; }
+          .gp-root .gp-retro-dias { display:flex; flex-wrap:wrap; gap:6px; }
+          .gp-root .gp-retro-dia { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 10px; border-radius:999px; border:1px solid #fdba74; background:#fff; color:#9a3412; font-size:0.78rem; font-weight:700; cursor:pointer; }
+          .gp-root .gp-retro-dia b { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:18px; padding:0 5px; border-radius:999px; background:#ffedd5; color:#9a3412; font-size:0.7rem; }
+          .gp-root .gp-retro-dia.has-bad b { background:#fee2e2; color:#b91c1c; }
+          .gp-root .gp-retro-dia:hover { background:#ffedd5; }
+          .gp-root .gp-retro-dia.is-on { background:#f37021; border-color:#f37021; color:#fff; }
+          .gp-root .gp-retro-dia.is-on b { background:#fff; color:#c2410c; }
+          .gp-root .gp-retro-mais { height:28px; padding:0 10px; border:0; background:transparent; color:#9a3412; font-size:0.78rem; font-weight:700; text-decoration:underline; cursor:pointer; }
+          .gp-root .gp-retro-vendo { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:10px 20px 0; padding:8px 12px; border-radius:8px; background:#f1f5f9; color:#334155; font-size:0.82rem; }
+          .gp-root .gp-retro-vendo span { display:inline-flex; align-items:center; gap:6px; }
+          .gp-root .gp-warn { background:#ffedd5; color:#c2410c; }
+          .gp-root .btn:disabled { opacity:0.55; cursor:not-allowed; }
+          .gp-root .gp-visoes { display:flex; gap:8px; padding:14px 20px 0; }
+          .gp-root .gp-visao { height:34px; padding:0 14px; border-radius:8px; border:1px solid #cbd5e1; background:#fff; color:#334155; font-size:0.82rem; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+          .gp-root .gp-visao.is-active { background:#105436; border-color:#105436; color:#fff; }
+          .gp-root .gp-lotes-painel { margin:8px 16px 16px; }
+          .gp-root .gp-lotes-topo { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:14px; }
+          .gp-root .gp-lotes-topo h3 { margin:0 0 4px; color:#0f172a; font-size:1.15rem; }
+          .gp-root .gp-lotes-topo p { margin:0; max-width:640px; color:#64748b; font-size:0.82rem; line-height:1.4; }
+          .gp-root .gp-lotes-periodo { display:inline-flex; align-items:center; gap:8px; height:38px; padding:0 12px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#334155; font-size:0.82rem; font-weight:700; }
+          .gp-root .gp-lotes-periodo i { width:16px; height:16px; color:#64748b; }
+          .gp-root .gp-kpis { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:12px; margin-bottom:16px; }
+          .gp-root .gp-kpi { display:flex; align-items:center; gap:12px; padding:14px 16px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+          .gp-root .gp-kpi small { display:block; color:#64748b; font-size:0.75rem; font-weight:600; }
+          .gp-root .gp-kpi strong { display:block; margin-top:2px; color:#0f172a; font-size:1.25rem; }
+          .gp-root .gp-kpi-ic { width:36px; height:36px; border-radius:10px; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+          .gp-root .gp-kpi-ic i { width:18px; height:18px; }
+          .gp-root .gp-kpi-ok .gp-kpi-ic { background:#ecfdf5; color:#105436; }
+          .gp-root .gp-kpi-wait .gp-kpi-ic { background:#fef9c3; color:#a16207; }
+          .gp-root .gp-kpi-info .gp-kpi-ic { background:#eff6ff; color:#1d4ed8; }
+          .gp-root .gp-kpi-money .gp-kpi-ic { background:#f0fdf4; color:#105436; }
+          .gp-root .gp-lotes-barra { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin:4px 0 10px; }
+          .gp-root .gp-lotes-barra h3 { margin:0; font-size:0.95rem; color:#0f172a; }
+          .gp-root .gp-lotes-barra label { display:inline-flex; align-items:center; gap:8px; color:#64748b; font-size:0.75rem; font-weight:700; }
+          .gp-root .gp-lotes-barra select { height:36px; border:1px solid #e2e8f0; border-radius:8px; padding:0 10px; background:#fff; color:#0f172a; font-size:0.82rem; font-weight:600; }
+          .gp-root .gp-card { margin:0 0 12px; border:1px solid #e2e8f0; border-radius:14px; background:#fff; overflow:hidden; }
+          .gp-root .gp-card-bad { background:#fff7f7; border-color:#fecaca; }
+          .gp-root .gp-card-ok { background:#f0fdf4; border-color:#bbf7d0; }
+          .gp-root .gp-card-wait { background:#f8fbff; border-color:#bfdbfe; }
+          .gp-root .gp-card-h { display:flex; align-items:center; gap:16px; flex-wrap:wrap; padding:14px 16px; cursor:pointer; }
+          .gp-root .gp-card-ic { width:36px; height:36px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; flex:none; background:#fff; }
+          .gp-root .gp-card-ic i { width:18px; height:18px; }
+          .gp-root .gp-card-bad .gp-card-ic { color:#dc2626; }
+          .gp-root .gp-card-ok .gp-card-ic { color:#105436; }
+          .gp-root .gp-card-wait .gp-card-ic { color:#2563eb; }
+          .gp-root .gp-card-id { min-width:180px; display:flex; flex-direction:column; gap:2px; }
+          .gp-root .gp-card-id small { color:#64748b; font-size:0.68rem; font-weight:700; text-transform:uppercase; }
+          .gp-root .gp-card-id strong { color:#0f172a; font-size:0.92rem; }
+          .gp-root .gp-card-id span { color:#64748b; font-size:0.75rem; }
+          .gp-root .gp-card-meta { display:flex; align-items:center; gap:8px; min-width:110px; color:#334155; }
+          .gp-root .gp-card-meta i { width:16px; height:16px; color:#64748b; }
+          .gp-root .gp-card-meta small { display:block; color:#64748b; font-size:0.68rem; }
+          .gp-root .gp-card-meta b { font-size:0.88rem; }
+          .gp-root .gp-card-status { margin-left:auto; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+          .gp-root .gp-card-status small { color:#64748b; font-size:0.72rem; }
+          .gp-root .gp-card-badge { display:inline-flex; align-items:center; gap:6px; font-weight:800; font-size:0.82rem; }
+          .gp-root .gp-card-badge i { width:16px; height:16px; }
+          .gp-root .gp-card-badge-bad { color:#dc2626; }
+          .gp-root .gp-card-badge-ok { color:#105436; }
+          .gp-root .gp-card-badge-wait { color:#2563eb; }
+          .gp-root .gp-card-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+          .gp-root .gp-card-data { height:32px; border:1px solid #cbd5e1; border-radius:8px; padding:0 8px; font-size:0.82rem; color:#0f172a; background:#fff; }
+          .gp-root .gp-card-seta { width:18px; height:18px; color:#94a3b8; transition:transform .15s ease; }
+          .gp-root .gp-card.is-open .gp-card-seta { transform:rotate(180deg); }
+          .gp-root .gp-mais { position:relative; }
+          .gp-root .gp-mais summary { list-style:none; width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#64748b; }
+          .gp-root .gp-mais summary::-webkit-details-marker { display:none; }
+          .gp-root .gp-mais summary i { width:16px; height:16px; }
+          .gp-root .gp-mais div { position:absolute; right:0; top:36px; z-index:5; min-width:140px; padding:6px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; box-shadow:0 10px 24px rgba(15,23,42,.12); }
+          .gp-root .gp-mais button { display:block; width:100%; height:32px; border:0; background:transparent; text-align:left; padding:0 8px; border-radius:6px; cursor:pointer; font-weight:700; color:#334155; }
+          .gp-root .gp-mais button.is-danger { color:#b91c1c; }
+          .gp-root .gp-mais button:hover { background:#f8fafc; }
+          .gp-root .gp-card-body { background:#fff; border-top:1px solid #e2e8f0; }
+          .gp-root .gp-card-sub { padding:10px 16px 0; font-size:0.78rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:.03em; }
+          .gp-root .gp-card-tab { min-width:760px; }
+          .gp-root .gp-card-tab thead th { background:#f8fafc; color:#64748b; font-size:0.72rem; text-transform:uppercase; }
+          .gp-root .gp-lotes-vazio { padding:22px 8px; color:#64748b; font-size:0.85rem; }
+          .gp-root .gp-lotes-dica { display:flex; align-items:flex-start; gap:8px; margin:8px 0 0; padding:12px 14px; border-radius:10px; background:#f8fafc; color:#64748b; font-size:0.78rem; }
+          .gp-root .gp-lotes-dica i { width:16px; height:16px; color:#2563eb; flex:none; }
+          @media (max-width: 1100px) { .gp-root .gp-kpis { grid-template-columns:1fr 1fr; } }
+          .gp-root .gp-lote { margin:12px 20px; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; background:#fff; }
+          .gp-root .gp-lote-sem { border-color:#fecaca; }
+          .gp-root .gp-lote-h { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 14px; background:#f0f7f3; border-bottom:1px solid #e2e8f0; }
+          .gp-root .gp-lote-h[role="button"] { cursor:pointer; user-select:none; }
+          .gp-root .gp-lote-h[role="button"]:hover { filter:brightness(0.98); }
+          .gp-root .gp-lote:not(.is-open) .gp-lote-h { border-bottom:0; }
+          .gp-root .gp-lote-tit { display:flex; align-items:center; gap:10px; min-width:0; }
+          .gp-root .gp-lote-seta { width:18px; height:18px; color:#105436; flex-shrink:0; transition:transform .15s ease; }
+          .gp-root .gp-lote.is-open .gp-lote-seta { transform:rotate(90deg); }
+          .gp-root .gp-cc-outro { color:#64748b; font-weight:600; }
+          .gp-root .gp-aut { display:inline-flex; align-items:center; gap:2px; flex-wrap:wrap; }
+          .gp-root .gp-aut-seta { width:12px; height:12px; color:#94a3b8; }
+          .gp-root .gp-cc-lista { display:inline-flex; flex-direction:column; align-items:flex-start; gap:3px; cursor:help; font-size:0.85rem; }
           .gp-cc-pop { display:none; position:fixed; z-index:3000; background:#fff; border:1px solid #e2e8f0; border-radius:10px; box-shadow:0 10px 30px rgba(15,23,42,.18); padding:12px 14px; pointer-events:none; max-width:min(980px, 96vw); max-height:min(70vh, 640px); overflow:auto; }
           .gp-cc-pop h4 { margin:0 0 8px; color:#105436; font-size:0.92rem; }
           .gp-cc-pop .gp-rateio { font-size:0.78rem; }
@@ -4833,38 +4855,38 @@ const GerarPagamentoApp = {
           .gp-cc-pop-tab .gp-cc-outro { color:#64748b; font-weight:600; }
           .gp-cc-pop-nome { color:#64748b; font-size:0.74rem; margin-left:4px; }
           .gp-cc-pop .bchk { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.72rem; font-weight:700; }
-          #gerar-pagamento-root .gp-bloq, #gerar-pagamento-root .gp-status small.gp-bloq { color:#b91c1c; font-weight:700; }
-          #gerar-pagamento-root .gp-liberar { height:22px; margin-left:4px; padding:0 8px; border:1px solid #c2410c; border-radius:999px; background:#fff; color:#c2410c; font-size:0.68rem; font-weight:800; cursor:pointer; }
-          #gerar-pagamento-root .gp-liberar:hover { background:#ffedd5; }
-          #gerar-pagamento-root .gp-lote-sem .gp-lote-h { background:#fef2f2; }
-          #gerar-pagamento-root .gp-lote-conta { font-weight:800; color:#105436; font-size:0.92rem; }
-          #gerar-pagamento-root .gp-lote-sem .gp-lote-conta { color:#b91c1c; }
-          #gerar-pagamento-root .gp-lote-dia { display:inline-flex; align-items:center; gap:4px; margin-left:8px; padding:2px 10px; border-radius:999px; background:#105436; color:#fff; font-size:0.78rem; font-weight:700; vertical-align:middle; }
-          #gerar-pagamento-root .gp-lote-feito { opacity:0.8; }
-          #gerar-pagamento-root .gp-lote-feito .gp-lote-h { background:#f1f5f9; }
-          #gerar-pagamento-root .gp-lote-feito .gp-lote-dia { background:#64748b; }
-          #gerar-pagamento-root tr.gp-click { cursor:pointer; }
-          #gerar-pagamento-root tr.gp-click:hover td { background:#ecfdf5; }
-          #gerar-pagamento-root .gp-valida { display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:#475569; font-weight:600; }
-          #gerar-pagamento-root tr.gp-em-lote td { color:#94a3b8; }
-          #gerar-pagamento-root tr.gp-em-lote td strong { color:#64748b; }
-          #gerar-pagamento-root .gp-lote-h small { color:#64748b; font-size:0.75rem; }
-          #gerar-pagamento-root .gp-lote-acoes { display:flex; align-items:center; gap:14px; }
-          #gerar-pagamento-root .gp-baixa { display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; font-weight:700; color:#334155; white-space:nowrap; }
-          #gerar-pagamento-root .gp-baixa input { height:36px; border:1px solid #cbd5e1; border-radius:8px; padding:0 8px; font-size:0.82rem; color:#0f172a; background:#fff; }
-          #gerar-pagamento-root .gp-lote-todos { display:inline-flex; align-items:center; gap:6px; font-size:0.8rem; color:#334155; cursor:pointer; }
-          #gerar-pagamento-root .gp-massa { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0; flex:0 0 auto; justify-content:flex-end; }
-          #gerar-pagamento-root .gp-lote-total { font-size:1.05rem; color:#0f172a; min-width:120px; text-align:right; }
-          #gerar-pagamento-root .gp-lote .gp-titulos { min-width:1000px; }
-          #gerar-pagamento-root .gp-robo-btn { height:36px; padding:0 14px; border:1px solid #105436; border-radius:8px; background:#fff; color:#105436; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
-          #gerar-pagamento-root .gp-robo-btn:disabled { opacity:0.6; cursor:wait; }
-          #gerar-pagamento-root .gp-robo-msg { color:#105436; font-size:0.75rem; font-weight:700; max-width:420px; line-height:1.35; }
+          .gp-root .gp-bloq, .gp-root .gp-status small.gp-bloq { color:#b91c1c; font-weight:700; }
+          .gp-root .gp-liberar { height:22px; margin-left:4px; padding:0 8px; border:1px solid #c2410c; border-radius:999px; background:#fff; color:#c2410c; font-size:0.68rem; font-weight:800; cursor:pointer; }
+          .gp-root .gp-liberar:hover { background:#ffedd5; }
+          .gp-root .gp-lote-sem .gp-lote-h { background:#fef2f2; }
+          .gp-root .gp-lote-conta { font-weight:800; color:#105436; font-size:0.92rem; }
+          .gp-root .gp-lote-sem .gp-lote-conta { color:#b91c1c; }
+          .gp-root .gp-lote-dia { display:inline-flex; align-items:center; gap:4px; margin-left:8px; padding:2px 10px; border-radius:999px; background:#105436; color:#fff; font-size:0.78rem; font-weight:700; vertical-align:middle; }
+          .gp-root .gp-lote-feito { opacity:0.8; }
+          .gp-root .gp-lote-feito .gp-lote-h { background:#f1f5f9; }
+          .gp-root .gp-lote-feito .gp-lote-dia { background:#64748b; }
+          .gp-root tr.gp-click { cursor:pointer; }
+          .gp-root tr.gp-click:hover td { background:#ecfdf5; }
+          .gp-root .gp-valida { display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:#475569; font-weight:600; }
+          .gp-root tr.gp-em-lote td { color:#94a3b8; }
+          .gp-root tr.gp-em-lote td strong { color:#64748b; }
+          .gp-root .gp-lote-h small { color:#64748b; font-size:0.75rem; }
+          .gp-root .gp-lote-acoes { display:flex; align-items:center; gap:14px; }
+          .gp-root .gp-baixa { display:inline-flex; align-items:center; gap:6px; font-size:0.75rem; font-weight:700; color:#334155; white-space:nowrap; }
+          .gp-root .gp-baixa input { height:36px; border:1px solid #cbd5e1; border-radius:8px; padding:0 8px; font-size:0.82rem; color:#0f172a; background:#fff; }
+          .gp-root .gp-lote-todos { display:inline-flex; align-items:center; gap:6px; font-size:0.8rem; color:#334155; cursor:pointer; }
+          .gp-root .gp-massa { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0; flex:0 0 auto; justify-content:flex-end; }
+          .gp-root .gp-lote-total { font-size:1.05rem; color:#0f172a; min-width:120px; text-align:right; }
+          .gp-root .gp-lote .gp-titulos { min-width:1000px; }
+          .gp-root .gp-robo-btn { height:36px; padding:0 14px; border:1px solid #105436; border-radius:8px; background:#fff; color:#105436; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+          .gp-root .gp-robo-btn:disabled { opacity:0.6; cursor:wait; }
+          .gp-root .gp-robo-msg { color:#105436; font-size:0.75rem; font-weight:700; max-width:420px; line-height:1.35; }
         </style>
         <div class="crm-card" style="overflow:hidden;padding:0;">
           <div class="gp-busca">
-            <div style="flex:1 1 220px;">
+            ${s.tela === "cartao" ? "" : `<div style="flex:1 1 220px;">
               <h3 style="margin:0;color:var(--color-primary);font-size:1rem;">${s.visao === "lotes" ? "Lotes de pagamento" : "Programação de Pagamentos"}</h3>
-            </div>
+            </div>`}
             <div class="form-group">
               <label>Vencimento de</label>
               <input type="date" class="form-control" value="${this.esc(s.startDate)}" ${busy ? "disabled" : ""}
@@ -4879,12 +4901,12 @@ const GerarPagamentoApp = {
               style="height:38px;width:150px;justify-content:center;display:inline-flex;align-items:center;gap:6px;">
               <i data-lucide="search" style="width:14px;"></i> Buscar títulos
             </button>
-            <span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
+            ${s.tela === "cartao" ? "" : `<span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
             <button type="button" id="gp-robo-btn" class="gp-robo-btn" ${s.roboLigando ? "disabled" : ""} onclick="GerarPagamentoApp.ligarRobo()">
               <i data-lucide="bot" style="width:16px;height:16px;"></i> Ligar robô
-            </button>
+            </button>`}
           </div>
-          ${this.alertaSemContaHtml()}
+          ${s.tela === "cartao" ? "" : this.alertaSemContaHtml()}
           <div id="gp-titulos-box">${this.titulosHtml()}</div>
         </div>`);
 
@@ -4905,7 +4927,9 @@ window.contaPagamentoDoCentroCusto = function (input) {
 };
 
 document.addEventListener("tabChanged", function (e) {
-  if (e && e.detail === "gerar-pagamento") GerarPagamentoApp.init();
+  if (!e) return;
+  if (e.detail === "gerar-pagamento") GerarPagamentoApp.init("lotes");
+  if (e.detail === "cartao-credito") GerarPagamentoApp.init("cartao");
 });
 
 document.addEventListener("DOMContentLoaded", function () {

@@ -446,6 +446,7 @@ const ConfigUsersApp = {
           actions: [
             { id: "assistente_cp", label: "Assistente de Contas a Pagar" },
             { id: "gerar_pagamento", label: "Gerar Pagamento", permBase: "sub_fin_cp_gerar_pagamento" },
+            { id: "cartao_credito", label: "Cartão de crédito", permBase: "sub_fin_cp_cartao_credito" },
             { id: "titulos_incompletos", label: "Títulos incompletos", permBase: "sub_fin_cp_titulos_incompletos" },
             { id: "rydoo", label: "Rydoo", permBase: "sub_fin_cp_rydoo" }
           ]
