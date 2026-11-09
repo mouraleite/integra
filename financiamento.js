@@ -43,6 +43,47 @@ const FinanciamentoApp = {
   init() {
     this.render();
     this.populateEmpreendimentos();
+    this.puxarNuvem();
+  },
+
+  /* A lista de financiamentos só vinha da nuvem no login. Quem abriu o sistema antes de outra pessoa incluir
+   * um financiamento não via o cliente na esteira. Agora, ao abrir a tela, junta com a nuvem (sem apagar nada)
+   * e, se este navegador tiver algum que a nuvem ainda não tem, envia. */
+  async puxarNuvem(forcar) {
+    const agora = Date.now();
+    if (!forcar && this._nuvemEm && agora - this._nuvemEm < 20000) return;
+    if (this._nuvemLendo) return;
+    const fc = window.firebaseCollections;
+    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function" || typeof window.crmFinanciamentosMesclar !== "function") return;
+    this._nuvemLendo = true;
+    this._nuvemEm = agora;
+    try {
+      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+      const nuvem = existe ? String((snap.data() || {})[FIN_PROC_KEY] || "{}") : "{}";
+      let local = "{}";
+      try { local = localStorage.getItem(FIN_PROC_KEY) || "{}"; } catch (e) {}
+      const junto = window.crmFinanciamentosMesclar(local, nuvem);
+      const mapaJunto = this.lerMapaProc(junto);
+      const mapaNuvem = this.lerMapaProc(nuvem);
+      const mapaLocal = this.lerMapaProc(local);
+      const chegouNovo = Object.keys(mapaJunto).some((k) => !mapaLocal[k]
+        || String(mapaJunto[k].updatedAt || "") !== String(mapaLocal[k].updatedAt || ""));
+      const faltaNaNuvem = Object.keys(mapaJunto).some((k) => !mapaNuvem[k]
+        || String(mapaJunto[k].updatedAt || "") > String(mapaNuvem[k].updatedAt || ""));
+      if (junto !== local) {
+        const gravar = window._originalSetItem || localStorage.setItem.bind(localStorage);
+        try { gravar.call(localStorage, FIN_PROC_KEY, junto); } catch (e) {}
+        try { sessionStorage.setItem(FIN_PROC_KEY, junto); } catch (e) {}
+        window._finProcMem = mapaJunto;
+      }
+      if (faltaNaNuvem && window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(() => {});
+      if (chegouNovo && FinanciamentoState.view !== "fluxo" && document.getElementById("financiamento-root")) this.render();
+    } catch (e) {
+      console.warn("[Financiamento] leitura da nuvem", e);
+    } finally {
+      this._nuvemLendo = false;
+    }
   },
 
   render() {
@@ -61,6 +102,7 @@ const FinanciamentoApp = {
     FinanciamentoState.painel = id === "esteira" ? "esteira" : "pesquisa";
     FinanciamentoState.view = "busca";
     this.render();
+    if (FinanciamentoState.painel === "esteira") this.puxarNuvem();
   },
 
   abasHtml(painel) {
