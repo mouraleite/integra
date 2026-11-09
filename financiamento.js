@@ -200,13 +200,6 @@ const FinanciamentoApp = {
         </div>
       </div>
 
-      <div class="crm-card" id="fin-customer-card" style="display:none;margin-bottom:24px;">
-        <div class="crm-card-header" style="background-color:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;margin-bottom:20px;">
-          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do cliente</h3>
-        </div>
-        <div id="fin-customer-info" class="crm-card-content"></div>
-      </div>
-
       <div class="crm-card" id="fin-results-card" style="display:none;">
         <div class="crm-card-header" style="background-color:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;margin-bottom:20px;">
           <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Contratos do cliente</h3>
@@ -235,12 +228,6 @@ const FinanciamentoApp = {
   },
 
   restoreBuscaUi() {
-    if (FinanciamentoState.customer) {
-      const info = document.getElementById("fin-customer-info");
-      const card = document.getElementById("fin-customer-card");
-      if (info) info.innerHTML = this.customerCardHtml(FinanciamentoState.customer);
-      if (card) card.style.display = "block";
-    }
     if (FinanciamentoState.contracts && FinanciamentoState.contracts.length) {
       this.renderContractsTable(FinanciamentoState.contracts);
     }
@@ -267,9 +254,7 @@ const FinanciamentoApp = {
       const dd = document.getElementById("custom-dropdown-fin-" + t);
       if (dd) dd.style.display = "none";
     });
-    const cc = document.getElementById("fin-customer-card");
     const rc = document.getElementById("fin-results-card");
-    if (cc) cc.style.display = "none";
     if (rc) rc.style.display = "none";
     this.toggleFilters();
     this.renderAbertos();
@@ -533,8 +518,6 @@ const FinanciamentoApp = {
 
   async buscar() {
     const tbody = document.getElementById("fin-results-tbody");
-    const info = document.getElementById("fin-customer-info");
-    const card = document.getElementById("fin-customer-card");
     const results = document.getElementById("fin-results-card");
     const sug = document.getElementById("fin-sugestoes");
     if (sug) sug.style.display = "none";
@@ -556,15 +539,12 @@ const FinanciamentoApp = {
       </td></tr>`;
     }
     if (results) results.style.display = "block";
-    if (card) card.style.display = "none";
     try {
       const svc = window.SiengeApiService;
       if (!svc) throw new Error("API Sienge indisponível");
       const customer = await svc.getCustomer(customerId);
       if (!customer) throw new Error("Cliente não encontrado");
       FinanciamentoState.customer = customer;
-      if (info) info.innerHTML = this.customerCardHtml(customer);
-      if (card) card.style.display = "block";
       let contracts = [];
       if (typeof svc.getSales === "function") contracts = await svc.getSales(customerId);
       if (!Array.isArray(contracts)) contracts = [];
@@ -1288,6 +1268,12 @@ const FinanciamentoApp = {
           <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Título</div><div style="font-weight:700;color:#0f172a;">${this.esc(proc.titulo || "—")}</div></div>
           <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Unidade</div><div style="font-weight:700;color:#0f172a;">${this.esc(this.formatUnidade(proc.unit || "—"))}</div></div>
         </div>
+      </div>
+      <div class="crm-card" style="margin-bottom:16px;">
+        <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
+          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do cliente</h3>
+        </div>
+        <div class="crm-card-content">${this.customerCardHtml(customer)}</div>
       </div>
       <div class="crm-card">
         <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">

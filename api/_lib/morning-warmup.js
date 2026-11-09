@@ -1095,8 +1095,199 @@ async function advanceControleFinanceiro(req, res, today, started, log) {
   });
 }
 
+/* ---------- Valor a Receber (Fluxo de caixa diário) ----------
+   Títulos e previsões a receber em aberto que não são CT nem TC, de todas as empresas geridas.
+   Lido no batimento das 7h e gravado em caixa_valor_receber/emp_<empresa>. A tela só lê o resultado.
+   O filtro é o mesmo de FluxoCaixaDiarioApp.vrItensDoIncome (caixa-diario.js): mantenha os dois iguais. */
+const VR_COL = "caixa_valor_receber";
+const VR_ESTADO = "_estado";
+const VR_MESES_VENCIDAS = 12;
+const VR_BUDGET_MS = 40000;
+
+function vrJanela(today) {
+  const d = parseIso(today);
+  const ini = isoDate(new Date(d.getFullYear(), d.getMonth() - VR_MESES_VENCIDAS, 1));
+  const fim = isoDate(new Date(d.getFullYear(), d.getMonth() + 4, 0));
+  return { ini, fim };
+}
+
+function vrFatias(ini, fim) {
+  const out = [];
+  let d = parseIso(ini);
+  const last = parseIso(fim);
+  while (d <= last) {
+    const s = isoDate(new Date(d.getFullYear(), d.getMonth(), 1));
+    const e = isoDate(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    out.push({ s: s < ini ? ini : s, e: e > fim ? fim : e });
+    d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  }
+  return out;
+}
+
+function vrItensDoIncome(rows, ini, fim) {
+  const out = [];
+  const visto = {};
+  (rows || []).forEach((r) => {
+    if (!r) return;
+    const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
+    if (doc === "CT" || doc === "TC") return;
+    const numero = String(r.documentNumber || "");
+    const numUp = numero.toUpperCase();
+    if (numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0) return;
+    const recs = Array.isArray(r.receipts) ? r.receipts : [];
+    if (recs.some((x) => x && x.operationTypeName)) return;
+    const due = String(r.dueDate || "").slice(0, 10);
+    if (!due || due < ini || due > fim) return;
+    const valor = Number(r.correctedBalanceAmount != null ? r.correctedBalanceAmount : (r.balanceAmount != null ? r.balanceAmount : r.originalAmount)) || 0;
+    if (!(valor > 0.009)) return;
+    const titulo = r.billId != null ? String(r.billId) : "";
+    const parcela = r.installmentId != null ? String(r.installmentId) : "";
+    const chave = titulo + "|" + parcela + "|" + due;
+    if (visto[chave]) return;
+    visto[chave] = true;
+    const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
+    const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
+    out.push({
+      empresa: r.companyName || "",
+      companyId: r.companyId != null ? String(r.companyId) : "",
+      doc,
+      descricao: numero,
+      titulo,
+      parcela,
+      vencimento: due,
+      valor: Math.round(valor * 100) / 100,
+      cliente: r.clientName || "",
+      cc: cat.costCenterId != null ? String(cat.costCenterId) : "",
+      ccNome: cat.costCenterName || ""
+    });
+  });
+  return out;
+}
+
+async function vrIncome(s, e, companyId, depth) {
+  const url = `${SIENGE_BULK_BASE}/bulk-data/v1/income?startDate=${encodeURIComponent(s)}&endDate=${encodeURIComponent(e)}`
+    + `&selectionType=D&correctionIndexerId=0&correctionDate=2022-01-01&companyId=${encodeURIComponent(companyId)}`;
+  try {
+    const res = await siengeFetchOnce(url);
+    return (res && res.data) || (Array.isArray(res) ? res : []);
+  } catch (err) {
+    const status = Number(err && err.status);
+    if (status === 404) return [];
+    if (status === 429 && depth < 4) {
+      await new Promise((r) => setTimeout(r, 3000 * (depth + 1)));
+      return vrIncome(s, e, companyId, depth + 1);
+    }
+    if (status !== 507 || depth > 6 || s >= e) throw err;
+    const dias = Math.round((parseIso(e) - parseIso(s)) / 86400000);
+    const m = shiftDays(s, Math.floor(dias / 2));
+    const left = await vrIncome(s, m, companyId, depth + 1);
+    const right = await vrIncome(shiftDays(m, 1), e, companyId, depth + 1);
+    return left.concat(right);
+  }
+}
+
+async function continuarValorReceber(req) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    await fetch(`${originFromReq(req)}/api/valor-receber`, {
+      headers: { Authorization: req.headers.authorization || "" },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Uma passada: lê fatias mensais até o tempo acabar, grava cada empresa ao terminar e chama a passada seguinte. */
+async function valorReceberHandler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(204).end();
+  }
+  if (!authorized(req)) return res.status(401).json({ error: "unauthorized" });
+  const started = Date.now();
+  const today = todayIsoSP();
+  const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
+  const ref = doc(db, VR_COL, VR_ESTADO);
+  try {
+    const snap = await getDoc(ref);
+    let st = snap.exists() ? snap.data() : null;
+    if (st && st.date === today && st.done && !force) return res.status(200).json({ done: true, date: today });
+    if (st && st.date === today && !st.done && Number(st.lockAte || 0) > Date.now() && !force) {
+      return res.status(200).json({ done: false, emAndamento: true });
+    }
+    if (!st || st.date !== today || force) {
+      const empresas = empresasGeridas(await loadConfigCustom());
+      const jan = vrJanela(today);
+      st = { date: today, ini: jan.ini, fim: jan.fim, empresas, ei: 0, fi: 0, done: false, itens: "[]", falhas: 0 };
+    }
+    st.lockAte = Date.now() + 58000;
+    await setDoc(ref, st);
+    const fatias = vrFatias(st.ini, st.fim);
+    let itens = [];
+    try { itens = JSON.parse(st.itens || "[]"); } catch (e) { itens = []; }
+    while (st.ei < st.empresas.length && Date.now() - started < VR_BUDGET_MS) {
+      const cid = st.empresas[st.ei];
+      const f = fatias[st.fi];
+      try {
+        const rows = await vrIncome(f.s, f.e, cid, 0);
+        itens = itens.concat(vrItensDoIncome(rows, st.ini, st.fim));
+      } catch (e) {
+        st.falhas = (st.falhas || 0) + 1;
+        console.warn("[valor-receber]", cid, f.s, e && e.message);
+      }
+      st.fi += 1;
+      if (st.fi >= fatias.length) {
+        const vistos = {};
+        const unicos = itens.filter((it) => {
+          const k = it.titulo + "|" + it.parcela + "|" + it.vencimento;
+          if (vistos[k]) return false;
+          vistos[k] = true;
+          return true;
+        }).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+        await setDoc(doc(db, VR_COL, "emp_" + cid), {
+          companyId: String(cid),
+          ini: st.ini,
+          fim: st.fim,
+          atualizadoEm: new Date().toISOString(),
+          origem: "batimento",
+          falhas: st.falhas || 0,
+          itens: JSON.stringify(unicos)
+        });
+        itens = [];
+        st.falhas = 0;
+        st.fi = 0;
+        st.ei += 1;
+      }
+    }
+    st.itens = JSON.stringify(itens);
+    st.done = st.ei >= st.empresas.length;
+    st.lockAte = 0;
+    await setDoc(ref, st);
+    if (!st.done) await continuarValorReceber(req);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(200).json({ done: st.done, empresa: st.ei, de: st.empresas.length });
+  } catch (e) {
+    try { await setDoc(ref, { lockAte: 0 }, { merge: true }); } catch (e2) {}
+    return res.status(500).json({ error: String((e && e.message) || e) });
+  }
+}
+
+/** Valor a Receber entra no mesmo batimento das 7h. A chamada é abandonada; a rotina segue sozinha. */
+async function dispararValorReceber(req) {
+  try {
+    const snap = await getDoc(doc(db, VR_COL, VR_ESTADO));
+    const st = snap.exists() ? snap.data() : null;
+    if (st && st.date === todayIsoSP() && (st.done || Number(st.lockAte || 0) > Date.now())) return;
+  } catch (e) {}
+  await continuarValorReceber(req);
+}
+
 async function handler(req, res) {
   if (String(req.url || "").indexOf("caucao-batimento") >= 0) return caucaoHandler(req, res);
+  if (String(req.url || "").indexOf("valor-receber") >= 0) return valorReceberHandler(req, res);
   if (String(req.url || "").indexOf("distrato-followup") >= 0) return distratoFollowupHandler(req, res);
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1109,6 +1300,7 @@ async function handler(req, res) {
   await dispararCaucao(req);
   await dispararDistratoFollowup(req);
   await dispararCredores(req);
+  await dispararValorReceber(req);
 
   const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
   const today = todayIsoSP();

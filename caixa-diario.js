@@ -218,7 +218,6 @@ const FluxoCaixaDiarioApp = {
   openingDate: "",
   recItems: [],
   outras: [],
-  aReceber: [],
   movs: [],
   payItems: [],
   progress: "",
@@ -259,6 +258,7 @@ const FluxoCaixaDiarioApp = {
     this._avisoToken = (this._avisoToken || 0) + 1;
     this.render();
     this.load();
+    if (this.aba === "receber") this.carregarVr();
   },
 
   hoje() {
@@ -282,6 +282,7 @@ const FluxoCaixaDiarioApp = {
   setAba(id) {
     this.aba = id === "receber" ? "receber" : "movimento";
     this.render();
+    if (this.aba === "receber" && !(this.vr && (this.vr.carregando || this.vr.atualizando))) this.carregarVr();
   },
 
   setRadarYm(ym) {
@@ -571,31 +572,267 @@ const FluxoCaixaDiarioApp = {
         onclick="FluxoCaixaDiarioApp.setAba('${t.id}')"><i data-lucide="${t.icon}"></i> ${t.label}</button>`).join("")}</div>`;
   },
 
-  valorAReceberHtml() {
-    const excl = this.excludedCcs();
-    const lista = (this.aReceber || []).filter((it) => !it.cc || !excl.has(String(it.cc)));
-    if (!lista.length) {
-      return `<p class="cxd-vazio">${this.progress ? "Lendo os títulos a receber…" : "Nenhum título ou previsão a receber fora de CT e TC neste período."}</p>`;
+  /* ---------- Valor a Receber ----------
+     O batimento das 7h (api/_lib/morning-warmup.js, rota valor-receber) grava caixa_valor_receber/emp_<empresa>.
+     A tela só lê esse resultado; o botão Atualizar refaz a busca no Sienge e grava por cima.
+     O filtro vrItensDoIncome é o mesmo do servidor: mantenha os dois iguais. */
+  VR_COL: "caixa_valor_receber",
+  VR_MESES_VENCIDAS: 12,
+  vr: null,
+
+  vrEmpresasAlvo() {
+    if (this.companyIds.length) return this.companyIds.map(String);
+    return this.empresasGeridas().map((c) => String(c.id));
+  },
+
+  vrJanela() {
+    const n = new Date();
+    const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return {
+      ini: iso(new Date(n.getFullYear(), n.getMonth() - this.VR_MESES_VENCIDAS, 1)),
+      fim: iso(new Date(n.getFullYear(), n.getMonth() + 4, 0))
+    };
+  },
+
+  vrItensDoIncome(rows, ini, fim) {
+    const out = [];
+    const visto = {};
+    (rows || []).forEach((r) => {
+      if (!r) return;
+      const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
+      if (doc === "CT" || doc === "TC") return;
+      const numero = String(r.documentNumber || "");
+      const numUp = numero.toUpperCase();
+      if (numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0) return;
+      const recs = Array.isArray(r.receipts) ? r.receipts : [];
+      if (recs.some((x) => x && x.operationTypeName)) return;
+      const due = String(r.dueDate || "").slice(0, 10);
+      if (!due || due < ini || due > fim) return;
+      const valor = Number(r.correctedBalanceAmount != null ? r.correctedBalanceAmount : (r.balanceAmount != null ? r.balanceAmount : r.originalAmount)) || 0;
+      if (!(valor > 0.009)) return;
+      const titulo = r.billId != null ? String(r.billId) : "";
+      const parcela = r.installmentId != null ? String(r.installmentId) : "";
+      const chave = titulo + "|" + parcela + "|" + due;
+      if (visto[chave]) return;
+      visto[chave] = true;
+      const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
+      const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
+      out.push({
+        empresa: r.companyName || "",
+        companyId: r.companyId != null ? String(r.companyId) : "",
+        doc,
+        descricao: numero,
+        titulo,
+        parcela,
+        vencimento: due,
+        valor: Math.round(valor * 100) / 100,
+        cliente: r.clientName || "",
+        cc: cat.costCenterId != null ? String(cat.costCenterId) : "",
+        ccNome: cat.costCenterName || ""
+      });
+    });
+    return out;
+  },
+
+  /** Lê o que o batimento (ou a última atualização manual) gravou. */
+  async carregarVr() {
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    const token = {};
+    this._vrToken = token;
+    this.vr = Object.assign({}, this.vr || {}, { carregando: true, erro: "" });
+    if (this.aba === "receber") this.render();
+    if (!fx || !db || typeof fx.getDocs !== "function") {
+      this.vr = { carregando: false, erro: "O Firebase não está disponível.", docs: {} };
+      if (this.aba === "receber") this.render();
+      return;
     }
+    try {
+      const snap = await fx.getDocs(fx.collection(db, this.VR_COL));
+      if (this._vrToken !== token) return;
+      const docs = {};
+      snap.forEach((d) => {
+        if (!/^emp_/.test(d.id)) return;
+        const data = d.data() || {};
+        let itens = [];
+        try { itens = JSON.parse(data.itens || "[]"); } catch (e) { itens = []; }
+        docs[String(data.companyId || d.id.slice(4))] = {
+          itens, atualizadoEm: data.atualizadoEm || "", origem: data.origem || "", por: data.por || "", falhas: Number(data.falhas) || 0, ini: data.ini || "", fim: data.fim || ""
+        };
+      });
+      this.vr = Object.assign({}, this.vr, { carregando: false, erro: "", docs });
+    } catch (e) {
+      if (this._vrToken !== token) return;
+      console.warn("[Caixa diário] valor a receber", e);
+      this.vr = Object.assign({}, this.vr, { carregando: false, erro: "Não consegui ler o Valor a Receber gravado: " + ((e && e.message) || e) });
+    }
+    if (this.aba === "receber") this.render();
+  },
+
+  /** Botão Atualizar: busca no Sienge as empresas da tela e grava o resultado para todos. */
+  async atualizarVr() {
+    if (this.vr && this.vr.atualizando) return;
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (typeof window.siengeFetchWithRetry !== "function") { alert("A conexão com o Sienge não está disponível."); return; }
+    const empresas = this.vrEmpresasAlvo();
+    if (!empresas.length) { alert("Nenhuma empresa gerida pelo grupo para atualizar."); return; }
+    const jan = this.vrJanela();
+    const fatias = [];
+    let d = new Date(jan.ini + "T12:00:00");
+    const last = new Date(jan.fim + "T12:00:00");
+    const iso = (x) => x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0");
+    while (d <= last) {
+      fatias.push({ s: iso(new Date(d.getFullYear(), d.getMonth(), 1)), e: iso(new Date(d.getFullYear(), d.getMonth() + 1, 0)) });
+      d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+    const get = async (s, e, cid, depth) => {
+      const path = "/bulk-data/v1/income?startDate=" + encodeURIComponent(s) + "&endDate=" + encodeURIComponent(e)
+        + "&selectionType=D&correctionIndexerId=0&correctionDate=2022-01-01&companyId=" + encodeURIComponent(cid);
+      try {
+        const payload = await window.siengeFetchWithRetry(path, 2);
+        return (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (Number(err && err.status) === 404) return [];
+        if (Number(err && err.status) !== 507 || depth > 6 || s >= e) throw err;
+        const dias = Math.round((new Date(e + "T12:00:00") - new Date(s + "T12:00:00")) / 86400000);
+        const m = caixaAddDays(s, Math.floor(dias / 2));
+        const left = await get(s, m, cid, depth + 1);
+        const right = await get(caixaAddDays(m, 1), e, cid, depth + 1);
+        return left.concat(right);
+      }
+    };
+    const user = (window.AppState && AppState.currentUser) || {};
+    this.vr = Object.assign({}, this.vr || {}, { atualizando: true, erro: "", passo: "" });
+    this.render();
+    const erros = [];
+    for (let i = 0; i < empresas.length; i++) {
+      const cid = empresas[i];
+      let itens = [];
+      let falhas = 0;
+      for (let j = 0; j < fatias.length; j++) {
+        this.vr.passo = `Empresa ${cid} (${i + 1} de ${empresas.length}) · mês ${j + 1} de ${fatias.length}`;
+        const el = document.getElementById("cxd-vr-passo");
+        if (el) el.textContent = this.vr.passo;
+        try {
+          itens = itens.concat(this.vrItensDoIncome(await get(fatias[j].s, fatias[j].e, cid, 0), jan.ini, jan.fim));
+        } catch (e) {
+          falhas += 1;
+          console.warn("[Caixa diário] valor a receber", cid, fatias[j].s, e);
+        }
+      }
+      if (falhas === fatias.length) { erros.push(cid); continue; }
+      const vistos = {};
+      itens = itens.filter((it) => {
+        const k = it.titulo + "|" + it.parcela + "|" + it.vencimento;
+        if (vistos[k]) return false;
+        vistos[k] = true;
+        return true;
+      }).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+      const registro = { companyId: String(cid), ini: jan.ini, fim: jan.fim, atualizadoEm: new Date().toISOString(), origem: "manual", por: user.name || user.email || "", falhas, itens: JSON.stringify(itens) };
+      const docs = Object.assign({}, (this.vr && this.vr.docs) || {});
+      docs[String(cid)] = Object.assign({}, registro, { itens });
+      this.vr.docs = docs;
+      if (fx && db && typeof fx.setDoc === "function") {
+        try { await fx.setDoc(fx.doc(db, this.VR_COL, "emp_" + cid), registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
+      }
+    }
+    this.vr.atualizando = false;
+    this.vr.passo = "";
+    if (erros.length) this.vr.erro = "Não consegui ler no Sienge a(s) empresa(s) " + erros.join(", ") + ". Ficou valendo a leitura anterior.";
+    this.render();
+  },
+
+  /** Fim da semana corrente (domingo). */
+  vrFimSemana(hoje) {
+    const d = new Date(hoje + "T12:00:00");
+    return caixaAddDays(hoje, (7 - d.getDay()) % 7);
+  },
+
+  vrRotuloAtualizacao(docs, empresas) {
+    const lidos = empresas.map((c) => docs[c]).filter(Boolean);
+    if (!lidos.length) return "";
+    const fmt = (iso) => {
+      const d = new Date(iso);
+      if (isNaN(d)) return "";
+      return d.toLocaleDateString("pt-BR") + " às " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    };
+    const maisAntigo = lidos.slice().sort((a, b) => String(a.atualizadoEm).localeCompare(String(b.atualizadoEm)))[0];
+    const quem = maisAntigo.origem === "manual" ? ("atualização manual" + (maisAntigo.por ? " de " + maisAntigo.por : "")) : "batimento das 7h";
+    let txt = `Informação atualizada em ${fmt(maisAntigo.atualizadoEm)} (${quem}).`;
+    const faltam = empresas.filter((c) => !docs[c]);
+    if (faltam.length) txt += ` Sem leitura ainda para a(s) empresa(s) ${faltam.join(", ")}.`;
+    if (lidos.some((x) => x.falhas)) txt += " Parte dos meses não respondeu no Sienge nessa leitura.";
+    return txt;
+  },
+
+  valorAReceberHtml() {
+    const v = this.vr || {};
+    const docs = v.docs || {};
+    const empresas = this.vrEmpresasAlvo();
+    const excl = this.excludedCcs();
+    const hoje = this.hoje();
+    const fimSemana = this.vrFimSemana(hoje);
+    const lista = [];
+    empresas.forEach((c) => {
+      const d = docs[c];
+      if (!d) return;
+      (d.itens || []).forEach((it) => {
+        if (it.cc && excl.has(String(it.cc))) return;
+        lista.push(it);
+      });
+    });
+    lista.sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+    const grupos = [
+      { id: "vencidas", rotulo: "Vencidas", itens: lista.filter((it) => it.vencimento < hoje) },
+      { id: "semana", rotulo: `Entradas na semana (${caixaFmtDate(hoje)} a ${caixaFmtDate(fimSemana)})`, itens: lista.filter((it) => it.vencimento >= hoje && it.vencimento <= fimSemana) },
+      { id: "depois", rotulo: "Demais entradas", itens: lista.filter((it) => it.vencimento > fimSemana) }
+    ];
+    const atualizacao = this.vrRotuloAtualizacao(docs, empresas);
+    const barra = `<div class="cxd-vr-barra">
+        <div class="cxd-vr-info">${v.atualizando
+          ? `<span class="loading-spinner" style="width:14px;height:14px;"></span> <span id="cxd-vr-passo">${caixaEsc(v.passo || "Buscando no Sienge…")}</span>`
+          : (v.carregando && !Object.keys(docs).length ? "Lendo o Valor a Receber…" : caixaEsc(atualizacao || "Ainda não há leitura gravada. Clique em Atualizar."))}</div>
+        <button type="button" class="btn btn-primary cc-atualizar" ${v.atualizando ? "disabled" : ""} onclick="FluxoCaixaDiarioApp.atualizarVr()"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Atualizar</button>
+      </div>
+      ${v.erro ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(v.erro)}</div>` : ""}`;
+    const cards = grupos.map((g) => {
+      const tot = g.itens.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+      return `<div class="cxd-vr-card is-${g.id}"><span>${caixaEsc(g.id === "semana" ? "Entradas na semana" : g.rotulo)}</span><strong>${caixaMoney(tot)}</strong><small>${g.itens.length} título(s)</small></div>`;
+    }).join("");
+    const nomeEmp = (it) => it.empresa || this.companyName(it.companyId) || "—";
+    const ccTxt = (it) => it.cc ? (it.cc + (it.ccNome || this.ccNomeDe(it.cc) ? " - " + (it.ccNome || this.ccNomeDe(it.cc)) : "")) : "—";
+    const corpo = grupos.map((g) => {
+      const tot = g.itens.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+      const head = `<tr class="cxd-vr-grupo is-${g.id}"><td colspan="7">${caixaEsc(g.rotulo)} · ${g.itens.length} título(s)</td><td class="is-right">${caixaMoney(tot)}</td><td></td></tr>`;
+      if (!g.itens.length) return head + `<tr><td colspan="9" style="text-align:center;color:#64748b;">Nada neste grupo.</td></tr>`;
+      return head + g.itens.map((it) => {
+        const atraso = it.vencimento < hoje ? Math.round((new Date(hoje + "T12:00:00") - new Date(it.vencimento + "T12:00:00")) / 86400000) : 0;
+        return `<tr>
+          <td title="${caixaEsc(nomeEmp(it))}">${caixaEsc(it.companyId || "—")}</td>
+          <td title="${caixaEsc(ccTxt(it))}">${caixaEsc(ccTxt(it))}</td>
+          <td>${caixaEsc(it.doc || "—")}</td>
+          <td title="${caixaEsc(it.descricao || "")}">${caixaEsc(it.descricao || "—")}</td>
+          <td>${caixaEsc(it.titulo || "—")}${it.parcela ? `<span style="color:#64748b;"> / ${caixaEsc(it.parcela)}</span>` : ""}</td>
+          <td>${caixaFmtDate(it.vencimento)}</td>
+          <td class="is-center">${atraso ? atraso : "—"}</td>
+          <td class="is-right">${caixaMoney(it.valor)}</td>
+          <td title="${caixaEsc(it.cliente || "")}">${caixaEsc(it.cliente || "—")}</td>
+        </tr>`;
+      }).join("");
+    }).join("");
     const total = lista.reduce((s, it) => s + (Number(it.valor) || 0), 0);
-    const linhas = lista.map((it) => `<tr>
-      <td>${caixaEsc(it.empresa || "—")}</td>
-      <td>${caixaEsc(it.doc || "—")}</td>
-      <td class="cxd-desc">${caixaEsc(it.descricao || "—")}</td>
-      <td>${caixaEsc(it.titulo || "—")}</td>
-      <td>${caixaFmtDate(it.vencimento)}</td>
-      <td class="cxd-num">${caixaMoney(it.valor)}</td>
-      <td class="cxd-desc">${caixaEsc(it.cliente || "—")}</td>
-    </tr>`).join("");
-    return `<p class="cxd-title">VALOR A RECEBER <span>· títulos e previsões em aberto que não são CT nem TC · ${caixaEsc(this.rotuloPeriodo())}</span></p>
-      <div class="cxd-wrap">
-        <table class="cxd-analitico">
+    return `${barra}
+      <div class="cxd-vr-cards">${cards}</div>
+      <div class="cc-scroll">
+        <table class="cc-table cxd-vr-table">
+          <colgroup><col style="width:48px"><col style="width:20%"><col style="width:70px"><col style="width:16%"><col style="width:90px"><col style="width:86px"><col style="width:64px"><col style="width:110px"><col></colgroup>
           <thead><tr>
-            <th>Empresa</th><th>Documento</th><th>Descrição</th><th>Título</th><th>Vencimento</th><th class="cxd-num">Valor a Receber</th><th>Cliente</th>
+            <th>Emp.</th><th>Centro de custo</th><th>Documento</th><th>Descrição</th><th>Título</th><th>Vencimento</th><th class="is-center">Dias atraso</th><th class="is-right">Valor a receber</th><th>Cliente</th>
           </tr></thead>
           <tbody>
-            ${linhas}
-            <tr class="cxd-row-acum"><td colspan="5">Total</td><td class="cxd-num">${caixaMoney(total)}</td><td></td></tr>
+            ${corpo}
+            <tr class="cxd-vr-total"><td colspan="7">Total</td><td class="is-right">${caixaMoney(total)}</td><td></td></tr>
           </tbody>
         </table>
       </div>`;
@@ -1151,7 +1388,6 @@ const FluxoCaixaDiarioApp = {
     this.accounts = [];
     this.recItems = [];
     this.outras = [];
-    this.aReceber = [];
     this.movs = [];
     this.payItems = [];
     this.openingDate = "";
@@ -1580,8 +1816,6 @@ const FluxoCaixaDiarioApp = {
     if (this._gen !== gen) return;
     const seen = {};
     const out = [];
-    const aReceber = [];
-    const vistoReceber = {};
     rows.forEach((r) => {
       if (!r) return;
       const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
@@ -1594,27 +1828,6 @@ const FluxoCaixaDiarioApp = {
       const numero = String(r.documentNumber || "");
       const numUp = numero.toUpperCase();
       const grupoContrato = numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0;
-      const valorAberto = Number(r.correctedBalanceAmount != null ? r.correctedBalanceAmount : (r.balanceAmount != null ? r.balanceAmount : r.originalAmount)) || 0;
-      if (doc !== "CT" && doc !== "TC" && !grupoContrato && !recebido && due && due >= b.start && due <= b.end && (!companyId || this.companyWanted(companyId)) && valorAberto > 0.009) {
-        const chave = titulo + "|" + parcela + "|" + due;
-        if (!vistoReceber[chave]) {
-          vistoReceber[chave] = true;
-          const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
-          const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
-          aReceber.push({
-            empresa: r.companyName || this.companyName(companyId),
-            companyId,
-            doc,
-            descricao: numero,
-            titulo,
-            parcela,
-            vencimento: due,
-            valor: valorAberto,
-            cliente: r.clientName || "",
-            cc: cat.costCenterId != null ? String(cat.costCenterId) : ""
-          });
-        }
-      }
       if (fora[doc]) return;
       if (grupoContrato) return;
       if (recebido) return;
@@ -1655,8 +1868,6 @@ const FluxoCaixaDiarioApp = {
       });
     });
     this.outras = out;
-    aReceber.sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
-    this.aReceber = aReceber;
     this.rebuild();
     this.render();
   },
@@ -3294,6 +3505,21 @@ const FluxoCaixaDiarioApp = {
         #fluxo-caixa-diario-root .cxd-gbox-head small { flex:1; font-weight:500; font-size:.74rem; opacity:.85; }
         #fluxo-caixa-diario-root .cxd-gbox-head strong { font-variant-numeric:tabular-nums; }
         #fluxo-caixa-diario-root .cxd-gbox-tot { display:flex; gap:18px; text-align:right; }
+        #fluxo-caixa-diario-root .cxd-vr-barra { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 10px; flex-wrap:wrap; }
+        #fluxo-caixa-diario-root .cxd-vr-info { display:flex; align-items:center; gap:8px; font-size:.8rem; font-weight:600; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-vr-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin:0 0 12px; }
+        #fluxo-caixa-diario-root .cxd-vr-card { border:1px solid #e2e8f0; border-radius:8px; background:#fff; padding:10px 12px; display:flex; flex-direction:column; gap:2px; }
+        #fluxo-caixa-diario-root .cxd-vr-card span { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-vr-card strong { font-size:1.05rem; color:#105436; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-vr-card small { font-size:.72rem; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-vr-card.is-vencidas strong { color:#b91c1c; }
+        #fluxo-caixa-diario-root .cxd-vr-table td.is-right { font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo:hover td { background:#e7f6ee; color:#105436; font-weight:700; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo.is-vencidas td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo.is-vencidas:hover td { color:#b91c1c; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-total td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-total:hover td { background:#105436; color:#fff; font-weight:700; }
         #fluxo-caixa-diario-root .cxd-gbox-tot label { display:block; font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.7; }
         #fluxo-caixa-diario-root .cxd-gbox-tot b { font-weight:600; font-variant-numeric:tabular-nums; opacity:.8; }
         #fluxo-caixa-diario-root .cxd-gbox-nocaixa strong { font-size:.95rem; }
