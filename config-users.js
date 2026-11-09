@@ -357,6 +357,7 @@ const ConfigUsersApp = {
   garantirCobrancaJuridica() {
     if (!Array.isArray(this.users)) this.users = [];
     let changed = false;
+    if (typeof window.crmRepararCacoLista === "function" && window.crmRepararCacoLista(this.users)) changed = true;
     const emailCaco = "caco@colenci.com.br";
     if (typeof window.reviveCrmUserEmail === "function") window.reviveCrmUserEmail(emailCaco);
     let caco = this.users.find((u) => String((u && u.email) || "").toLowerCase().trim() === emailCaco);
@@ -1660,7 +1661,13 @@ const ConfigUsersApp = {
                   <input type="email" id="umodal-email" value="${user ? user.email : ''}" oninput="this.value = this.value.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');" style="width: 100%; padding: 10px; border: 1px solid #e8eaed; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#105436'" onblur="this.style.borderColor='#e8eaed'">
                </div>
             </div>
-            
+
+            <div style="margin-bottom: 16px;">
+               <label for="umodal-login-email" style="display: block; font-weight: 600; color: #5f6368; margin-bottom: 6px; font-size: 0.85rem;">E-mail de login (Microsoft) <span style="font-weight:400;color:#94a3b8;">· opcional</span></label>
+               <input type="email" id="umodal-login-email" placeholder="Deixe em branco se a pessoa entra com o próprio e-mail" value="${user ? this.esc(user.login_email || '') : ''}" oninput="this.value = this.value.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');" style="width: 100%; padding: 10px; border: 1px solid #e8eaed; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#105436'" onblur="this.style.borderColor='#e8eaed'">
+               <div style="margin-top:4px;font-size:0.78rem;color:#64748b;">Use quando a pessoa entra no CRM pela conta @mouraleite.com.br de outra pessoa. Se a conta servir a mais de um cadastro, o CRM pergunta quem está acessando.</div>
+            </div>
+
             <div style="margin-bottom: 16px; display: flex; gap: 16px;">
                <div style="flex: 1;">
                   <label style="display: block; font-weight: 600; color: #5f6368; margin-bottom: 6px; font-size: 0.85rem;">Usuário Sienge</label>
@@ -1833,6 +1840,8 @@ const ConfigUsersApp = {
   async saveUserModal(userId, userEmail = null) {
       const name = document.getElementById('umodal-name').value.trim();
       const email = document.getElementById('umodal-email').value.trim();
+      const loginEmailEl = document.getElementById('umodal-login-email');
+      const loginEmail = loginEmailEl ? loginEmailEl.value.trim().toLowerCase() : '';
       const sienge = document.getElementById('umodal-sienge').value.trim();
       const phone = document.getElementById('umodal-phone').value.trim();
       const telefoneCorporativo = document.getElementById('umodal-fone-corp') ? document.getElementById('umodal-fone-corp').value.trim() : '';
@@ -1873,6 +1882,20 @@ const ConfigUsersApp = {
           alert("Nome e E-mail são obrigatórios.");
           return;
       }
+      if (loginEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail)) {
+          alert("O E-mail de login não é um e-mail válido.");
+          return;
+      }
+      {
+          // O e-mail é a chave do cadastro: dois usuários não podem ter o mesmo. Conta compartilhada vai no E-mail de login.
+          const emailNovo = email.toLowerCase();
+          const atual = userId ? this.findUser(userId, userEmail) : null;
+          const outro = this.users.find((u) => u && u !== atual && String(u.email || "").toLowerCase().trim() === emailNovo);
+          if (outro && (userId || String(outro.status || "").toUpperCase() === "ATIVO")) {
+              alert(`O e-mail ${email} já é do cadastro de ${outro.name || "outro usuário"}. Nada foi alterado.\n\nSe esta pessoa entra no CRM pela mesma conta Microsoft, deixe o e-mail dela no campo "E-mail Corporativo" e coloque ${email} no campo "E-mail de login (Microsoft)".`);
+              return;
+          }
+      }
 
       const isAdvProfile = window.isAdvogadoCobrancaProfile(profileName);
       const papelEl = document.getElementById("umodal-cobranca-papel");
@@ -1883,6 +1906,7 @@ const ConfigUsersApp = {
       const fields = {
           name: name,
           email: email,
+          login_email: loginEmail && loginEmail !== email.toLowerCase() ? loginEmail : "",
           sienge_user: sienge,
           phone: phone,
           telefone_corporativo: telefoneCorporativo,
@@ -1919,10 +1943,11 @@ const ConfigUsersApp = {
           const oldEmail = String(user.email || "").toLowerCase().trim();
           Object.assign(user, fields);
           if (oldEmail && oldEmail !== emailKey) {
+              // Só tira cópias deste mesmo cadastro com o e-mail antigo (mesmo id). Nunca outro usuário.
               this.users = this.users.filter((u) => {
                   if (u === user) return true;
                   const em = String((u && u.email) || "").toLowerCase().trim();
-                  return em !== oldEmail && em !== emailKey;
+                  return !(em === oldEmail && String(u.id) === String(user.id));
               });
               if (typeof window.removeCrmUserEmail === "function") window.removeCrmUserEmail(oldEmail);
           }
@@ -2261,7 +2286,7 @@ const ConfigUsersApp = {
             <strong>${this.esc(u.name)}</strong>
             ${this.deptUserLine(u)}
           </td>
-          <td class="cfg-email" title="${this.esc(u.email || '')}">${this.esc(u.email || '-')}</td>
+          <td class="cfg-email" title="${this.esc(u.email || '')}${u.login_email ? ' · entra pela conta ' + this.esc(u.login_email) : ''}">${this.esc(u.email || '-')}${u.login_email ? `<div style="font-size:0.72rem;color:#64748b;">login: ${this.esc(u.login_email)}</div>` : ''}</td>
           <td>${this.esc(u.sienge_user || '-')}</td>
           <td>${this.esc(u.phone || '-')}</td>
           <td class="cfg-perfil">

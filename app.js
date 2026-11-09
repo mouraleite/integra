@@ -4991,6 +4991,11 @@ window.crmAplicarAdvogadoAtuando = function(pessoa) {
 
 window.crmPedirAdvogadoAtuando = function() {
   const u = window.AppState && AppState.currentUser;
+  if (window._crmCadastroEscolhido) {
+    // Quem entrou já foi escolhido pela conta compartilhada (E-mail de login): não pergunta de novo.
+    window._crmForcarQuemAcessa = false;
+    return Promise.resolve(null);
+  }
   if (!u || !window.isAdvogadoCobrancaUser || !window.isAdvogadoCobrancaUser(u)) return Promise.resolve(null);
   const lista = window.crmListaAdvogadosCobranca();
   if (lista.length < 2) {
@@ -5069,6 +5074,7 @@ window.crmPedirAdvogadoAtuando = function() {
 
 window.crmSair = function() {
   try { sessionStorage.removeItem(window.CRM_ADVOGADO_ATUANDO_KEY); } catch (e) {}
+  try { sessionStorage.removeItem(window.CRM_CADASTRO_CONTA_KEY); } catch (e) {}
   if (!window.MouraAuth || typeof MouraAuth.logout !== "function") return;
   const compartilhado = window.crmAcessoAdvogadoCompartilhado && window.crmAcessoAdvogadoCompartilhado();
   return MouraAuth.logout(compartilhado ? { manterOutrasAbas: true } : undefined);
@@ -5089,7 +5095,9 @@ async function processSuccessfulLogin(loggedUser) {
         console.warn("[crm_users] sync no login:", e);
       }
     }
-    const validatedUser = validateAndLoadCrmUser(loggedUser);
+    const cadastro = await window.crmEscolherCadastroDaConta(loggedUser);
+    const validatedUser = validateAndLoadCrmUser(cadastro ? Object.assign({}, loggedUser, { email: cadastro.email }) : loggedUser);
+    if (cadastro) validatedUser._emailConta = String(loggedUser.email || "").toLowerCase();
     AppState.currentUser = validatedUser;
     try {
       if (typeof window.downloadBackOfficePermsFromFirebase === "function") {
@@ -5101,7 +5109,7 @@ async function processSuccessfulLogin(loggedUser) {
     if (window.MouraAuth && typeof MouraAuth.persistSession === "function") {
       MouraAuth.persistSession({
         name: validatedUser.name || loggedUser.name,
-        email: validatedUser.email || loggedUser.email,
+        email: cadastro ? loggedUser.email : (validatedUser.email || loggedUser.email),
         isAuthenticated: true,
         method: validatedUser.method || loggedUser.method || "Azure AD"
       });
@@ -5869,7 +5877,146 @@ window.mergeCrmUsers = function(localStr, cloudStr) {
   };
   cloud.forEach(put);
   local.forEach(put);
-  return JSON.stringify(Array.from(byKey.values()));
+  const saida = Array.from(byKey.values());
+  if (typeof window.crmRepararCacoLista === "function") window.crmRepararCacoLista(saida);
+  return JSON.stringify(saida);
+};
+
+/**
+ * O Caco (caco@colenci.com.br) entra no CRM pela conta Microsoft colenci@mouraleite.com.br, que também é
+ * o cadastro da Danieli. O e-mail do cadastro é a chave do usuário; a conta de entrada fica em login_email.
+ * Conserta a troca feita em 09/11/2026 (o Caco gravado com colenci@mouraleite.com.br) e tira a cópia
+ * velha dele que outro navegador ainda tenha com aquele e-mail (mesmo id e usuário Sienge CACO).
+ */
+window.CRM_CACO_EMAIL = "caco@colenci.com.br";
+window.CRM_CACO_CONTA = "colenci@mouraleite.com.br";
+window.crmRepararCacoLista = function(list) {
+  if (!Array.isArray(list)) return false;
+  const CACO = window.CRM_CACO_EMAIL;
+  const CONTA = window.CRM_CACO_CONTA;
+  const emailOf = (u) => String((u && u.email) || "").toLowerCase().trim();
+  const ehCaco = (u) => !!u && String(u.sienge_user || "").trim().toUpperCase() === "CACO";
+  let changed = false;
+  let caco = list.find((u) => emailOf(u) === CACO);
+  if (!caco) {
+    const trocado = list.find((u) => ehCaco(u) && emailOf(u) === CONTA);
+    if (trocado) {
+      trocado.email = CACO;
+      if (trocado.login_email === undefined || emailOf({ email: trocado.login_email }) === CACO) trocado.login_email = CONTA;
+      trocado.editedAt = Date.now();
+      caco = trocado;
+      changed = true;
+    }
+  }
+  if (caco) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const u = list[i];
+      if (u === caco || emailOf(u) === CACO) continue;
+      if (ehCaco(u) && String(u.id) === String(caco.id)) {
+        list.splice(i, 1);
+        changed = true;
+      } else if (ehCaco(u) && emailOf(u) === CONTA) {
+        // Cadastro da Danieli mesclado com a cópia velha do Caco: o usuário Sienge CACO é só do Caco.
+        u.sienge_user = "";
+        changed = true;
+      }
+    }
+    if (caco.login_email === undefined) {
+      caco.login_email = CONTA;
+      changed = true;
+    }
+  }
+  return changed;
+};
+
+/** Cadastros ativos que entram por esta conta Microsoft: o próprio e-mail ou o E-mail de login. */
+window.crmCadastrosDaConta = function(conta) {
+  const em = String(conta || "").toLowerCase().trim();
+  if (!em) return [];
+  const lista = typeof window.getCrmUsersList === "function" ? window.getCrmUsersList() : [];
+  return (Array.isArray(lista) ? lista : []).filter((u) => {
+    if (!u || String(u.status || "").toUpperCase() === "INATIVO") return false;
+    const proprio = String(u.email || "").toLowerCase().trim();
+    const login = String(u.login_email || "").toLowerCase().trim();
+    return proprio === em || login === em;
+  });
+};
+
+window.CRM_CADASTRO_CONTA_KEY = "crm_cadastro_da_conta";
+
+/** Quando a conta serve a mais de um cadastro, pergunta quem está entrando. Devolve o cadastro escolhido ou null. */
+window.crmEscolherCadastroDaConta = function(loggedUser) {
+  window._crmCadastroEscolhido = null;
+  const conta = String((loggedUser && loggedUser.email) || "").toLowerCase().trim();
+  const lista = window.crmCadastrosDaConta(conta)
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt"));
+  if (lista.length < 2) {
+    const unico = lista[0] && String(lista[0].email || "").toLowerCase().trim() !== conta ? lista[0] : null;
+    window._crmCadastroEscolhido = unico;
+    return Promise.resolve(unico);
+  }
+  if (!window._crmForcarQuemAcessa) {
+    try {
+      const salvo = JSON.parse(sessionStorage.getItem(window.CRM_CADASTRO_CONTA_KEY) || "null");
+      const ainda = salvo && salvo.conta === conta ? lista.find((u) => String(u.email || "").toLowerCase() === String(salvo.email || "").toLowerCase()) : null;
+      if (ainda) {
+        window._crmCadastroEscolhido = ainda;
+        return Promise.resolve(ainda);
+      }
+    } catch (e) {}
+  }
+  return new Promise((resolve) => {
+    const antigo = document.getElementById("crm-cadastro-conta");
+    if (antigo) antigo.remove();
+    const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let escolhido = null;
+    const overlay = document.createElement("div");
+    overlay.id = "crm-cadastro-conta";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:200000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:24px;";
+    const card = document.createElement("div");
+    card.style.cssText = "width:min(440px,100%);background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 24px 60px rgba(15,23,42,.28);";
+    card.innerHTML = `
+      <h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f172a;">Quem está acessando?</h2>
+      <p style="margin:0 0 14px;font-size:.84rem;color:#64748b;line-height:1.45;">A conta ${esc(conta)} é usada por mais de uma pessoa. Escolha quem está entrando agora: o CRM abre com o perfil e as permissões dessa pessoa.</p>
+      <div>${lista.map((p, i) => `<button type="button" data-idx="${i}" style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font:inherit;">
+        <span style="width:36px;height:36px;border-radius:50%;background:#105436;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
+        <span style="min-width:0;"><span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
+        <span style="display:block;font-size:.75rem;color:#64748b;">${esc(p.profile_name || "")}${p.profile_name ? " · " : ""}${esc(p.email)}</span></span>
+      </button>`).join("")}</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+        <button type="button" id="crm-cad-sair" style="height:38px;padding:0 14px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#334155;font-weight:700;cursor:pointer;">Sair</button>
+        <button type="button" id="crm-cad-ok" disabled style="height:38px;padding:0 16px;border-radius:10px;border:0;background:#105436;color:#fff;font-weight:800;cursor:pointer;opacity:.45;">Continuar</button>
+      </div>`;
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    const ok = card.querySelector("#crm-cad-ok");
+    card.querySelectorAll("[data-idx]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
+        card.querySelectorAll("[data-idx]").forEach((b) => {
+          const on = b === btn;
+          b.style.borderColor = on ? "#105436" : "#e2e8f0";
+          b.style.background = on ? "#f0fdf4" : "#fff";
+        });
+        ok.disabled = !escolhido;
+        ok.style.opacity = escolhido ? "1" : ".45";
+      });
+    });
+    ok.addEventListener("click", () => {
+      if (!escolhido) return;
+      try { sessionStorage.setItem(window.CRM_CADASTRO_CONTA_KEY, JSON.stringify({ conta, email: escolhido.email })); } catch (e) {}
+      window._crmCadastroEscolhido = escolhido;
+      overlay.remove();
+      resolve(escolhido);
+    });
+    card.querySelector("#crm-cad-sair").addEventListener("click", () => {
+      overlay.remove();
+      if (window.crmSair) window.crmSair();
+    });
+  });
 };
 
 window.mergeComissaoNfs = function(localStr, cloudStr) {
@@ -5936,6 +6083,7 @@ window.incluirCacoNaLista = function(raw) {
   try { list = JSON.parse(raw || "[]") || []; } catch (e) { list = []; }
   if (!Array.isArray(list)) list = [];
   const emailOf = (u) => String((u && u.email) || "").toLowerCase().trim();
+  if (typeof window.crmRepararCacoLista === "function") window.crmRepararCacoLista(list);
   let caco = list.find((u) => emailOf(u) === "caco@colenci.com.br");
   if (!caco) {
     caco = window.usuarioCaco();
