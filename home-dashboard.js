@@ -381,7 +381,7 @@ const HomeDashboard = {
     groups.push({ id: 'suspender', label: uniqueCust.size + ' clientes 0% pago para suspender', items: suspender, hideIfEmpty: true, count: uniqueCust.size });
     groups.push({ id: 'enviar-nex', label: enviar.length + ' títulos 0% pago enviar Nex', items: enviar, hideIfEmpty: true });
     groups.push({ id: 'sem-contato', label: semContato.length + ' títulos 0% sem nenhum contato', items: semContato, hideIfEmpty: false });
-    groups.push({ id: 'ontem', label: leftoverClients.length + ' títulos da sua fila não foram finalizados ontem', items: leftoverClients.length ? leftoverClients : leftover, hideIfEmpty: false });
+    groups.push({ id: 'ontem', label: leftoverClients.length + ' títulos da sua fila não foram finalizados ontem', items: leftoverClients.length ? leftoverClients : leftover, hideIfEmpty: false, count: leftoverClients.length });
     groups.push({ id: 'mais-91', label: mais91.length + ' títulos com mais de 91 dias', items: mais91, hideIfEmpty: false });
     return groups;
   },

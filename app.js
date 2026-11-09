@@ -20245,11 +20245,42 @@ window.renegAoMudarDataSinal = function() {
   if (typeof calculateRenegotiation === "function") calculateRenegotiation();
 };
 
+function renegAplicarSinalDescoberto() {
+  const achado = renegDescobrirSinalPago();
+  if (!achado) return false;
+  window._renegSinalJaPago = true;
+  window._renegRestaurando = true;
+  const sel = document.getElementById("reneg-payment-method");
+  if (sel) {
+    const opt = Array.from(sel.options).find(function(o) { return o.value === "diluir"; });
+    if (opt) opt.disabled = false;
+    sel.value = "diluir";
+    if (typeof window.sincronizarSeletorModalidade === "function") window.sincronizarSeletorModalidade();
+  }
+  window._renegSinalModo = "valor";
+  const sinalValorEl = document.getElementById("reneg-sinal-valor");
+  if (sinalValorEl) {
+    sinalValorEl.value = achado.valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  if (typeof calculateRenegotiation === "function") calculateRenegotiation();
+  window._renegRestaurando = false;
+  const box = document.getElementById("reneg-proposta-aviso");
+  if (box) {
+    const valor = achado.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    const dataBr = new Date(achado.data + "T12:00:00").toLocaleDateString("pt-BR");
+    box.hidden = false;
+    box.textContent = "O sinal de " + valor + " pago em " + dataBr + " já foi abatido nas parcelas. A diluição do restante está nesta tela. Pode gerar o termo de confissão de dívida.";
+  }
+  if (typeof window.atualizarBotaoReneg === "function") window.atualizarBotaoReneg();
+  return true;
+}
+
 function showRenegotiationView(customer, sale, allUnpaidBills) {
   if (window._renegotiationBlockedMsg) {
     alert(window._renegotiationBlockedMsg);
     return;
   }
+  window._renegSinalJaPago = false;
   g_renegCustomer = customer;
   g_renegSale = sale;
   
@@ -21237,8 +21268,9 @@ function renegAplicarFaixaModalidade() {
       somar: "Somar é para quem pagou menos de " + mods.somar.pctPagoMax + "% do contrato."
     };
     const adminEscolhe = typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal();
+    const sinalJaPago = !!window._renegSinalJaPago;
     Array.from(sel.options).forEach((opt) => {
-      if (opt.value === "cartao" || adminEscolhe) {
+      if (opt.value === "cartao" || adminEscolhe || (sinalJaPago && opt.value === sel.value)) {
         opt.disabled = false;
         opt.title = adminEscolhe && opt.value !== "cartao" ? "O administrador pode escolher qualquer plano." : "";
         return;
@@ -21413,6 +21445,51 @@ function renegExplicarAbatimentoSinal(sinalValor) {
   const dataBr = new Date(data + "T12:00:00").toLocaleDateString("pt-BR");
   const texto = "O sinal de " + dinheiro(sinal) + ", pago em " + dataBr + ", foi abatido " + meio + ". O restante será diluído nas parcelas.";
   return { sinal: sinal, data: data, dataBr: dataBr, linhas: linhas, porId: porId, texto: texto };
+}
+
+/** Sinal já pago no Sienge: no mesmo dia quitou uma parcela inteira e abateu a seguinte. */
+function renegDescobrirSinalPago() {
+  const parcelas = renegParcelasParaSinal();
+  if (!parcelas.length) return null;
+  const datas = new Set();
+  parcelas.forEach(function(inst) {
+    (inst.receipts || []).forEach(function(r) {
+      const d = renegIsoRecibo(r);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && renegValorRecibo(r) > 0.009) datas.add(d);
+    });
+  });
+  let melhor = null;
+  datas.forEach(function(data) {
+    const quando = new Date(data + "T12:00:00");
+    const ordenadas = parcelas.slice().sort(function(a, b) {
+      return String(a.dueDate || "").localeCompare(String(b.dueDate || ""));
+    });
+    const fatias = [];
+    ordenadas.forEach(function(inst) {
+      const dias = typeof window.daysOverdueUntilTarget === "function" ? window.daysOverdueUntilTarget(inst, quando) : 0;
+      if (!(dias > 0)) return;
+      const principal = renegPrincipalAntesDoSinal(inst, data);
+      if (!(principal > 0.009)) return;
+      const ch = window.computeLateCharges(principal, dias, 1);
+      const corrigido = renegCentavos(principal + (ch.multa || 0) + (ch.juros || 0));
+      if (!(corrigido > 0.009)) return;
+      let pago = 0;
+      (inst.receipts || []).forEach(function(r) {
+        if (renegIsoRecibo(r) !== data) return;
+        pago += renegValorRecibo(r);
+      });
+      const usa = renegCentavos(Math.min(pago, corrigido));
+      if (!(usa > 0.009)) return;
+      fatias.push({ usa: usa, integral: usa >= corrigido - 0.009 });
+    });
+    const temIntegral = fatias.some(function(f) { return f.integral; });
+    const temParcial = fatias.some(function(f) { return !f.integral; });
+    if (!temIntegral || !temParcial) return;
+    const valor = renegCentavos(fatias.reduce(function(s, f) { return s + f.usa; }, 0));
+    if (!(valor > 0.009)) return;
+    if (!melhor || data > melhor.data) melhor = { valor: valor, data: data };
+  });
+  return melhor;
 }
 
 function renegDepoisDoAbatimento(bill, corte) {
@@ -22064,8 +22141,7 @@ function calculateRenegotiation() {
   if (greenTotalParcelasEl) greenTotalParcelasEl.textContent = greenTotalParcelas;
   if (greenTotalPagarEl) greenTotalPagarEl.textContent = fmt(greenTotalPagar);
   if (greenUltimaEl) greenUltimaEl.textContent = greenLastDate;
-  if (typeof window.atualizarBotaoReneg === "function") window.atualizarBotaoReneg();
-  
+
   // Salvar no estado global de simulação
   AppState.currentRenegResult = {
     grossDebt,
@@ -22093,6 +22169,8 @@ function calculateRenegotiation() {
       linhas: abatimentoSinal.linhas
     } : null
   };
+  window._renegSinalJaPago = !!abatimentoSinal;
+  if (typeof window.atualizarBotaoReneg === "function") window.atualizarBotaoReneg();
 }
 
 
@@ -22306,8 +22384,9 @@ window.clientTemPropostaParaConfessao = function(client) {
 };
 
 window.renegPropostaProntaParaConfessao = function(p) {
-  if (!p || p.status === "concluida" || p.status === "expirada") return false;
+  if (!p || p.status === "concluida") return false;
   if (p.sinalPago) return true;
+  if (p.status === "expirada") return false;
   if (!window.renegPropostaEstaAtiva(p)) return false;
   return window.renegSinalFoiPago(p.sinalValue, String(p.createdAt || "").slice(0, 10));
 };
@@ -22352,11 +22431,6 @@ window.carregarRenegPropostas = function(force) {
         apagarTeste.push(d.id);
         return;
       }
-      const limite = String(data.expiraEm || renegIsoMaisDias(data.sinalDue, 2) || "");
-      if (!data.sinalPago && data.status !== "concluida" && data.status !== "expirada" && limite && hoje > limite) {
-        data.status = "expirada";
-        vencer.push(d.id);
-      }
       map.set(d.id, data);
     });
     window._renegPropostasMap = map;
@@ -22364,13 +22438,21 @@ window.carregarRenegPropostas = function(force) {
     apagarTeste.forEach(function(id) {
       if (fc.deleteDoc) fc.deleteDoc(fc.doc(window.firebaseDb, "reneg_propostas", id)).catch(function() {});
     });
+    if (typeof window.renegMarcarSinaisPagos === "function") {
+      try { await window.renegMarcarSinaisPagos(map); } catch (e) {}
+    }
+    map.forEach(function(data, id) {
+      if (!data || data.sinalPago || data.status === "concluida" || data.status === "expirada") return;
+      const limite = String(data.expiraEm || renegIsoMaisDias(data.sinalDue, 2) || "");
+      if (limite && hoje > limite) {
+        data.status = "expirada";
+        vencer.push(id);
+      }
+    });
     vencer.forEach(function(id) {
       const ref = fc.doc(window.firebaseDb, "reneg_propostas", id);
       fc.setDoc(ref, { status: "expirada", expiradaEm: new Date().toISOString() }, { merge: true }).catch(function() {});
     });
-    if (typeof window.renegMarcarSinaisPagos === "function") {
-      try { await window.renegMarcarSinaisPagos(map); } catch (e) {}
-    }
     window._renegPropostasCarregando = null;
     return map;
   })().catch(function(e) {
@@ -22407,7 +22489,32 @@ window.renegSinalFoiPago = function(valor, desdeIso, recibos) {
   const alvo = Number(valor) || 0;
   if (!(alvo > 0)) return false;
   const lista = Array.isArray(recibos) ? recibos : renegRecebimentosDoContrato();
-  return lista.some(function(r) { return renegReciboConfereSinal(r, alvo, desdeIso); });
+  if (lista.some(function(r) { return renegReciboConfereSinal(r, alvo, desdeIso); })) return true;
+  const desde = String(desdeIso || "").slice(0, 10);
+  const porData = new Map();
+  lista.forEach(function(r) {
+    if (!r || (typeof window.isWriteOffReceipt === "function" && window.isWriteOffReceipt(r))) return;
+    const v = renegValorRecibo(r);
+    const d = renegIsoRecibo(r);
+    if (!(v > 0.009) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+    if (desde && d < desde) return;
+    if (!porData.has(d)) porData.set(d, []);
+    porData.get(d).push(Math.round(v * 100));
+  });
+  const alvoC = Math.round(alvo * 100);
+  let achou = false;
+  porData.forEach(function(cents) {
+    if (achou) return;
+    const n = cents.length;
+    if (!n || n > 18) return;
+    const limite = 1 << n;
+    for (let m = 1; m < limite; m++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) if (m & (1 << i)) s += cents[i];
+      if (Math.abs(s - alvoC) <= 5) { achou = true; return; }
+    }
+  });
+  return achou;
 };
 
 function renegReciboConfereSinal(r, alvo, desdeIso) {
@@ -22432,8 +22539,7 @@ window.renegMarcarSinaisPagos = async function(map) {
   const fc = window.firebaseCollections;
   const abertas = [];
   map.forEach(function(p) {
-    if (!p || p.sinalPago || p.status === "concluida" || p.status === "expirada") return;
-    if (!window.renegPropostaEstaAtiva(p)) return;
+    if (!p || p.sinalPago || p.status === "concluida") return;
     abertas.push(p);
   });
   for (let i = 0; i < abertas.length; i++) {
@@ -22458,19 +22564,62 @@ window.renegMarcarSinaisPagos = async function(map) {
     if (!pago) continue;
     p.sinalPago = true;
     p.sinalPagoEm = new Date().toISOString();
+    if (p.status === "expirada") p.status = "ativa";
     if (fc && fc.setDoc && fc.doc && window.firebaseDb) {
       fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", p.id || renegPropostaId(p.customerId, p.saleId)), {
-        sinalPago: true, sinalPagoEm: p.sinalPagoEm
+        sinalPago: true, sinalPagoEm: p.sinalPagoEm, status: p.status || "ativa"
       }, { merge: true }).catch(function() {});
     }
   }
 };
 
+function renegChavesProposta(customerId, saleId) {
+  const cust = String(customerId || "0");
+  const raw = String(saleId || "");
+  const chaves = [];
+  const por = function(v) {
+    const id = renegPropostaId(cust, v);
+    if (chaves.indexOf(id) < 0) chaves.push(id);
+  };
+  if (raw) por(raw);
+  const bill = raw.replace(/^B-/i, "").split("-")[0].replace(/\D/g, "");
+  if (bill) {
+    por(bill);
+    por("B-" + bill);
+  }
+  return chaves;
+}
+
 function renegPropostaAtual() {
+  const map = window._renegPropostasMap;
+  if (!map) return null;
   const customer = g_renegCustomer || {};
   const sale = g_renegSale || {};
-  const id = renegPropostaId(customer.id || customer.customerId || AppState.selectedCustomerId, AppState.selectedSaleId || sale.receivableBillId || sale.id);
-  return (window._renegPropostasMap && window._renegPropostasMap.get(id)) || null;
+  const customerId = customer.id || customer.customerId || (window.AppState && AppState.selectedCustomerId);
+  const saleIds = [
+    window.AppState && AppState.selectedSaleId,
+    window.AppState && AppState.selectedTitulo,
+    sale.receivableBillId,
+    sale.billReceivableId,
+    sale.id
+  ];
+  for (let i = 0; i < saleIds.length; i++) {
+    const chaves = renegChavesProposta(customerId, saleIds[i]);
+    for (let j = 0; j < chaves.length; j++) {
+      const p = map.get(chaves[j]);
+      if (p) return p;
+    }
+  }
+  const bill = String(sale.receivableBillId || sale.billReceivableId || sale.id || (window.AppState && AppState.selectedSaleId) || "").replace(/^B-/i, "").split("-")[0].replace(/\D/g, "");
+  if (!bill) return null;
+  let achou = null;
+  map.forEach(function(p) {
+    if (achou || !p) return;
+    if (customerId && String(p.customerId || "") !== String(customerId)) return;
+    const pb = String(p.saleId || "").replace(/^B-/i, "").split("-")[0].replace(/\D/g, "");
+    if (pb === bill) achou = p;
+  });
+  return achou;
 }
 
 window.atualizarBotaoReneg = function() {
@@ -22482,7 +22631,8 @@ window.atualizarBotaoReneg = function() {
     return;
   }
   const p = renegPropostaAtual();
-  const pago = window.renegPropostaProntaParaConfessao(p);
+  const resultado = window.AppState && AppState.currentRenegResult;
+  const pago = window.renegPropostaProntaParaConfessao(p) || !!(resultado && resultado.abatimentoSinal);
   label.textContent = pago ? "Gerar termo de confissão de dívida" : "Gerar proposta de acordo";
 };
 
@@ -22505,9 +22655,13 @@ function renegMontarAvisoProposta(p, pago) {
 };
 
 window.renegChecarPropostaAtiva = async function() {
-  try { await window.carregarRenegPropostas(true); } catch (e) { return; }
+  try { await window.carregarRenegPropostas(true); } catch (e) {}
   const p = renegPropostaAtual();
-  if (!p || p.status === "concluida" || p.status === "expirada" || (!p.sinalPago && !window.renegPropostaEstaAtiva(p))) {
+  const achado = renegDescobrirSinalPago();
+  const aberta = !!(p && p.status !== "concluida" && p.status !== "expirada" && (p.sinalPago || window.renegPropostaEstaAtiva(p)));
+  const propostaDoSinal = !!(aberta && achado && Math.abs((Number(p.sinalValue) || 0) - achado.valor) < 0.05 && (p.cenario === "diluir" || !p.cenario));
+  if (achado && !propostaDoSinal && renegAplicarSinalDescoberto()) return;
+  if (!aberta) {
     renegMontarAvisoProposta(null, false);
     window.atualizarBotaoReneg();
     return;
@@ -23502,7 +23656,7 @@ function generateAgreementPDF() {
   window._renegGerando = true;
   try {
   const proposta = renegPropostaAtual();
-  const pago = window.renegPropostaProntaParaConfessao(proposta);
+  const pago = window.renegPropostaProntaParaConfessao(proposta) || !!(results && results.abatimentoSinal);
   const modo = pago ? "confissao" : "proposta";
   if (modo === "proposta") {
     const pix = await renegPedirPdfPix();
