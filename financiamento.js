@@ -1694,16 +1694,16 @@ const FinanciamentoApp = {
       </div>
       <div class="crm-card" style="margin-bottom:16px;">
         <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
-          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);display:flex;align-items:center;gap:8px;">
-            <i data-lucide="landmark" style="width:18px;"></i> Financiamento iniciado
-          </h3>
+          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do contrato</h3>
         </div>
-        <div class="crm-card-content fin-topo">
-          <div title="${this.esc(obra.empresa)}"><div>Empresa</div><div class="fin-topo-val">${this.esc(obra.empresa)}</div></div>
-          <div title="${this.esc(obra.empreendimento)}"><div>Empreendimento</div><div class="fin-topo-val">${this.esc(obra.empreendimento)}</div></div>
-          <div title="${this.esc(proc.contractNumber || "—")}"><div>Contrato</div><div class="fin-topo-val">${this.esc(proc.contractNumber || "—")}</div></div>
-          <div title="${this.esc(proc.titulo || "—")}"><div>Título</div><div class="fin-topo-val">${this.esc(proc.titulo || "—")}</div></div>
-          <div title="${this.esc(this.formatUnidade(proc.unit || "—"))}"><div>Unidade</div><div class="fin-topo-val">${this.esc(this.formatUnidade(proc.unit || "—"))}</div></div>
+        <div class="crm-card-content">
+          <div class="cessao-customer-grid">
+            <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empresa)}"><span class="cessao-lbl">Empresa</span><span class="cessao-val">${this.esc(obra.empresa)}</span></div>
+            <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empreendimento)}"><span class="cessao-lbl">Empreendimento</span><span class="cessao-val">${this.esc(obra.empreendimento)}</span></div>
+            <div class="cessao-customer-field" title="${this.esc(proc.contractNumber || "—")}"><span class="cessao-lbl">Contrato</span><span class="cessao-val">${this.esc(proc.contractNumber || "—")}</span></div>
+            <div class="cessao-customer-field" title="${this.esc(proc.titulo || "—")}"><span class="cessao-lbl">Título</span><span class="cessao-val">${this.esc(proc.titulo || "—")}</span></div>
+            <div class="cessao-customer-field" title="${this.esc(this.formatUnidade(proc.unit || "—"))}"><span class="cessao-lbl">Unidade</span><span class="cessao-val">${this.esc(this.formatUnidade(proc.unit || "—"))}</span></div>
+          </div>
         </div>
       </div>
       <div class="crm-card" style="margin-bottom:16px;">
@@ -1731,9 +1731,6 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
             #financiamento-root .fin-nota textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font: inherit; background: #fff; min-height: 52px; resize: vertical; }
             #financiamento-root .fin-nota-linha { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
-            #financiamento-root .fin-topo { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-            #financiamento-root .fin-topo > div > div:first-child { font-size: 0.7rem; color: #64748b; text-transform: uppercase; font-weight: 700; }
-            #financiamento-root .fin-topo-val { font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
             #financiamento-root .fin-tag-box { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
             #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
