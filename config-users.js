@@ -407,6 +407,7 @@ const ConfigUsersApp = {
       submodules: [{ name: "Engenharia", key: "sub_eng_geral", actions: [
         { id: "caucao", label: "Gestão de caução", permBase: "sub_eng_geral_caucao" },
         { id: "custo_obra", label: "Custo obra", permBase: "sub_eng_geral_custo_obra" },
+        { id: "acompanhamento", label: "Acompanhamento de obra", permBase: "sub_eng_geral_acompanhamento" },
         { id: "config", label: "Configurações", permBase: "sub_eng_geral_config" }
       ] }]
     },

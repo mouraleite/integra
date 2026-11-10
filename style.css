@@ -10868,9 +10868,21 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .cc-table.ctb-eq-lista .is-neg { color: #b91c1c; }
 .cc-table tbody tr.cc-row-salvo { animation: ccRowSalvo 2.4s ease-out; }
 @keyframes ccRowSalvo { 0%, 40% { background-color: #bbf7d0; } 100% { background-color: transparent; } }
+.cc-table.aobra-table { min-width: 1180px; }
+.cc-table.aobra-table col.aobra-id { width: 88px; }
+.cc-table.aobra-table col.aobra-acao { width: 76px; }
+.cc-table.aobra-table td.aobra-acoes { overflow: visible; white-space: nowrap; text-align: right; }
+.aobra-help { flex: 1 1 320px; margin: 0; color: #64748b; font-size: 0.82rem; line-height: 1.35; }
+.aobra-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.aobra-form label { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 0.75rem; font-weight: 700; color: #475569; }
+.aobra-form label.aobra-id { grid-column: 1 / -1; }
+.aobra-form input { height: 38px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0 10px; background: #fff; font-size: 0.9rem; color: #0f172a; box-sizing: border-box; }
+.aobra-form input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
+.aobra-modal { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
 @media (max-width: 900px) {
   .cc-toolbar-actions { margin-left: 0; }
   .cc-page .ml-emp-filter { max-width: none; }
+  .aobra-form { grid-template-columns: 1fr; }
 }
 
 /* Parametrização de parceiro · Centros de custo da obra */

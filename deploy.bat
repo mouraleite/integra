@@ -7,6 +7,14 @@ echo   DEPLOY AUTOMATICO - CRM MOURA LEITE
 echo ========================================================
 echo.
 
+REM --- 0) TRAZ O QUE OUTRAS PESSOAS SUBIRAM NO GITHUB ---
+echo [0/5] Buscando alteracoes de outras pessoas no GitHub...
+git pull --no-rebase --no-edit --autostash origin main
+if errorlevel 1 goto :conflito
+for /f %%f in ('git diff --name-only --diff-filter=U') do goto :conflito
+echo       OK - Pasta atualizada com o GitHub
+echo.
+
 REM --- 1) INCREMENTA VERSAO NO INDEX.HTML ---
 echo [1/5] Incrementando versao no index.html...
 for /f "tokens=*" %%v in ('powershell -NoProfile -ExecutionPolicy Bypass -File "_version_bump.ps1"') do set NEW_VER=%%v
@@ -44,6 +52,13 @@ echo.
 REM --- 4) ENVIA COMMITS PARA O GITHUB ---
 echo [4/5] Enviando commits para o GitHub...
 git push
+if errorlevel 1 (
+    echo.
+    echo [ERRO] O GitHub recusou o envio. Nada foi publicado na Vercel.
+    echo        Provavelmente alguem subiu algo nos ultimos segundos. Rode o deploy de novo.
+    pause
+    exit /b 1
+)
 echo       OK - Commits enviados
 echo.
 
@@ -61,3 +76,11 @@ echo   Aguarde ~30s e atualize a pagina do CRM.
 echo ========================================================
 echo.
 pause
+exit /b 0
+
+:conflito
+echo.
+echo [PARADO] Suas alteracoes e as que vieram do GitHub mexem nas mesmas linhas.
+echo          Nada foi enviado. Peca ao Claude: "resolver conflito do deploy".
+pause
+exit /b 1

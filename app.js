@@ -3870,6 +3870,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "compras-config": "Calendário de vencimento de títulos a pagar",
     "engenharia-caucao": "Gestão de caução",
     "engenharia-custo-obra": "Custo obra",
+    "engenharia-acompanhamento": "Acompanhamento de obra",
     "engenharia-config": "Configurações",
     "construcao-engenharia": "Gestão de caução",
     "construcao-compras": "Follow-up de previsões",
@@ -3953,6 +3954,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "compras-config": "calendar-clock",
     "engenharia-caucao": "shield-check",
     "engenharia-custo-obra": "hard-hat",
+    "engenharia-acompanhamento": "building-2",
     "engenharia-config": "settings",
     "construcao-engenharia": "shield-check",
     "construcao-compras": "clipboard-list",
@@ -4105,6 +4107,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     }
   } else if (tabId === "engenharia-custo-obra") {
     if (window.CustoObraApp && typeof window.CustoObraApp.init === "function") window.CustoObraApp.init();
+  } else if (tabId === "engenharia-acompanhamento") {
+    if (window.AcompanhamentoObraApp && typeof window.AcompanhamentoObraApp.init === "function") window.AcompanhamentoObraApp.init();
   } else if (tabId === "vistoria") {
     try {
       if (window.VerificarConstrucaoApp && typeof window.VerificarConstrucaoApp.init === "function") {
@@ -6576,7 +6580,7 @@ window.commitCrmGlobalConfig = async function(payload) {
         localRaw = memFin.raw;
         localAt = String(memFin.at);
       }
-      const chosen = window.escolherEtapasFinanciamento(localRaw || "[]", localAt || "0", cloud[kFin] || "[]", cloud[kAt] || "0");
+      const chosen = window.escolherEtapasFinanciamento(localRaw || "[]", localAt || "0", cloud[kFin] || "[]", cloud[kAt] || "0", cloud.crm_moura_financiamento_excluidas || "");
       let at = Number(chosen.at) || 0;
       const listStr = JSON.stringify(chosen.list);
       const cloudStr = JSON.stringify(window.parseListaEtapas(cloud[kFin] || "[]"));
@@ -11073,21 +11077,114 @@ window.etapasFinanciamentoSaoPadrao = function(lista) {
   });
 };
 
-/* A lista gravada por último vale inteira. Juntar pelo nome devolvia a etapa apagada e desfazia a edição. */
-window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloudAt) {
-  const local = window.parseListaEtapas(localRaw);
-  const cloud = window.parseListaEtapas(cloudRaw);
+/* Etapa apagada nas configurações. A nuvem e o modelo inicial não devolvem essa etapa. */
+window.FIN_ETAPAS_EXCLUIDAS_KEY = "crm_moura_financiamento_excluidas";
+
+window.finNomeEtapa = function(e) {
+  return String(e && (e.nome || e.name) || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ").trim().toUpperCase();
+};
+
+window.finEtapasExcluidasLer = function(raw) {
+  let o = raw;
+  if (typeof raw === "string" || raw == null) {
+    try { o = JSON.parse(raw || localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || "{}"); } catch (e) { o = {}; }
+  }
+  if (!o || typeof o !== "object") o = {};
+  const ids = Array.isArray(o.ids) ? o.ids.map((id) => String(id)).filter(Boolean) : [];
+  const nomes = Array.isArray(o.nomes) ? o.nomes.map((n) => String(n)).filter(Boolean) : [];
+  return { ids: ids, nomes: nomes };
+};
+
+window.finEtapasExcluidasGravar = function(tomb) {
+  const ids = Array.from(new Set((tomb && tomb.ids) || []));
+  const nomes = Array.from(new Set((tomb && tomb.nomes) || []));
+  const raw = JSON.stringify({ ids: ids, nomes: nomes });
+  const setter = window._originalSetItem || localStorage.setItem.bind(localStorage);
+  try { setter.call(localStorage, window.FIN_ETAPAS_EXCLUIDAS_KEY, raw); } catch (e) {}
+  return raw;
+};
+
+window.finEtapasExcluidasUnirNuvem = function(cloudRaw) {
+  const local = window.finEtapasExcluidasLer();
+  const cloud = window.finEtapasExcluidasLer(cloudRaw || "");
+  return window.finEtapasExcluidasGravar({
+    ids: local.ids.concat(cloud.ids),
+    nomes: local.nomes.concat(cloud.nomes)
+  });
+};
+
+window.finEtapasMarcarExcluidas = function(etapas) {
+  const atual = window.finEtapasExcluidasLer();
+  (etapas || []).forEach((e) => {
+    if (!e) return;
+    if (e.id) atual.ids.push(String(e.id));
+    const nome = window.finNomeEtapa(e);
+    if (nome) atual.nomes.push(nome);
+  });
+  return window.finEtapasExcluidasGravar(atual);
+};
+
+window.finEtapasLiberar = function(etapa) {
+  if (!etapa) return;
+  const atual = window.finEtapasExcluidasLer();
+  const id = String(etapa.id || "");
+  const nome = window.finNomeEtapa(etapa);
+  atual.ids = atual.ids.filter((item) => item !== id);
+  atual.nomes = atual.nomes.filter((item) => item !== nome);
+  window.finEtapasExcluidasGravar(atual);
+};
+
+window.finEtapasSemExcluidas = function(lista, tomb) {
+  const t = tomb || window.finEtapasExcluidasLer();
+  const src = Array.isArray(lista) ? lista : [];
+  const ids = new Set(t.ids || []);
+  if (!ids.size) return src.slice();
+  const drop = new Set();
+  src.forEach((e) => {
+    if (e && e.id && ids.has(String(e.id))) drop.add(String(e.id));
+  });
+  let grew = true;
+  while (grew) {
+    grew = false;
+    src.forEach((e) => {
+      if (e && e.parentId && drop.has(String(e.parentId)) && !drop.has(String(e.id))) {
+        drop.add(String(e.id));
+        grew = true;
+      }
+    });
+  }
+  return src.filter((e) => e && !drop.has(String(e.id)));
+};
+
+/* A lista gravada por último vale inteira. Etapa já excluída não volta nem da nuvem nem do modelo. */
+window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloudAt, cloudExcluidasRaw) {
+  const tombRaw = window.finEtapasExcluidasUnirNuvem(cloudExcluidasRaw || "");
+  const tomb = window.finEtapasExcluidasLer(tombRaw);
+  const local = window.finEtapasSemExcluidas(window.parseListaEtapas(localRaw), tomb);
+  const cloudCheia = window.parseListaEtapas(cloudRaw);
+  const cloud = window.finEtapasSemExcluidas(cloudCheia, tomb);
   const la = Number(localAt) || 0;
   const ca = Number(cloudAt) || 0;
   const pack = (list, at, winner) => ({ list: list, at: at, winner: winner });
-  if (la && ca) return la >= ca ? pack(local, la, "local") : pack(cloud, ca, "cloud");
-  if (la) return pack(local, la, "local");
-  if (ca) return pack(cloud, ca, "cloud");
-  if (!local.length && cloud.length) return pack(cloud, 0, "cloud");
-  if (local.length && !cloud.length) return pack(local, 0, "local");
-  const localPadrao = window.etapasFinanciamentoSaoPadrao(local) || !!window._finEtapasVeioDoPadrao;
-  if (localPadrao && cloud.length && !window.etapasFinanciamentoSaoPadrao(cloud)) return pack(cloud, 0, "cloud");
-  return pack(local, 0, "local");
+  let chosen;
+  if (la && ca) chosen = la >= ca ? pack(local, la, "local") : pack(cloud, ca, "cloud");
+  else if (la) chosen = pack(local, la, "local");
+  else if (ca) chosen = pack(cloud, ca, "cloud");
+  else if (!local.length && cloud.length) chosen = pack(cloud, 0, "cloud");
+  else if (local.length && !cloud.length) chosen = pack(local, 0, "local");
+  else {
+    const localPadrao = window.etapasFinanciamentoSaoPadrao(local) || !!window._finEtapasVeioDoPadrao;
+    if (localPadrao && cloud.length && !window.etapasFinanciamentoSaoPadrao(cloud)) chosen = pack(cloud, 0, "cloud");
+    else chosen = pack(local, 0, "local");
+  }
+  if (cloudCheia.length !== cloud.length) {
+    chosen.list = window.finEtapasSemExcluidas(chosen.list, tomb);
+    chosen.at = Date.now();
+    chosen.winner = "local";
+  }
+  return chosen;
 };
 
 /* Etapas que o usuário excluiu. A sincronização não coloca de volta. */
@@ -44102,7 +44199,7 @@ window.ensureEtapasFinanciamento = function() {
   let stored = null;
   try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
   if (stored != null) return false;
-  window.EtapasFinanciamentoState = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
+  const base = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
     dias: e.dias,
@@ -44110,6 +44207,9 @@ window.ensureEtapasFinanciamento = function() {
     parentId: null,
     order: (i + 1) * 10
   }));
+  window.EtapasFinanciamentoState = typeof window.finEtapasSemExcluidas === "function"
+    ? window.finEtapasSemExcluidas(base)
+    : base;
   try {
     localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
   } catch (e) {}
@@ -44143,10 +44243,14 @@ window.persistEtapasFinanciamento = function() {
   else { try { localStorage.removeItem("crm_moura_financiamento_at"); } catch (e) {} }
   const fc = window.firebaseCollections;
   if (fc && fc.doc && fc.setDoc && window.firebaseDb) {
-    fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), {
+    let excluidas = "";
+    try { excluidas = localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || ""; } catch (e) {}
+    const doc = {
       crm_moura_financiamento: raw,
       crm_moura_financiamento_at: at
-    }, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
+    };
+    if (excluidas) doc.crm_moura_financiamento_excluidas = excluidas;
+    fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), doc, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
   }
   if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(console.error);
 };
@@ -44294,6 +44398,13 @@ window.renderEtapasFinanciamento = function() {
     return;
   }
   if (typeof window.ensureEtapasFinanciamento === "function") window.ensureEtapasFinanciamento();
+  if (typeof window.finEtapasSemExcluidas === "function" && Array.isArray(window.EtapasFinanciamentoState)) {
+    const limpa = window.finEtapasSemExcluidas(window.EtapasFinanciamentoState);
+    if (limpa.length !== window.EtapasFinanciamentoState.length) {
+      window.EtapasFinanciamentoState = limpa;
+      if (typeof window.persistEtapasFinanciamento === "function") window.persistEtapasFinanciamento();
+    }
+  }
   container.innerHTML = "";
   if (!window.EtapasFinanciamentoState || window.EtapasFinanciamentoState.length === 0) {
     container.innerHTML = `<div style="text-align: center; color: #94a3b8; font-size: 0.9rem; padding: 20px;">Nenhuma etapa configurada.</div>`;
@@ -44453,7 +44564,12 @@ window.salvarEtapaFinanciamentoModal = function() {
       e.nome = nome.trim();
       e.dias = dias;
       e.descricao = desc;
+      if (typeof window.finEtapasLiberar === "function") window.finEtapasLiberar(e);
     }
+  }
+  if (id === "new" && typeof window.finEtapasLiberar === "function") {
+    const criada = window.EtapasFinanciamentoState[window.EtapasFinanciamentoState.length - 1];
+    window.finEtapasLiberar(criada);
   }
   document.getElementById("etapa-financiamento-modal").style.display = "none";
   window.persistEtapasFinanciamento();
@@ -44485,6 +44601,8 @@ window.removerEtapaFinanciamento = async function(id) {
       }
     });
   }
+  const removidas = window.EtapasFinanciamentoState.filter(e => dropIds.has(e.id));
+  if (typeof window.finEtapasMarcarExcluidas === "function") window.finEtapasMarcarExcluidas(removidas);
   window.EtapasFinanciamentoState = window.EtapasFinanciamentoState.filter(e => !dropIds.has(e.id));
   window.persistEtapasFinanciamento();
   window.renderEtapasFinanciamento();
@@ -53844,6 +53962,7 @@ window.getDynamicOperators = function(type = 'all') {
 window.SYNC_KEYS = [
     "crm_users",
     "crm_moura_judiciais",
+    "crm_moura_financiamento_excluidas",
     "crm_moura_financiamento",
     "crm_moura_financiamento_at",
     "crm_moura_financiamentos_proc",
@@ -53876,6 +53995,7 @@ window.SYNC_KEYS = [
     "crm_compromissario_configs",
     "crm_compromissario_cessao_v1",
     "crm_compras_prazo_lancamento_v1",
+    "crm_engenharia_acompanhamento_obra",
     "crm_engenharia_caucao_liberados_v1",
     "crm_engenharia_caucao_prorrogacao_v1",
     "crm_engenharia_caucao_avisos_v1",
@@ -54682,6 +54802,7 @@ window.syncGlobalConfigFromFirebase = async function() {
                 if (k === "crm_moura_preambles_list") return;
                 if (k === "crm_moura_cartorios_list") return;
                 if (k === "crm_moura_financiamento_at") return;
+                if (k === "crm_moura_financiamento_excluidas") return;
                 if (k === "crm_moura_financiamento" && typeof window.escolherEtapasFinanciamento === "function") {
                     const finLocal = typeof window.finEtapasLocais === "function"
                         ? window.finEtapasLocais()
@@ -54690,7 +54811,8 @@ window.syncGlobalConfigFromFirebase = async function() {
                         finLocal.raw,
                         finLocal.at,
                         globalData[k] || "[]",
-                        globalData.crm_moura_financiamento_at || "0"
+                        globalData.crm_moura_financiamento_at || "0",
+                        globalData.crm_moura_financiamento_excluidas || ""
                     );
                     window._finEtapasEscolhidas = chosen.list;
                     let at = Number(chosen.at) || 0;
