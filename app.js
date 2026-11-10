@@ -6571,6 +6571,11 @@ window.commitCrmGlobalConfig = async function(payload) {
       let localAt = next[kAt];
       try { if (!localRaw) localRaw = localStorage.getItem(kFin) || "[]"; } catch (e) { localRaw = "[]"; }
       try { if (!localAt) localAt = localStorage.getItem(kAt) || "0"; } catch (e) { localAt = "0"; }
+      const memFin = window._finEtapasMem;
+      if (memFin && Number(memFin.at) > (Number(localAt) || 0)) {
+        localRaw = memFin.raw;
+        localAt = String(memFin.at);
+      }
       const chosen = window.escolherEtapasFinanciamento(localRaw || "[]", localAt || "0", cloud[kFin] || "[]", cloud[kAt] || "0");
       let at = Number(chosen.at) || 0;
       const listStr = JSON.stringify(chosen.list);
@@ -20713,6 +20718,11 @@ function showRenegotiationView(customer, sale, allUnpaidBills) {
   let firstDate = new Date(dateSinal.getFullYear(), dateSinal.getMonth() + 1, defaultDay);
   document.getElementById("reneg-first-due-date").value = firstDate.toISOString().split("T")[0];
   
+  if (typeof renegLerPropostasLocais === "function") renegLerPropostasLocais();
+  const previaReneg = typeof renegPropostaAtual === "function" ? renegPropostaAtual() : null;
+  const previaAberta = !!(previaReneg && previaReneg.status !== "concluida" && previaReneg.status !== "expirada" && (previaReneg.sinalPago || (typeof window.renegPropostaEstaAtiva === "function" && window.renegPropostaEstaAtiva(previaReneg))));
+  window._renegChecandoProposta = !previaAberta;
+  if (previaAberta && typeof renegAplicarPropostaNaTela === "function") renegAplicarPropostaNaTela(previaReneg, { silencioso: true, semCalculo: true });
   calculateRenegotiation();
   if (typeof window.renegChecarPropostaAtiva === "function") window.renegChecarPropostaAtiva();
 }
@@ -21622,10 +21632,115 @@ function renegPrincipalAntesDoSinal(inst, data) {
   return renegCentavos(original);
 }
 
+function renegIdParcela(inst) {
+  return String(inst && (inst.installmentId != null ? inst.installmentId : (inst.installmentNumber != null ? inst.installmentNumber : (inst.installmentNum != null ? inst.installmentNum : ""))) || "");
+}
+
+function renegSaldoParcela(inst) {
+  const bruto = Number(inst && (inst.currentBalance != null ? inst.currentBalance : inst.balanceDue));
+  return Number.isFinite(bruto) ? bruto : null;
+}
+
+/** Parcela já quitada antes do dia do sinal: o pagamento de hoje não pode ser contado nela de novo. */
+function renegQuitadaAntesDoSinal(inst, data) {
+  let pagoDia = 0;
+  let pagoAntes = 0;
+  (inst && inst.receipts || []).forEach((r) => {
+    const d = renegIsoRecibo(r);
+    const v = renegValorRecibo(r);
+    if (!(v > 0.009) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+    if (d === data) pagoDia += v;
+    else if (d < data) pagoAntes += v;
+  });
+  if (pagoDia > 0.009) return false;
+  const saldo = renegSaldoParcela(inst);
+  if (saldo != null && saldo <= 0.009 && pagoAntes > 0.009) return true;
+  const original = Number(inst && (inst.originalValue != null ? inst.originalValue : inst.value)) || 0;
+  return pagoAntes > 0.009 && original > 0.009 && pagoAntes >= original - 0.05;
+}
+
+function renegJuntarLista(partes) {
+  if (!partes.length) return "";
+  if (partes.length === 1) return partes[0];
+  return partes.slice(0, -1).join(", ") + " e " + partes[partes.length - 1];
+}
+
+/** Uma frase só: o que o sinal quitou e o que abateu, sem repetir "juros e multa" em cada parcela. */
+function renegTextoAbatimento(sinal, dataBr, linhas) {
+  const dinheiro = (n) => renegCentavos(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const item = (l) => l.vencimento + " (" + dinheiro(l.valor) + ")";
+  const integrais = linhas.filter((l) => l.integral);
+  const parciais = linhas.filter((l) => !l.integral);
+  let meio = "";
+  if (integrais.length && parciais.length) {
+    meio = "quitou " + (integrais.length > 1 ? "as parcelas de " : "a parcela de ") + renegJuntarLista(integrais.map(item))
+      + " e abateu " + renegJuntarLista(parciais.map((l) => dinheiro(l.valor) + " da parcela de " + l.vencimento));
+  } else if (parciais.length) {
+    meio = "abateu " + renegJuntarLista(parciais.map((l) => dinheiro(l.valor) + " da parcela de " + l.vencimento));
+  } else {
+    meio = "quitou " + (integrais.length > 1 ? "as parcelas de " : "a parcela de ") + renegJuntarLista(integrais.map(item));
+  }
+  return "O sinal de " + dinheiro(sinal) + ", pago em " + dataBr + ", " + meio + ", com juros e multa.";
+}
+
+function renegLinhaDoRecibo(inst, data, valor) {
+  const id = renegIdParcela(inst);
+  const due = String(inst.dueDate || "").slice(0, 10);
+  const vencimento = due ? new Date(due + "T12:00:00").toLocaleDateString("pt-BR") : "—";
+  const saldo = renegSaldoParcela(inst);
+  return {
+    id: id,
+    due: due,
+    vencimento: vencimento,
+    valor: renegCentavos(valor),
+    integral: saldo != null ? saldo <= 0.009 : true,
+    juros: 0,
+    multa: 0
+  };
+}
+
+/** Recebimentos do dia do sinal que fecham o valor. É o que o Sienge baixou, não uma conta por cima. */
+function renegLinhasPeloRecibo(sinal, data, parcelas) {
+  const fatias = [];
+  (parcelas || []).forEach((inst) => {
+    let pago = 0;
+    (inst.receipts || []).forEach((r) => {
+      if (renegIsoRecibo(r) !== data) return;
+      pago += renegValorRecibo(r);
+    });
+    pago = renegCentavos(pago);
+    if (pago > 0.009) fatias.push({ inst: inst, valor: pago });
+  });
+  if (!fatias.length) return null;
+  const alvo = Math.round(renegCentavos(sinal) * 100);
+  const soma = fatias.reduce((s, f) => s + Math.round(f.valor * 100), 0);
+  let escolhidas = fatias;
+  if (Math.abs(soma - alvo) > 5) {
+    const n = fatias.length;
+    if (!n || n > 18) return null;
+    let achou = null;
+    const limite = 1 << n;
+    for (let m = 1; m < limite && !achou; m++) {
+      let s = 0;
+      const grupo = [];
+      for (let i = 0; i < n; i++) {
+        if (!(m & (1 << i))) continue;
+        s += Math.round(fatias[i].valor * 100);
+        grupo.push(fatias[i]);
+      }
+      if (Math.abs(s - alvo) <= 5) achou = grupo;
+    }
+    if (!achou) return null;
+    escolhidas = achou;
+  }
+  escolhidas.sort((a, b) => String(a.inst.dueDate || "").localeCompare(String(b.inst.dueDate || "")));
+  return escolhidas.map((f) => renegLinhaDoRecibo(f.inst, data, f.valor));
+}
+
 /**
- * O sinal entra antes do valor já pago. Nas parcelas vencidas na data do pagamento,
- * da mais antiga para a mais nova: quita as integrais (principal, juros e multa daquela data)
- * e o que sobra abate a seguinte. A diluição usa o principal que restou, com juros e multa de hoje.
+ * O sinal entra antes do valor já pago. Primeiro vale o recebimento lançado naquele dia.
+ * Sem esse lançamento, nas parcelas ainda abertas e vencidas na data, da mais antiga
+ * para a mais nova: quita as integrais e o que sobra abate a seguinte.
  */
 function renegExplicarAbatimentoSinal(sinalValor) {
   const sinal = renegCentavos(sinalValor);
@@ -21633,13 +21748,14 @@ function renegExplicarAbatimentoSinal(sinalValor) {
   const parcelas = renegParcelasParaSinal();
   const data = renegDataPagamentoSinal(sinal, parcelas);
   if (!data) return null;
+  const dataBr = new Date(data + "T12:00:00").toLocaleDateString("pt-BR");
   const quando = new Date(data + "T12:00:00");
   const ordenadas = parcelas.slice().sort((a, b) => String(a.dueDate || "").localeCompare(String(b.dueDate || "")));
   let resto = sinal;
-  const linhas = [];
-  const porId = new Map();
+  const abertas = [];
   ordenadas.forEach((inst) => {
     if (resto <= 0.009) return;
+    if (renegQuitadaAntesDoSinal(inst, data)) return;
     const dias = typeof window.daysOverdueUntilTarget === "function" ? window.daysOverdueUntilTarget(inst, quando) : 0;
     if (!(dias > 0)) return;
     const principal = renegPrincipalAntesDoSinal(inst, data);
@@ -21648,33 +21764,28 @@ function renegExplicarAbatimentoSinal(sinalValor) {
     const corrigido = renegCentavos(principal + (ch.multa || 0) + (ch.juros || 0));
     if (!(corrigido > 0.009)) return;
     const usa = renegCentavos(Math.min(resto, corrigido));
-    const integral = usa >= corrigido - 0.009;
-    const id = String(inst.installmentId != null ? inst.installmentId : (inst.installmentNumber != null ? inst.installmentNumber : (inst.installmentNum != null ? inst.installmentNum : "")));
+    const id = renegIdParcela(inst);
     const due = String(inst.dueDate || "").slice(0, 10);
     const vencimento = due ? new Date(due + "T12:00:00").toLocaleDateString("pt-BR") : "—";
-    linhas.push({
+    abertas.push({
       id: id,
       due: due,
       vencimento: vencimento,
       valor: usa,
-      integral: integral,
+      integral: usa >= corrigido - 0.009,
       juros: renegCentavos(ch.juros || 0),
       multa: renegCentavos(ch.multa || 0)
     });
-    porId.set(id || due, { valor: usa, integral: integral, due: due });
     resto = renegCentavos(resto - usa);
   });
+  const doRecibo = renegLinhasPeloRecibo(sinal, data, parcelas);
+  const linhas = doRecibo && doRecibo.length ? doRecibo : abertas;
   if (!linhas.length) return null;
-  const dinheiro = (n) => renegCentavos(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  const partes = linhas.map((l) => l.integral
-    ? ("a parcela integral de " + l.vencimento + " no valor de " + dinheiro(l.valor) + " (com juros e multa)")
-    : ("a parcela parcial de " + l.vencimento + " no valor de " + dinheiro(l.valor)));
-  const meio = partes.length === 1
-    ? partes[0]
-    : (partes.slice(0, -1).join(", ") + " e " + partes[partes.length - 1]);
-  const dataBr = new Date(data + "T12:00:00").toLocaleDateString("pt-BR");
-  const texto = "O sinal de " + dinheiro(sinal) + ", pago em " + dataBr + ", foi abatido " + meio + ". O restante será diluído nas parcelas.";
-  return { sinal: sinal, data: data, dataBr: dataBr, linhas: linhas, porId: porId, texto: texto };
+  const porId = new Map();
+  (abertas.length ? abertas : linhas).forEach((l) => {
+    porId.set(l.id || l.due, { valor: l.valor, integral: l.integral, due: l.due });
+  });
+  return { sinal: sinal, data: data, dataBr: dataBr, linhas: linhas, porId: porId, texto: renegTextoAbatimento(sinal, dataBr, linhas) };
 }
 
 /** Sinal já pago no Sienge: no mesmo dia quitou uma parcela inteira e abateu a seguinte. */
@@ -22638,6 +22749,88 @@ window.getPropostaSinalAgingHtml = function(client) {
   </span>`;
 };
 
+function renegLerPropostasLocais() {
+  if (window._renegPropostasMap && window._renegPropostasMap.size) return window._renegPropostasMap;
+  try {
+    const raw = sessionStorage.getItem("crm_reneg_propostas");
+    if (!raw) return window._renegPropostasMap || null;
+    const arr = JSON.parse(raw);
+    const map = new Map();
+    (Array.isArray(arr) ? arr : []).forEach(function(p) {
+      if (p && p.id) map.set(String(p.id), p);
+    });
+    if (map.size) window._renegPropostasMap = map;
+    return window._renegPropostasMap || null;
+  } catch (e) {
+    return window._renegPropostasMap || null;
+  }
+}
+
+function renegGravarPropostasLocais(map) {
+  if (!map) return;
+  try {
+    const arr = [];
+    map.forEach(function(p, id) {
+      arr.push(Object.assign({}, p, { id: p && p.id ? p.id : id }));
+    });
+    sessionStorage.setItem("crm_reneg_propostas", JSON.stringify(arr));
+  } catch (e) {}
+}
+
+function renegAplicarPropostaNaTela(p, opts) {
+  opts = opts || {};
+  if (!p) return false;
+  const pago = window.renegPropostaProntaParaConfessao(p);
+  window._renegRestaurando = true;
+  const sel = document.getElementById("reneg-payment-method");
+  if (sel && p.cenario) {
+    const optMod = Array.from(sel.options).find(function(o) { return o.value === p.cenario; });
+    if (optMod) optMod.disabled = false;
+    sel.value = p.cenario;
+    if (typeof window.sincronizarSeletorModalidade === "function") window.sincronizarSeletorModalidade();
+    if (typeof onRenegPaymentMethodChange === "function") onRenegPaymentMethodChange();
+  }
+  const sinalDue = document.getElementById("reneg-sinal-due");
+  if (sinalDue && p.sinalDue) sinalDue.value = p.sinalDue;
+  const firstDue = document.getElementById("reneg-first-due-date");
+  if (firstDue && p.firstDueDate) firstDue.value = p.firstDueDate;
+  const sinalPct = document.getElementById("reneg-sinal-pct");
+  if (sinalPct && p.sinalPct != null) {
+    const opt = Array.from(sinalPct.options).find(function(o) { return String(o.value) === String(p.sinalPct); });
+    if (!opt) sinalPct.insertAdjacentHTML("beforeend", '<option value="' + p.sinalPct + '">' + p.sinalPct + "%</option>");
+    sinalPct.value = String(p.sinalPct);
+  }
+  if (p.sinalValue > 0) {
+    window._renegSinalModo = "valor";
+    const sinalValorEl = document.getElementById("reneg-sinal-valor");
+    if (sinalValorEl) sinalValorEl.value = Number(p.sinalValue).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  const qty = document.getElementById("reneg-installments-qty");
+  if (qty && p.instQty != null) {
+    const opt = Array.from(qty.options).find(function(o) { return String(o.value) === String(p.instQty); });
+    if (!opt) qty.insertAdjacentHTML("beforeend", '<option value="' + p.instQty + '">' + p.instQty + "×</option>");
+    qty.value = String(p.instQty);
+  }
+  if (Array.isArray(p.selectedBillIds) && p.selectedBillIds.length) {
+    const wanted = new Set(p.selectedBillIds.map(String));
+    document.querySelectorAll(".reneg-bill-check").forEach(function(c) {
+      if (c.disabled) return;
+      c.checked = wanted.has(String(c.value));
+    });
+  }
+  window._renegRestaurando = false;
+  if (!opts.semCalculo && typeof calculateRenegotiation === "function") calculateRenegotiation();
+  renegMontarAvisoProposta(p, pago);
+  if (typeof window.atualizarBotaoReneg === "function") window.atualizarBotaoReneg();
+  if (!opts.silencioso && window._renegPropostaAvisada !== p.id) {
+    window._renegPropostaAvisada = p.id;
+    alert(pago
+      ? "Este contrato tem uma proposta ativa e o sinal já consta como pago. Os dados foram restaurados para gerar o termo de confissão de dívida."
+      : "Este contrato tem uma proposta ativa aguardando o sinal até " + renegIsoBr(p.sinalDue) + ". Os dados foram restaurados. O termo de confissão só sai depois do pagamento.");
+  }
+  return true;
+}
+
 window.carregarRenegPropostas = function(force) {
   if (!force && window._renegPropostasMap && window._renegPropostasEm && Date.now() - window._renegPropostasEm < 20000) {
     return Promise.resolve(window._renegPropostasMap);
@@ -22665,6 +22858,7 @@ window.carregarRenegPropostas = function(force) {
     });
     window._renegPropostasMap = map;
     window._renegPropostasEm = Date.now();
+    renegGravarPropostasLocais(map);
     apagarTeste.forEach(function(id) {
       if (fc.deleteDoc) fc.deleteDoc(fc.doc(window.firebaseDb, "reneg_propostas", id)).catch(function() {});
     });
@@ -22863,6 +23057,10 @@ window.atualizarBotaoReneg = function() {
   const p = renegPropostaAtual();
   const resultado = window.AppState && AppState.currentRenegResult;
   const pago = window.renegPropostaProntaParaConfessao(p) || !!(resultado && resultado.abatimentoSinal);
+  if (window._renegChecandoProposta && !pago && !p) {
+    label.textContent = "Verificando proposta…";
+    return;
+  }
   label.textContent = pago ? "Gerar termo de confissão de dívida" : "Gerar proposta de acordo";
 };
 
@@ -22885,12 +23083,25 @@ function renegMontarAvisoProposta(p, pago) {
 };
 
 window.renegChecarPropostaAtiva = async function() {
-  try { await window.carregarRenegPropostas(true); } catch (e) {}
+  const seq = (window._renegChecagemSeq = (window._renegChecagemSeq || 0) + 1);
+  renegLerPropostasLocais();
+  const previa = renegPropostaAtual();
+  const previaAberta = !!(previa && previa.status !== "concluida" && previa.status !== "expirada" && (previa.sinalPago || window.renegPropostaEstaAtiva(previa)));
+  window._renegChecandoProposta = !previaAberta;
+  if (previaAberta) renegAplicarPropostaNaTela(previa, { silencioso: true });
+  else if (typeof window.atualizarBotaoReneg === "function") window.atualizarBotaoReneg();
+  try { await window.carregarRenegPropostas(false); } catch (e) {}
+  if (seq !== window._renegChecagemSeq) return;
   const p = renegPropostaAtual();
   const achado = renegDescobrirSinalPago();
   const aberta = !!(p && p.status !== "concluida" && p.status !== "expirada" && (p.sinalPago || window.renegPropostaEstaAtiva(p)));
   const propostaDoSinal = !!(aberta && achado && Math.abs((Number(p.sinalValue) || 0) - achado.valor) < 0.05 && (p.cenario === "diluir" || !p.cenario));
-  if (achado && !propostaDoSinal && renegAplicarSinalDescoberto()) return;
+  if (achado && !propostaDoSinal && renegAplicarSinalDescoberto()) {
+    window._renegChecandoProposta = false;
+    window.atualizarBotaoReneg();
+    return;
+  }
+  window._renegChecandoProposta = false;
   if (!aberta) {
     renegMontarAvisoProposta(null, false);
     window.atualizarBotaoReneg();
@@ -22906,53 +23117,7 @@ window.renegChecarPropostaAtiva = async function() {
       }, { merge: true }).catch(function() {});
     }
   }
-  window._renegRestaurando = true;
-  const sel = document.getElementById("reneg-payment-method");
-  if (sel && p.cenario) {
-    const optMod = Array.from(sel.options).find(function(o) { return o.value === p.cenario; });
-    if (optMod) optMod.disabled = false;
-    sel.value = p.cenario;
-    if (typeof window.sincronizarSeletorModalidade === "function") window.sincronizarSeletorModalidade();
-    if (typeof onRenegPaymentMethodChange === "function") onRenegPaymentMethodChange();
-  }
-  const sinalDue = document.getElementById("reneg-sinal-due");
-  if (sinalDue && p.sinalDue) sinalDue.value = p.sinalDue;
-  const firstDue = document.getElementById("reneg-first-due-date");
-  if (firstDue && p.firstDueDate) firstDue.value = p.firstDueDate;
-  const sinalPct = document.getElementById("reneg-sinal-pct");
-  if (sinalPct && p.sinalPct != null) {
-    const opt = Array.from(sinalPct.options).find(function(o) { return String(o.value) === String(p.sinalPct); });
-    if (!opt) sinalPct.insertAdjacentHTML("beforeend", '<option value="' + p.sinalPct + '">' + p.sinalPct + "%</option>");
-    sinalPct.value = String(p.sinalPct);
-  }
-  if (p.sinalValue > 0) {
-    window._renegSinalModo = "valor";
-    const sinalValorEl = document.getElementById("reneg-sinal-valor");
-    if (sinalValorEl) sinalValorEl.value = Number(p.sinalValue).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  const qty = document.getElementById("reneg-installments-qty");
-  if (qty && p.instQty != null) {
-    const opt = Array.from(qty.options).find(function(o) { return String(o.value) === String(p.instQty); });
-    if (!opt) qty.insertAdjacentHTML("beforeend", '<option value="' + p.instQty + '">' + p.instQty + "×</option>");
-    qty.value = String(p.instQty);
-  }
-  if (Array.isArray(p.selectedBillIds) && p.selectedBillIds.length) {
-    const wanted = new Set(p.selectedBillIds.map(String));
-    document.querySelectorAll(".reneg-bill-check").forEach(function(c) {
-      if (c.disabled) return;
-      c.checked = wanted.has(String(c.value));
-    });
-  }
-  if (typeof calculateRenegotiation === "function") calculateRenegotiation();
-  window._renegRestaurando = false;
-  renegMontarAvisoProposta(p, pago);
-  window.atualizarBotaoReneg();
-  if (window._renegPropostaAvisada !== p.id) {
-    window._renegPropostaAvisada = p.id;
-    alert(pago
-      ? "Este contrato tem uma proposta ativa e o sinal já consta como pago. Os dados foram restaurados para gerar o termo de confissão de dívida."
-      : "Este contrato tem uma proposta ativa aguardando o sinal até " + renegIsoBr(p.sinalDue) + ". Os dados foram restaurados. O termo de confissão só sai depois do pagamento.");
-  }
+  renegAplicarPropostaNaTela(p, { silencioso: !!previaAberta });
 };
 
 async function renegSalvarProposta(results, extra) {
@@ -23936,6 +24101,24 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
   return pdf;
 }
 
+function renegBlocosTermo(corpo) {
+  const bruto = String(corpo || "").replace(/\r\n/g, "\n").replace(/<br\s*\/?>/gi, "\n");
+  const pedacos = bruto.split(/\n[ \t]*\n/).map(function(b) { return b.replace(/^\n+|\n+$/g, ""); }).filter(function(b) {
+    return b.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+  });
+  return pedacos.map(function(b) {
+    const linhas = b.split("\n");
+    const primeira = linhas[0].replace(/<[^>]+>/g, "").trim();
+    if (/^CL[ÁA]USULA\b/i.test(primeira)) {
+      const titulo = linhas[0];
+      const resto = linhas.slice(1).join("\n").trim();
+      return '<div data-doc-sem-justify="1" style="text-align:left;font-weight:700;margin:0 0 6px;">' + titulo + "</div>"
+        + (resto ? '<div style="text-align:justify;margin:0;">' + resto.replace(/\n/g, "<br>") + "</div>" : "");
+    }
+    return '<div style="text-align:justify;margin:0;">' + b.replace(/\n/g, "<br>") + "</div>";
+  });
+}
+
 function generateAgreementPDF() {
   const results = AppState.currentRenegResult;
   if (!results) return;
@@ -23988,11 +24171,8 @@ function generateAgreementPDF() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("crm_docpadrao_reneg") || "{}"); } catch (e) {}
   const titleEl = document.getElementById("doc-reneg-title");
-  const subtitleEl = document.getElementById("doc-reneg-subtitle");
   let docTitle = (titleEl && titleEl.value) || saved["doc-reneg-title"] || "INSTRUMENTO PARTICULAR DE CONFISSÃO DE DÍVIDA";
   if (modo === "proposta") docTitle = "TERMO DE PROPOSTA DE ACORDO";
-  const docSubtitle = (subtitleEl && subtitleEl.value) || saved["doc-reneg-subtitle"] || "Moura Leite Loteamentos";
-
   const padraoEl = document.getElementById("doc-reneg-clauses");
   const editorEl = document.getElementById("reneg-clauses-editor");
   let textTemplate = "";
@@ -24043,12 +24223,11 @@ function generateAgreementPDF() {
 
   const docHtml = `
     <div style="text-align: center; margin-bottom: 2rem;">
-      <h2 style="color: #105436; font-size: 16pt; font-weight: bold; margin-bottom: 5px;">${docTitle}</h2>
-      <h3 style="font-size: 12pt; color: #666; margin: 0;">${docSubtitle}</h3>
+      <h2 style="color: #111; font-size: 13pt; font-weight: bold; letter-spacing: 0.04em; margin: 0 0 1.2rem; font-family: 'Times New Roman', Times, serif;">${docTitle}</h2>
     </div>
-    <div style="text-align: left; margin-bottom: 2rem; font-family: Georgia, 'Times New Roman', serif; font-size: 11pt; line-height: 1.55;">
+    <div style="margin-bottom: 2rem; font-family: 'Times New Roman', Times, serif; font-size: 11pt; line-height: 1.75; color: #111;">
       ${avisoProposta}
-      ${corpoTermo.replace(/\n/g, "<br>")}
+      ${renegBlocosTermo(corpoTermo).join("")}
     </div>
     ${blocoAssinaturas}
   `;
@@ -24062,7 +24241,21 @@ function generateAgreementPDF() {
         nome: (g_renegCustomer && g_renegCustomer.name) || ""
       })
     : (modo === "proposta" ? "Proposta de acordo.pdf" : "Confissão de dívida.pdf");
-  const cru = await baixarHtmlComoPdf(docHtml, nomeArq, { devolver: true });
+  let cru;
+  const rel = window.RelacionamentoApp;
+  if (rel && typeof rel._paginarDoc === "function" && typeof rel._baixarPaginasPdf === "function") {
+    const tituloHtml = `<h2 style="text-align:center;color:#111;font-size:13pt;font-weight:bold;letter-spacing:0.04em;margin:0 0 30px;font-family:'Times New Roman',Times,serif;">${docTitle}</h2>`;
+    const corpoCss = "font-family:'Times New Roman',Times,serif;font-size:11pt;line-height:1.75;color:#111;";
+    const blocos = [];
+    if (avisoProposta) blocos.push(avisoProposta);
+    renegBlocosTermo(corpoTermo).forEach(function(b) { blocos.push(b); });
+    if (blocoAssinaturas) blocos.push(blocoAssinaturas);
+    const paginas = rel._paginarDoc(tituloHtml, blocos, corpoCss);
+    const pdfDoc = await rel._baixarPaginasPdf(paginas, nomeArq, { retornar: true });
+    cru = new Uint8Array(pdfDoc.output("arraybuffer"));
+  } else {
+    cru = await baixarHtmlComoPdf(docHtml, nomeArq, { devolver: true });
+  }
   const ja = renegPropostaAtual();
   const pack = await renegCarimbarAcordo(cru, results, (ja && ja.codigoAuth) || "");
   renegBaixarBytes(pack.bytes, nomeArq);
@@ -27853,10 +28046,10 @@ function buildRenegAgreementExtraMap(results) {
       : "____",
     INDEXADOR_NOME: renegPickIndexerName(bills),
     JUROS_CONTRATO: renegFormatJurosContrato(g_renegSale, bills),
-    TESTEMUNHA_1_NOME: tw1.nome || tw1.name || "LETICIA PEREIRA DE OLIVIERA",
-    TESTEMUNHA_1_RG: tw1.rg || tw1.doc_rg || "50.505.231-3",
-    TESTEMUNHA_2_NOME: tw2.nome || tw2.name || "MICHELLE FRANCINE VIEIRA",
-    TESTEMUNHA_2_RG: tw2.rg || tw2.doc_rg || "463210852"
+    TESTEMUNHA_1_NOME: tw1.nome || tw1.name || "",
+    TESTEMUNHA_1_RG: tw1.rg || tw1.doc_rg || "",
+    TESTEMUNHA_2_NOME: tw2.nome || tw2.name || "",
+    TESTEMUNHA_2_RG: tw2.rg || tw2.doc_rg || ""
   };
   if (typeof valorPorExtensoBRL === "function") {
     map.VALOR_DIVIDA_EXTENSO = valorPorExtensoBRL(results.newDebtBalance);
@@ -28455,9 +28648,13 @@ window.centerDistratoSignatures = function(html) {
     w2Rg = testemunhasEscolhidas.w2.rg || w2Rg;
     hasWitnessTitle = true;
   }
+  if (w1Rg && w2Rg && w1Name && w2Name && w1Rg.replace(/\D/g, "") === w2Rg.replace(/\D/g, "") && w1Name.toUpperCase() !== w2Name.toUpperCase()) {
+    w2Rg = "";
+  }
+  const larguraAss = "440px";
   const blocoAssinatura = (p) => `
-      <div style="border-top: 1px solid #111; padding-top: 4px; font-weight: 700; line-height: 1.2; white-space: normal;">${p.name}</div>
-      <div style="font-size: 10.5pt; font-weight: 400; margin-top: 2px; line-height: 1.2;">${p.role}</div>`;
+      <div style="border-top: 1px solid #111; margin-top: 72px; padding-top: 8px; font-weight: 700; line-height: 1.25; white-space: normal; text-align: center;">${p.name}</div>
+      <div style="font-size: 10.5pt; font-weight: 400; margin-top: 4px; line-height: 1.25; text-align: center;">${p.role}</div>`;
   const gruposAss = [];
   parties.forEach((p) => {
     const vendedor = /vendedor/i.test(p.role);
@@ -28466,43 +28663,41 @@ window.centerDistratoSignatures = function(html) {
     else gruposAss.push({ vendedor: vendedor, itens: [p] });
   });
   const partyHtml = gruposAss.map((g, idx) => {
-    const topo = idx === 0 ? 16 : 22;
+    const topo = idx === 0 ? 8 : 16;
     if (g.vendedor && g.itens.length > 1) {
-      const nomes = g.itens.map((p) => `<div style="font-weight: 700;">${p.name}</div>`).join("");
-      return `<div style="margin: ${topo}px auto 0; text-align: center;">
-        <div style="display: inline-block; min-width: 260px; max-width: 520px; text-align: center;">
-          <div style="border-top: 1px solid #111; padding-top: 4px; line-height: 1.2; white-space: normal;">
-            ${nomes}
-            <div style="font-size: 10.5pt; font-weight: 400; margin-top: 2px;">${g.itens[0].role}</div>
-          </div>
+      const nomes = g.itens.map((p) => `<div style="font-weight: 700; text-align: center;">${p.name}</div>`).join("");
+      return `<div style="width: ${larguraAss}; margin: ${topo}px auto 0; text-align: center;" data-doc-sem-justify="1">
+        <div style="border-top: 1px solid #111; margin-top: 72px; padding-top: 8px; line-height: 1.25; white-space: normal; text-align: center;">
+          ${nomes}
+          <div style="font-size: 10.5pt; font-weight: 400; margin-top: 4px; text-align: center;">${g.itens[0].role}</div>
         </div>
       </div>`;
     }
     return g.itens.map((p, i) => `
-    <div style="margin: ${i === 0 ? topo : 18}px auto 0; max-width: 420px; text-align: center;">
+    <div style="width: ${larguraAss}; margin: ${i === 0 ? topo : 16}px auto 0; text-align: center;" data-doc-sem-justify="1">
       ${blocoAssinatura(p)}
     </div>`).join("");
   }).join("");
   const witnessesHtml = (hasWitnessTitle || w1Name || w2Name) ? `
-    <div style="margin-top: 18px; text-align: center; font-weight: 700;">Testemunhas</div>
-    <table style="width: 100%; max-width: 680px; margin: 8px auto 0; border-collapse: collapse; white-space: normal;">
+    <div style="margin-top: 28px; text-align: center; font-weight: 700;" data-doc-sem-justify="1">Testemunhas</div>
+    <table style="width: 100%; margin: 0 auto; border-collapse: collapse; white-space: normal; table-layout: fixed;">
       <tr>
-        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 18px;">
-          <div style="border-top: 1px solid #111; margin-top: 28px; padding-top: 4px; line-height: 1.2;">${w1Name || "________________"}</div>
-          <div style="margin-top: 2px; line-height: 1.2;">RG: ${w1Rg || "________________"}</div>
+        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 24px;">
+          <div style="border-top: 1px solid #111; margin-top: 72px; padding-top: 8px; line-height: 1.25; text-align: center;">${w1Name || "________________"}</div>
+          <div style="margin-top: 4px; line-height: 1.25; text-align: center;">RG: ${w1Rg || "________________"}</div>
         </td>
-        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 18px;">
-          <div style="border-top: 1px solid #111; margin-top: 28px; padding-top: 4px; line-height: 1.2;">${w2Name || "________________"}</div>
-          <div style="margin-top: 2px; line-height: 1.2;">RG: ${w2Rg || "________________"}</div>
+        <td style="width: 50%; text-align: center; vertical-align: top; padding: 0 24px;">
+          <div style="border-top: 1px solid #111; margin-top: 72px; padding-top: 8px; line-height: 1.25; text-align: center;">${w2Name || "________________"}</div>
+          <div style="margin-top: 4px; line-height: 1.25; text-align: center;">RG: ${w2Rg || "________________"}</div>
         </td>
       </tr>
     </table>` : "";
   const dateHtml = dateLine
     ? `<div style="white-space: normal; text-align: center; margin: 18px 0 8px; font-weight: 500;">${dateLine}</div>`
     : "";
-  const clauseKeepHtml = lastClause
-    ? `<div class="pdf-distrato-last-clause" style="white-space: pre-wrap; text-align: left;">${lastClause}</div>`
-    : "";
+  const clauseKeepHtml = lastClause && typeof renegBlocosTermo === "function"
+    ? `<div class="pdf-distrato-last-clause">${renegBlocosTermo(lastClause).join("")}</div>`
+    : (lastClause ? `<div class="pdf-distrato-last-clause" style="white-space: pre-wrap; text-align: left;">${lastClause}</div>` : "");
   return `${before}
 <div class="pdf-sign-keep" style="page-break-inside: avoid; break-inside: avoid; page-break-before: auto;">
 ${clauseKeepHtml}
@@ -43732,12 +43927,37 @@ window.ensureEtapasFinanciamento = function() {
   return true;
 };
 
+/* Com o armazenamento do navegador cheio, o setItem falha calado e o envio subia a lista velha.
+   A última edição fica em memória e vai direto para a nuvem. */
+window.finEtapasLocais = function() {
+  let raw = "[]";
+  let at = "0";
+  try { raw = localStorage.getItem("crm_moura_financiamento") || "[]"; } catch (e) {}
+  try { at = localStorage.getItem("crm_moura_financiamento_at") || "0"; } catch (e) {}
+  const mem = window._finEtapasMem;
+  if (mem && Number(mem.at) > (Number(at) || 0)) return { raw: mem.raw, at: String(mem.at) };
+  return { raw: raw, at: at };
+};
+
 window.persistEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   window._finEtapasVeioDoPadrao = false;
   const at = String(Date.now());
-  localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
-  localStorage.setItem("crm_moura_financiamento_at", at);
+  const raw = JSON.stringify(window.EtapasFinanciamentoState);
+  window._finEtapasMem = { raw: raw, at: at };
+  localStorage.setItem("crm_moura_financiamento", raw);
+  let gravou = false;
+  try { gravou = localStorage.getItem("crm_moura_financiamento") === raw; } catch (e) {}
+  // Data sem a lista faria a lista velha vencer a da nuvem no próximo carregamento.
+  if (gravou) localStorage.setItem("crm_moura_financiamento_at", at);
+  else { try { localStorage.removeItem("crm_moura_financiamento_at"); } catch (e) {} }
+  const fc = window.firebaseCollections;
+  if (fc && fc.doc && fc.setDoc && window.firebaseDb) {
+    fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), {
+      crm_moura_financiamento: raw,
+      crm_moura_financiamento_at: at
+    }, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
+  }
   if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(console.error);
 };
 window.ensureEtapasFinanciamento();
@@ -54260,12 +54480,16 @@ window.syncGlobalConfigFromFirebase = async function() {
                 if (k === "crm_moura_cartorios_list") return;
                 if (k === "crm_moura_financiamento_at") return;
                 if (k === "crm_moura_financiamento" && typeof window.escolherEtapasFinanciamento === "function") {
+                    const finLocal = typeof window.finEtapasLocais === "function"
+                        ? window.finEtapasLocais()
+                        : { raw: localStorage.getItem(k) || "[]", at: localStorage.getItem("crm_moura_financiamento_at") || "0" };
                     const chosen = window.escolherEtapasFinanciamento(
-                        localStorage.getItem(k) || "[]",
-                        localStorage.getItem("crm_moura_financiamento_at") || "0",
+                        finLocal.raw,
+                        finLocal.at,
                         globalData[k] || "[]",
                         globalData.crm_moura_financiamento_at || "0"
                     );
+                    window._finEtapasEscolhidas = chosen.list;
                     let at = Number(chosen.at) || 0;
                     const listStr = JSON.stringify(chosen.list);
                     const cloudStr = JSON.stringify(window.parseListaEtapas(globalData[k] || "[]"));
@@ -54657,7 +54881,10 @@ window.syncGlobalConfigFromFirebase = async function() {
                 if (typeof window.ensureReintegracaoPosseNiveis === "function") window.ensureReintegracaoPosseNiveis();
             } catch (e) {}
             try {
-                const fin = JSON.parse(localStorage.getItem("crm_moura_financiamento") || "[]");
+                const fin = Array.isArray(window._finEtapasEscolhidas)
+                    ? window._finEtapasEscolhidas
+                    : JSON.parse(localStorage.getItem("crm_moura_financiamento") || "[]");
+                window._finEtapasEscolhidas = null;
                 if (Array.isArray(fin)) window.EtapasFinanciamentoState = fin;
                 if (typeof window.ensureEtapasFinanciamento === "function" && window.ensureEtapasFinanciamento()) {
                     changed = true;

@@ -1835,9 +1835,9 @@ const RelacionamentoApp = {
       const texto = node.nodeValue || "";
       if (!texto.trim()) return;
       const pai = node.parentElement;
-      if (!pai || pai.closest("table") || pai.closest("span[data-doc-palavra]")) return;
+      if (!pai || pai.closest("table") || pai.closest("span[data-doc-palavra]") || pai.closest("[data-doc-sem-justify]")) return;
       const align = String(pai.style.textAlign || "").toLowerCase();
-      if (align === "center" || align === "right") return;
+      if (align === "center" || align === "right" || align === "left") return;
       const frag = document.createDocumentFragment();
       texto.split(/(\n+)/).forEach((parte) => {
         if (!parte) return;
