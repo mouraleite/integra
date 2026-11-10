@@ -75,6 +75,11 @@ function saveAuthConfig(config) {
   initializeMsal();
 }
 
+function previewDaVercel() {
+  const host = String(window.location.hostname || "").toLowerCase();
+  return host.endsWith(".vercel.app") && host !== "crm-gestao.vercel.app";
+}
+
 function clearMsalInteractionLock() {
   const wipe = (store) => {
     if (!store) return;
@@ -93,6 +98,36 @@ function clearMsalInteractionLock() {
   };
   wipe(window.sessionStorage);
   wipe(window.localStorage);
+}
+
+function resetMsalClient() {
+  clearMsalInteractionLock();
+  msalInstance = null;
+  msalReady = null;
+  initializeMsal();
+}
+
+function usuarioDaResposta(loginResponse) {
+  const account = loginResponse && loginResponse.account;
+  const email = account && account.username;
+  if (!email) throw new Error("A Microsoft não devolveu a conta.");
+  if (!validateDomain(email)) {
+    throw new Error("Acesso negado. Apenas e-mails do domínio @mouraleite.com.br são permitidos.");
+  }
+  return {
+    name: account.name || email.split("@")[0].toUpperCase(),
+    email: email,
+    isAuthenticated: true,
+    method: "Azure AD"
+  };
+}
+
+function mensagemLoginMicrosoft(error) {
+  const msg = String((error && (error.errorMessage || error.message)) || error || "");
+  if (/AADSTS50011|redirect_uri/i.test(msg)) {
+    return new Error("Este endereço de teste não está autorizado no aplicativo Microsoft do Integra. Cadastre " + window.location.origin + "/ nas URIs de redirecionamento SPA.");
+  }
+  return error;
 }
 
 function initializeMsal() {
@@ -148,11 +183,33 @@ function userFromMsalAccount(account) {
   };
 }
 
+async function consumirRetornoMicrosoft() {
+  if (!msalInstance || typeof msalInstance.handleRedirectPromise !== "function") return null;
+  if (msalReady) {
+    try { await msalReady; } catch (e) {}
+  }
+  let resposta;
+  try {
+    resposta = await msalInstance.handleRedirectPromise();
+  } catch (error) {
+    if (isInteractionInProgress(error)) {
+      resetMsalClient();
+      return null;
+    }
+    window._crmErroLoginMicrosoft = mensagemLoginMicrosoft(error);
+    return null;
+  }
+  if (!resposta || !resposta.account) return null;
+  return persistSession(usuarioDaResposta(resposta));
+}
+
 async function restoreSession() {
   initSessionChannel();
   if (msalReady) {
     try { await msalReady; } catch (e) {}
   }
+  const vindoDaMicrosoft = await consumirRetornoMicrosoft();
+  if (vindoDaMicrosoft) return vindoDaMicrosoft;
   const existing = getCurrentUser();
   if (existing) return existing;
 
@@ -188,34 +245,24 @@ async function login() {
         scopes: ["user.read"],
         prompt: "select_account"
       };
+      const pedir = async () => {
+        if (previewDaVercel()) return msalInstance.loginRedirect(loginRequest);
+        return msalInstance.loginPopup(loginRequest);
+      };
       let loginResponse;
       try {
-        loginResponse = await msalInstance.loginPopup(loginRequest);
+        loginResponse = await pedir();
       } catch (error) {
-        if (isInteractionInProgress(error)) {
-          clearMsalInteractionLock();
-          loginResponse = await msalInstance.loginPopup(loginRequest);
-        } else {
-          throw error;
-        }
+        if (!isInteractionInProgress(error)) throw error;
+        resetMsalClient();
+        if (msalReady) await msalReady;
+        loginResponse = await pedir();
       }
 
-      const email = loginResponse.account.username;
+      if (previewDaVercel()) return new Promise(function () {});
 
-      if (!validateDomain(email)) {
-        try { await msalInstance.logoutPopup(); } catch (e) {}
-        throw new Error("Acesso negado. Apenas e-mails do domínio @mouraleite.com.br são permitidos.");
-      }
-
-      const user = {
-        name: loginResponse.account.name || email.split("@")[0].toUpperCase(),
-        email: email,
-        isAuthenticated: true,
-        method: "Azure AD"
-      };
-
-      persistSession(user);
-      return user;
+      persistSession(usuarioDaResposta(loginResponse));
+      return getCurrentUser();
     }
 
     if (g_authConfig.enabled) {
@@ -228,9 +275,9 @@ async function login() {
   } catch (error) {
     console.error("Falha no login Azure AD:", error);
     if (isInteractionInProgress(error)) {
-      clearMsalInteractionLock();
+      resetMsalClient();
     }
-    throw error;
+    throw mensagemLoginMicrosoft(error);
   } finally {
     loginInFlight = false;
   }
