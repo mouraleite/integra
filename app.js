@@ -23705,12 +23705,34 @@ async function renegAnexarPdf(bytes, extraBytes) {
   return new Uint8Array(await out.save());
 }
 
+function renegCadastroDaTestemunha(u) {
+  if (!u) return null;
+  const lista = [];
+  try {
+    const salvos = JSON.parse(localStorage.getItem("crm_users") || "[]");
+    if (Array.isArray(salvos)) salvos.forEach(function(x) { if (x) lista.push(x); });
+  } catch (e) {}
+  if (window.ConfigUsersApp && Array.isArray(ConfigUsersApp.users)) {
+    ConfigUsersApp.users.forEach(function(x) { if (x) lista.push(x); });
+  }
+  const id = String(u.id || "");
+  const email = String(u.email || "").toLowerCase();
+  const nome = String(u.name || u.nome || "").trim().toUpperCase();
+  const iguais = lista.filter(function(x) {
+    if (id && String(x.id) === id) return true;
+    if (email && String(x.email || "").toLowerCase() === email) return true;
+    return !!(nome && String(x.name || "").trim().toUpperCase() === nome);
+  });
+  return iguais.find(function(x) { return String(x.doc_rg || "").trim(); }) || iguais[0] || null;
+}
+
 function renegTestemunhaDaPessoa(u) {
-  if (!u) return { id: "", nome: "", rg: "" };
+  const cad = renegCadastroDaTestemunha(u) || {};
+  const base = u || {};
   return {
-    id: String(u.id || ""),
-    nome: u.name || u.nome || "",
-    rg: u.doc_rg || u.rg || ""
+    id: String(cad.id || base.id || ""),
+    nome: cad.name || cad.nome || base.name || base.nome || "",
+    rg: String(cad.doc_rg || "").trim()
   };
 }
 
@@ -23736,8 +23758,9 @@ function renegPedirTestemunhas() {
     const outras = lista.filter(function(u) { return !w1.id || String(u.id) !== w1.id; });
     t1.value = w1.nome ? (w1.nome + (w1.rg ? " — RG " + w1.rg : "")) : "Quem está gerando o termo";
     t2.innerHTML = ['<option value="">Selecione a segunda testemunha...</option>'].concat(outras.map(function(u) {
-      const rg = u.doc_rg || u.rg || "";
-      const nome = String(u.name || "").replace(/[&<>"]/g, "");
+      const pessoa = renegTestemunhaDaPessoa(u);
+      const rg = pessoa.rg || "";
+      const nome = String(pessoa.nome || u.name || "").replace(/[&<>"]/g, "");
       return '<option value="' + String(u.id).replace(/"/g, "") + '">' + nome + (rg ? " — RG " + String(rg).replace(/[&<>"]/g, "") : "") + "</option>";
     })).join("");
     let feito = false;
@@ -24363,6 +24386,239 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
   return pdf;
 }
 
+function renegTextoPlano(html) {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(div|p|h\d|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\r\n/g, "\n");
+}
+
+function renegPartesDoTermo(texto) {
+  const linhas = renegTextoPlano(texto).split("\n");
+  let corte = -1;
+  for (let i = 0; i < linhas.length; i++) {
+    const limpa = String(linhas[i] || "").replace(/\s/g, "");
+    if (limpa.length >= 18 && /^_+$/.test(limpa)) {
+      corte = i;
+      break;
+    }
+  }
+  const corpoLinhas = (corte < 0 ? linhas : linhas.slice(0, corte)).slice();
+  const resto = corte < 0 ? [] : linhas.slice(corte);
+  let data = "";
+  for (let j = corpoLinhas.length - 1; j >= 0; j--) {
+    const t = String(corpoLinhas[j] || "").trim();
+    if (!t) continue;
+    if (/,\s*\d{1,2}\s+de\s+/i.test(t) || /\d{1,2}\s+de\s+[a-zçáéíóúâêôãõü]+/i.test(t)) {
+      data = t;
+      corpoLinhas.splice(j, 1);
+    }
+    break;
+  }
+  const blocos = [];
+  let buf = [];
+  const solta = function() {
+    const t = buf.join(" ").replace(/\s+/g, " ").trim();
+    buf = [];
+    if (t) blocos.push({ tipo: "texto", texto: t });
+  };
+  corpoLinhas.forEach(function(linha) {
+    const t = String(linha || "").trim();
+    if (!t) { solta(); return; }
+    if (/^(CL[ÁA]USULA|CLAUSULA)\b/i.test(t)) {
+      solta();
+      blocos.push({ tipo: "clausula", texto: t });
+      return;
+    }
+    if (/^[a-d]\)\s+/i.test(t)) {
+      solta();
+      blocos.push({ tipo: "item", texto: t });
+      return;
+    }
+    buf.push(t);
+  });
+  solta();
+  const limpas = resto.map(function(l) { return String(l || "").trim(); }).filter(function(l) { return l.length; });
+  const partes = [];
+  let i = 0;
+  while (i < limpas.length && /^_+$/.test(limpas[i].replace(/\s/g, ""))) {
+    const name = limpas[i + 1] || "";
+    const role = limpas[i + 2] || "";
+    if (name && /promitente|confitente|c[oô]njuge/i.test(role)) {
+      partes.push({ name: name, role: role });
+      i += 3;
+      continue;
+    }
+    break;
+  }
+  return { blocos: blocos, data: data, partes: partes };
+}
+
+function renegLinhasLargura(pdf, texto, largura) {
+  const palavras = String(texto || "").split(/\s+/).filter(Boolean);
+  const linhas = [];
+  let atual = [];
+  const cabe = function(lista) { return pdf.getTextWidth(lista.join(" ")) <= largura + 0.2; };
+  palavras.forEach(function(p) {
+    if (atual.length && !cabe(atual.concat(p))) {
+      linhas.push(atual);
+      atual = [p];
+    } else atual.push(p);
+  });
+  if (atual.length) linhas.push(atual);
+  return linhas;
+}
+
+async function renegLogoTermo() {
+  try {
+    const res = await fetch("Banner/logo moura leite loteamentos.png");
+    if (!res.ok) return "";
+    const buf = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const passo = 0x8000;
+    for (let i = 0; i < bytes.length; i += passo) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + passo));
+    }
+    return "data:image/png;base64," + btoa(bin);
+  } catch (e) {
+    return "";
+  }
+}
+
+async function renegTermoPdfSelecionavel(titulo, texto, testemunhas) {
+  if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("Gerador de PDF indisponível.");
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF("p", "mm", "a4");
+  const margem = 20;
+  const largura = 210 - margem * 2;
+  const fundo = 278;
+  const passo = 5.2;
+  const logo = await renegLogoTermo();
+  const doc = renegPartesDoTermo(texto);
+  const w1 = (testemunhas && testemunhas.w1) || { nome: "", rg: "" };
+  const w2 = (testemunhas && testemunhas.w2) || { nome: "", rg: "" };
+  let rg1 = String(w1.rg || "").trim();
+  let rg2 = String(w2.rg || "").trim();
+  const nome1 = String(w1.nome || "").trim();
+  const nome2 = String(w2.nome || "").trim();
+  if (rg1 && rg2 && rg1.replace(/\D/g, "") === rg2.replace(/\D/g, "") && nome1.toUpperCase() !== nome2.toUpperCase()) rg2 = "";
+  let y = 18;
+  const nova = function() {
+    pdf.addPage();
+    y = 18;
+  };
+  const cabe = function(altura) {
+    if (y + altura > fundo) nova();
+  };
+  if (logo) {
+    try { pdf.addImage(logo, "PNG", 210 - margem - 42, 10, 42, 14); } catch (e) {}
+    y = 30;
+  }
+  pdf.setTextColor(17, 17, 17);
+  pdf.setFont("times", "bold");
+  pdf.setFontSize(13);
+  const titulos = renegLinhasLargura(pdf, titulo, largura);
+  titulos.forEach(function(linha) {
+    pdf.text(linha.join(" "), 105, y, { align: "center" });
+    y += 6.2;
+  });
+  y += 4;
+  pdf.setFontSize(11);
+  doc.blocos.forEach(function(bloco, idx) {
+    const clausula = bloco.tipo === "clausula";
+    pdf.setFont("times", clausula ? "bold" : "normal");
+    const linhas = renegLinhasLargura(pdf, bloco.texto, largura);
+    const antes = clausula ? 3.2 : (bloco.tipo === "item" ? 0.6 : 2.2);
+    if (idx > 0) y += antes;
+    linhas.forEach(function(palavras, iLinha) {
+      cabe(passo);
+      const ultima = iLinha === linhas.length - 1;
+      if (clausula || ultima || palavras.length < 2) {
+        pdf.text(palavras.join(" "), margem, y);
+      } else {
+        const soma = palavras.reduce(function(s, p) { return s + pdf.getTextWidth(p); }, 0);
+        const extra = (largura - soma) / (palavras.length - 1);
+        let x = margem;
+        palavras.forEach(function(p) {
+          pdf.text(p, x, y);
+          x += pdf.getTextWidth(p) + extra;
+        });
+      }
+      y += passo;
+    });
+  });
+  const grupos = [];
+  doc.partes.forEach(function(p) {
+    const ult = grupos[grupos.length - 1];
+    if (ult && String(ult.role).toUpperCase() === String(p.role).toUpperCase()) ult.nomes.push(p.name);
+    else grupos.push({ role: p.role, nomes: [p.name] });
+  });
+  const alturaAss = 10 + grupos.length * 24 + (nome1 || nome2 ? 22 : 0);
+  if (y + Math.min(alturaAss, 70) > fundo) nova();
+  else y += 8;
+  if (doc.data) {
+    cabe(8);
+    pdf.setFont("times", "normal");
+    pdf.setFontSize(11);
+    pdf.text(doc.data, 105, y, { align: "center" });
+    y += 12;
+  }
+  grupos.forEach(function(g) {
+    cabe(22);
+    const varios = g.nomes.length > 1;
+    const linhaW = varios ? 150 : 92;
+    const x0 = (210 - linhaW) / 2;
+    pdf.setDrawColor(17, 17, 17);
+    pdf.setLineWidth(0.25);
+    pdf.line(x0, y, x0 + linhaW, y);
+    y += 5;
+    pdf.setFont("times", "bold");
+    pdf.setFontSize(11);
+    if (varios) {
+      const faixa = linhaW / g.nomes.length;
+      g.nomes.forEach(function(nome, i) {
+        pdf.text(nome, x0 + faixa * i + faixa / 2, y, { align: "center" });
+      });
+    } else {
+      pdf.text(g.nomes[0], 105, y, { align: "center" });
+    }
+    y += 5;
+    pdf.setFont("times", "italic");
+    pdf.text(g.role, 105, y, { align: "center" });
+    y += 14;
+  });
+  if (nome1 || nome2) {
+    cabe(18);
+    pdf.setFont("times", "italic");
+    pdf.setFontSize(11);
+    pdf.text("Testemunhas", 105, y, { align: "center" });
+    y += 8;
+    pdf.setFont("times", "normal");
+    const coluna = function(x, nome, rg) {
+      pdf.text("Nome: " + (nome || "________________"), x, y);
+      pdf.text("RG: " + (rg || "________________"), x, y + 5);
+    };
+    coluna(margem, nome1, rg1);
+    coluna(margem + largura / 2, nome2, rg2);
+    y += 10;
+  }
+  const total = pdf.internal.getNumberOfPages();
+  for (let n = 1; n <= total; n++) {
+    pdf.setPage(n);
+    pdf.setFont("times", "normal");
+    pdf.setFontSize(9);
+    pdf.setTextColor(17, 17, 17);
+    pdf.text(n + " de " + total, 210 - margem, 290, { align: "right" });
+  }
+  return new Uint8Array(pdf.output("arraybuffer"));
+}
+
 function renegBlocosTermo(corpo) {
   const bruto = String(corpo || "").replace(/\r\n/g, "\n").replace(/<br\s*\/?>/gi, "\n");
   const pedacos = bruto.split(/\n[ \t]*\n/).map(function(b) { return b.replace(/^\n+|\n+$/g, ""); }).filter(function(b) {
@@ -24469,30 +24725,6 @@ function generateAgreementPDF() {
   if (fraseAbatimento && textTemplate.indexOf(fraseAbatimento) < 0) {
     textTemplate = textTemplate.replace(/(CL[ÁA]USULA\s+3ª[^\n]*\n)/i, "$1" + fraseAbatimento + "\n");
   }
-  if (typeof window.centerDistratoSignatures === "function") {
-    textTemplate = window.centerDistratoSignatures(textTemplate);
-  }
-  const avisoProposta = modo === "proposta" && !fraseAbatimento
-    ? `<p style="margin:0 0 14px;"><b>Esta proposta não é o acordo.</b> Ela só se converte em confissão de dívida se o sinal de ${Number(results.sinalValue || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} for pago até ${renegIsoBr(results.sinalDueStr)}. Sem esse pagamento, a proposta expira em ${renegIsoBr(renegIsoMaisDias(results.sinalDueStr, 2))} e o acordo não é válido. Cartão de crédito não depende deste sinal.</p>`
-    : "";
-  let corpoTermo = textTemplate;
-  let blocoAssinaturas = "";
-  const corteAssinatura = corpoTermo.indexOf('<div class="pdf-sign-keep"');
-  if (corteAssinatura >= 0) {
-    blocoAssinaturas = corpoTermo.slice(corteAssinatura);
-    corpoTermo = corpoTermo.slice(0, corteAssinatura);
-  }
-
-  const docHtml = `
-    <div style="text-align: center; margin-bottom: 2rem;">
-      <h2 style="color: #111; font-size: 13pt; font-weight: bold; letter-spacing: 0.04em; margin: 0 0 1.2rem; font-family: 'Times New Roman', Times, serif;">${docTitle}</h2>
-    </div>
-    <div style="margin-bottom: 2rem; font-family: 'Times New Roman', Times, serif; font-size: 11pt; line-height: 1.75; color: #111;">
-      ${avisoProposta}
-      ${renegBlocosTermo(corpoTermo).join("")}
-    </div>
-    ${blocoAssinaturas}
-  `;
 
   const unitName = unit.name || unit.unitName || g_renegSale.unitName || "";
   const nomeArq = typeof window.buildFichaPdfFilename === "function"
@@ -24503,21 +24735,7 @@ function generateAgreementPDF() {
         nome: (g_renegCustomer && g_renegCustomer.name) || ""
       })
     : (modo === "proposta" ? "Proposta de acordo.pdf" : "Confissão de dívida.pdf");
-  let cru;
-  const rel = window.RelacionamentoApp;
-  if (rel && typeof rel._paginarDoc === "function" && typeof rel._baixarPaginasPdf === "function") {
-    const tituloHtml = `<h2 style="text-align:center;color:#111;font-size:13pt;font-weight:bold;letter-spacing:0.04em;margin:0 0 30px;font-family:'Times New Roman',Times,serif;">${docTitle}</h2>`;
-    const corpoCss = "font-family:'Times New Roman',Times,serif;font-size:11pt;line-height:1.75;color:#111;";
-    const blocos = [];
-    if (avisoProposta) blocos.push(avisoProposta);
-    renegBlocosTermo(corpoTermo).forEach(function(b) { blocos.push(b); });
-    if (blocoAssinaturas) blocos.push(blocoAssinaturas);
-    const paginas = rel._paginarDoc(tituloHtml, blocos, corpoCss);
-    const pdfDoc = await rel._baixarPaginasPdf(paginas, nomeArq, { retornar: true });
-    cru = new Uint8Array(pdfDoc.output("arraybuffer"));
-  } else {
-    cru = await baixarHtmlComoPdf(docHtml, nomeArq, { devolver: true });
-  }
+  const cru = await renegTermoPdfSelecionavel(docTitle, textTemplate, window._renegTestemunhasDoc);
   const ja = renegPropostaAtual();
   const pack = await renegCarimbarAcordo(cru, results, (ja && ja.codigoAuth) || "");
   renegBaixarBytes(pack.bytes, nomeArq);
@@ -28139,7 +28357,8 @@ function getDistratoWitnessBySelect(id) {
   if (!uid) return { nome: "", rg: "" };
   const u = getDistratoWitnessUsers().find(x => String(x.id) === String(uid));
   if (!u) return { nome: "", rg: "" };
-  return { nome: u.name || "", rg: u.doc_rg || u.rg || "" };
+  const pessoa = typeof renegTestemunhaDaPessoa === "function" ? renegTestemunhaDaPessoa(u) : null;
+  return { nome: (pessoa && pessoa.nome) || u.name || "", rg: (pessoa && pessoa.rg) || "" };
 }
 
 function numeroPorExtenso(n) {
@@ -28902,12 +29121,12 @@ window.centerDistratoSignatures = function(html) {
   }
   if (testemunhasEscolhidas && testemunhasEscolhidas.w1) {
     w1Name = testemunhasEscolhidas.w1.nome || w1Name;
-    w1Rg = testemunhasEscolhidas.w1.rg || w1Rg;
+    w1Rg = String(testemunhasEscolhidas.w1.rg || "").trim();
     hasWitnessTitle = true;
   }
   if (testemunhasEscolhidas && testemunhasEscolhidas.w2) {
     w2Name = testemunhasEscolhidas.w2.nome || w2Name;
-    w2Rg = testemunhasEscolhidas.w2.rg || w2Rg;
+    w2Rg = String(testemunhasEscolhidas.w2.rg || "").trim();
     hasWitnessTitle = true;
   }
   if (w1Rg && w2Rg && w1Name && w2Name && w1Rg.replace(/\D/g, "") === w2Rg.replace(/\D/g, "") && w1Name.toUpperCase() !== w2Name.toUpperCase()) {
