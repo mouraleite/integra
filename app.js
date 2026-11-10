@@ -6826,6 +6826,7 @@ function applyMenuPermissions() {
   if (!AppState.currentUser) return;
   const profileName = AppState.currentUser.profile_name || "";
   window.applyPermissions(profileName);
+  if (typeof window.crmPintarVerComoAdmin === "function") window.crmPintarVerComoAdmin();
 }
 window.applyMenuPermissions = applyMenuPermissions;
 
@@ -6851,6 +6852,7 @@ window.applyPermissions = function(profileName) {
     profileName = window.CRM_BACK_OFFICE_PROFILE_NAME;
     current.profile_name = profileName;
   } else profileName = "";
+  if (!imp && window.crmVerComoAdmin && window.crmVerComoAdmin()) profileName = "ADMINISTRADOR";
   if (!profileName) {
     if (typeof window.crmRestringirMenuAoHome === "function") window.crmRestringirMenuAoHome();
     return;
@@ -7022,6 +7024,53 @@ window.crmAdministradorReal = function() {
   return !!(rec && window.isCrmAdminProfileName(rec.profile_name));
 };
 
+window.CRM_VER_COMO_ADMIN_KEY = "crm_ver_como_admin";
+
+window.crmPodeVerComoAdmin = function() {
+  if (window.crmAdministradorReal()) return false;
+  const u = window.AppState && AppState.currentUser;
+  if (!u) return false;
+  const rec = typeof window.findCrmRegisteredUser === "function" ? window.findCrmRegisteredUser(u) : null;
+  if (!rec || !rec.pode_ver_como_admin) return false;
+  const status = String(rec.status || "ATIVO").toUpperCase();
+  return status !== "INATIVO" && status !== "PENDENTE";
+};
+
+window.crmVerComoAdmin = function() {
+  if (!window.crmPodeVerComoAdmin()) return false;
+  try { return sessionStorage.getItem(window.CRM_VER_COMO_ADMIN_KEY) === "1"; } catch (e) { return false; }
+};
+
+window.crmAlternarVerComoAdmin = function() {
+  if (!window.crmPodeVerComoAdmin()) return;
+  const ligado = window.crmVerComoAdmin();
+  try {
+    if (ligado) sessionStorage.removeItem(window.CRM_VER_COMO_ADMIN_KEY);
+    else sessionStorage.setItem(window.CRM_VER_COMO_ADMIN_KEY, "1");
+  } catch (e) {}
+  if (typeof window.applyMenuPermissions === "function") window.applyMenuPermissions();
+  if (typeof window.updateOperatorTabsUI === "function") {
+    try { window.updateOperatorTabsUI(); } catch (err) {}
+  }
+  if (typeof window.crmAtualizarTelasDoAcesso === "function") window.crmAtualizarTelasDoAcesso();
+  window.crmPintarVerComoAdmin();
+};
+
+window.crmPintarVerComoAdmin = function() {
+  const btn = document.getElementById("ver-como-admin-btn");
+  if (!btn) return;
+  const pode = window.crmPodeVerComoAdmin();
+  btn.hidden = !pode;
+  if (!pode) return;
+  const ligado = window.crmVerComoAdmin();
+  const perfil = (typeof window.crmPerfilCadastrado === "function" && window.crmPerfilCadastrado(AppState.currentUser)) || "seu perfil";
+  btn.textContent = ligado ? "Voltar ao meu perfil" : "Ver como administrador";
+  btn.classList.toggle("is-on", !!ligado);
+  btn.title = ligado
+    ? ("Você está vendo todos os acessos de administrador. Seu perfil continua " + perfil + ". Ao fechar o navegador, a próxima entrada volta só ao seu perfil.")
+    : ("Seu perfil continua " + perfil + ". Este botão mostra todos os acessos de administrador até você voltar ou fechar o navegador.");
+};
+
 window.crmBackOfficeReal = function() {
   if (window.crmAdministradorReal()) return false;
   const u = window.AppState && AppState.currentUser;
@@ -7080,7 +7129,13 @@ window.isCrmAdministrator = function(user) {
   const rec = window.findCrmRegisteredUser(user);
   const status = String((rec && rec.status) || user.status || "ATIVO").toUpperCase();
   if (status === "INATIVO") return false;
-  return !!(rec && window.isCrmAdminProfileName(rec.profile_name));
+  if (rec && window.isCrmAdminProfileName(rec.profile_name)) return true;
+  if (window.crmVerComoAdmin && window.crmVerComoAdmin()) {
+    const eu = String((window.AppState && AppState.currentUser && AppState.currentUser.email) || "").toLowerCase();
+    const mail = String((user && user.email) || (rec && rec.email) || "").toLowerCase();
+    if (eu && mail && eu === mail) return true;
+  }
+  return false;
 };
 
 window.listCrmAdministrators = function() {
@@ -7234,6 +7289,9 @@ window.crmPintarTesteConta = function() {
 window.crmIniciarTesteConta = function() {
   if (window._testeContaPronto) return;
   window._testeContaPronto = true;
+  const verAdmin = document.getElementById("ver-como-admin-btn");
+  if (verAdmin) verAdmin.addEventListener("click", () => window.crmAlternarVerComoAdmin());
+  if (typeof window.crmPintarVerComoAdmin === "function") window.crmPintarVerComoAdmin();
   const btn = document.getElementById("teste-conta-btn");
   const menu = document.getElementById("teste-conta-menu");
   if (!btn || !menu) return;
@@ -9272,11 +9330,64 @@ window.cancelamentoExigencias = function(client) {
   return { obraAndamento: obraAndamento, loteamentoFechado: loteamentoFechado, webro: !!webro };
 };
 
+window.cancelamentoNormDoc = function(texto) {
+  let s = String(texto || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (window.FollowupCndApp && typeof FollowupCndApp.colarLetrasSoltas === "function") s = FollowupCndApp.colarLetrasSoltas(s);
+  return s.replace(/\s+/g, " ").trim();
+};
+
+window.cancelamentoPartesUnidade = function(client) {
+  let nome = String((client && (client.unitName || client.unitLabel)) || "").trim();
+  const cc = String((client && client.costCenterId) || "").split(",")[0].trim();
+  if (cc && nome.indexOf(cc) === 0) nome = nome.slice(cc.length).replace(/^[\s-]+/, "");
+  const pedaco = nome.split(" - ").pop() || nome;
+  const compacto = pedaco.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const m = pedaco.match(/([A-Za-z]+)\s*[- ]\s*(\d+[A-Za-z0-9]*)/);
+  return { nome: pedaco, compacto: compacto, quadra: m ? m[1].toUpperCase() : "", lote: m ? m[2].toUpperCase() : "" };
+};
+
+window.cancelamentoConferirDistrato = function(texto, client) {
+  const t = window.cancelamentoNormDoc(texto);
+  const faltas = [];
+  if (!t) {
+    const mensagem = "Não consegui ler o texto deste PDF. Envie o distrato com texto selecionável.";
+    return { ok: false, faltas: [mensagem], mensagem: mensagem };
+  }
+  if (!/DISTRATO|RESCISAO|RESCIND/.test(t)) faltas.push("o arquivo não é um termo de distrato");
+  const nome = window.cancelamentoNormDoc(client && client.customerName);
+  const tokens = nome.split(/\s+/).filter(function(p) { return p.length >= 3 && !/^(DE|DA|DO|DAS|DOS|E)$/.test(p); });
+  const primeiro = tokens[0] || "";
+  const ultimo = tokens.length > 1 ? tokens[tokens.length - 1] : "";
+  if (!primeiro || t.indexOf(primeiro) < 0 || (ultimo && t.indexOf(ultimo) < 0)) {
+    faltas.push("o nome do cliente " + (client && client.customerName ? client.customerName : ""));
+  }
+  const titulo = String((client && client.saleId) || "").replace(/\D/g, "");
+  const semEspaco = t.replace(/\s+/g, "");
+  if (!titulo || !new RegExp("(^|\\D)" + titulo + "(\\D|$)").test(semEspaco)) {
+    faltas.push("o título " + (titulo || ""));
+  }
+  const un = window.cancelamentoPartesUnidade(client);
+  const compacto = semEspaco.replace(/[^A-Z0-9]/g, "");
+  const temUnidade = !!(un.compacto && un.compacto.length >= 2 && compacto.indexOf(un.compacto) >= 0);
+  const temQuadraLote = !!(un.quadra && un.lote && new RegExp("(^|[^A-Z])" + un.quadra + "([^A-Z]|$)").test(t) && new RegExp("(^|\\D)" + un.lote + "(\\D|$)").test(semEspaco));
+  if (!temUnidade && !temQuadraLote) faltas.push("a unidade " + (un.nome || ""));
+  const msg = faltas.length
+    ? ("Este arquivo não é o distrato deste contrato. Não encontrei: " + faltas.join("; ") + ".")
+    : "";
+  return { ok: !faltas.length, faltas: faltas, mensagem: msg };
+};
+
 window.cancelamentoDocsOk = function() {
   const exig = window._cancelExigencias || {};
   const cnd = document.getElementById("cancel-cnd-file");
   const assoc = document.getElementById("cancel-assoc-file");
   const webro = document.getElementById("cancel-webro-file");
+  const distrato = document.getElementById("cancel-distrato-file");
+  const leitura = window._cancelLeitura || {};
+  if (distrato) {
+    if (!(distrato.files && distrato.files[0])) return false;
+    if (!leitura.distrato || leitura.distrato.status !== "ok" || !leitura.distrato.ok) return false;
+  }
   if (!exig.obraAndamento && !(cnd && cnd.files && cnd.files[0])) return false;
   if (!exig.obraAndamento && !window.cancelamentoCertidaoPronta()) return false;
   if (exig.loteamentoFechado && !exig.obraAndamento && !(assoc && assoc.files && assoc.files[0])) return false;
@@ -9298,12 +9409,13 @@ window.cancelamentoLiberarSeguir = function() {
   const btn = document.getElementById("cancel-seguir-btn");
   if (!btn) return;
   const leitura = window._cancelLeitura || {};
-  const lendo = (leitura.cnd && leitura.cnd.status === "lendo") || (leitura.certidao && leitura.certidao.status === "lendo");
+  const lendo = (leitura.cnd && leitura.cnd.status === "lendo") || (leitura.certidao && leitura.certidao.status === "lendo") || (leitura.distrato && leitura.distrato.status === "lendo");
   const ok = !lendo && window.cancelamentoDocsOk();
   btn.disabled = !ok;
   btn.style.opacity = ok ? "" : "0.45";
   btn.style.cursor = ok ? "" : "not-allowed";
-  btn.title = ok ? "" : (lendo ? "Lendo o documento…" : "Anexe a certidão da prefeitura para seguir com o distrato.");
+  const distMsg = leitura.distrato && leitura.distrato.status === "ok" && !leitura.distrato.ok ? leitura.distrato.mensagem : "";
+  btn.title = ok ? "" : (lendo ? "Lendo o documento…" : (distMsg || "Anexe os documentos pedidos, inclusive o distrato assinado deste cliente, título e unidade."));
 };
 
 window.cancelamentoMostrarPedidoCertidao = function(classe) {
@@ -9391,6 +9503,44 @@ window.cancelamentoAoAnexarCertidao = async function() {
   window.cancelamentoLiberarSeguir();
 };
 
+window.cancelamentoAoAnexarDistrato = async function() {
+  const input = document.getElementById("cancel-distrato-file");
+  const aviso = document.getElementById("cancel-distrato-aviso");
+  const file = input && input.files && input.files[0];
+  const client = window._cancelClienteDoc || null;
+  window._cancelLeitura = window._cancelLeitura || {};
+  if (!file) {
+    window._cancelLeitura.distrato = null;
+    if (aviso) aviso.textContent = "";
+    window.cancelamentoLiberarSeguir();
+    return;
+  }
+  const pdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+  if (!pdf) {
+    window._cancelLeitura.distrato = { status: "ok", ok: false, mensagem: "Envie o distrato em PDF, com texto selecionável." };
+    if (aviso) { aviso.style.color = "#9a3412"; aviso.textContent = window._cancelLeitura.distrato.mensagem; }
+    window.cancelamentoLiberarSeguir();
+    return;
+  }
+  window._cancelLeitura.distrato = { status: "lendo" };
+  if (aviso) { aviso.style.color = "#64748b"; aviso.textContent = "Lendo o distrato…"; }
+  window.cancelamentoLiberarSeguir();
+  let texto = "";
+  try {
+    texto = window.FollowupCndApp && typeof FollowupCndApp.lerPdf === "function" ? await FollowupCndApp.lerPdf(file) : "";
+  } catch (e) {
+    texto = "";
+  }
+  if (!document.getElementById("cancel-distrato-file")) return;
+  const conf = window.cancelamentoConferirDistrato(texto, client);
+  window._cancelLeitura.distrato = { status: "ok", ok: conf.ok, mensagem: conf.mensagem, nome: file.name };
+  if (aviso) {
+    aviso.style.color = conf.ok ? "#105436" : "#9a3412";
+    aviso.textContent = conf.ok ? "Distrato conferido: cliente, título e unidade desta tela." : conf.mensagem;
+  }
+  window.cancelamentoLiberarSeguir();
+};
+
 window.cancelamentoGuardarDocsESeguir = function(customerId, saleId) {
   if (!window.cancelamentoDocsOk()) {
     if (window.showToast) window.showToast("Anexe os documentos pedidos para seguir com o distrato.", "warning");
@@ -9400,11 +9550,13 @@ window.cancelamentoGuardarDocsESeguir = function(customerId, saleId) {
   const assoc = document.getElementById("cancel-assoc-file");
   const webro = document.getElementById("cancel-webro-file");
   const cert = document.getElementById("cancel-certidao-file");
+  const distratoArq = document.getElementById("cancel-distrato-file");
   window._cancelDocs = {
     cnd: cnd && cnd.files && cnd.files[0] ? cnd.files[0] : null,
     certidao: cert && cert.files && cert.files[0] ? cert.files[0] : null,
     associacao: assoc && assoc.files && assoc.files[0] ? assoc.files[0] : null,
-    webro: webro && webro.files && webro.files[0] ? webro.files[0] : null
+    webro: webro && webro.files && webro.files[0] ? webro.files[0] : null,
+    distrato: distratoArq && distratoArq.files && distratoArq.files[0] ? distratoArq.files[0] : null
   };
   window.fecharAvaliacaoCancelamento();
   window.abrirCancelamentoContrato(customerId, saleId);
@@ -9499,6 +9651,7 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
     const saleJs = String(client.saleId || saleId).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     const cidNum = Number(client.customerId) || 0;
     window._cancelLeitura = {};
+    window._cancelClienteDoc = client;
     const campoArquivo = function(id, rotulo, ajuda) {
       const muda = id === "cancel-cnd-file" ? "window.cancelamentoAoAnexarCnd()" : "window.cancelamentoLiberarSeguir()";
       return `<div style="margin-top:12px;">
@@ -9509,6 +9662,12 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
     };
     let docsHtml = "";
     if (pode.ok) {
+      docsHtml += `<div style="margin-top:12px;">
+        <label style="display:block;font-size:0.82rem;font-weight:700;color:#0f172a;margin-bottom:4px;">Distrato assinado</label>
+        <p style="margin:0 0 6px;font-size:0.78rem;color:#64748b;">Envie o PDF do distrato assinado. O sistema confere se o texto é deste cliente, deste título e desta unidade antes de gravar na unidade.</p>
+        <input type="file" id="cancel-distrato-file" accept=".pdf,application/pdf" onchange="window.cancelamentoAoAnexarDistrato()" style="width:100%;box-sizing:border-box;padding:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;font-size:0.85rem;">
+        <p id="cancel-distrato-aviso" style="margin:6px 0 0;font-size:0.78rem;color:#64748b;"></p>
+      </div>`;
       if (exig.obraAndamento) {
         docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">Obra em andamento: CND e CND da associação dispensadas.</p>`;
       } else {
@@ -9522,9 +9681,9 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
         docsHtml += campoArquivo("cancel-webro-file", "Print da tela da Webro com os boletos baixados", "Este cliente tem a tag Boleto WEBRO. O print sobe no cadastro da unidade.");
       }
     }
-    const pedeDoc = !!(pode.ok && (!exig.obraAndamento || exig.webro));
+    const pedeDoc = !!pode.ok;
     const aviso = pode.ok
-      ? `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#ecfdf5;color:#105436;font-size:0.84rem;font-weight:700;">Pago ${window.cancelContratoEsc(pct)} do contrato, menos de 10%. Restituição zero. Sem construção.${pedeDoc ? " Para seguir, anexe os mesmos documentos da suspensão." : " Pode cancelar direto no Sienge."}</p>`
+      ? `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#ecfdf5;color:#105436;font-size:0.84rem;font-weight:700;">Pago ${window.cancelContratoEsc(pct)} do contrato, menos de 10%. Restituição zero. Sem construção. Para seguir, anexe o distrato assinado deste cliente, título e unidade.</p>`
       : `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:0.84rem;">${pode.motivos.map(function(m) { return window.cancelContratoEsc(m); }).join("<br>")}</p>`;
     const seguir = pode.ok
       ? `<button type="button" class="btn btn-primary" id="cancel-seguir-btn" ${pedeDoc ? "disabled style=\"opacity:0.45;cursor:not-allowed;\" title=\"Anexe os documentos pedidos para seguir com o distrato.\"" : ""} onclick="window.cancelamentoGuardarDocsESeguir(${cidNum}, '${saleJs}')">Seguir para o cancelamento</button>`
@@ -9680,6 +9839,11 @@ window.enviarCancelamentoContrato = async function() {
   }
   if (exig.loteamentoFechado && !exig.obraAndamento && !docs.associacao) { falha("Anexe a CND da associação antes de cancelar."); return; }
   if (exig.webro && !docs.webro) { falha("Anexe o print da baixa da Webro antes de cancelar."); return; }
+  const leituraDistrato = (window._cancelLeitura || {}).distrato;
+  if (!docs.distrato || !leituraDistrato || !leituraDistrato.ok) {
+    falha((leituraDistrato && leituraDistrato.mensagem) || "Anexe o distrato assinado deste cliente, título e unidade.");
+    return;
+  }
   if (btn) btn.disabled = true;
   if (aviso) { aviso.style.color = "#475569"; aviso.textContent = "Enviando os documentos para a unidade…"; }
   try {
@@ -9697,6 +9861,7 @@ window.enviarCancelamentoContrato = async function() {
     }
     await subir(docs.associacao, ["CND ASSOCIACAO", "CND DA ASSOCIACAO", "TAXA ASSOCIATIVA"], "cancelamento-associacao", "a CND da associação");
     await subir(docs.webro, ["BAIXA WEBRO", "PRINT WEBRO", "WEBRO", "COMPROVANTE BAIXA WEBRO"], "cancelamento-webro", "o print da baixa Webro");
+    await subir(docs.distrato, ["DISTRATO"], "cancelamento-distrato", "o distrato assinado");
   } catch (e) {
     if (btn) btn.disabled = false;
     falha("Não foi possível gravar o documento na unidade. O título não foi cancelado. " + ((e && e.message) || e));
@@ -9724,7 +9889,7 @@ window.enviarCancelamentoContrato = async function() {
       subType: subtipo
     });
     const subNome = (window.CANCEL_SUBTIPOS.find(function(s) { return s.codigo === subtipo; }) || {}).nome || subtipo;
-    const anexosTxt = [docs.cnd && "CND", docs.associacao && "CND da associação", docs.webro && "print da baixa Webro"].filter(Boolean).join(", ");
+    const anexosTxt = [docs.distrato && "distrato assinado", docs.cnd && "CND", docs.associacao && "CND da associação", docs.webro && "print da baixa Webro"].filter(Boolean).join(", ");
     const resumo = "Contrato " + contract.id + " cancelado no Sienge, subtipo " + subNome + " (" + subtipo + "), motivo " + rot.codigo + " (" + rot.texto + "), título " + client.saleId + " · " + (client.customerName || "") + (anexosTxt ? ". Documentos na unidade: " + anexosTxt : "");
     window.cancelContratoRegistrar(client, "ok", resumo, { contractId: contract.id, reason: rot.codigo, reasonTexto: rot.texto, subType: subtipo, date: data, cnd: !!docs.cnd, associacao: !!docs.associacao, webro: !!docs.webro });
     let avisoFollow = "";
@@ -21097,7 +21262,7 @@ window.gravarPedidosLiberacaoLocal = function() {
 window.pintarPedidosLiberacaoReneg = function() {
   const fab = document.getElementById("reneg-pedido-fab");
   const painel = document.getElementById("reneg-pedido-painel");
-  const admin = typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal();
+  const admin = (typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal()) || (typeof window.crmVerComoAdmin === "function" && window.crmVerComoAdmin());
   const pendentes = (window._renegPedidos || []).filter((p) => p && p.status === "pendente").sort((a, b) => (b.criadoEm || 0) - (a.criadoEm || 0));
   if (fab) {
     fab.hidden = !(admin && pendentes.length);
@@ -21507,7 +21672,7 @@ function renegAplicarFaixaModalidade() {
       deslocar: "Deslocar exige mais de " + mods.deslocar.pctPagoMin + "% pago e no máximo " + mods.deslocar.maxAcordos + " acordo.",
       somar: "Somar é para quem pagou menos de " + mods.somar.pctPagoMax + "% do contrato."
     };
-    const adminEscolhe = typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal();
+    const adminEscolhe = (typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal()) || (typeof window.crmVerComoAdmin === "function" && window.crmVerComoAdmin());
     const sinalJaPago = !!window._renegSinalJaPago;
     Array.from(sel.options).forEach((opt) => {
       if (opt.value === "cartao" || adminEscolhe || (sinalJaPago && opt.value === sel.value)) {
@@ -29385,6 +29550,31 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
       arquivo: docTitle || "Distrato",
       centroId: ccDist
     });
+  }
+  try {
+    if (typeof baixarHtmlComoPdf === "function" && typeof window.anexosUploadUnitAttachment === "function") {
+      const tituloArq = String((g_distSale && (g_distSale.receivableBillId || g_distSale.id)) || "titulo").replace(/[^\w.-]+/g, "");
+      const nomeArq = "Distrato " + tituloArq + ".pdf";
+      const bytes = await baixarHtmlComoPdf(docHtml, nomeArq, { devolver: true });
+      const arquivo = new File([bytes], nomeArq, { type: "application/pdf" });
+      const ccDistUpload = String((unit && (unit.costCenterId || unit.enterpriseId)) || (g_distSale && (g_distSale.costCenterId || g_distSale.enterpriseId)) || "").split(",")[0].trim();
+      const nomeUnidade = (unit && (unit.name || unit.unitName)) || (g_distSale && g_distSale.unitName) || "";
+      const tagDistrato = typeof window.anexosResolveTagName === "function"
+        ? await window.anexosResolveTagName(["DISTRATO"])
+        : "DISTRATO";
+      await window.anexosUploadUnitAttachment({
+        file: arquivo,
+        tagLabel: tagDistrato,
+        sale: g_distSale,
+        unitName: nomeUnidade,
+        costCenterId: ccDistUpload,
+        context: "distrato-gerado"
+      });
+      if (window.showToast) window.showToast("Distrato gravado na unidade com a tag " + tagDistrato + ".", "success");
+    }
+  } catch (eUp) {
+    console.error(eUp);
+    alert("O termo foi gerado, mas não consegui gravar o distrato na unidade. " + ((eUp && eUp.message) || eUp));
   }
   document.getElementById("pdf-modal-title").textContent = "Termo de Rescisão e Distrato - PDF";
   document.getElementById("pdf-document-content").innerHTML = docHtml;

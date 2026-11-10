@@ -3,8 +3,8 @@ const db = require('./db');
 require('dotenv').config();
 
 const SIENGE_CONFIG = {
-  user: "mouraleite-contas-a-pagar",
-  pass: "U2riBlrXuOPIpbb7TyRapoxSzaXWUisj",
+  user: process.env.SIENGE_API_USER || "",
+  pass: process.env.SIENGE_API_PASSWORD || "",
   host: 'api.sienge.com.br'
 };
 

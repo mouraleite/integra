@@ -1713,6 +1713,15 @@ const ConfigUsersApp = {
                <div style="flex: 1;"></div>
             </div>
 
+            ${(() => {
+              const podeMarcar = typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal();
+              const jaAdmin = typeof window.isCrmAdminProfileName === "function" && window.isCrmAdminProfileName(user && user.profile_name);
+              if (!podeMarcar || jaAdmin) return "";
+              return '<div style="margin: -4px 0 16px;">' +
+                switchField("umodal-ver-como-admin", !!(user && user.pode_ver_como_admin), "", "Pode ver como administrador") +
+                '<span style="font-size: 0.75rem; color: #9aa0a6; display: block; margin-top: 6px;">O perfil não muda. Ela entra na conta dela e pede para ver como administrador. Aí enxerga todos os acessos, até voltar ao perfil ou fechar o navegador.</span></div>';
+            })()}
+
             <div style="display: flex; gap: 16px; margin-bottom: 16px;">
                <div style="flex: 1;">
                   <label style="display: block; font-weight: 600; color: #5f6368; margin-bottom: 6px; font-size: 0.85rem;">Perfil de Acesso</label>
@@ -1874,6 +1883,9 @@ const ConfigUsersApp = {
 
       const resendBillet = document.getElementById('umodal-resend-billet') ? document.getElementById('umodal-resend-billet').checked : false;
       const assinaTestemunha = document.getElementById('umodal-assina-testemunha') ? document.getElementById('umodal-assina-testemunha').checked : false;
+      const verComoAdminEl = document.getElementById('umodal-ver-como-admin');
+      const cadastroAtual = userId ? this.findUser(userId, userEmail) : null;
+      const podeVerComoAdmin = verComoAdminEl ? !!verComoAdminEl.checked : !!(cadastroAtual && cadastroAtual.pode_ver_como_admin);
       const docRg = document.getElementById('umodal-doc-rg') ? document.getElementById('umodal-doc-rg').value.trim() : '';
       const departmentHistory = this.collectDeptHistory();
       if (departmentHistory === false) return;
@@ -1927,6 +1939,7 @@ const ConfigUsersApp = {
           badge_color: badgeColor,
           resend_billet: resendBillet,
           assina_testemunha: assinaTestemunha,
+          pode_ver_como_admin: podeVerComoAdmin,
           doc_rg: docRg,
           department_history: departmentHistory || []
       };

@@ -32,7 +32,7 @@ const IndexadoresApp = {
       // 1. Fetch Sienge Indexers
       const response = await fetch(`http://${host}:${port}/sienge-proxy/indexers?limit=100`, {
         headers: {
-            'Authorization': 'Basic ' + btoa('mouraleite-contas-a-pagar:U2riBlrXuOPIpbb7TyRapoxSzaXWUisj')
+            'Authorization': getBasicAuthHeader()
         }
       });
       if (!response.ok) throw new Error("Erro ao buscar indexadores do Sienge");

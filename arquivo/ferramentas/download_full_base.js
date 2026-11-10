@@ -3,8 +3,8 @@ const { getFirestore, doc, writeBatch } = require('firebase/firestore');
 
 // Configuração Sienge
 const SIENGE_DOMAIN = "mouraleite";
-const SIENGE_USER = "mouraleite-contas-a-pagar";
-const SIENGE_PASS = "U2riBlrXuOPIpbb7TyRapoxSzaXWUisj";
+const SIENGE_USER = process.env.SIENGE_API_USER || "";
+const SIENGE_PASS = process.env.SIENGE_API_PASSWORD || "";
 const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toString('base64');
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 

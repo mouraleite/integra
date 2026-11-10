@@ -95,6 +95,17 @@ module.exports = async function handler(req, res) {
   delete proxyHeaders['content-encoding'];
   stripCrmProfileHeader(proxyHeaders);
 
+  // A autenticação do Sienge vem das variáveis da Vercel. O que o navegador mandar é descartado.
+  const siengeUser = process.env.SIENGE_API_USER || '';
+  const siengePass = process.env.SIENGE_API_PASSWORD || '';
+  Object.keys(proxyHeaders).forEach((k) => { if (k.toLowerCase() === 'authorization') delete proxyHeaders[k]; });
+  if (!siengeUser || !siengePass) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return res.status(500).end(JSON.stringify({ error: 'Credenciais do Sienge não configuradas no servidor (SIENGE_API_USER / SIENGE_API_PASSWORD).' }));
+  }
+  proxyHeaders.authorization = 'Basic ' + Buffer.from(siengeUser + ':' + siengePass).toString('base64');
+
   const method = (req.method || 'GET').toUpperCase();
   const body = (method === 'GET' || method === 'HEAD') ? Buffer.alloc(0) : await collectRawBody(req);
   if (body.length) {

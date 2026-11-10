@@ -3,8 +3,9 @@ const { getFirestore, collection, doc, getDoc, setDoc, getDocs, writeBatch } = r
 const { todayIsoSP } = require("../../lib/br-calendar");
 
 const SIENGE_DOMAIN = "mouraleite";
-const SIENGE_USER = "mouraleite-contas-a-pagar";
-const SIENGE_PASS = "U2riBlrXuOPIpbb7TyRapoxSzaXWUisj";
+// Usuário e senha da API do Sienge ficam nas variáveis da Vercel, nunca no código.
+const SIENGE_USER = process.env.SIENGE_API_USER || "";
+const SIENGE_PASS = process.env.SIENGE_API_PASSWORD || "";
 const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toString("base64");
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 

@@ -3,8 +3,9 @@
 
 const SIENGE_CONFIG = {
   domain: "mouraleite",
-  user: "mouraleite-contas-a-pagar",
-  pass: "U2riBlrXuOPIpbb7TyRapoxSzaXWUisj",
+  // Sem senha no navegador: o /api/sienge-proxy autentica com as variáveis da Vercel.
+  user: "integra",
+  pass: "",
   baseUrl: (() => {
     if (window.location.protocol === "file:") {
       return "/api/sienge-proxy";

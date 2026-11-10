@@ -3720,6 +3720,18 @@ circle.donut-segment {
   position: relative;
 }
 .suporte-widget { position: relative; }
+.ver-como-admin-btn {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 14px;
+  margin-right: 8px;
+  background: #105436;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+.ver-como-admin-btn.is-on { background: #f37021; }
+.ver-como-admin-btn[hidden] { display: none !important; }
 .teste-conta-widget { position: relative; margin-right: 8px; }
 .teste-conta-widget[hidden] { display: none !important; }
 .suporte-fab.is-teste { color: #fff; background: #105436; border-color: #105436; }

@@ -184,7 +184,7 @@ const server = http.createServer(async (req, res) => {
         ...proxyHeaders,
         host: SIENGE_HOST,
         // Repassar autorização básica para o Sienge
-        'Authorization': req.headers['authorization'] || ''
+        'Authorization': (process.env.SIENGE_API_USER && process.env.SIENGE_API_PASSWORD) ? 'Basic ' + Buffer.from(process.env.SIENGE_API_USER + ':' + process.env.SIENGE_API_PASSWORD).toString('base64') : (req.headers['authorization'] || '')
       }
     };
 
@@ -280,7 +280,7 @@ const server = http.createServer(async (req, res) => {
       headers: {
         ...proxyHeaders,
         host: SIENGE_HOST,
-        'Authorization': req.headers['authorization'] || ''
+        'Authorization': (process.env.SIENGE_API_USER && process.env.SIENGE_API_PASSWORD) ? 'Basic ' + Buffer.from(process.env.SIENGE_API_USER + ':' + process.env.SIENGE_API_PASSWORD).toString('base64') : (req.headers['authorization'] || '')
       }
     };
     
