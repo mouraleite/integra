@@ -217,10 +217,160 @@ const DocAssinaturaApp = {
     };
   },
 
+  avalDistrato(row) {
+    const titulo = String((row && row.titulo) || "").replace(/\D/g, "");
+    if (!titulo || !this._avalDistrato) return null;
+    return this._avalDistrato[titulo] || null;
+  },
+
+  botaoDistratoHtml(r) {
+    if (!r || r.tipo !== "distrato" || r.status === "lancado") return "";
+    const titulo = String(r.titulo || "").replace(/\D/g, "");
+    const chave = encodeURIComponent(String(r.id));
+    const aval = this.avalDistrato(r);
+    if (aval && aval.ok) {
+      return `<button type="button" class="btn btn-primary btn-sm" data-distrato-id="${chave}" data-distrato-titulo="${this.esc(titulo)}" onclick="DocAssinaturaApp.fazerDistrato('${chave}')">Fazer distrato</button>`;
+    }
+    return `<span class="docs-distrato is-off" data-distrato-id="${chave}" data-distrato-titulo="${this.esc(titulo)}" onmouseenter="DocAssinaturaApp.mostrarCaixaDistrato(this)" onmouseleave="DocAssinaturaApp.esconderCaixaDistrato()"><button type="button" class="btn btn-primary btn-sm" disabled>Fazer distrato</button></span>`;
+  },
+
+  caixaDistratoHtml(titulo, aval) {
+    const din = typeof window.cancelamentoDinheiro === "function" ? window.cancelamentoDinheiro : (n) => String(n == null ? "—" : n);
+    const pct = aval && aval.pct != null
+      ? (Number(aval.pct).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%")
+      : "—";
+    const linha = (rotulo, valor) => `<li><span>${rotulo}</span><b>${this.esc(valor)}</b></li>`;
+    const motivos = (aval && aval.motivos || []).map((m) => `<li>${this.esc(m)}</li>`).join("");
+    return `<p class="docs-distrato-caixa-t">Título ${this.esc(titulo || "—")}</p>
+      <ul class="docs-distrato-sit">
+        ${linha("Pago do contrato", pct)}
+        ${linha("Valor do contrato", aval && aval.contrato != null ? din(aval.contrato) : "—")}
+        ${linha("Valor pago", aval && aval.pago != null ? din(aval.pago) : "—")}
+        ${linha("Restituição", aval && aval.restituicao != null ? din(aval.restituicao) : "—")}
+        ${linha("Construção", (aval && aval.construcao) || "—")}
+      </ul>
+      <p class="docs-distrato-porque">Por que o distrato não segue</p>
+      <ul class="docs-distrato-motivos">${motivos || "<li>A situação deste título ainda está sendo consultada.</li>"}</ul>`;
+  },
+
+  mostrarCaixaDistrato(el) {
+    if (!el) return;
+    const titulo = el.getAttribute("data-distrato-titulo") || "";
+    const aval = this._avalDistrato && this._avalDistrato[titulo];
+    let box = document.getElementById("docs-distrato-caixa");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "docs-distrato-caixa";
+      box.className = "docs-distrato-caixa";
+      document.body.appendChild(box);
+    }
+    box.innerHTML = aval
+      ? this.caixaDistratoHtml(titulo, aval)
+      : `<p class="docs-distrato-caixa-t">Título ${this.esc(titulo || "—")}</p><p class="docs-distrato-porque">Consultando a situação deste título…</p>`;
+    box.style.display = "block";
+    const r = el.getBoundingClientRect();
+    const largura = box.offsetWidth || 340;
+    const altura = box.offsetHeight || 180;
+    let left = Math.min(window.innerWidth - largura - 8, Math.max(8, r.right - largura));
+    let top = r.top - altura - 8;
+    if (top < 8) top = Math.min(window.innerHeight - altura - 8, r.bottom + 8);
+    box.style.left = left + "px";
+    box.style.top = top + "px";
+  },
+
+  esconderCaixaDistrato() {
+    const box = document.getElementById("docs-distrato-caixa");
+    if (box) box.style.display = "none";
+  },
+
+  atualizarBotaoDistrato(titulo) {
+    const nodes = Array.from(document.querySelectorAll('[data-distrato-titulo="' + titulo + '"]'));
+    nodes.forEach((node) => {
+      const id = decodeURIComponent(node.getAttribute("data-distrato-id") || "");
+      const row = (this.itens || []).find((r) => String(r.id) === id);
+      if (!row) return;
+      node.outerHTML = this.botaoDistratoHtml(row);
+    });
+  },
+
+  async avaliarUmDistrato(row) {
+    const titulo = String((row && row.titulo) || "").replace(/\D/g, "");
+    if (!titulo) return;
+    this._avalDistrato = this._avalDistrato || {};
+    if (this._avalDistrato[titulo]) return;
+    let aval;
+    try {
+      const client = await this.clienteDoTitulo(row);
+      if (!client || !client.customerId || typeof window.cancelamentoMontarExtrato !== "function" || typeof window.cancelamentoPodeSeguir !== "function") {
+        aval = { ok: false, motivos: ["Não encontrei o título para calcular o distrato."], construcao: "—", pct: null, pago: null, restituicao: null, contrato: null };
+      } else {
+        if (!client.costCenterId) client.costCenterId = (row && row.centroId) || this.centroDe(row);
+        if (!client.unitName) client.unitName = this.nomeUnidade(row);
+        if (!client.saleId) client.saleId = titulo;
+        const obra = typeof window.cancelamentoLerConstrucao === "function"
+          ? await window.cancelamentoLerConstrucao(client)
+          : { temConstrucao: false, incerta: true, texto: "A consulta de construção ainda não retornou." };
+        const resumo = await window.cancelamentoMontarExtrato(client);
+        const nex = typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client);
+        const pode = window.cancelamentoPodeSeguir({
+          contrato: resumo.contrato,
+          pago: resumo.pago,
+          multa: resumo.multa,
+          restituicao: resumo.restituicao,
+          pctPago: resumo.pctPago,
+          temConstrucao: !!obra.temConstrucao,
+          construcaoIncerta: !!obra.incerta,
+          nexCumprida: !!nex
+        });
+        aval = {
+          ok: !!pode.ok,
+          motivos: pode.motivos || [],
+          pct: resumo.pctPago,
+          pago: resumo.pago,
+          restituicao: resumo.restituicao,
+          contrato: resumo.contrato,
+          construcao: (obra && obra.texto) || "—"
+        };
+      }
+    } catch (e) {
+      aval = { ok: false, motivos: ["Não foi possível consultar a situação deste título."], construcao: "—", pct: null, pago: null, restituicao: null, contrato: null };
+    }
+    this._avalDistrato[titulo] = aval;
+    this.atualizarBotaoDistrato(titulo);
+  },
+
+  avaliarDistratosVisiveis() {
+    const rows = this.visiveis().filter((r) => r && r.tipo === "distrato" && r.status !== "lancado");
+    const novos = [];
+    this._avalAndamento = this._avalAndamento || {};
+    rows.forEach((r) => {
+      const titulo = String(r.titulo || "").replace(/\D/g, "");
+      if (!titulo || (this._avalDistrato && this._avalDistrato[titulo]) || this._avalAndamento[titulo]) return;
+      this._avalAndamento[titulo] = true;
+      novos.push(r);
+    });
+    if (!novos.length) return;
+    this._filaAval = (this._filaAval || []).concat(novos);
+    if (this._consumindoAval) return;
+    this._consumindoAval = this.consumirAvaliacoes().finally(() => { this._consumindoAval = null; });
+  },
+
+  async consumirAvaliacoes() {
+    try {
+      if (typeof window.ensureFilaSignalsIndex === "function") await window.ensureFilaSignalsIndex();
+    } catch (e) {}
+    while (this._filaAval && this._filaAval.length) {
+      const lote = this._filaAval.splice(0, 3);
+      await Promise.all(lote.map((row) => this.avaliarUmDistrato(row)));
+    }
+  },
+
   async fazerDistrato(id) {
     const chave = decodeURIComponent(String(id || ""));
     const row = (this.itens || []).find((r) => String(r.id) === chave);
     if (!row || row.tipo !== "distrato" || row.status === "lancado") return;
+    const aval = this.avalDistrato(row);
+    if (!aval || !aval.ok) return;
     const client = await this.clienteDoTitulo(row);
     if (!client || !client.customerId) {
       alert("Não encontrei o título " + (row.titulo || "") + " para calcular o distrato.");
@@ -919,9 +1069,7 @@ const DocAssinaturaApp = {
     const linha = (r) => {
       const tem = !!r.pdfUrl;
       const chave = encodeURIComponent(String(r.id));
-      const distrato = r.tipo === "distrato" && r.status !== "lancado"
-        ? `<button type="button" class="btn btn-primary btn-sm" title="Avalia o distrato como na NEX cumprida: pago menor que 10% do contrato, restituição zero e lote sem construção. Se couber, pede a CND, confere o IPTU e a taxa associativa." onclick="DocAssinaturaApp.fazerDistrato('${chave}')">Fazer distrato</button>`
-        : "";
+      const distrato = this.botaoDistratoHtml(r);
       return `<tr>
             <td>${this.esc(this.quando(r.createdAt))}</td>
             <td>${this.esc(this.tipoLabel(r.tipo))}</td>
@@ -971,6 +1119,11 @@ const DocAssinaturaApp = {
       </div>
       ${tabela}`;
     if (window.lucide && lucide.createIcons) lucide.createIcons();
+    if (!this._caixaLigada) {
+      this._caixaLigada = true;
+      document.addEventListener("scroll", () => this.esconderCaixaDistrato(), true);
+    }
+    this.avaliarDistratosVisiveis();
   }
 };
 
