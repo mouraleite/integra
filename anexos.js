@@ -5026,76 +5026,120 @@ const AnexosApp = {
     }
   },
 
+  tagDoAnexoJuridico(f) {
+    if (!f) return "DOC";
+    const lista = Array.isArray(f.tags) ? f.tags : (f.tags ? [f.tags] : []);
+    const nomes = lista.map((t) => (typeof getTagName === "function" ? getTagName(t) : t)).filter(Boolean);
+    return nomes.join(", ") || "DOC";
+  },
+
+  podeApagarAnexoJuridico() {
+    const u = window.AppState && AppState.currentUser;
+    if (!u) return false;
+    if (typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal()) return true;
+    if (typeof window.crmVerComoAdmin === "function" && window.crmVerComoAdmin()) return true;
+    if (typeof window.isCrmAdministrator === "function" && window.isCrmAdministrator(u)) return true;
+    const rec = typeof window.findCrmRegisteredUser === "function" ? window.findCrmRegisteredUser(u) : null;
+    return typeof window.isCobrancaBackOfficeUser === "function" && window.isCobrancaBackOfficeUser(rec || u);
+  },
+
+  ordenarAnexosJuridico() {
+    this._jurOrdem = this._jurOrdem === "desc" ? "asc" : "desc";
+    this.renderAnexosJuridicoTab();
+  },
+
+  verAnexoJuridico(index) {
+    const item = this._jurUrls && this._jurUrls[index];
+    if (!item || !item.url) return;
+    window.open(item.url, "_blank", "noopener");
+  },
+
+  baixarAnexoJuridico(index) {
+    const item = this._jurUrls && this._jurUrls[index];
+    if (!item || !item.url) return;
+    const a = document.createElement("a");
+    a.href = item.url;
+    a.download = item.nome || "anexo";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
+  async apagarAnexoJuridico(index) {
+    if (!this.podeApagarAnexoJuridico()) return;
+    const customerId = typeof AppState !== "undefined" ? AppState.selectedCustomerId : null;
+    if (!customerId) return;
+    const files = await AnexosDB.load(customerId);
+    if (!files || !files[index]) return;
+    const tag = this.tagDoAnexoJuridico(files[index]);
+    const msg = "Apagar o anexo " + tag + "?";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
+    if (!ok) return;
+    files.splice(index, 1);
+    await AnexosDB.save(customerId, files);
+    this.renderAnexosJuridicoTab();
+  },
+
   async renderAnexosJuridicoTab() {
-    const listEl = document.getElementById('anexos-juridico-list');
+    const listEl = document.getElementById("anexos-juridico-list");
     if (!listEl) return;
-    
-    // Mostra estado de carregamento
     listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--color-text-muted);">Carregando documentos...</div>';
-    
-    const customerId = typeof AppState !== 'undefined' ? AppState.selectedCustomerId : null;
+    const customerId = typeof AppState !== "undefined" ? AppState.selectedCustomerId : null;
     if (!customerId) {
       listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--color-text-muted);">Selecione um cliente para ver os documentos.</div>';
       return;
     }
-    
     try {
       const files = await AnexosDB.load(customerId);
-      
-      if (!files || files.length === 0) {
-        listEl.innerHTML = `
-          <div style="text-align: center; padding: 30px; border: 1px dashed var(--color-border); border-radius: 8px;">
-            <i data-lucide="inbox" style="width: 32px; height: 32px; color: var(--color-text-muted); margin-bottom: 10px;"></i>
-            <div style="color: var(--color-text-muted);">Nenhum documento arquivado</div>
-          </div>
-        `;
-        if (window.lucide) window.lucide.createIcons();
-        return;
-      }
-      
-      let html = '';
-      files.forEach(f => {
-        // Criar URL de visualização/download
+      const podeApagar = this.podeApagarAnexoJuridico();
+      const dir = this._jurOrdem === "desc" ? -1 : 1;
+      const itens = (files || []).map((f, i) => ({ f, i, tag: this.tagDoAnexoJuridico(f) }));
+      itens.sort((a, b) => String(a.tag).localeCompare(String(b.tag), "pt-BR") * dir);
+      this._jurUrls = {};
+      const linhas = itens.map((item) => {
+        const f = item.f;
         let url = f.previewUrl;
         if (!url && f.file) {
-          try { url = URL.createObjectURL(f.file); } catch(e) {}
+          try { url = URL.createObjectURL(f.file); } catch (e) { url = ""; }
         }
-        
-        const ext = f.ext || (f.originalName || '').split('.').pop();
-        if (!Array.isArray(f.tags)) f.tags = f.tags ? [f.tags] : [];
-        const tagLabel = (typeof getTagName === 'function' ? getTagName(f.tags[0]) : f.tags[0]) || 'DOC';
-        
-        html += `
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 15px; border: 1px solid var(--color-border); border-radius: 8px; background: white;">
-            <div style="display: flex; align-items: center; gap: 15px;">
-              <div style="width: 40px; height: 40px; border-radius: 8px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; color: var(--color-primary);">
-                <i data-lucide="file-text" style="width: 20px;"></i>
-              </div>
-              <div>
-                <strong style="font-size: 1rem; color: var(--color-text); display: block; margin-bottom: 4px;">${tagLabel} - ${f.originalName || f.file?.name}</strong>
-                <div style="font-size: 0.8rem; color: var(--color-text-muted); display: flex; gap: 10px; align-items: center;">
-                  <span style="background: #e2e8f0; padding: 2px 8px; border-radius: 12px; font-weight: 500;">Tag: ${f.tags.join(', ')}</span>
-                  <span>Tamanho: ${(f.size / 1024 / 1024).toFixed(2)} MB</span>
-                </div>
-              </div>
-            </div>
-            
-            <div>
-              ${url ? `
-                <a href="${url}" download="${tagLabel} - ${f.originalName || f.file?.name}" class="btn btn-outline" style="border-color: var(--color-primary); color: var(--color-primary); padding: 6px 12px; display: inline-flex; align-items: center; gap: 6px; text-decoration: none;">
-                  <i data-lucide="download" style="width: 16px;"></i> Baixar Arquivo
-                </a>
-              ` : '<span style="color: var(--color-text-muted); font-size: 0.85rem;">Indisponível</span>'}
-            </div>
-          </div>
-        `;
-      });
-      
-      listEl.innerHTML = html;
+        const ext = String(f.ext || (f.originalName || "").split(".").pop() || "pdf").replace(/[^\w]/g, "") || "pdf";
+        const nome = item.tag.replace(/[\\/]+/g, " ") + "." + ext;
+        this._jurUrls[item.i] = { url: url || "", nome: nome };
+        const acoes = url ? `
+          <button type="button" class="tvig-ico" title="Visualizar" onclick="AnexosApp.verAnexoJuridico(${item.i})">
+            <i data-lucide="eye" style="width:15px;height:15px;"></i>
+          </button>
+          <button type="button" class="tvig-ico" title="Baixar" onclick="AnexosApp.baixarAnexoJuridico(${item.i})">
+            <i data-lucide="download" style="width:15px;height:15px;"></i>
+          </button>` : "";
+        const apagar = podeApagar ? `
+          <button type="button" class="tvig-ico is-danger" title="Excluir" onclick="AnexosApp.apagarAnexoJuridico(${item.i})">
+            <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+          </button>` : "";
+        return `
+          <tr>
+            <td class="cc-nome" title="${this.esc ? this.esc(item.tag) : String(item.tag).replace(/"/g, "&quot;")}">${String(item.tag).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>
+            <td class="is-right" style="overflow:visible;white-space:nowrap;">${acoes}${apagar}</td>
+          </tr>`;
+      }).join("");
+      listEl.innerHTML = `
+        <div class="cc-scroll">
+          <table class="cc-table">
+            <colgroup><col><col style="width:148px"></colgroup>
+            <thead>
+              <tr>
+                <th onclick="AnexosApp.ordenarAnexosJuridico()" style="cursor:pointer;user-select:none;">Tag <i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i></th>
+                <th class="is-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${linhas || '<tr><td colspan="2" style="text-align:center;padding:28px;color:#64748b;">Nenhum documento arquivado.</td></tr>'}
+            </tbody>
+          </table>
+        </div>`;
       if (window.lucide) window.lucide.createIcons();
-      
     } catch (e) {
-      console.error('Erro ao carregar anexos jurídicos', e);
+      console.error("Erro ao carregar anexos jurídicos", e);
       listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--color-danger);">Erro ao carregar os documentos.</div>';
     }
   }

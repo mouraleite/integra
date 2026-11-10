@@ -9414,6 +9414,11 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 
 /* Comercial · Tabelas vigentes */
 .tvig-page { padding: 4px 0 28px; }
+.tvig-tabs { margin-bottom: 16px; }
+.cc-table.tvig-m2-table { min-width: 860px; }
+.tvig-m2-pct { display: flex; flex-direction: column; gap: 4px; margin: 0; font-size: 0.72rem; font-weight: 700; color: #475569; }
+.tvig-m2-pct input { height: 36px; width: 120px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0 10px; background: #fff; font-size: 0.9rem; color: #0f172a; font-weight: 600; }
+.tvig-m2-pct input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
 .tvig-params { overflow: visible; margin-bottom: 18px; gap: 0.85rem; }
 .tvig-page-title {
   display: flex;

@@ -53996,6 +53996,7 @@ window.SYNC_KEYS = [
     "crm_compromissario_cessao_v1",
     "crm_compras_prazo_lancamento_v1",
     "crm_engenharia_acompanhamento_obra",
+    "crm_moura_valor_padrao_m2",
     "crm_engenharia_caucao_liberados_v1",
     "crm_engenharia_caucao_prorrogacao_v1",
     "crm_engenharia_caucao_avisos_v1",

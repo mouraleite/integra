@@ -33,8 +33,38 @@ const TabelasVigentesApp = {
     openEmp: false,
     qCity: "",
     qEmp: "",
-    editor: null
+    editor: null,
+    aba: "tabelas",
+    m2: null,
+    m2Ordem: "cidade",
+    m2Dir: "asc"
   },
+
+  M2_KEY: "crm_moura_valor_padrao_m2",
+  M2_BASE: [
+    ["Araçariguama", "Reserva do Araçari", "14201", 957.14, 996.77],
+    ["Avaré", "Reserva Central Parque", "13700", 543.83, 566.35],
+    ["Avaré", "Reserva Central Parque", "13800", 703.51, 732.64],
+    ["Botucatu", "Livia", "13300", 470, 489.46],
+    ["Botucatu", "Livia I", "13400", 470, 489.46],
+    ["Botucatu", "Livia II", "13500", 470, 489.46],
+    ["Botucatu", "Livia II (somente QD \"P\")", "13500", 470, 489.46],
+    ["Botucatu", "Reserva Central Parque", "13600", 950, 989.33],
+    ["Botucatu", "Parque Cidade", "14100", 497, 517.58],
+    ["Botucatu", "Gleba C", "14500", 576.43, 600.30],
+    ["Cerqueira César", "Chácara (Lote 250m²)", "10100", 300, 312.42],
+    ["Cerqueira César", "Chácara (Lote 250m²)", "10101", 300, 312.42],
+    ["Cerqueira César", "Jardim Primavera", "10200", 300, 312.42],
+    ["Cerqueira César", "Jardim Primavera III", "10300", 300, 312.42],
+    ["Cerqueira César", "Jardim Tropical", "12200", 300, 312.42],
+    ["Cerqueira César", "Novo Horizonte", "13200", 320, 333.25],
+    ["Fartura", "Jardim da Serra II", "11900", 350, 364.49],
+    ["Fartura", "Jardim da Serra III", "12000", 350, 364.49],
+    ["Piraju", "Jardim Tropical", "11300", 352, 366.58],
+    ["Piraju", "Alto da Bela Vista", "13100", 352, 366.58],
+    ["Taguaí", "Jardim dos Ipês", "12400", 300, 450],
+    ["Taguaí", "Jardim dos Ipês II", "12800", 300, 450]
+  ],
 
   esc(s) {
     return String(s == null ? "" : s)
@@ -711,11 +741,36 @@ const TabelasVigentesApp = {
     if (window.lucide) lucide.createIcons();
   },
 
+  setAba(id) {
+    this.state.aba = id === "m2" ? "m2" : "tabelas";
+    this.renderPage();
+  },
+
   renderPage() {
     const root = document.getElementById("tabelas-vigentes-root");
     if (!root) return;
-    if (!this.state.competencia) this.state.competencia = this.currentCompetencia();
+    const aba = this.state.aba === "m2" ? "m2" : "tabelas";
+    const tab = (id, icon, label) => `
+      <button type="button" role="tab" aria-selected="${aba === id}"
+        class="ml-tab ${aba === id ? "is-active" : ""}"
+        onclick="TabelasVigentesApp.setAba('${id}')"><i data-lucide="${icon}"></i> ${label}</button>`;
     root.innerHTML = `
+      <div class="ml-tabs tvig-tabs" role="tablist">
+        ${tab("tabelas", "table", "Tabelas vigentes")}
+        ${tab("m2", "ruler", "Valor padrão m²")}
+      </div>
+      <div id="tvig-aba-corpo"></div>
+      <div id="tvig-editor-overlay" class="modal-overlay tvig-editor-overlay" style="display:none;"></div>`;
+    if (aba === "m2") this.renderM2();
+    else this.renderTabelas();
+    if (window.lucide) lucide.createIcons();
+  },
+
+  renderTabelas() {
+    const box = document.getElementById("tvig-aba-corpo");
+    if (!box) return;
+    if (!this.state.competencia) this.state.competencia = this.currentCompetencia();
+    box.innerHTML = `
       <div class="tvig-page">
         <div class="search-filter-panel tvig-params">
           <h3 class="tvig-section-title">Parâmetros da consulta</h3>
@@ -740,11 +795,238 @@ const TabelasVigentesApp = {
         </div>
         <h3 class="tvig-section-title">Resultados da consulta</h3>
         <div id="tvig-results"></div>
-      </div>
-      <div id="tvig-editor-overlay" class="modal-overlay tvig-editor-overlay" style="display:none;"></div>`;
+      </div>`;
     this.paintFilters();
     this.renderList();
-    if (window.lucide) lucide.createIcons();
+  },
+
+  m2Seed() {
+    return {
+      indice: "IPCA-12",
+      correcoes: { "2026": 4.14 },
+      linhas: this.M2_BASE.map((r, i) => ({
+        id: "m2-" + r[2] + "-" + i,
+        cidade: r[0],
+        empreendimento: r[1],
+        cc: r[2],
+        valores: { "2025": r[3], "2026": r[4] }
+      }))
+    };
+  },
+
+  loadM2() {
+    if (this.state.m2) return;
+    let raw = null;
+    try { raw = localStorage.getItem(this.M2_KEY); } catch (e) {}
+    if (raw == null) {
+      this.state.m2 = this.m2Seed();
+      this.saveM2();
+      return;
+    }
+    try {
+      const o = JSON.parse(raw);
+      if (o && Array.isArray(o.linhas) && o.linhas.length) this.state.m2 = o;
+      else this.state.m2 = this.m2Seed();
+    } catch (e) {
+      this.state.m2 = this.m2Seed();
+    }
+    if (!this.state.m2.correcoes) this.state.m2.correcoes = { "2026": 4.14 };
+    if (this.state.m2.correcoes["2026"] == null) this.state.m2.correcoes["2026"] = 4.14;
+  },
+
+  saveM2() {
+    try { localStorage.setItem(this.M2_KEY, JSON.stringify(this.state.m2)); } catch (e) {}
+  },
+
+  anoAtual() {
+    return new Date().getFullYear();
+  },
+
+  anosM2() {
+    const anos = [2025, 2026];
+    const atual = this.anoAtual();
+    for (let y = 2027; y <= atual; y++) anos.push(y);
+    return anos;
+  },
+
+  reais(n) {
+    const v = Number(n);
+    if (!isFinite(v)) return null;
+    return Math.round((v + Number.EPSILON) * 100) / 100;
+  },
+
+  dinheiro(n) {
+    const v = this.reais(n);
+    if (v == null) return "—";
+    return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  pctTexto(n) {
+    const v = Number(n);
+    if (!isFinite(v)) return "";
+    return String(v).replace(".", ",");
+  },
+
+  lerPct(texto) {
+    const n = parseFloat(String(texto || "").trim().replace(/\s/g, "").replace("%", "").replace(",", "."));
+    return isFinite(n) ? n : null;
+  },
+
+  ordenarM2(campo) {
+    if (this.state.m2Ordem === campo) this.state.m2Dir = this.state.m2Dir === "asc" ? "desc" : "asc";
+    else {
+      this.state.m2Ordem = campo;
+      this.state.m2Dir = "asc";
+    }
+    this.renderPage();
+  },
+
+  linhasM2() {
+    const campo = this.state.m2Ordem || "cidade";
+    const dir = this.state.m2Dir === "desc" ? -1 : 1;
+    const linhas = (this.state.m2 && this.state.m2.linhas) || [];
+    return linhas.slice().sort((a, b) => {
+      if (campo === "cc") return (Number(a.cc) - Number(b.cc)) * dir;
+      if (/^\d{4}$/.test(campo)) {
+        const av = Number(a.valores && a.valores[campo]);
+        const bv = Number(b.valores && b.valores[campo]);
+        return ((isFinite(av) ? av : -1) - (isFinite(bv) ? bv : -1)) * dir;
+      }
+      const c = String(a[campo] || "").localeCompare(String(b[campo] || ""), "pt-BR");
+      if (c) return c * dir;
+      return (Number(a.cc) - Number(b.cc)) * dir;
+    });
+  },
+
+  renderM2() {
+    const box = document.getElementById("tvig-aba-corpo");
+    if (!box) return;
+    this.loadM2();
+    const anos = this.anosM2();
+    const atual = this.anoAtual();
+    const pedePct = atual >= 2027;
+    const pctAno = this.state.m2.correcoes && this.state.m2.correcoes[String(atual)];
+    const th = (campo, label, centro) => `<th class="${centro ? "is-right" : ""}" onclick="TabelasVigentesApp.ordenarM2('${campo}')" style="cursor:pointer;user-select:none;">${this.esc(label)} <i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i></th>`;
+    const linhas = this.linhasM2();
+    const corpo = linhas.map((r) => `
+      <tr>
+        <td class="cc-nome" title="${this.esc(r.cidade)}">${this.esc(r.cidade)}</td>
+        <td class="cc-nome" title="${this.esc(r.empreendimento)}">${this.esc(r.empreendimento)}</td>
+        <td><strong>${this.esc(r.cc)}</strong></td>
+        ${anos.map((ano) => `<td class="is-right">${this.dinheiro(r.valores && r.valores[String(ano)])}</td>`).join("")}
+        ${pedePct ? `<td class="is-right aobra-acoes">
+          <button type="button" class="tvig-ico" title="Ajustar ${atual}" onclick="TabelasVigentesApp.abrirM2Linha('${this.esc(r.id)}')">
+            <i data-lucide="pencil" style="width:15px;height:15px;"></i>
+          </button>
+        </td>` : ""}
+      </tr>`).join("");
+    box.innerHTML = `
+      <div class="cc-page">
+        <div class="cc-toolbar">
+          <p class="aobra-help">Índice de correção 2026: IPCA-12 · 4,14%. Os valores de 2025 e 2026 já estão na tabela.${pedePct ? " Informe o percentual de " + atual + " para calcular a partir de " + (atual - 1) + "." : " O campo do percentual abre em 2027, quando o ano virar."}</p>
+          ${pedePct ? `<div class="cc-toolbar-actions">
+            <label class="tvig-m2-pct">Percentual de correção ${atual}
+              <input type="text" id="tvig-m2-pct" inputmode="decimal" placeholder="0,00" value="${this.esc(this.pctTexto(pctAno))}">
+            </label>
+            <button type="button" class="btn btn-primary cc-atualizar" onclick="TabelasVigentesApp.aplicarCorrecaoM2()">Aplicar</button>
+          </div>` : ""}
+        </div>
+        <div class="cc-scroll">
+          <table class="cc-table tvig-m2-table">
+            <colgroup>
+              <col style="width:16%"><col><col style="width:88px">
+              ${anos.map(() => '<col style="width:120px">').join("")}
+              ${pedePct ? '<col style="width:52px">' : ""}
+            </colgroup>
+            <thead>
+              <tr>
+                ${th("cidade", "Cidade")}
+                ${th("empreendimento", "Empreendimento")}
+                ${th("cc", "Centro de custo")}
+                ${anos.map((ano) => th(String(ano), "Valor por m² " + ano, true)).join("")}
+                ${pedePct ? '<th class="is-right">Ações</th>' : ""}
+              </tr>
+            </thead>
+            <tbody>${corpo || `<tr><td colspan="${3 + anos.length}" style="text-align:center;padding:28px;">Nenhum valor cadastrado.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+      <div id="tvig-m2-overlay" class="modal-overlay" onclick="if (event.target === this) TabelasVigentesApp.fecharM2()"></div>`;
+  },
+
+  aplicarCorrecaoM2() {
+    const ano = this.anoAtual();
+    if (ano < 2027) return;
+    this.loadM2();
+    const el = document.getElementById("tvig-m2-pct");
+    const pct = this.lerPct(el && el.value);
+    if (pct == null) {
+      alert("Informe o percentual de correção.");
+      return;
+    }
+    const anterior = String(ano - 1);
+    const fator = 1 + pct / 100;
+    (this.state.m2.linhas || []).forEach((linha) => {
+      const base = this.reais(linha.valores && linha.valores[anterior]);
+      if (base == null) return;
+      if (!linha.valores) linha.valores = {};
+      linha.valores[String(ano)] = this.reais(base * fator);
+    });
+    if (!this.state.m2.correcoes) this.state.m2.correcoes = {};
+    this.state.m2.correcoes[String(ano)] = pct;
+    this.saveM2();
+    this.renderPage();
+  },
+
+  abrirM2Linha(id) {
+    const ano = this.anoAtual();
+    if (ano < 2027) return;
+    this.loadM2();
+    const linha = (this.state.m2.linhas || []).find((r) => String(r.id) === String(id));
+    const ov = document.getElementById("tvig-m2-overlay");
+    if (!linha || !ov) return;
+    const valor = linha.valores && linha.valores[String(ano)];
+    ov.innerHTML = `
+      <div class="modal-box aobra-modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Valor ${ano} · ${this.esc(linha.cc)}</h3>
+          <button type="button" class="btn btn-fechar" onclick="TabelasVigentesApp.fecharM2()">Fechar</button>
+        </div>
+        <p class="aobra-help" style="margin-bottom:12px;">${this.esc(linha.cidade)} · ${this.esc(linha.empreendimento)}. Use este campo quando o valor não seguir o percentual.</p>
+        <label class="tvig-m2-pct">Valor por m² ${ano}
+          <input type="text" id="tvig-m2-valor" inputmode="decimal" value="${valor == null ? "" : this.esc(this.pctTexto(valor))}">
+        </label>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+          <button type="button" class="btn btn-primary" onclick="TabelasVigentesApp.salvarM2Linha('${this.esc(linha.id)}')">Salvar</button>
+        </div>
+      </div>`;
+    ov.classList.add("active");
+    const campo = document.getElementById("tvig-m2-valor");
+    if (campo) campo.focus();
+  },
+
+  fecharM2() {
+    const ov = document.getElementById("tvig-m2-overlay");
+    if (!ov) return;
+    ov.classList.remove("active");
+    ov.innerHTML = "";
+  },
+
+  salvarM2Linha(id) {
+    const ano = String(this.anoAtual());
+    this.loadM2();
+    const linha = (this.state.m2.linhas || []).find((r) => String(r.id) === String(id));
+    if (!linha) return;
+    const valor = this.lerPct(document.getElementById("tvig-m2-valor") && document.getElementById("tvig-m2-valor").value);
+    if (valor == null || valor < 0) {
+      alert("Informe o valor por m².");
+      return;
+    }
+    if (!linha.valores) linha.valores = {};
+    linha.valores[ano] = this.reais(valor);
+    this.saveM2();
+    this.fecharM2();
+    this.renderPage();
   },
 
   findTable(id) {
@@ -1832,6 +2114,7 @@ const TabelasVigentesApp = {
     if (!this.state.inited) {
       if (!this.state.competencia) this.state.competencia = this.currentCompetencia();
       this.loadLocal();
+      this.loadM2();
       this.renderPage();
       this.state.loading = true;
       await this.loadCatalog();
