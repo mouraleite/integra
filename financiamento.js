@@ -1088,6 +1088,8 @@ const FinanciamentoApp = {
   },
 
   async prepararTagsUnidade() {
+    const atual = FinanciamentoState.process && FinanciamentoState.process.currentStageId;
+    if (atual) this.pintarTag(atual);
     if (window.AnexosApp && typeof window.AnexosApp.loadTagsAtivas === "function") {
       try { await window.AnexosApp.loadTagsAtivas(); } catch (e) {}
     }
@@ -1096,15 +1098,82 @@ const FinanciamentoApp = {
       if (window.AnexosApp && typeof window.AnexosApp.tagDestino === "function") return window.AnexosApp.tagDestino(t) === "Unidade";
       return true;
     });
-    document.querySelectorAll("select.fin-tag").forEach((sel) => {
-      const atual = sel.value;
-      if (!this._tagsUnidade.length) {
-        sel.innerHTML = '<option value="">Nenhuma tag de unidade</option>';
-        return;
+    this._tagsProntas = true;
+    const proc = FinanciamentoState.process;
+    if (proc && proc.currentStageId) this.pintarTag(proc.currentStageId);
+  },
+
+  tagUi(stageId) {
+    this._tagUi = this._tagUi || {};
+    if (!this._tagUi[stageId]) this._tagUi[stageId] = { open: false, query: "", value: "" };
+    return this._tagUi[stageId];
+  },
+
+  tagEscolhida(stageId) {
+    return String((this.tagUi(stageId).value) || "");
+  },
+
+  itensTag() {
+    return (this._tagsUnidade || []).map((t) => ({ id: t.name, label: t.name }));
+  },
+
+  opcoesTag(stageId) {
+    const ui = this.tagUi(stageId);
+    const items = this.itensTag();
+    return {
+      id: "fin-tag-" + stageId,
+      label: "Tag",
+      items: items,
+      selectedIds: ui.value ? [ui.value] : [],
+      open: !!ui.open,
+      query: ui.query || "",
+      single: true,
+      emptyMeansAll: false,
+      emptyLabel: "Escolha a tag",
+      keepOrder: true,
+      extraClass: "ml-emp-filter--corte",
+      nouns: {
+        singular: "tag",
+        plural: "tags",
+        none: this._tagsProntas ? "Nenhuma tag de unidade" : "Carregando tags…",
+        noMatch: "Nenhuma tag com esse nome."
       }
-      sel.innerHTML = '<option value="">Escolha a tag</option>' + this._tagsUnidade.map((t) => `<option value="${this.esc(t.name)}">${this.esc(t.name)}</option>`).join("");
-      if (atual) sel.value = atual;
+    };
+  },
+
+  ligarTag(stageId) {
+    if (!window.MlEmpresaFilter) return;
+    const ui = this.tagUi(stageId);
+    window.MlEmpresaFilter.bind("fin-tag-" + stageId, {
+      toggleOpen: () => { ui.open = !ui.open; this.pintarTag(stageId); },
+      close: () => { ui.open = false; this.pintarTag(stageId); },
+      setQuery: (q) => { ui.query = q; this.pintarTagLista(stageId); },
+      toggleId: (itemId, on) => {
+        ui.value = on ? String(itemId) : "";
+        ui.open = true;
+        this.pintarTag(stageId);
+      }
     });
+  },
+
+  pintarTag(stageId) {
+    const box = document.getElementById("fin-tag-box-" + stageId);
+    if (!box || !window.MlEmpresaFilter) return;
+    this.ligarTag(stageId);
+    box.innerHTML = window.MlEmpresaFilter.html(this.opcoesTag(stageId));
+    if (window.lucide) {
+      const root = box.querySelector(".ml-emp-filter") || box;
+      lucide.createIcons({ root: root });
+    }
+  },
+
+  pintarTagLista(stageId) {
+    const list = document.getElementById("fin-tag-" + stageId + "-list");
+    if (!list || !window.MlEmpresaFilter) {
+      this.pintarTag(stageId);
+      return;
+    }
+    list.innerHTML = window.MlEmpresaFilter.listHtml(this.opcoesTag(stageId));
   },
 
   arquivosDaArea(data) {
@@ -1144,9 +1213,7 @@ const FinanciamentoApp = {
     const st = document.getElementById("fin-st-" + stageId);
     const nomes = this.pendentesDe(stageId).map((f) => f.name).filter(Boolean);
     if (!st || !nomes.length) return;
-    st.textContent = nomes.join(", ") + (document.getElementById("fin-tag-" + stageId) && document.getElementById("fin-tag-" + stageId).value
-      ? ""
-      : " — escolha a tag da unidade para gravar.");
+    st.textContent = nomes.join(", ") + " — clique em Enviar para a unidade.";
   },
 
   ligarEtapa() {
@@ -1162,7 +1229,6 @@ const FinanciamentoApp = {
       const id = (e.target && e.target.id) || "";
       if (id.indexOf("fin-nota-data-") === 0) this.persistirRascunho(id.slice("fin-nota-data-".length));
       if (id.indexOf("fin-arq-") === 0) this.aoEscolherArquivo(id.slice("fin-arq-".length));
-      if (id.indexOf("fin-tag-") === 0) this.aoEscolherTag(id.slice("fin-tag-".length));
     });
     root.addEventListener("focusout", (e) => {
       const id = (e.target && e.target.id) || "";
@@ -1183,12 +1249,6 @@ const FinanciamentoApp = {
     if (!files.length) return;
     this.guardarPendentes(stageId, files);
     if (arq) arq.value = "";
-    const tag = document.getElementById("fin-tag-" + stageId);
-    if (tag && tag.value) this.enviarAnexo(stageId);
-  },
-
-  aoEscolherTag(stageId) {
-    if (this.pendentesDe(stageId).length) this.enviarAnexo(stageId);
   },
 
   aoColar(e) {
@@ -1199,16 +1259,13 @@ const FinanciamentoApp = {
     if (!stageId) return;
     e.preventDefault();
     this.guardarPendentes(stageId, files);
-    const tag = document.getElementById("fin-tag-" + stageId);
-    if (tag && tag.value) this.enviarAnexo(stageId);
   },
 
   async enviarAnexo(stageId, listaForcada) {
     const proc = FinanciamentoState.process;
-    const tagEl = document.getElementById("fin-tag-" + stageId);
     const btn = document.getElementById("fin-env-" + stageId);
     const st = document.getElementById("fin-st-" + stageId);
-    const tag = tagEl && tagEl.value;
+    const tag = this.tagEscolhida(stageId);
     const files = listaForcada && listaForcada.length ? listaForcada : this.pendentesDe(stageId).slice();
     if (!proc) return false;
     if (String(proc.currentStageId || "") !== String(stageId)) return false;
@@ -1471,20 +1528,10 @@ const FinanciamentoApp = {
     this.fixarNota(stageId);
     proc = FinanciamentoState.process;
     if (this.pendentesDe(stageId).length) {
-      const tagEl = document.getElementById("fin-tag-" + stageId);
-      if (!tagEl || !tagEl.value) {
-        const st = document.getElementById("fin-st-" + stageId);
-        if (st) st.textContent = "Escolha a tag da unidade para gravar o anexo antes de concluir a etapa.";
-        if (btn) btn.disabled = false;
-        return;
-      }
-      const enviou = await this.enviarAnexo(stageId);
-      if (!enviou) {
-        if (btn) btn.disabled = false;
-        return;
-      }
-      proc = FinanciamentoState.process;
-      if (!proc || String(proc.currentStageId || "") !== String(stageId)) return;
+      const st = document.getElementById("fin-st-" + stageId);
+      if (st) st.textContent = "Clique em Enviar para a unidade antes de concluir a etapa.";
+      if (btn) btn.disabled = false;
+      return;
     }
     const proxima = folhas[idx + 1];
     const tinhaDone = !!(proxima && proc.done && (proc.done[proxima.id] || proc.done[String(proxima.id)]));
@@ -1630,6 +1677,7 @@ const FinanciamentoApp = {
   fluxoHtml() {
     const proc = FinanciamentoState.process || {};
     const customer = (FinanciamentoState.selected && FinanciamentoState.selected.customer) || FinanciamentoState.customer || {};
+    const obra = this.obraDoProc(proc);
     const catalog = typeof window.buildFinanciamentoStageCatalog === "function"
       ? window.buildFinanciamentoStageCatalog()
       : [];
@@ -1650,11 +1698,12 @@ const FinanciamentoApp = {
             <i data-lucide="landmark" style="width:18px;"></i> Financiamento iniciado
           </h3>
         </div>
-        <div class="crm-card-content" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-          <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Cliente</div><div style="font-weight:700;color:#0f172a;">${this.esc(proc.customerName || customer.name || "—")}</div></div>
-          <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Contrato</div><div style="font-weight:700;color:#0f172a;">${this.esc(proc.contractNumber || "—")}</div></div>
-          <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Título</div><div style="font-weight:700;color:#0f172a;">${this.esc(proc.titulo || "—")}</div></div>
-          <div><div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;font-weight:700;">Unidade</div><div style="font-weight:700;color:#0f172a;">${this.esc(this.formatUnidade(proc.unit || "—"))}</div></div>
+        <div class="crm-card-content fin-topo">
+          <div title="${this.esc(obra.empresa)}"><div>Empresa</div><div class="fin-topo-val">${this.esc(obra.empresa)}</div></div>
+          <div title="${this.esc(obra.empreendimento)}"><div>Empreendimento</div><div class="fin-topo-val">${this.esc(obra.empreendimento)}</div></div>
+          <div title="${this.esc(proc.contractNumber || "—")}"><div>Contrato</div><div class="fin-topo-val">${this.esc(proc.contractNumber || "—")}</div></div>
+          <div title="${this.esc(proc.titulo || "—")}"><div>Título</div><div class="fin-topo-val">${this.esc(proc.titulo || "—")}</div></div>
+          <div title="${this.esc(this.formatUnidade(proc.unit || "—"))}"><div>Unidade</div><div class="fin-topo-val">${this.esc(this.formatUnidade(proc.unit || "—"))}</div></div>
         </div>
       </div>
       <div class="crm-card" style="margin-bottom:16px;">
@@ -1682,11 +1731,16 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
             #financiamento-root .fin-nota textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font: inherit; background: #fff; min-height: 52px; resize: vertical; }
             #financiamento-root .fin-nota-linha { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
-            #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+            #financiamento-root .fin-topo { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+            #financiamento-root .fin-topo > div > div:first-child { font-size: 0.7rem; color: #64748b; text-transform: uppercase; font-weight: 700; }
+            #financiamento-root .fin-topo-val { font-weight: 700; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+            #financiamento-root .fin-tag-box { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
+            #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
             #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
           </style>
-          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
+          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
           ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
           ${ativoIdx < 0 && folhas.length ? '<p style="margin:-4px 0 12px;color:#105436;font-size:0.82rem;font-weight:700;">Financiamento concluído.</p>' : ""}
           ${!etapas.length ? '<p style="color:#64748b;">Nenhuma etapa cadastrada. Cadastre em Financiamento → Configurações.</p>' : etapas.map((s) => {
@@ -1735,9 +1789,9 @@ const FinanciamentoApp = {
               </div>
               <div class="fin-anexo">
                 <input type="file" id="fin-arq-${sid}" multiple style="max-width:240px;font-size:0.8rem;">
-                <select id="fin-tag-${sid}" class="fin-tag form-control" style="max-width:220px;height:36px;"><option value="">Carregando tags…</option></select>
+                <div id="fin-tag-box-${sid}" class="fin-tag-box"></div>
                 <button type="button" class="btn btn-primary btn-sm" id="fin-env-${sid}" onclick="FinanciamentoApp.enviarAnexo('${sid}')">Enviar para a unidade</button>
-                <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">Vários arquivos podem entrar nesta etapa. Cole com Ctrl+V para gravar o documento.</p>
+                <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">Vários arquivos podem entrar nesta etapa. Cole com Ctrl+V e clique em Enviar para a unidade.</p>
                 <p id="fin-st-${sid}" style="margin:0;flex-basis:100%;color:#b45309;font-size:0.78rem;"></p>
               </div>
             </div>` : "";
