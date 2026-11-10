@@ -19,17 +19,32 @@ const FollowupCndApp = {
     return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
   },
 
+  colarLetrasSoltas(texto) {
+    const partes = String(texto || "").split(/(\s+)/);
+    let out = "";
+    partes.forEach(function(p, i) {
+      if (/^\s+$/.test(p)) return;
+      const sep = i > 0 ? partes[i - 1] : "";
+      const sola = /^[A-Z0-9]$/i.test(p);
+      const cola = sep === " " && sola && /[A-Z0-9]$/i.test(out);
+      if (!cola && out && sep) out += (sep.length > 1 ? " " : sep);
+      out += p;
+    });
+    return out;
+  },
+
   classificarTexto(texto) {
-    const t = this.semAcento(texto).replace(/\s+/g, " ");
+    const t = this.colarLetrasSoltas(this.semAcento(texto)).replace(/\s+/g, " ").trim();
     if (!t.trim()) {
       return { tipo: "ilegivel", certidao: false, follow: false, rotulo: "PDF sem texto" };
     }
-    const temCertidao = /CERTIDAO/.test(t);
-    const temPrefeitura = /PREFEITURA|MUNICIPIO|MUNICIPAL|CADASTRO IMOBILIARIO|SECRETARIA/.test(t);
-    const certidao = temCertidao && (temPrefeitura || /IPTU/.test(t));
+    const quiteMunicipal = /ENCONTRA\s*-?\s*SE QUITE|QUITE COM OS COFRES|NEGATIVA DO IMOBILIARIO/.test(t);
+    const temCertidao = /CERTIDAO/.test(t) || quiteMunicipal;
+    const temPrefeitura = /PREFEITURA|MUNICIPIO|MUNICIPAL|CADASTRO IMOBILIARIO|SECRETARIA|COFRES MUNICIPAIS|FIORILLI/.test(t);
+    const certidao = temCertidao && (temPrefeitura || /IPTU/.test(t) || quiteMunicipal);
     const efeito = /POSITIVA COM EFEITO|EFEITO DE NEGATIVA|CND COM EFEITO POSITIV|COM EFEITO POSITIV/.test(t);
     const positiva = /CERTIDAO POSITIVA|POSITIVA DE DEBITO|POSITIVA DO CADASTRO/.test(t);
-    const negativa = /CERTIDAO NEGATIVA|NEGATIVA DE DEBITO/.test(t);
+    const negativa = /CERTIDAO NEGATIVA|NEGATIVA DE DEBITO|NEGATIVA DO IMOBILIARIO|ENCONTRA\s*-?\s*SE QUITE|QUITE COM OS COFRES/.test(t);
     if (certidao && efeito) return { tipo: "cpen", certidao: true, follow: true, rotulo: "CND com efeito positiva" };
     if (certidao && positiva) return { tipo: "cpd", certidao: true, follow: true, rotulo: "CPD (certidão positiva de débitos)" };
     if (certidao && negativa) return { tipo: "cnd", certidao: true, follow: false, rotulo: "CND (certidão negativa de débitos)" };
@@ -41,17 +56,51 @@ const FollowupCndApp = {
     return { tipo: "outro", certidao: false, follow: false, rotulo: "outro documento" };
   },
 
+  juntarItensPdf(items) {
+    const linhas = [];
+    (items || []).forEach(function(it) {
+      const s = it && it.str ? String(it.str) : "";
+      if (!s.trim()) return;
+      const tr = it.transform || [];
+      const x = Number(tr[4]) || 0;
+      const y = Number(tr[5]) || 0;
+      const h = Number(it.height) || Math.abs(Number(tr[3]) || 0) || 10;
+      const w = Number(it.width) || s.length * h * 0.45;
+      let linha = null;
+      for (let i = 0; i < linhas.length; i++) {
+        if (Math.abs(linhas[i].y - y) <= Math.max(h, linhas[i].h) * 0.45) { linha = linhas[i]; break; }
+      }
+      if (!linha) {
+        linha = { y: y, h: h, itens: [] };
+        linhas.push(linha);
+      }
+      linha.itens.push({ x: x, s: s, w: w, h: h });
+    });
+    linhas.sort(function(a, b) { return b.y - a.y; });
+    return linhas.map(function(l) {
+      l.itens.sort(function(a, b) { return a.x - b.x; });
+      let out = "";
+      let fim = null;
+      l.itens.forEach(function(it) {
+        if (fim != null && it.x - fim > Math.max(it.h, 8) * 0.22) out += " ";
+        out += it.s;
+        fim = it.x + it.w;
+      });
+      return out;
+    }).join("\n");
+  },
+
   async lerPdf(file) {
     const lib = window["pdfjs-dist/build/pdf"] || window.pdfjsLib;
     if (!lib || !file) return "";
     const buf = await file.arrayBuffer();
     const pdf = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
     let text = "";
-    const pages = Math.min(pdf.numPages || 1, 2);
+    const pages = Math.min(pdf.numPages || 1, 4);
     for (let p = 1; p <= pages; p++) {
       const page = await pdf.getPage(p);
       const tc = await page.getTextContent();
-      text += "\n" + (tc.items || []).map(function(it) { return it.str || ""; }).join(" ");
+      text += "\n" + this.juntarItensPdf(tc.items);
     }
     return text;
   },

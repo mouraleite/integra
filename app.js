@@ -9446,7 +9446,7 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
   const nome = window.cancelContratoEsc(client.customerName || "");
   const titulo = window.cancelContratoEsc(client.saleId || saleId);
   pop.innerHTML = `
-    <div style="background:#fff;border-radius:12px;width:min(640px,100%);max-height:min(88vh,760px);overflow:auto;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);">
+    <div style="background:#fff;border-radius:12px;width:min(1040px,calc(100vw - 40px));max-height:calc(100vh - 28px);overflow:auto;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);">
       <div style="background:#105436;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div>
           <div style="color:#fff;font-size:0.95rem;font-weight:800;">Avaliar cancelamento</div>
@@ -44092,6 +44092,17 @@ window.onDropFinNode = function(e, targetId) {
 window.renderEtapasFinanciamento = function() {
   const container = document.getElementById("financiamento-tree-container");
   if (!container) return;
+  // Com o navegador sem espaço, a cópia local fica velha: espera a nuvem para não mostrar etapa já excluída.
+  if (!window._globalConfigSyncedAt && !window._finEtapasMem && !window._finEtapasEsperouNuvem) {
+    container.innerHTML = `<div style="text-align: center; color: #94a3b8; font-size: 0.9rem; padding: 20px;">Carregando etapas…</div>`;
+    if (!window._finEtapasEsperaTimer) {
+      window._finEtapasEsperaTimer = setTimeout(() => {
+        window._finEtapasEsperouNuvem = true;
+        if (document.getElementById("financiamento-tree-container")) window.renderEtapasFinanciamento();
+      }, 10000);
+    }
+    return;
+  }
   if (typeof window.ensureEtapasFinanciamento === "function") window.ensureEtapasFinanciamento();
   container.innerHTML = "";
   if (!window.EtapasFinanciamentoState || window.EtapasFinanciamentoState.length === 0) {
@@ -54885,6 +54896,7 @@ window.syncGlobalConfigFromFirebase = async function() {
                     ? window._finEtapasEscolhidas
                     : JSON.parse(localStorage.getItem("crm_moura_financiamento") || "[]");
                 window._finEtapasEscolhidas = null;
+                window._finEtapasEsperouNuvem = true;
                 if (Array.isArray(fin)) window.EtapasFinanciamentoState = fin;
                 if (typeof window.ensureEtapasFinanciamento === "function" && window.ensureEtapasFinanciamento()) {
                     changed = true;
