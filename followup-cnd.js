@@ -90,6 +90,38 @@ const FollowupCndApp = {
     }).join("\n");
   },
 
+  TESSERACT_URL: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+
+  carregarTesseract() {
+    if (window.Tesseract) return Promise.resolve();
+    if (this._tessVoo) return this._tessVoo;
+    this._tessVoo = new Promise((ok, falha) => {
+      const sc = document.createElement("script");
+      sc.src = this.TESSERACT_URL;
+      sc.onload = () => ok();
+      sc.onerror = () => { this._tessVoo = null; falha(new Error("OCR indisponível")); };
+      document.head.appendChild(sc);
+    });
+    return this._tessVoo;
+  },
+
+  /* Certidões como a de Botucatu vêm só como imagem dentro do PDF: lê pelo OCR. */
+  async ocrPagina(page) {
+    await this.carregarTesseract();
+    const vp = page.getViewport({ scale: 2.5 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(vp.width);
+    canvas.height = Math.ceil(vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    const worker = await Tesseract.createWorker("por", 1);
+    try {
+      const { data } = await worker.recognize(canvas);
+      return String((data && data.text) || "");
+    } finally {
+      try { await worker.terminate(); } catch (e) {}
+    }
+  },
+
   async lerPdf(file) {
     const lib = window["pdfjs-dist/build/pdf"] || window.pdfjsLib;
     if (!lib || !file) return "";
@@ -100,7 +132,11 @@ const FollowupCndApp = {
     for (let p = 1; p <= pages; p++) {
       const page = await pdf.getPage(p);
       const tc = await page.getTextContent();
-      text += "\n" + this.juntarItensPdf(tc.items);
+      let pagina = this.juntarItensPdf(tc.items);
+      if (pagina.replace(/\s+/g, "").length < 30 && p <= 2) {
+        try { pagina = await this.ocrPagina(page); } catch (e) { console.warn("[CND] OCR falhou", e); }
+      }
+      text += "\n" + pagina;
     }
     return text;
   },
