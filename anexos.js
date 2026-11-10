@@ -4631,9 +4631,17 @@ const AnexosApp = {
     if (isModal) {
       anexosAplicarRotulosTcd(filesToSend);
       filesToSend.forEach((f) => { if (f._tcdRotulo) f.tags = [f._tcdRotulo]; });
-      AnexosDB.save(AnexosState.idCliente, filesToSend).then(() => {
-        alert("Anexos salvos localmente com sucesso!");
+      // Grava no mesmo cliente que a aba Anexos Jurídico lê (o da ficha aberta).
+      const fichaId = (typeof AppState !== 'undefined' && AppState.selectedCustomerId) ? String(AppState.selectedCustomerId) : '';
+      const chaveJuridico = AnexosState.juridicoCustomerId || fichaId || String(AnexosState.idCliente || '');
+      AnexosDB.save(chaveJuridico, filesToSend).then(() => {
         if (window.closeAnexosClienteModal) window.closeAnexosClienteModal();
+        const btnAba = document.getElementById('btn-anexos-juridico');
+        if (btnAba && btnAba.style.display !== 'none' && typeof switchCustomerTab === 'function') {
+          switchCustomerTab('tab-anexos-juridico');
+        }
+        AnexosApp.renderAnexosJuridicoTab();
+        alert(filesToSend.length + " documento(s) enviado(s) para a aba Anexos Jurídico.");
       }).catch(err => {
         console.error("Erro ao salvar no IndexedDB:", err);
         alert("Erro ao salvar anexos localmente.");
@@ -5054,7 +5062,8 @@ const AnexosApp = {
         }
         
         const ext = f.ext || (f.originalName || '').split('.').pop();
-        const tagLabel = typeof getTagName === 'function' ? getTagName(f.tags[0]) : f.tags[0];
+        if (!Array.isArray(f.tags)) f.tags = f.tags ? [f.tags] : [];
+        const tagLabel = (typeof getTagName === 'function' ? getTagName(f.tags[0]) : f.tags[0]) || 'DOC';
         
         html += `
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 15px; border: 1px solid var(--color-border); border-radius: 8px; background: white;">

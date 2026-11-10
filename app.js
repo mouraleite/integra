@@ -52433,6 +52433,8 @@ window.openAnexosClienteModal = async function(customerId) {
     AnexosApp.resetAndRender();
     AnexosState.contexto = 'Cliente';
     AnexosState.idCliente = customerId;
+    // Cliente da ficha: é nele que a aba Anexos Jurídico procura os documentos.
+    AnexosState.juridicoCustomerId = String(customerId);
   AnexosState.loadingUnidadeAnexos = true;
     
     let costCenterId = null;
