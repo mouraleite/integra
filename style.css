@@ -9637,7 +9637,8 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .docs-voce { margin-left: 6px; font-size: 0.68rem; font-weight: 700; color: #105436; background: #ecfdf5; border-radius: 999px; padding: 1px 6px; }
 .docs-sit { display: inline-block; font-size: 0.72rem; font-weight: 700; color: #92400e; background: #fffbeb; border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
 .docs-sit.is-feito { color: #105436; background: #ecfdf5; }
-.docs-acoes { width: 76px; text-align: right; white-space: nowrap; }
+.docs-acoes { width: auto; min-width: 76px; text-align: right; white-space: nowrap; }
+.docs-acoes .btn { margin-right: 6px; height: 32px; padding: 0 10px; }
 .docs-vazio { margin: 8px 0 0; color: #64748b; }
 .tvig-ico.is-danger { color: #b91c1c; }
 .tvig-ico.is-danger:hover { background: #fef2f2; }

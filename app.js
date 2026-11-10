@@ -5240,6 +5240,14 @@ async function checkAuthentication() {
   if (!user) {
     const overlay = document.getElementById("login-modal-overlay");
     overlay.classList.add("active");
+    if (window._crmErroLoginMicrosoft) {
+      const erroMicrosoft = document.getElementById("login-error-msg");
+      if (erroMicrosoft) {
+        erroMicrosoft.textContent = "Falha no login com a Microsoft: " + (window._crmErroLoginMicrosoft.message || window._crmErroLoginMicrosoft);
+        erroMicrosoft.style.display = "block";
+      }
+      window._crmErroLoginMicrosoft = null;
+    }
     const loginVideo = document.getElementById("login-bg-video");
     if (loginVideo) loginVideo.play().catch(() => {});
     const loginEmail = document.getElementById("login-email");
@@ -6556,8 +6564,25 @@ window.commitCrmGlobalConfig = async function(payload) {
       next[kImp] = window.mergePlanoImpostos(localImp, cloud[kImp] || "{}");
       window._impostosAposCommit = next[kImp];
     }
+    if (typeof window.escolherEtapasFinanciamento === "function") {
+      const kFin = "crm_moura_financiamento";
+      const kAt = "crm_moura_financiamento_at";
+      let localRaw = next[kFin];
+      let localAt = next[kAt];
+      try { if (!localRaw) localRaw = localStorage.getItem(kFin) || "[]"; } catch (e) { localRaw = "[]"; }
+      try { if (!localAt) localAt = localStorage.getItem(kAt) || "0"; } catch (e) { localAt = "0"; }
+      const chosen = window.escolherEtapasFinanciamento(localRaw || "[]", localAt || "0", cloud[kFin] || "[]", cloud[kAt] || "0");
+      let at = Number(chosen.at) || 0;
+      const listStr = JSON.stringify(chosen.list);
+      const cloudStr = JSON.stringify(window.parseListaEtapas(cloud[kFin] || "[]"));
+      if (!at && listStr !== cloudStr) at = Date.now();
+      next[kFin] = listStr;
+      if (at) next[kAt] = String(at);
+      window._finEtapasAposCommit = listStr;
+      window._finEtapasAtAposCommit = at ? String(at) : "";
+    }
     if (typeof window.mergeEtapasPorNome === "function") {
-      ["crm_moura_judiciais", "crm_moura_financiamento"].forEach((k) => {
+      ["crm_moura_judiciais"].forEach((k) => {
         let localArr = [];
         let cloudArr = [];
         try { localArr = JSON.parse(next[k] || localStorage.getItem(k) || "[]"); } catch (e) { localArr = []; }
@@ -6602,6 +6627,21 @@ window.commitCrmGlobalConfig = async function(payload) {
     }
     if (typeof window.updateJudFaseDropdown === "function") {
       try { window.updateJudFaseDropdown(); } catch (e) {}
+    }
+  }
+  if (window._finEtapasAposCommit != null) {
+    try {
+      const setter = window._originalSetItem || localStorage.setItem.bind(localStorage);
+      setter.call(localStorage, "crm_moura_financiamento", window._finEtapasAposCommit);
+      if (window._finEtapasAtAposCommit) setter.call(localStorage, "crm_moura_financiamento_at", window._finEtapasAtAposCommit);
+      const listaFin = JSON.parse(window._finEtapasAposCommit);
+      if (Array.isArray(listaFin)) window.EtapasFinanciamentoState = listaFin;
+      window._finEtapasVeioDoPadrao = false;
+    } catch (e) {}
+    window._finEtapasAposCommit = null;
+    window._finEtapasAtAposCommit = "";
+    if (typeof window.renderEtapasFinanciamento === "function" && document.getElementById("financiamento-tree-container")) {
+      try { window.renderEtapasFinanciamento(); } catch (e) {}
     }
   }
   if (window._impostosAposCommit) {
@@ -10840,6 +10880,44 @@ window.mergeEtapasPorNome = function(localArr, cloudArr) {
     chaves.add(chave(copia, out));
   });
   return out;
+};
+
+window.parseListaEtapas = function(raw) {
+  try {
+    const lista = typeof raw === "string" ? JSON.parse(raw || "[]") : raw;
+    return Array.isArray(lista) ? lista : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+window.etapasFinanciamentoSaoPadrao = function(lista) {
+  const padrao = window.ETAPAS_FINANCIAMENTO_PADRAO || [];
+  if (!Array.isArray(lista) || lista.length !== padrao.length) return false;
+  return padrao.every((p, i) => {
+    const e = lista[i];
+    return !!(e
+      && String(e.id) === String(p.id)
+      && String(e.nome || "") === String(p.nome)
+      && (parseInt(e.dias, 10) || 0) === (parseInt(p.dias, 10) || 0));
+  });
+};
+
+/* A lista gravada por último vale inteira. Juntar pelo nome devolvia a etapa apagada e desfazia a edição. */
+window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloudAt) {
+  const local = window.parseListaEtapas(localRaw);
+  const cloud = window.parseListaEtapas(cloudRaw);
+  const la = Number(localAt) || 0;
+  const ca = Number(cloudAt) || 0;
+  const pack = (list, at, winner) => ({ list: list, at: at, winner: winner });
+  if (la && ca) return la >= ca ? pack(local, la, "local") : pack(cloud, ca, "cloud");
+  if (la) return pack(local, la, "local");
+  if (ca) return pack(cloud, ca, "cloud");
+  if (!local.length && cloud.length) return pack(cloud, 0, "cloud");
+  if (local.length && !cloud.length) return pack(local, 0, "local");
+  const localPadrao = window.etapasFinanciamentoSaoPadrao(local) || !!window._finEtapasVeioDoPadrao;
+  if (localPadrao && cloud.length && !window.etapasFinanciamentoSaoPadrao(cloud)) return pack(cloud, 0, "cloud");
+  return pack(local, 0, "local");
 };
 
 /* Etapas que o usuário excluiu. A sincronização não coloca de volta. */
@@ -43636,6 +43714,9 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   if (window.EtapasFinanciamentoState.length) return false;
+  let stored = null;
+  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
+  if (stored != null) return false;
   window.EtapasFinanciamentoState = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
@@ -43647,17 +43728,16 @@ window.ensureEtapasFinanciamento = function() {
   try {
     localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
   } catch (e) {}
-  setTimeout(() => {
-    if (!window._commitConfigBusy && typeof window.forceUploadLocalConfig === "function") {
-      window.forceUploadLocalConfig(true);
-    }
-  }, 1800);
+  window._finEtapasVeioDoPadrao = true;
   return true;
 };
 
 window.persistEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
+  window._finEtapasVeioDoPadrao = false;
+  const at = String(Date.now());
   localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
+  localStorage.setItem("crm_moura_financiamento_at", at);
   if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(console.error);
 };
 window.ensureEtapasFinanciamento();
@@ -43967,10 +44047,12 @@ window.adicionarEtapaFinanciamento = function() {
   window.openEtapaFinanciamentoModal("new");
 };
 
-window.removerEtapaFinanciamento = function(id) {
+window.removerEtapaFinanciamento = async function(id) {
   const etapa = (window.EtapasFinanciamentoState || []).find(e => e.id === id);
   if (!etapa) return;
-  if (!confirm(`Deseja realmente excluir a etapa "${etapa.nome}"?`)) return;
+  const msg = `Deseja realmente excluir a etapa "${etapa.nome}"?`;
+  const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
+  if (!ok) return;
   const dropIds = new Set([id]);
   let grew = true;
   while (grew) {
@@ -53340,6 +53422,7 @@ window.SYNC_KEYS = [
     "crm_users",
     "crm_moura_judiciais",
     "crm_moura_financiamento",
+    "crm_moura_financiamento_at",
     "crm_moura_financiamentos_proc",
     "crm_moura_profiles",
     "crm_moura_rules",
@@ -54175,6 +54258,29 @@ window.syncGlobalConfigFromFirebase = async function() {
             window.SYNC_KEYS.forEach(k => {
                 if (k === "crm_moura_preambles_list") return;
                 if (k === "crm_moura_cartorios_list") return;
+                if (k === "crm_moura_financiamento_at") return;
+                if (k === "crm_moura_financiamento" && typeof window.escolherEtapasFinanciamento === "function") {
+                    const chosen = window.escolherEtapasFinanciamento(
+                        localStorage.getItem(k) || "[]",
+                        localStorage.getItem("crm_moura_financiamento_at") || "0",
+                        globalData[k] || "[]",
+                        globalData.crm_moura_financiamento_at || "0"
+                    );
+                    let at = Number(chosen.at) || 0;
+                    const listStr = JSON.stringify(chosen.list);
+                    const cloudStr = JSON.stringify(window.parseListaEtapas(globalData[k] || "[]"));
+                    if (!at && listStr !== cloudStr) at = Date.now();
+                    if (listStr !== (localStorage.getItem(k) || "[]")) {
+                        _originalSetItem.call(localStorage, k, listStr);
+                        changed = true;
+                    }
+                    if (at && String(at) !== (localStorage.getItem("crm_moura_financiamento_at") || "")) {
+                        _originalSetItem.call(localStorage, "crm_moura_financiamento_at", String(at));
+                    }
+                    const sobe = chosen.winner === "local" && (listStr !== cloudStr || (at && String(at) !== String(globalData.crm_moura_financiamento_at || "")));
+                    if (sobe && window.forceUploadLocalConfig) setTimeout(() => window.forceUploadLocalConfig(true), 1500);
+                    return;
+                }
                 if (k === "crm_moura_timeline_nodes" || k === "crm_moura_timeline_acoes") {
                     const merger = k === "crm_moura_timeline_nodes" ? window.mergeTimelineNodes : window.mergeTimelineAcoes;
                     const merged = typeof merger === "function"
@@ -54524,7 +54630,7 @@ window.syncGlobalConfigFromFirebase = async function() {
                         }
                         return;
                     }
-                    if ((k === "crm_moura_judiciais" || k === "crm_moura_financiamento") && typeof window.mergeEtapasPorNome === "function") {
+                    if (k === "crm_moura_judiciais" && typeof window.mergeEtapasPorNome === "function") {
                         try {
                             const localArr = JSON.parse(localStorage.getItem(k) || "[]");
                             const cloudArr = JSON.parse(globalData[k] || "[]");

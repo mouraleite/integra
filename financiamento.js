@@ -94,7 +94,10 @@ const FinanciamentoApp = {
     root.innerHTML = noFluxo ? this.fluxoHtml() : (this.abasHtml(painel) + (painel === "esteira" ? this.esteiraHtml() : this.buscaHtml()));
     if (window.lucide) lucide.createIcons();
     if (!noFluxo && painel === "pesquisa") this.restoreBuscaUi();
-    if (noFluxo) this.prepararTagsUnidade();
+    if (noFluxo) {
+      this.prepararTagsUnidade();
+      this.ligarEtapa();
+    }
   },
 
   setPainel(id) {
@@ -767,7 +770,9 @@ const FinanciamentoApp = {
   },
 
   voltarBusca() {
-    if (FinanciamentoState.process) this.saveProcess(FinanciamentoState.process);
+    const proc = FinanciamentoState.process;
+    if (proc && proc.currentStageId) this.persistirRascunho(proc.currentStageId);
+    else if (proc) this.saveProcess(proc);
     FinanciamentoState.view = "busca";
     FinanciamentoState.process = null;
     this.render();
@@ -1102,69 +1107,242 @@ const FinanciamentoApp = {
     });
   },
 
-  async enviarAnexo(stageId) {
-    const proc = FinanciamentoState.process;
+  arquivosDaArea(data) {
+    if (!data) return [];
+    const vistos = [];
+    const por = (f) => {
+      if (!f) return;
+      if (vistos.some((x) => x === f || (x.name === f.name && x.size === f.size && x.lastModified === f.lastModified))) return;
+      vistos.push(f);
+    };
+    if (data.files) Array.from(data.files).forEach(por);
+    if (data.items) {
+      Array.from(data.items).forEach((item) => {
+        if (item.kind === "file" && typeof item.getAsFile === "function") por(item.getAsFile());
+      });
+    }
+    return vistos.map((f, i) => {
+      if (f.name) return f;
+      const ext = (f.type && f.type.split("/")[1]) || "png";
+      return new File([f], "colado-" + Date.now() + "-" + i + "." + ext, { type: f.type || "image/png" });
+    });
+  },
+
+  pendentesDe(stageId) {
+    this._pendentes = this._pendentes || {};
+    return this._pendentes[stageId] || [];
+  },
+
+  guardarPendentes(stageId, files) {
+    this._pendentes = this._pendentes || {};
+    const atual = this._pendentes[stageId] || [];
+    this._pendentes[stageId] = atual.concat(files || []);
+    this.pintarPendentes(stageId);
+  },
+
+  pintarPendentes(stageId) {
+    const st = document.getElementById("fin-st-" + stageId);
+    const nomes = this.pendentesDe(stageId).map((f) => f.name).filter(Boolean);
+    if (!st || !nomes.length) return;
+    st.textContent = nomes.join(", ") + (document.getElementById("fin-tag-" + stageId) && document.getElementById("fin-tag-" + stageId).value
+      ? ""
+      : " — escolha a tag da unidade para gravar.");
+  },
+
+  ligarEtapa() {
+    const root = document.getElementById("financiamento-root");
+    if (!root || root.dataset.finLigado === "1") return;
+    root.dataset.finLigado = "1";
+    root.addEventListener("input", (e) => {
+      const id = (e.target && e.target.id) || "";
+      if (id.indexOf("fin-nota-data-") === 0 || id.indexOf("fin-nota-st-") === 0) return;
+      if (id.indexOf("fin-nota-") === 0) this.agendarNota(id.slice("fin-nota-".length));
+    });
+    root.addEventListener("change", (e) => {
+      const id = (e.target && e.target.id) || "";
+      if (id.indexOf("fin-nota-data-") === 0) this.persistirRascunho(id.slice("fin-nota-data-".length));
+      if (id.indexOf("fin-arq-") === 0) this.aoEscolherArquivo(id.slice("fin-arq-".length));
+      if (id.indexOf("fin-tag-") === 0) this.aoEscolherTag(id.slice("fin-tag-".length));
+    });
+    root.addEventListener("focusout", (e) => {
+      const id = (e.target && e.target.id) || "";
+      if (id.indexOf("fin-nota-data-") === 0) this.persistirRascunho(id.slice("fin-nota-data-".length));
+      else if (id.indexOf("fin-nota-") === 0 && id.indexOf("fin-nota-st-") !== 0) this.persistirRascunho(id.slice("fin-nota-".length));
+    });
+    root.addEventListener("paste", (e) => this.aoColar(e));
+  },
+
+  agendarNota(stageId) {
+    if (this._notaTimer) clearTimeout(this._notaTimer);
+    this._notaTimer = setTimeout(() => this.persistirRascunho(stageId), 700);
+  },
+
+  aoEscolherArquivo(stageId) {
     const arq = document.getElementById("fin-arq-" + stageId);
+    const files = arq && arq.files ? Array.from(arq.files) : [];
+    if (!files.length) return;
+    this.guardarPendentes(stageId, files);
+    if (arq) arq.value = "";
+    const tag = document.getElementById("fin-tag-" + stageId);
+    if (tag && tag.value) this.enviarAnexo(stageId);
+  },
+
+  aoEscolherTag(stageId) {
+    if (this.pendentesDe(stageId).length) this.enviarAnexo(stageId);
+  },
+
+  aoColar(e) {
+    const files = this.arquivosDaArea(e.clipboardData);
+    if (!files.length) return;
+    const proc = FinanciamentoState.process;
+    const stageId = proc && proc.currentStageId;
+    if (!stageId) return;
+    e.preventDefault();
+    this.guardarPendentes(stageId, files);
+    const tag = document.getElementById("fin-tag-" + stageId);
+    if (tag && tag.value) this.enviarAnexo(stageId);
+  },
+
+  async enviarAnexo(stageId, listaForcada) {
+    const proc = FinanciamentoState.process;
     const tagEl = document.getElementById("fin-tag-" + stageId);
     const btn = document.getElementById("fin-env-" + stageId);
     const st = document.getElementById("fin-st-" + stageId);
-    const file = arq && arq.files && arq.files[0];
     const tag = tagEl && tagEl.value;
-    if (!proc) return;
-    if (!file || !tag) {
-      if (st) st.textContent = "Escolha o arquivo e a tag da unidade.";
-      return;
+    const files = listaForcada && listaForcada.length ? listaForcada : this.pendentesDe(stageId).slice();
+    if (!proc) return false;
+    if (String(proc.currentStageId || "") !== String(stageId)) return false;
+    if (!files.length || !tag) {
+      if (st) st.textContent = files.length ? "Escolha a tag da unidade para gravar o anexo." : "Escolha o arquivo, ou cole com Ctrl+V, e a tag da unidade.";
+      return false;
     }
-    if (String(proc.currentStageId || "") !== String(stageId)) return;
     if (typeof window.anexosUploadUnitAttachment !== "function") {
       if (st) st.textContent = "O envio de anexos da unidade não está disponível.";
-      return;
+      return false;
     }
     if (btn) { btn.disabled = true; btn.textContent = "Enviando…"; }
     if (st) st.textContent = "";
-    try {
-      const resp = await window.anexosUploadUnitAttachment({
-        file: file,
-        tagLabel: tag,
-        costCenterId: proc.costCenterId || proc.empId,
-        unitName: proc.unitName || proc.unit,
-        sale: {
-          customerId: proc.customerId,
-          id: proc.contractId,
-          contractId: proc.contractId,
-          contractNumber: proc.contractNumber,
-          receivableBillId: proc.titulo,
+    const restam = [];
+    let falha = "";
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const resp = await window.anexosUploadUnitAttachment({
+          file: file,
+          tagLabel: tag,
           costCenterId: proc.costCenterId || proc.empId,
-          unitName: proc.unitName || proc.unit
-        },
-        context: "financiamento"
-      });
-      proc.anexos = proc.anexos || {};
-      const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
-      lista.push({ tag: tag, fileName: resp.fileName || file.name, em: new Date().toISOString(), unitId: resp.unitId || "" });
-      proc.anexos[stageId] = lista;
-      proc.updatedAt = new Date().toISOString();
-      this.saveProcess(proc);
-      FinanciamentoState.process = proc;
-      this.render();
-    } catch (e) {
-      if (st) st.textContent = (e && e.message) ? e.message : "Não consegui enviar o anexo para a unidade.";
-      if (btn) { btn.disabled = false; btn.textContent = "Enviar para a unidade"; }
+          unitName: proc.unitName || proc.unit,
+          sale: {
+            customerId: proc.customerId,
+            id: proc.contractId,
+            contractId: proc.contractId,
+            contractNumber: proc.contractNumber,
+            receivableBillId: proc.titulo,
+            costCenterId: proc.costCenterId || proc.empId,
+            unitName: proc.unitName || proc.unit
+          },
+          context: "financiamento"
+        });
+        proc.anexos = proc.anexos || {};
+        const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
+        lista.push({
+          id: "a-" + Date.now() + "-" + i,
+          tag: tag,
+          fileName: resp.fileName || file.name,
+          em: new Date().toISOString(),
+          unitId: resp.unitId || ""
+        });
+        proc.anexos[stageId] = lista;
+      } catch (e) {
+        restam.push(file);
+        falha = (e && e.message) ? e.message : "Não consegui enviar o anexo para a unidade.";
+      }
     }
+    this._pendentes = this._pendentes || {};
+    this._pendentes[stageId] = restam;
+    proc.updatedAt = new Date().toISOString();
+    this.saveProcess(proc);
+    FinanciamentoState.process = proc;
+    this.render();
+    const st2 = document.getElementById("fin-st-" + stageId);
+    const btn2 = document.getElementById("fin-env-" + stageId);
+    if (falha && st2) st2.textContent = falha;
+    if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
+    return !restam.length;
   },
 
   folhasEtapa(etapas) {
     return (etapas || []).filter((s) => s && s.hasChildren !== true && s.selectable !== false);
   },
 
+  JANELA_DESFAZER_MS: 24 * 60 * 60 * 1000,
+
+  concluidaEm(proc, stageId) {
+    if (!proc || stageId == null) return "";
+    const mapa = proc.concluidas || {};
+    const marca = mapa[stageId] || mapa[String(stageId)] || "";
+    if (!marca) return "";
+    const desfeitos = proc.desfeitos || {};
+    const desfeito = desfeitos[stageId] || desfeitos[String(stageId)];
+    if (desfeito && (Date.parse(desfeito.em || 0) || 0) >= (Date.parse(marca) || 0)) return "";
+    return marca;
+  },
+
   indiceAtivo(proc, folhas) {
     if (!folhas.length) return -1;
-    const concluidas = (proc && proc.concluidas) || {};
     if (proc && proc.currentStageId) {
       const i = folhas.findIndex((s) => String(s.id) === String(proc.currentStageId));
-      if (i >= 0 && !concluidas[folhas[i].id] && !concluidas[String(folhas[i].id)]) return i;
+      if (i >= 0 && !this.concluidaEm(proc, folhas[i].id)) return i;
     }
-    return folhas.findIndex((s) => !concluidas[s.id] && !concluidas[String(s.id)]);
+    return folhas.findIndex((s) => !this.concluidaEm(proc, s.id));
+  },
+
+  operadorAtual() {
+    let u = window.AppState && window.AppState.currentUser;
+    if (!u) {
+      try { u = JSON.parse(localStorage.getItem("crm_logged_user") || "null"); } catch (e) { u = null; }
+    }
+    const imp = typeof window.crmImpersonacaoAtual === "function" ? window.crmImpersonacaoAtual() : null;
+    const efetivo = imp || u || {};
+    const id = String(efetivo.email || efetivo.id || efetivo.username || efetivo.name || "").trim().toLowerCase();
+    const nome = String(efetivo.name || efetivo.email || "").trim();
+    return { id: id, nome: nome };
+  },
+
+  ultimoAvanco(proc) {
+    const lista = proc && Array.isArray(proc.avancos) ? proc.avancos : [];
+    return lista.length ? lista[lista.length - 1] : null;
+  },
+
+  avancoDentroDoPrazo(av) {
+    const em = Date.parse(av && av.em || 0) || 0;
+    return !!em && (Date.now() - em) <= this.JANELA_DESFAZER_MS;
+  },
+
+  avancoEhMeu(av) {
+    const eu = this.operadorAtual();
+    return !!(eu.id && av && String(av.por || "") === eu.id);
+  },
+
+  alvoDesfazer(proc) {
+    if (!proc) return null;
+    const av = this.ultimoAvanco(proc);
+    if (av) {
+      if (!this.avancoDentroDoPrazo(av) || !this.avancoEhMeu(av)) return null;
+      return { stageId: String(av.stageId), nome: av.nome || "etapa anterior", legado: false, av: av, em: av.em };
+    }
+    const folhas = this.folhasEtapa(this.catalogoEtapas());
+    const idx = this.indiceAtivo(proc, folhas);
+    const anterior = idx > 0 ? folhas[idx - 1] : (idx < 0 && folhas.length ? folhas[folhas.length - 1] : null);
+    if (!anterior) return null;
+    const em = this.concluidaEm(proc, anterior.id);
+    if (!em || (Date.now() - (Date.parse(em) || 0)) > this.JANELA_DESFAZER_MS) return null;
+    if (!this.operadorAtual().id) return null;
+    return { stageId: String(anterior.id), nome: anterior.nome || anterior.label || "etapa anterior", legado: true, em: em };
+  },
+
+  podeDesfazer(proc) {
+    return !!this.alvoDesfazer(proc);
   },
 
   iniciarEtapa(stageId) {
@@ -1183,24 +1361,213 @@ const FinanciamentoApp = {
     this.render();
   },
 
-  concluirEtapa(stageId) {
+  listaNotas(proc, stageId) {
+    const bruto = this.notaDe(proc, stageId);
+    if (!bruto) return [];
+    const lista = Array.isArray(bruto) ? bruto : [bruto];
+    const fechadas = proc && proc.notasFechadas;
+    const corte = Date.parse((fechadas && (fechadas[stageId] || fechadas[String(stageId)])) || 0) || 0;
+    return lista.filter((n) => {
+      if (!n || (!n.texto && !n.data)) return false;
+      if (n.rascunho && corte && (Date.parse(n.em || 0) || 0) <= corte) return false;
+      return true;
+    }).map((n) => Object.assign({}, n));
+  },
+
+  garantirNotas(proc, stageId) {
+    proc.notas = proc.notas || {};
+    const bruto = proc.notas[stageId] || proc.notas[String(stageId)] || [];
+    const lista = (Array.isArray(bruto) ? bruto : [bruto]).filter((n) => n && typeof n === "object").map((n) => Object.assign({}, n));
+    lista.forEach((n, i) => {
+      if (!n.id) n.id = n.rascunho ? ("n-rascunho-" + stageId) : ("n-legado-" + stageId + (i ? "-" + i : ""));
+    });
+    proc.notas[stageId] = lista;
+    const chaveStr = String(stageId);
+    if (chaveStr !== stageId) delete proc.notas[chaveStr];
+    return lista;
+  },
+
+  lerNotaDaTela(stageId) {
+    const textoEl = document.getElementById("fin-nota-" + stageId);
+    const dataEl = document.getElementById("fin-nota-data-" + stageId);
+    if (!textoEl && !dataEl) return null;
+    return {
+      texto: textoEl ? String(textoEl.value || "").trim() : "",
+      data: dataEl ? String(dataEl.value || "").slice(0, 10) : ""
+    };
+  },
+
+  persistirRascunho(stageId) {
     const proc = FinanciamentoState.process;
+    const lido = this.lerNotaDaTela(stageId);
+    if (!proc || !lido || String(proc.currentStageId || "") !== String(stageId)) return;
+    const assinatura = (bruto) => {
+      const base = !bruto ? [] : (Array.isArray(bruto) ? bruto : [bruto]);
+      return JSON.stringify(base.filter((n) => n && (n.texto || n.data)).map((n) => ({
+        rascunho: !!n.rascunho,
+        texto: String(n.texto || ""),
+        data: String(n.data || "")
+      })));
+    };
+    const antes = assinatura(proc.notas && (proc.notas[stageId] || proc.notas[String(stageId)]));
+    const lista = this.garantirNotas(proc, stageId).filter((n) => !n.rascunho);
+    if (!lido.texto && !lido.data) {
+      proc.notas[stageId] = lista;
+    } else {
+      lista.push({
+        id: "n-rascunho-" + stageId,
+        rascunho: true,
+        texto: lido.texto,
+        data: lido.data,
+        em: new Date().toISOString()
+      });
+      proc.notas[stageId] = lista;
+    }
+    if (assinatura(proc.notas[stageId]) === antes) return;
+    proc.updatedAt = new Date().toISOString();
+    this.saveProcess(proc);
+    FinanciamentoState.process = proc;
+    const st = document.getElementById("fin-nota-st-" + stageId);
+    if (st && (lido.texto || lido.data)) st.textContent = "Salvo nesta etapa.";
+    else if (st && st.textContent === "Salvo nesta etapa.") st.textContent = "";
+  },
+
+  fixarNota(stageId) {
+    const proc = FinanciamentoState.process;
+    const lido = this.lerNotaDaTela(stageId);
+    if (!proc || String(proc.currentStageId || "") !== String(stageId)) return false;
+    const texto = lido ? lido.texto : "";
+    const data = lido && lido.data ? lido.data : (texto ? this.hojeIso() : "");
+    const lista = this.garantirNotas(proc, stageId).filter((n) => !n.rascunho);
+    if (!texto && !data) {
+      proc.notas[stageId] = lista;
+      return false;
+    }
+    const agora = new Date().toISOString();
+    lista.push({
+      id: "n-" + Date.now(),
+      texto: texto,
+      data: data,
+      em: agora
+    });
+    proc.notas[stageId] = lista;
+    proc.notasFechadas = proc.notasFechadas || {};
+    proc.notasFechadas[stageId] = agora;
+    proc.updatedAt = new Date().toISOString();
+    this.saveProcess(proc);
+    FinanciamentoState.process = proc;
+    return true;
+  },
+
+  async concluirEtapa(stageId) {
+    let proc = FinanciamentoState.process;
     if (!proc || String(proc.currentStageId || "") !== String(stageId)) return;
     const folhas = this.folhasEtapa(this.catalogoEtapas());
     const idx = folhas.findIndex((s) => String(s.id) === String(stageId));
     if (idx < 0 || this.indiceAtivo(proc, folhas) !== idx) return;
-    proc.concluidas = proc.concluidas || {};
-    proc.concluidas[stageId] = new Date().toISOString();
+    const btn = document.getElementById("fin-concluir-" + stageId);
+    if (btn) btn.disabled = true;
+    if (this._notaTimer) clearTimeout(this._notaTimer);
+    this.fixarNota(stageId);
+    proc = FinanciamentoState.process;
+    if (this.pendentesDe(stageId).length) {
+      const tagEl = document.getElementById("fin-tag-" + stageId);
+      if (!tagEl || !tagEl.value) {
+        const st = document.getElementById("fin-st-" + stageId);
+        if (st) st.textContent = "Escolha a tag da unidade para gravar o anexo antes de concluir a etapa.";
+        if (btn) btn.disabled = false;
+        return;
+      }
+      const enviou = await this.enviarAnexo(stageId);
+      if (!enviou) {
+        if (btn) btn.disabled = false;
+        return;
+      }
+      proc = FinanciamentoState.process;
+      if (!proc || String(proc.currentStageId || "") !== String(stageId)) return;
+    }
     const proxima = folhas[idx + 1];
+    const tinhaDone = !!(proxima && proc.done && (proc.done[proxima.id] || proc.done[String(proxima.id)]));
+    const eu = this.operadorAtual();
+    const quando = new Date().toISOString();
+    proc.concluidas = proc.concluidas || {};
+    proc.concluidas[stageId] = quando;
+    if (proc.desfeitos) {
+      delete proc.desfeitos[stageId];
+      delete proc.desfeitos[String(stageId)];
+    }
+    proc.avancos = Array.isArray(proc.avancos) ? proc.avancos : [];
+    proc.avancos.push({
+      stageId: String(stageId),
+      nome: (folhas[idx] && (folhas[idx].nome || folhas[idx].label)) || "etapa",
+      em: quando,
+      por: eu.id,
+      nomeOperador: eu.nome,
+      proximaId: proxima ? String(proxima.id) : "",
+      criouDoneProxima: !!(proxima && !tinhaDone),
+      statusAntes: proc.status || "",
+      finishedAtAntes: proc.finishedAt || ""
+    });
     if (proxima) {
       proc.currentStageId = proxima.id;
       proc.done = proc.done || {};
-      if (!proc.done[proxima.id]) proc.done[proxima.id] = new Date().toISOString();
+      if (!proc.done[proxima.id]) proc.done[proxima.id] = quando;
+      if (String(proc.status || "") === "concluido") proc.status = "";
+      proc.finishedAt = "";
     } else {
       proc.status = "concluido";
-      proc.finishedAt = new Date().toISOString();
+      proc.finishedAt = quando;
     }
-    proc.updatedAt = new Date().toISOString();
+    proc.updatedAt = quando;
+    this.saveProcess(proc);
+    FinanciamentoState.process = proc;
+    this.render();
+  },
+
+  async desfazerAvanco() {
+    const proc = FinanciamentoState.process;
+    const alvo = proc && this.alvoDesfazer(proc);
+    if (!alvo) return;
+    const msg = `Desfazer a conclusão de "${alvo.nome}"? O financiamento volta para essa etapa. A nota e o anexo gravados permanecem.`;
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
+    if (!ok) return;
+    const agora = new Date().toISOString();
+    const eu = this.operadorAtual();
+    proc.desfeitos = proc.desfeitos || {};
+    proc.desfeitos[alvo.stageId] = { em: agora, por: eu.id, nome: eu.nome };
+    proc.concluidas = proc.concluidas || {};
+    delete proc.concluidas[alvo.stageId];
+    delete proc.concluidas[String(alvo.stageId)];
+    if (alvo.legado) {
+      const deixando = proc.currentStageId;
+      if (deixando && proc.done && proc.done[deixando]) {
+        const td = Date.parse(proc.done[deixando]) || 0;
+        const tc = Date.parse(alvo.em) || 0;
+        if (td && tc && Math.abs(td - tc) < 15000) {
+          proc.doneRevogados = proc.doneRevogados || {};
+          proc.doneRevogados[deixando] = agora;
+          delete proc.done[deixando];
+        }
+      }
+      if (String(proc.status || "") === "concluido") {
+        proc.status = "";
+        proc.finishedAt = "";
+      }
+    } else {
+      const av = alvo.av || {};
+      if (av.criouDoneProxima && av.proximaId && proc.done) {
+        proc.doneRevogados = proc.doneRevogados || {};
+        proc.doneRevogados[av.proximaId] = agora;
+        delete proc.done[av.proximaId];
+      }
+      proc.status = av.statusAntes || "";
+      proc.finishedAt = av.finishedAtAntes || "";
+      if (Array.isArray(proc.avancos) && proc.avancos.length) proc.avancos.pop();
+    }
+    proc.currentStageId = alvo.stageId;
+    if (!proc.done) proc.done = {};
+    if (!proc.done[alvo.stageId]) proc.done[alvo.stageId] = alvo.em || agora;
+    proc.updatedAt = agora;
     this.saveProcess(proc);
     FinanciamentoState.process = proc;
     this.render();
@@ -1213,7 +1580,8 @@ const FinanciamentoApp = {
   },
 
   notaCardHtml(proc, etapa) {
-    const nota = this.notaDe(proc, etapa && etapa.id);
+    const lista = this.listaNotas(proc, etapa && etapa.id);
+    const nota = lista[lista.length - 1];
     if (!nota || (!nota.texto && !nota.data)) return "";
     const quando = nota.data ? this.fmtDate(nota.data) : "";
     const texto = String(nota.texto || "").replace(/\s+/g, " ").trim();
@@ -1221,22 +1589,42 @@ const FinanciamentoApp = {
     return `<div class="fin-card-nota">${this.esc(linha)}</div>`;
   },
 
+  linhaHistorico(data, texto) {
+    const quando = data ? this.fmtDate(String(data).slice(0, 10)) : "";
+    const corpo = String(texto || "").trim();
+    const linha = quando && corpo ? (quando + " · " + corpo) : (quando || corpo);
+    if (!linha) return "";
+    return `<p class="fin-etapa-nota">${this.esc(linha)}</p>`;
+  },
+
+  historicoHtml(proc, stageId) {
+    const notas = this.listaNotas(proc, stageId).filter((n) => !n.rascunho);
+    const anexos = (proc && proc.anexos && (proc.anexos[stageId] || proc.anexos[String(stageId)])) || [];
+    const linhas = notas.map((n) => this.linhaHistorico(n.data || n.em, n.texto)).join("");
+    const arquivos = (Array.isArray(anexos) ? anexos : []).map((a) => this.linhaHistorico(a.em, a.fileName)).join("");
+    return linhas + arquivos;
+  },
+
   salvarNota(stageId) {
-    const proc = FinanciamentoState.process;
-    if (!proc) return;
-    const textoEl = document.getElementById("fin-nota-" + stageId);
-    const dataEl = document.getElementById("fin-nota-data-" + stageId);
+    if (this._notaTimer) clearTimeout(this._notaTimer);
+    this.persistirRascunho(stageId);
     const st = document.getElementById("fin-nota-st-" + stageId);
-    if (String(proc.currentStageId || "") !== String(stageId)) return;
-    const texto = textoEl ? String(textoEl.value || "").trim() : "";
-    const data = dataEl ? String(dataEl.value || "").slice(0, 10) : "";
-    proc.notas = proc.notas || {};
-    if (!texto && !data) delete proc.notas[stageId];
-    else proc.notas[stageId] = { texto: texto, data: data, em: new Date().toISOString() };
-    proc.updatedAt = new Date().toISOString();
-    this.saveProcess(proc);
-    FinanciamentoState.process = proc;
-    if (st) st.textContent = "Nota salva nesta fase.";
+    if (st && !st.textContent) st.textContent = "Salvo nesta etapa.";
+  },
+
+  novaNota(stageId) {
+    if (this._notaTimer) clearTimeout(this._notaTimer);
+    const gravou = this.fixarNota(stageId);
+    if (!gravou) {
+      const st = document.getElementById("fin-nota-st-" + stageId);
+      if (st) st.textContent = "Escreva a nota para incluir outra.";
+      return;
+    }
+    this.render();
+    const st = document.getElementById("fin-nota-st-" + stageId);
+    if (st) st.textContent = "Nota gravada no histórico. O campo está livre para outra.";
+    const campo = document.getElementById("fin-nota-" + stageId);
+    if (campo) campo.focus();
   },
 
   fluxoHtml() {
@@ -1288,7 +1676,7 @@ const FinanciamentoApp = {
             #financiamento-root .fin-etapa-linha { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; }
             #financiamento-root .fin-etapa-nome { font-weight: 700; color: #0f172a; font-size: 0.9rem; }
             #financiamento-root .fin-etapa-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
-            #financiamento-root .fin-etapa-nota { margin: 0; padding: 0 12px 8px; color: #334155; font-size: 0.78rem; }
+            #financiamento-root .fin-etapa-nota { margin: 0; padding: 0 12px 6px; color: #334155; font-size: 0.78rem; white-space: pre-wrap; line-height: 1.4; }
             #financiamento-root .fin-etapa-corpo { padding: 0 12px 12px; }
             #financiamento-root .fin-grupo { margin: 14px 0 6px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #64748b; }
             #financiamento-root .fin-nota label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
@@ -1298,19 +1686,20 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
           </style>
-          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota, a data e o arquivo ficam nela. A próxima libera quando esta for concluída.</p>
+          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
+          ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
           ${ativoIdx < 0 && folhas.length ? '<p style="margin:-4px 0 12px;color:#105436;font-size:0.82rem;font-weight:700;">Financiamento concluído.</p>' : ""}
           ${!etapas.length ? '<p style="color:#64748b;">Nenhuma etapa cadastrada. Cadastre em Financiamento → Configurações.</p>' : etapas.map((s) => {
             if (s.hasChildren) return `<div class="fin-grupo">${this.esc(s.label || s.nome)}</div>`;
             const idx = folhas.findIndex((f) => String(f.id) === String(s.id));
-            const concluidaEm = (proc.concluidas && (proc.concluidas[s.id] || proc.concluidas[String(s.id)])) || "";
+            const concluidaEm = this.concluidaEm(proc, s.id);
             const encerrado = ativoIdx < 0;
             const atual = !encerrado && idx === ativoIdx;
             const passada = encerrado || idx < ativoIdx || !!concluidaEm;
             const sid = String(s.id).replace(/'/g, "");
-            const nota = this.notaDe(proc, s.id) || {};
-            const notaLinha = this.notaCardHtml(proc, s).replace("fin-card-nota", "fin-etapa-nota");
-            const enviados = ((proc.anexos && proc.anexos[s.id]) || []).map((a) => this.esc(a.fileName)).filter(Boolean).join(", ");
+            const notasEtapa = this.listaNotas(proc, s.id);
+            const rascunho = notasEtapa.filter((n) => n.rascunho).pop() || {};
+            const historico = this.historicoHtml(proc, s.id);
             const classe = passada && !atual ? "is-feita" : (atual ? "is-atual" : "is-espera");
             if (!atual) {
               const quando = concluidaEm || (proc.done && proc.done[s.id]) || "";
@@ -1324,43 +1713,47 @@ const FinanciamentoApp = {
                     <div class="fin-etapa-meta">${this.esc(meta)}</div>
                   </div>
                 </div>
-                ${passada ? notaLinha : ""}
-                ${passada && enviados ? `<p class="fin-etapa-nota">${enviados}</p>` : ""}
+                ${passada ? historico : ""}
               </div>`;
             }
             const iniciada = String(proc.currentStageId || "") === String(s.id);
             const desde = iniciada && proc.done && proc.done[s.id] ? " · desde " + this.fmtDate(proc.done[s.id]) : "";
             const corpo = iniciada ? `<div class="fin-etapa-corpo">
+              ${historico}
               <div class="fin-nota">
                 <label for="fin-nota-${sid}">Nota interna</label>
-                <textarea id="fin-nota-${sid}" rows="2" placeholder="Ex.: termo enviado pela Allanis no ticket de orientações">${this.esc(nota.texto || "")}</textarea>
+                <textarea id="fin-nota-${sid}" rows="2" placeholder="Ex.: aguardando carta para confirmar o valor">${this.esc(rascunho.texto || "")}</textarea>
                 <div class="fin-nota-linha">
                   <div>
                     <label for="fin-nota-data-${sid}">Data</label>
-                    <input type="date" id="fin-nota-data-${sid}" value="${this.esc(String(nota.data || "").slice(0, 10))}">
+                    <input type="date" id="fin-nota-data-${sid}" value="${this.esc(String(rascunho.data || "").slice(0, 10))}">
                   </div>
                   <button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.salvarNota('${sid}')">Salvar nota</button>
+                  <button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.novaNota('${sid}')">Nova nota</button>
                   <p id="fin-nota-st-${sid}" class="fin-nota-st"></p>
                 </div>
               </div>
               <div class="fin-anexo">
-                <input type="file" id="fin-arq-${sid}" style="max-width:240px;font-size:0.8rem;">
+                <input type="file" id="fin-arq-${sid}" multiple style="max-width:240px;font-size:0.8rem;">
                 <select id="fin-tag-${sid}" class="fin-tag form-control" style="max-width:220px;height:36px;"><option value="">Carregando tags…</option></select>
                 <button type="button" class="btn btn-primary btn-sm" id="fin-env-${sid}" onclick="FinanciamentoApp.enviarAnexo('${sid}')">Enviar para a unidade</button>
+                <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">Vários arquivos podem entrar nesta etapa. Cole com Ctrl+V para gravar o documento.</p>
                 <p id="fin-st-${sid}" style="margin:0;flex-basis:100%;color:#b45309;font-size:0.78rem;"></p>
-                ${enviados ? `<p style="margin:0;flex-basis:100%;color:#334155;font-size:0.78rem;">${enviados}</p>` : ""}
               </div>
             </div>` : "";
             const acao = iniciada
-              ? `<button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.concluirEtapa('${sid}')">Concluir etapa</button>`
+              ? `<button type="button" class="btn btn-primary btn-sm" id="fin-concluir-${sid}" onclick="FinanciamentoApp.concluirEtapa('${sid}')">Concluir etapa</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.iniciarEtapa('${sid}')">Iniciar etapa</button>`;
+            const desfazer = iniciada && this.podeDesfazer(proc)
+              ? `<button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button>`
+              : "";
             return `<div class="fin-etapa is-atual">
               <div class="fin-etapa-linha">
                 <div>
                   <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
                   <div class="fin-etapa-meta">${s.dias || 0} dias${this.esc(desde)}</div>
                 </div>
-                ${acao}
+                <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">${desfazer}${acao}</div>
               </div>
               ${corpo}
             </div>`;
@@ -1383,15 +1776,32 @@ window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {
     }
   };
   const unirLista = (a, b) => {
+    const itens = (lista) => {
+      if (Array.isArray(lista)) return lista;
+      if (lista && typeof lista === "object") return [lista];
+      return [];
+    };
+    const chave = (item) => {
+      if (item.id) return "id:" + String(item.id);
+      if (item.fileName) return "arq:" + String(item.fileName) + "|" + String(item.em || "");
+      if (item.texto) return "txt:" + String(item.texto).slice(0, 180) + "|" + String(item.data || "");
+      return "em:" + String(item.em || "");
+    };
     const out = [];
-    const visto = {};
+    const pos = {};
     [a, b].forEach((lista) => {
-      (Array.isArray(lista) ? lista : []).forEach((item) => {
+      itens(lista).forEach((item) => {
         if (!item || typeof item !== "object") return;
-        const chave = String(item.fileName || "") + "|" + String(item.em || "");
-        if (visto[chave]) return;
-        visto[chave] = true;
-        out.push(item);
+        const k = chave(item);
+        if (pos[k] == null) {
+          pos[k] = out.length;
+          out.push(item);
+          return;
+        }
+        const prev = out[pos[k]];
+        const tp = Date.parse(prev.em || 0) || 0;
+        const tn = Date.parse(item.em || 0) || 0;
+        if (tn >= tp) out[pos[k]] = item;
       });
     });
     return out;
@@ -1437,8 +1847,52 @@ window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {
     const junto = Object.assign({}, antigo, recente);
     junto.done = unirMapa(antigo.done, recente.done, true);
     junto.concluidas = unirMapa(antigo.concluidas, recente.concluidas, true);
+    junto.desfeitos = unirMapa(antigo.desfeitos, recente.desfeitos, true);
+    junto.doneRevogados = unirMapa(antigo.doneRevogados, recente.doneRevogados, false);
     junto.anexos = unirMapa(antigo.anexos, recente.anexos, false);
     junto.notas = unirMapa(antigo.notas, recente.notas, true);
+    const fechadas = Object.assign({}, (antigo && antigo.notasFechadas) || {});
+    Object.keys((recente && recente.notasFechadas) || {}).forEach((id) => {
+      const a = fechadas[id];
+      const b = recente.notasFechadas[id];
+      fechadas[id] = String(b || "") >= String(a || "") ? b : a;
+    });
+    junto.notasFechadas = fechadas;
+    Object.keys(junto.notas || {}).forEach((id) => {
+      const corte = Date.parse(fechadas[id] || 0) || 0;
+      if (!corte) return;
+      const lista = Array.isArray(junto.notas[id]) ? junto.notas[id] : [junto.notas[id]];
+      junto.notas[id] = lista.filter((n) => n && (!n.rascunho || (Date.parse(n.em || 0) || 0) > corte));
+    });
+    const horaFin = (v) => Date.parse(v || 0) || 0;
+    Object.keys(junto.desfeitos || {}).forEach((id) => {
+      const d = junto.desfeitos[id];
+      const maisNova = Math.max(
+        horaFin(antigo.concluidas && antigo.concluidas[id]),
+        horaFin(recente.concluidas && recente.concluidas[id])
+      );
+      if (maisNova > horaFin(d && d.em)) {
+        delete junto.desfeitos[id];
+        return;
+      }
+      if (junto.concluidas && junto.concluidas[id] && horaFin(d && d.em) >= horaFin(junto.concluidas[id])) {
+        delete junto.concluidas[id];
+      }
+    });
+    Object.keys(junto.doneRevogados || {}).forEach((id) => {
+      const rev = horaFin(junto.doneRevogados[id]);
+      const feitoAntigo = horaFin(antigo.done && antigo.done[id]);
+      const feitoRecente = horaFin(recente.done && recente.done[id]);
+      const maisNova = Math.max(feitoAntigo, feitoRecente);
+      if (maisNova > rev) {
+        delete junto.doneRevogados[id];
+        junto.done = junto.done || {};
+        junto.done[id] = maisNova === feitoRecente ? recente.done[id] : antigo.done[id];
+        return;
+      }
+      if (junto.done && junto.done[id] && rev >= horaFin(junto.done[id])) delete junto.done[id];
+    });
+    if (String(recente.status || "") !== "concluido") delete junto.finishedAt;
     if (!junto.currentStageId) junto.currentStageId = antigo.currentStageId || recente.currentStageId || null;
     if (!junto.customerName) junto.customerName = antigo.customerName || recente.customerName || "";
     if (!junto.titulo) junto.titulo = antigo.titulo || recente.titulo || "";
@@ -1460,7 +1914,10 @@ window.financiamentosProcAtual = function () {
 
 window.addEventListener("beforeunload", function () {
   const proc = FinanciamentoState.process;
-  if (proc && window.FinanciamentoApp) window.FinanciamentoApp.saveProcess(proc);
+  const app = window.FinanciamentoApp;
+  if (!proc || !app) return;
+  if (proc.currentStageId && typeof app.persistirRascunho === "function") app.persistirRascunho(proc.currentStageId);
+  else app.saveProcess(proc);
 });
 
 document.addEventListener("tabChanged", (e) => {

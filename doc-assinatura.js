@@ -189,6 +189,61 @@ const DocAssinaturaApp = {
     return cc && cc.name ? String(cc.name).toUpperCase() : "";
   },
 
+  async clienteDoTitulo(row) {
+    const titulo = String((row && row.titulo) || "").replace(/\D/g, "");
+    const lista = window.clientList || [];
+    const hit = lista.find((c) => {
+      if (!c || !titulo) return false;
+      const sale = String(c.saleId || "").replace(/^B-/i, "").split("-")[0].replace(/\D/g, "");
+      if (sale === titulo) return true;
+      const bills = Array.isArray(c.billIds) ? c.billIds : [];
+      return bills.some((b) => String(b || "").replace(/\D/g, "") === titulo);
+    });
+    if (hit) return hit;
+    if (!titulo) return null;
+    const bill = await this.siengeGet("/accounts-receivable/receivable-bills/" + encodeURIComponent(titulo));
+    if (!bill || typeof bill !== "object") return null;
+    const pessoa = bill.customer || bill.client || {};
+    const units = bill.units || bill.unit || [];
+    const unit = Array.isArray(units) ? units[0] : units;
+    return {
+      customerId: bill.customerId || bill.clientId || pessoa.id || "",
+      saleId: titulo,
+      customerName: bill.clientName || bill.customerName || pessoa.name || (row && row.cliente) || "",
+      costCenterId: bill.costCenterId || bill.enterpriseId || (unit && (unit.enterpriseId || unit.costCenterId)) || (row && row.centroId) || "",
+      unitName: (unit && (unit.name || unit.unitName)) || this.nomeUnidade(row),
+      contractId: bill.salesContractId || bill.contractId || "",
+      contractNumber: bill.contractNumber || ""
+    };
+  },
+
+  async fazerDistrato(id) {
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || row.tipo !== "distrato" || row.status === "lancado") return;
+    const client = await this.clienteDoTitulo(row);
+    if (!client || !client.customerId) {
+      alert("Não encontrei o título " + (row.titulo || "") + " para calcular o distrato.");
+      return;
+    }
+    if (typeof window.abrirAvaliacaoDoContrato !== "function") {
+      alert("A avaliação do distrato ainda não carregou. Atualize a página.");
+      return;
+    }
+    window.abrirAvaliacaoDoContrato({
+      customerId: client.customerId,
+      titulo: String(row.titulo || client.saleId || "").replace(/\D/g, ""),
+      saleId: client.saleId || String(row.titulo || "").replace(/\D/g, ""),
+      nome: client.customerName || row.cliente || "",
+      customerName: client.customerName || row.cliente || "",
+      costCenterId: client.costCenterId || row.centroId || "",
+      unitName: client.unitName || this.nomeUnidade(row),
+      unidade: row.unidade || "",
+      contractId: client.contractId || "",
+      contrato: client.contractNumber || ""
+    });
+  },
+
   consultar(id) {
     const chave = decodeURIComponent(String(id || ""));
     const row = (this.itens || []).find((r) => String(r.id) === chave);
@@ -426,6 +481,17 @@ const DocAssinaturaApp = {
     return String((row && (row.cedenteNome || row.titularNome)) || "").trim();
   },
 
+  /* Cessões que o Sienge já concluiu e a troca de titular não apareceu na consulta. */
+  CESSOES_CONCLUIDAS: {
+    "6306": "2026-10-21T12:00:00-03:00",
+    "16303": "2026-10-26T12:00:00-03:00"
+  },
+
+  cessaoConcluidaEm(row) {
+    const titulo = String((row && row.titulo) || "").replace(/\D/g, "");
+    return this.CESSOES_CONCLUIDAS[titulo] || "";
+  },
+
   /** A cessão foi feita quando o titular do título deixou de ser o cedente gravado. */
   cessaoMudou(row, atual) {
     if (!row || !atual) return false;
@@ -546,10 +612,10 @@ const DocAssinaturaApp = {
     return this.aditamentoMudou(row, datas.concat(datasParcela), planoAtual);
   },
 
-  async marcarLancado(row) {
+  async marcarLancado(row, quando) {
     if (!row || row.status === "lancado") return;
     row.status = "lancado";
-    row.lancadoEm = new Date().toISOString();
+    row.lancadoEm = quando || new Date().toISOString();
     const id = String(row.id || "");
     const patch = { status: "lancado", lancadoEm: row.lancadoEm };
     this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === id ? Object.assign({}, x, patch) : x)));
@@ -571,6 +637,11 @@ const DocAssinaturaApp = {
             gravado = await this.tituloBaixadoNoSienge(row);
             if (!gravado) gravado = await this.temDistratoGravado(row);
           } else if (row.tipo === "cessao") {
+            const concluidaEm = this.cessaoConcluidaEm(row);
+            if (concluidaEm) {
+              await this.marcarLancado(row, concluidaEm);
+              continue;
+            }
             gravado = await this.cessaoLancadaNoSienge(row);
           } else if (row.tipo === "aditamento") {
             gravado = await this.aditamentoLancadoNoSienge(row);
@@ -848,6 +919,9 @@ const DocAssinaturaApp = {
     const linha = (r) => {
       const tem = !!r.pdfUrl;
       const chave = encodeURIComponent(String(r.id));
+      const distrato = r.tipo === "distrato" && r.status !== "lancado"
+        ? `<button type="button" class="btn btn-primary btn-sm" title="Avalia o distrato como na NEX cumprida: pago menor que 10% do contrato, restituição zero e lote sem construção. Se couber, pede a CND, confere o IPTU e a taxa associativa." onclick="DocAssinaturaApp.fazerDistrato('${chave}')">Fazer distrato</button>`
+        : "";
       return `<tr>
             <td>${this.esc(this.quando(r.createdAt))}</td>
             <td>${this.esc(this.tipoLabel(r.tipo))}</td>
@@ -856,7 +930,7 @@ const DocAssinaturaApp = {
             <td>${this.esc(this.rotuloUnidade(r))}</td>
             <td>${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
             <td><span class="docs-sit${r.status === "lancado" ? " is-feito" : ""}">${r.status === "lancado" ? "Lançado no Sienge" : "Aguardando"}</span></td>
-            <td class="docs-acoes"><button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
+            <td class="docs-acoes">${distrato}<button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
           </tr>`;
     };
     const corpo = ordem.map((id) => {
