@@ -67,6 +67,17 @@ echo [5/5] Enviando tags para o GitHub...
 git push --tags
 echo       OK - Tags enviadas
 echo.
+REM --- 6) ATUALIZA O AMBIENTE DE TESTE (branch develop) ---
+REM So avanca a develop; se a Danielle tiver algo la que ainda nao entrou na main, nao mexe.
+echo [6/6] Atualizando o ambiente de teste (develop)...
+git push origin main:develop >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - A develop tem alteracoes que ainda nao estao na main.
+    echo                O ambiente de teste NAO foi atualizado. Peca ao Claude: "juntar develop na main".
+) else (
+    echo       OK - Ambiente de teste igual a producao
+)
+echo.
 
 echo ========================================================
 echo   SUCESSO! v!NEW_VER! publicada no GitHub e Vercel

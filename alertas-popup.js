@@ -16,8 +16,8 @@ const AlertasPopupApp = {
       id: "vistoria-resultado",
       nome: "Vistoria pedida na ficha foi aceita",
       quando: "Assim que o back office aceita a vistoria. Fica até a pessoa fechar.",
-      logica: "O pedido nasce na ficha do cliente, sem link. O back office dispara um único link com os pedidos pendentes. Quando a vistoria é aceita, o aviso volta para quem pediu, com as respostas e as fotos.",
-      quem: "Quem clicou em Solicitar Vistoria na ficha do cliente.",
+      logica: "O pedido nasce na ficha do cliente, sem link. O back office dispara um único link com os pedidos pendentes. Quando a vistoria é aceita, o aviso volta para quem pediu, com as respostas e as fotos. Quem pediu sendo o próprio back office não recebe esse aviso, porque é essa pessoa que valida as fotos.",
+      quem: "Quem clicou em Solicitar Vistoria na ficha do cliente, exceto o operador de cobrança back office.",
       titulo: "Vistoria finalizada",
       corpo: `<p>O back office aceitou a vistoria que você pediu pela ficha do cliente.</p>
         <div class="apa-item"><strong>Cliente exemplo · QD 04 LT 18</strong><span>Água: sim · Energia: sim · Estágio: alvenaria</span></div>`

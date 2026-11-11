@@ -2258,7 +2258,7 @@ window.VerificarConstrucaoApp = {
             document.getElementById('vc-validar-status').textContent = 'Finalizando Vistoria...';
             const { doc, updateDoc, collection, addDoc } = window.firebaseCollections;
             await updateDoc(doc(window.firebaseDb, 'vistorias', v.id), { status: 'concluida' });
-            if (v.origem === 'ficha' && v.requestedByEmail) {
+            if (v.origem === 'ficha' && v.requestedByEmail && !vistoriaSolicitanteEhBackOffice(v)) {
                 await addDoc(collection(window.firebaseDb, 'vistoria_avisos'), {
                     vistoriaId: v.id,
                     email: String(v.requestedByEmail).trim().toLowerCase(),
@@ -3172,6 +3172,29 @@ window.abrirAvisoVistoriaSolicitante = function(itens) {
     modal.style.display = "flex";
 };
 
+function perfilCobrancaBackOffice(u) {
+    if (!u) return false;
+    const profile = String(u.profile_name || u.nivel || u.role || "")
+        .toUpperCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+    const isAdmin = (window.isCrmAgendaSupervisor && window.isCrmAgendaSupervisor(u))
+        || profile.includes("ADMIN") || profile.includes("GESTOR") || profile.includes("GERENTE")
+        || String(u.role || "").toUpperCase().includes("ADMIN");
+    return (profile.includes("BACK OFFICE") || profile.includes("BACKOFFICE")) && !isAdmin;
+}
+
+function vistoriaSolicitanteEhBackOffice(v) {
+    if (v && v.requestedByBackOffice === true) return true;
+    const email = String(v && v.requestedByEmail || "").trim().toLowerCase();
+    if (!email) return false;
+    const atual = window.AppState && AppState.currentUser;
+    if (atual && String(atual.email || "").trim().toLowerCase() === email && perfilCobrancaBackOffice(atual)) return true;
+    const lista = typeof window.getCrmUsersCached === "function" ? window.getCrmUsersCached() : [];
+    const cadastrado = (lista || []).find((u) => String(u && u.email || "").trim().toLowerCase() === email);
+    return perfilCobrancaBackOffice(cadastrado);
+}
+
 window.fecharAvisoVistoriaSolicitante = async function() {
     const modal = document.getElementById("modal-vistoria-resultado-solicitante");
     const ids = String(window._avisoVistoriaAberto || "").split(",").filter(Boolean);
@@ -3188,6 +3211,7 @@ window.fecharAvisoVistoriaSolicitante = async function() {
 window.iniciarAvisoVistoriaSolicitante = function() {
     if (window._avisoVistoriaListener) return;
     const email = String((window.AppState && AppState.currentUser && AppState.currentUser.email) || "").trim().toLowerCase();
+    if (typeof window.userIsCobrancaBackOffice === "function" && window.userIsCobrancaBackOffice().ok) return;
     if (!email || !window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
     const { collection, query, where, onSnapshot } = window.firebaseCollections;
     const q = query(collection(window.firebaseDb, "vistoria_avisos"), where("email", "==", email));

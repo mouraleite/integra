@@ -1360,6 +1360,7 @@ window.solicitarWhatsAppFromClient = async function() {
             tituloKey: tituloKey,
             requestedBy: requestedBy,
             requestedByEmail: String((typeof AppState !== "undefined" && AppState.currentUser && AppState.currentUser.email) || "").trim().toLowerCase(),
+            requestedByBackOffice: typeof window.userIsCobrancaBackOffice === "function" && window.userIsCobrancaBackOffice().ok === true,
             origem: "ficha",
             requestedAt: new Date().toISOString(),
             status: "solicitada",
