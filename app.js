@@ -1994,6 +1994,51 @@ window.installmentIsSinalSI = function(inst) {
   });
 };
 
+function partesTipoParcela(inst) {
+  const out = collectInstallmentTypeParts(inst);
+  ["description", "conditionDescription", "paymentConditionDescription"].forEach((k) => {
+    const v = inst && inst[k];
+    if (v != null && v !== "" && typeof v !== "object") out.push(String(v));
+  });
+  return out;
+}
+
+/** Entrada (E1, EN, "Parcela de Entrada"). A taxa dessa condição é simbólica e não representa o contrato. */
+window.parcelaEhEntrada = function(inst) {
+  if (!inst) return false;
+  if (typeof window.installmentIsSinalSI === "function" && window.installmentIsSinalSI(inst)) return false;
+  const parts = partesTipoParcela(inst);
+  return parts.some((raw) => {
+    const n = String(raw || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (!n || n.indexOf("MENSAL") >= 0) return false;
+    const token = n.split(/[\s\-_\/.,;:]+/)[0];
+    if (token === "EN" || token === "ENT" || token === "ENTRADA" || /^E\d+$/.test(token)) return true;
+    return n.indexOf("ENTRADA") >= 0;
+  });
+};
+
+/** Parcela mensal (PM). É ela que diz se o contrato tem juros de parcelamento. */
+window.parcelaEhMensal = function(inst) {
+  if (!inst) return false;
+  if (typeof window.installmentIsSinalSI === "function" && window.installmentIsSinalSI(inst)) return false;
+  if (window.parcelaEhEntrada(inst)) return false;
+  const parts = partesTipoParcela(inst);
+  return parts.some((raw) => {
+    const n = String(raw || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    if (!n) return false;
+    const token = n.split(/[\s\-_\/.,;:]+/)[0];
+    if (token === "PM") return true;
+    if (n === "M" || n === "MEN" || n === "MENSAL" || n === "PARCELA MENSAL" || n === "PARCELAS MENSAIS") return true;
+    return n.indexOf("PARCELA MENSAL") >= 0 || n.indexOf("PARCELAS MENSAIS") >= 0;
+  });
+};
+
+/** Sinal e entrada ficam de fora quando existe outra condição para ler a taxa. */
+window.parcelaTaxaSimbolica = function(inst) {
+  if (typeof window.installmentIsSinalSI === "function" && window.installmentIsSinalSI(inst)) return true;
+  return window.parcelaEhEntrada(inst) === true;
+};
+
 window.installmentConditionKey = function(inst) {
   const parts = (typeof collectInstallmentTypeParts === "function")
     ? collectInstallmentTypeParts(inst)
@@ -17442,7 +17487,10 @@ function formatCpfCnpj(val) {
             installmentNumber: inst.installmentNumber || inst.installmentId,
             interestPercentage: inst.interestPercentage,
             interestRate: inst.interestRate,
-            conditionType: inst.conditionType || inst.paymentConditionType || inst.installmentType,
+            interestType: inst.interestType || inst.interestTypeId || "",
+            conditionType: inst.conditionType || inst.paymentConditionType || inst.installmentType || inst.conditionTypeId,
+            conditionTypeId: inst.conditionTypeId || inst.paymentConditionTypeId || inst.conditionType || "",
+            conditionTypeName: inst.conditionTypeName || inst.paymentConditionTypeName || inst.installmentTypeName || inst.description || "",
             receipts: receipts,
             installmentSituation: situationCode,
             value: orig,
@@ -26393,14 +26441,18 @@ function quitacaoRateMode(rates) {
 }
 
 function quitacaoEscolherTaxa(candidates) {
-  const priceLike = (candidates || []).filter((r) => r >= 0.005 && r <= 0.0095);
+  const list = candidates || [];
+  const reais = list.filter((r) => r >= 0.0001);
+  const pool = reais.length ? reais : list;
+  const priceLike = pool.filter((r) => r >= 0.005 && r <= 0.0095);
   if (priceLike.length) return quitacaoRateMode(priceLike);
-  const notMora = (candidates || []).filter((r) => Math.abs(r - 0.01) > 0.0004);
+  const notMora = pool.filter((r) => Math.abs(r - 0.01) > 0.0004);
   if (notMora.length) return quitacaoRateMode(notMora);
   return 0;
 }
 
-/** Taxa mensal decimal do parcelamento. 0 quando o título não tem juros de parcelamento. */
+/** Taxa mensal decimal do parcelamento. 0 quando o título não tem juros de parcelamento.
+ *  Sinal e entrada trazem taxa simbólica (0,0001%). A parcela mensal é a taxa do contrato. */
 function quitacaoGetMonthlyInterestRate(sale) {
   const candidates = [];
   const push = (v) => {
@@ -26408,9 +26460,13 @@ function quitacaoGetMonthlyInterestRate(sale) {
     if (r != null) candidates.push(r);
   };
   const conds = sale && Array.isArray(sale.paymentConditions) ? sale.paymentConditions : [];
+  const insts = (window.AppState && AppState.currentContractInstallments) || [];
+  const todos = conds.concat(insts).filter(Boolean);
+  const mensais = todos.filter((o) => window.parcelaEhMensal(o));
+  const semSimbolica = todos.filter((o) => !window.parcelaTaxaSimbolica(o));
+  const fonte = mensais.length ? mensais : (semSimbolica.length ? semSimbolica : []);
   let condicaoDisse = false;
-  conds.forEach((c) => {
-    if (!c) return;
+  fonte.forEach((c) => {
     const tipo = String(c.interestType || c.interestTypeId || "").trim().toUpperCase();
     if (tipo === "N" || tipo === "NAO" || tipo === "NÃO") {
       condicaoDisse = true;
@@ -26420,19 +26476,12 @@ function quitacaoGetMonthlyInterestRate(sale) {
       condicaoDisse = true;
       const n = Number(c.interestPercentage);
       if (Number.isFinite(n) && n > 0 && Math.abs(n - 1) >= 0.051 && Math.abs(n - 0.01) >= 0.0004) push(c.interestPercentage);
+    } else if (c.interestRate != null && Number(c.interestRate) > 0 && Number(c.interestRate) <= 0.05) {
+      condicaoDisse = true;
+      candidates.push(Number(c.interestRate));
     }
   });
-  if (condicaoDisse) return quitacaoEscolherTaxa(candidates);
-  ((window.AppState && AppState.currentContractInstallments) || []).forEach((inst) => {
-    if (!inst) return;
-    const tipo = String(inst.interestType || inst.interestTypeId || "").trim().toUpperCase();
-    if (tipo === "N" || tipo === "NAO" || tipo === "NÃO") return;
-    push(inst.interestPercentage);
-    if (inst.interestRate != null && Number(inst.interestRate) > 0 && Number(inst.interestRate) <= 0.05) {
-      candidates.push(Number(inst.interestRate));
-    }
-  });
-  if (candidates.length) return quitacaoEscolherTaxa(candidates);
+  if (condicaoDisse || candidates.length) return quitacaoEscolherTaxa(candidates);
   if (sale) {
     push(sale.interestPercentage);
     if (sale.interestRate != null) {
@@ -26732,6 +26781,11 @@ function quitacaoExtratoSemParcelamento(futuras) {
   });
 }
 
+function quitacaoPodeZerarJuros(sale) {
+  const rate = quitacaoGetMonthlyInterestRate(sale);
+  return !(Number(rate) >= 0.0001);
+}
+
 function quitacaoZerarJurosParcelamento(sale, rows) {
   window.updateQuitacaoJurosDisplay(sale, 0);
   const label = "0,00%";
@@ -26783,29 +26837,50 @@ function quitacaoMapPaidRow(inst) {
   };
 }
 
+async function quitacaoCompletarCondicoes(sale, billId) {
+  if (!sale) return sale;
+  const temMensal = (s) => Array.isArray(s && s.paymentConditions) && s.paymentConditions.some((c) => window.parcelaEhMensal(c));
+  if (temMensal(sale)) return sale;
+  const gravar = (merged) => {
+    if (!AppState.sales) return merged;
+    const idx = AppState.sales.findIndex((s) =>
+      String(s.receivableBillId) === String(billId) || String(s.id) === String(sale.id)
+    );
+    if (idx >= 0) AppState.sales[idx] = { ...AppState.sales[idx], paymentConditions: merged.paymentConditions };
+    return merged;
+  };
+  if (AppState.selectedCustomerId && window.SiengeApiService && SiengeApiService.getSales) {
+    try {
+      const sales = await SiengeApiService.getSales(AppState.selectedCustomerId);
+      const fresh = (Array.isArray(sales) ? sales : []).find((s) =>
+        String(s.receivableBillId) === String(billId) || String(s.id) === String(billId) || String(s.id) === String(sale.id)
+      );
+      if (fresh && Array.isArray(fresh.paymentConditions) && fresh.paymentConditions.length) {
+        sale = { ...sale, ...fresh, paymentConditions: fresh.paymentConditions };
+        if (temMensal(sale)) return gravar(sale);
+      }
+    } catch (e) { /* segue para o contrato */ }
+  }
+  const contractId = sale.id != null && String(sale.id) !== String(billId || "")
+    ? sale.id
+    : (sale.salesContractId || sale.contractId || "");
+  if (!contractId || typeof window.siengeFetchWithRetry !== "function") return sale;
+  try {
+    const sc = await window.siengeFetchWithRetry("/sales-contracts/" + encodeURIComponent(contractId));
+    if (sc && Array.isArray(sc.paymentConditions) && sc.paymentConditions.length) {
+      sale = { ...sale, paymentConditions: sc.paymentConditions };
+      return gravar(sale);
+    }
+  } catch (e) { /* a taxa fica a das parcelas já carregadas */ }
+  return sale;
+}
+
 window.loadQuitacaoDebtReport = async function(force) {
   const statusEl = document.getElementById("quitacao-report-status");
   const bodyEl = document.getElementById("quitacao-report-body");
   let sale = window.getQuitacaoCurrentSale();
   const billId = window.getQuitacaoCurrentBillId();
-  // Garante taxa do contrato (cache da fila às vezes não traz interestPercentage)
-  if (sale && quitacaoGetMonthlyInterestRate(sale) == null && AppState.selectedCustomerId && SiengeApiService.getSales) {
-    try {
-      const sales = await SiengeApiService.getSales(AppState.selectedCustomerId);
-      const list = Array.isArray(sales) ? sales : [];
-      const fresh = list.find((s) =>
-        String(s.receivableBillId) === String(billId) || String(s.id) === String(billId)
-      );
-      if (fresh) {
-        sale = { ...sale, ...fresh };
-        if (AppState.sales) {
-          const idx = AppState.sales.findIndex((s) => String(s.receivableBillId) === String(billId) || String(s.id) === String(billId));
-          if (idx >= 0) AppState.sales[idx] = { ...AppState.sales[idx], ...fresh };
-          else AppState.sales.push(fresh);
-        }
-      }
-    } catch (e) { /* ignore */ }
-  }
+  sale = await quitacaoCompletarCondicoes(sale, billId);
   window.updateQuitacaoJurosDisplay(sale);
   if (!billId) {
     if (statusEl) statusEl.textContent = "Sem título selecionado.";
@@ -26821,7 +26896,7 @@ window.loadQuitacaoDebtReport = async function(force) {
       window._quitacaoState.paidRows = paidRows;
       window._quitacaoState.pagoLiquido = paidRows.reduce((s, r) => s + (Number(r.liquido) || Number(r.valorBaixa) || 0), 0);
     }
-    if (quitacaoExtratoSemParcelamento(window._quitacaoState.aVencer)) {
+    if (quitacaoExtratoSemParcelamento(window._quitacaoState.aVencer) && quitacaoPodeZerarJuros(sale)) {
       quitacaoZerarJurosParcelamento(sale, window._quitacaoState.rows);
     } else {
       window.updateQuitacaoJurosDisplay(sale);
@@ -26887,7 +26962,7 @@ window.loadQuitacaoDebtReport = async function(force) {
         return row;
       })
       .sort((a, b) => String(a.due).localeCompare(String(b.due)));
-    if (quitacaoExtratoSemParcelamento(aVencer)) quitacaoZerarJurosParcelamento(sale, rows);
+    if (quitacaoExtratoSemParcelamento(aVencer) && quitacaoPodeZerarJuros(sale)) quitacaoZerarJurosParcelamento(sale, rows);
     const sumPago = paidRows.reduce((s, r) => s + (Number(r.liquido) || Number(r.valorBaixa) || 0), 0);
     const sumBaixa = paidRows.reduce((s, r) => s + (Number(r.valorBaixa) || 0), 0);
     const sumVencVp = vencidas.reduce((s, r) => s + (Number(r.vp) || 0), 0);

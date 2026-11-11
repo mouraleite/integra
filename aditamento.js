@@ -63,9 +63,23 @@
     return best;
   }
 
+  function lerTaxas(itens) {
+    const taxas = [];
+    let declarado = false;
+    (itens || []).forEach((o) => {
+      const n = jurosDeObjeto(o);
+      if (n == null) return;
+      declarado = true;
+      if (n > 0.00001) taxas.push(n);
+    });
+    const reais = taxas.filter((n) => n >= 0.01);
+    return { taxas: reais.length ? reais : taxas, declarado };
+  }
+
   /**
-   * Juros de parcelamento do título. A taxa do cabeçalho do contrato e a da
-   * tabela vigente não entram quando o extrato das parcelas não tem essa taxa.
+   * Juros de parcelamento do título. Sinal e entrada trazem taxa simbólica
+   * (0,0001%). A parcela mensal é a que diz se o contrato tem juros.
+   * A taxa do cabeçalho e a da tabela vigente não entram quando o extrato não tem essa taxa.
    */
   function jurosParcelamento(ctx, lista) {
     const sale = (ctx && ctx.sale) || {};
@@ -73,16 +87,17 @@
     const conds = []
       .concat(Array.isArray(bill.paymentConditions) ? bill.paymentConditions : [])
       .concat(Array.isArray(sale.paymentConditions) ? sale.paymentConditions : []);
-    const taxas = [];
-    let declarado = false;
-    (lista || []).concat(conds).forEach((o) => {
-      const n = jurosDeObjeto(o);
-      if (n == null) return;
-      declarado = true;
-      if (n > 0.00001) taxas.push(n);
-    });
-    if (taxas.length) return modaTaxa(taxas);
-    if (declarado) return 0;
+    const todos = (lista || []).concat(conds).filter(Boolean);
+    const mensal = (o) => typeof window.parcelaEhMensal === "function" && window.parcelaEhMensal(o);
+    const simbolica = (o) => typeof window.parcelaTaxaSimbolica === "function" && window.parcelaTaxaSimbolica(o);
+    const mensais = todos.filter(mensal);
+    const leituraMensal = lerTaxas(mensais);
+    if (leituraMensal.taxas.length) return modaTaxa(leituraMensal.taxas);
+    if (mensais.length && leituraMensal.declarado) return 0;
+    const demais = todos.filter((o) => !simbolica(o) && !mensal(o));
+    const leituraDemais = lerTaxas(demais);
+    if (leituraDemais.taxas.length) return modaTaxa(leituraDemais.taxas);
+    if (demais.length && leituraDemais.declarado) return 0;
     const hoje = hojeIso();
     const futuras = (lista || []).filter((p) => {
       if (!p) return false;
@@ -99,11 +114,11 @@
       });
       if (semDesconto) return 0;
       const cab = jurosDeObjeto(sale);
-      return cab != null ? cab : 0;
+      return cab != null && cab >= 0.01 ? cab : 0;
     }
     if ((lista || []).length) return 0;
     const cab = jurosDeObjeto(sale);
-    return cab != null ? cab : 0;
+    return cab != null && cab >= 0.01 ? cab : 0;
   }
 
   /** Saldo presente da parcela: valor atualizado, com os acréscimos do extrato. */

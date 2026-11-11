@@ -3028,6 +3028,7 @@ const SiengeApiService = {
           updatedContractValue: c.value,
           interestPercentage: c.interestPercentage,
           interestRate: (c.interestPercentage != null && c.interestPercentage !== "" ? Number(c.interestPercentage) / 100 : null),
+          paymentConditions: Array.isArray(c.paymentConditions) ? c.paymentConditions : [],
           subjudice: c.subjudice ? "S" : "N",
           percPaid: c.value > 0 ? (c.totalSellingValue - c.outstandingBalance) / c.value : 0,
           lastPaymentDate: c.lastUpdateDate,
