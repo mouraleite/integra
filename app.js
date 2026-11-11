@@ -18303,6 +18303,7 @@ function formatCpfCnpj(val) {
                const jurosContrato = oficial ? oficial.juros : (charges.jurosPadrao != null ? charges.jurosPadrao : charges.juros);
                const honorarios = charges.honorarios || 0;
                const juros = jurosContrato + honorarios;
+               if (boletoVencidoDentroDe28(inst)) inst.selected = false;
                
                if (inst.selected) {
                   totalPrincipal += inst.cb;
@@ -18321,6 +18322,9 @@ function formatCpfCnpj(val) {
                   if (inst.isFetchingBoleto) {
                      chkHtml = `<div class="loading-spinner" style="width:14px; height:14px; border:2px solid var(--color-primary); border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></div>`;
                      bgStyle = "background-color: rgba(0,0,0,0.02);";
+                  } else if (boletoVencidoDentroDe28(inst)) {
+                     chkHtml = `<input type="checkbox" disabled class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-boleto-so-download="true" title="Boleto vencido e ainda válido. Baixe o boleto já gerado." style="cursor:not-allowed;opacity:0.45;">`;
+                     bgStyle = "background-color: #fffbeb;";
                   } else if (inst.isActiveBoleto || inst.boletoBaixado) {
                      chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-has-active-boleto="true" ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
                      bgStyle = AppState.isSubjudiceMode ? "background-color: transparent;" : (inst.boletoBaixado ? "background-color: #fee2e2;" : "background-color: #ecfdf5;");
@@ -18480,7 +18484,10 @@ function formatCpfCnpj(val) {
                   const idx = parseInt(e.target.getAttribute('data-index'));
                   
                   // Validar se a seleção continua sequencial
-                  const allCheckedIndices = Array.from(checkboxes).map((c, i) => c.checked ? i : -1).filter(i => i !== -1);
+                  const allCheckedIndices = Array.from(checkboxes)
+                    .filter((c) => c.getAttribute("data-boleto-so-download") !== "true")
+                    .map((c, i) => c.checked ? i : -1)
+                    .filter(i => i !== -1);
                   if (allCheckedIndices.length > 1) {
                     let isSequential = true;
                     for (let i = 1; i < allCheckedIndices.length; i++) {
@@ -18507,7 +18514,7 @@ function formatCpfCnpj(val) {
          
          const updateCheckAllState = () => {
             if (!simCheckAll) return;
-            const overdues = vencidasSimulador.filter(i => i.isOverdue);
+            const overdues = vencidasSimulador.filter(i => i.isOverdue && !boletoVencidoDentroDe28(i));
             simCheckAll.checked = overdues.length > 0 && overdues.every(i => i.selected);
          };
 
@@ -18515,7 +18522,7 @@ function formatCpfCnpj(val) {
             simCheckAll.addEventListener('change', (e) => {
                const isChecked = e.target.checked;
                vencidasSimulador.forEach(inst => {
-                 if (inst.isOverdue) inst.selected = isChecked;
+                 if (inst.isOverdue && !boletoVencidoDentroDe28(inst)) inst.selected = isChecked;
                });
                recalcularSimulador();
             });
@@ -18781,6 +18788,16 @@ function formatCpfCnpj(val) {
         return;
       }
       
+      const soDownload = Array.from(checkboxes).filter(c => c.getAttribute('data-boleto-so-download') === 'true');
+      if (soDownload.length) {
+        const nums = soDownload.map(c => {
+          const id = c.getAttribute('data-inst-id');
+          const row = (AppState._simVencidas || []).find(s => String(s.installmentId) === String(id));
+          return row ? (row.installmentNumber || row.installmentId) : id;
+        }).join(", ");
+        alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
+        return;
+      }
       const hasActiveBoleto = Array.from(checkboxes).some(c => c.getAttribute('data-has-active-boleto') === 'true');
       if (hasActiveBoleto) {
           const confirmBaixa = confirm("Atenção! Uma ou mais parcelas selecionadas já possuem um boleto gerado e válido nos últimos 28 dias.\n\nVocê realizou a baixa manual do boleto anterior?\nSe isso não foi feito, o cliente poderá pagar em duplicidade.\n\nClique em OK se já fez a baixa e deseja continuar, ou Cancelar para abortar.");
@@ -31028,7 +31045,34 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
   return { multa, juros, principal, honorarios, finePct, interestPct, waive: waiver.waive };
 };
 
+/** Boleto já emitido, vencido e ainda dentro dos 28 dias. Nesse período não se gera outro. */
+function boletoVencidoDentroDe28(inst) {
+  if (!inst || !inst.isActiveBoleto || inst.boletoBaixado || !inst.dtFebraban) return false;
+  const today0 = new Date();
+  today0.setHours(0, 0, 0, 0);
+  const fb = new Date(inst.dtFebraban);
+  if (Number.isNaN(fb.getTime())) return false;
+  fb.setHours(0, 0, 0, 0);
+  const fbIso = fb.getFullYear() + "-" + String(fb.getMonth() + 1).padStart(2, "0") + "-" + String(fb.getDate()).padStart(2, "0");
+  const chargeFb = typeof window.installmentChargeDueIso === "function"
+    ? window.installmentChargeDueIso(fbIso)
+    : fbIso;
+  const chargeFbDate = new Date(chargeFb + "T12:00:00");
+  if (Number.isNaN(chargeFbDate.getTime())) return false;
+  chargeFbDate.setHours(0, 0, 0, 0);
+  return Math.floor((today0 - chargeFbDate) / 86400000) > 0;
+}
+window.boletoVencidoDentroDe28 = boletoVencidoDentroDe28;
+
 window.reprocessBoleto = async function(billId, instId, costCenterId, source = 'avulso') {
+  const idsPedido = (Array.isArray(instId) ? instId : [instId]).map(String);
+  const sims = (AppState && AppState._simVencidas) || [];
+  const bloqueadas = sims.filter((s) => idsPedido.includes(String(s.installmentId)) && boletoVencidoDentroDe28(s));
+  if (bloqueadas.length) {
+    const nums = bloqueadas.map((s) => s.installmentNumber || s.installmentId).join(", ");
+    alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
+    return;
+  }
   if (window.boletoBloqueadoSubJudice()) {
     alert("Cliente sub judice. O Integra não gera boleto. Mesmo com pagamento integral, a emissão fica com o advogado da Moura Leite.");
     return;
