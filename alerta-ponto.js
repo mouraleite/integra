@@ -1,5 +1,7 @@
 /* Lembrete do cartão de ponto, só para israel@mouraleite.com.br.
-   Sexta: checar pendências. Dia 15 (ou o próximo dia útil): validar o fechamento. */
+   Sexta: só na própria sexta. Se a sexta for feriado, no dia útil anterior.
+   Dia 15: só nesse dia. Se cair em feriado ou fim de semana, no próximo dia útil.
+   Não abre nos outros dias. */
 const AlertaPonto = {
   EMAIL: "israel@mouraleite.com.br",
 
@@ -56,11 +58,22 @@ const AlertaPonto = {
     return !!(u && String(u.email || "").toLowerCase() === this.EMAIL);
   },
 
-  /* Sexta desta semana, ou a sexta que já passou se hoje for sábado ou os dias seguintes até a próxima. */
-  sextaDoCiclo(hoje) {
+  /* Sexta da semana que contém hoje. Domingo usa a sexta que já passou. */
+  sextaDaSemana(hoje) {
     const dia = this.parse(hoje).getDay();
-    const desde = dia >= 5 ? dia - 5 : dia + 2;
-    return this.addDias(hoje, -desde);
+    const offset = dia === 0 ? -2 : 5 - dia;
+    return this.addDias(hoje, offset);
+  },
+
+  /* Só a data de hoje, quando hoje é a sexta ou o dia útil anterior se a sexta for feriado. */
+  sextaDoCiclo(hoje) {
+    let alvo = this.sextaDaSemana(hoje);
+    let guarda = 0;
+    while (!this.ehDiaUtil(alvo) && guarda < 6) {
+      alvo = this.addDias(alvo, -1);
+      guarda += 1;
+    }
+    return alvo === hoje ? alvo : "";
   },
 
   diaFechamento(ano, mes) {
@@ -73,11 +86,11 @@ const AlertaPonto = {
     return d;
   },
 
-  /* O fechamento deste mês, depois que o dia 15 (ou o próximo dia útil) chegou. */
+  /* Só no dia 15, ou no próximo dia útil quando o 15 cai em feriado ou fim de semana. */
   fechamentoAberto(hoje) {
     const p = String(hoje).split("-");
     const dia = this.diaFechamento(Number(p[0]), Number(p[1]));
-    return hoje >= dia ? dia : "";
+    return hoje === dia ? dia : "";
   },
 
   periodoDoFechamento(dia) {

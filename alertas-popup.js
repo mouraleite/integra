@@ -91,8 +91,8 @@ const AlertasPopupApp = {
     {
       id: "ponto-sexta",
       nome: "Pendências no cartão de ponto",
-      quando: "Na sexta-feira, no login. Se a pessoa entra depois, abre até a sexta seguinte. Uma vez nesse ciclo, ao marcar Ciente.",
-      logica: "Pede para checar as pendências no cartão de ponto do time. Ciente guarda a sexta daquele ciclo e o aviso só volta na sexta seguinte.",
+      quando: "No login, na sexta-feira. Se a sexta for feriado, no dia útil anterior. Só nesse dia. Ciente dispensa o restante do dia.",
+      logica: "Pede para checar as pendências no cartão de ponto do time. Não abre nos outros dias da semana.",
       quem: "israel@mouraleite.com.br.",
       titulo: "Pendências no cartão de ponto",
       corpo: `<p>Cheque as pendências no cartão de ponto do time.</p>
@@ -101,12 +101,24 @@ const AlertasPopupApp = {
     {
       id: "ponto-fechamento",
       nome: "Validar o ponto do time",
-      quando: "No login, no dia 15 de cada mês. Se o dia 15 não for dia útil, no próximo dia útil. Se a pessoa entra depois, abre até o fechamento seguinte. Uma vez nesse ciclo, ao marcar Ciente.",
-      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Ciente dispensa até o próximo dia 15, ou o próximo dia útil.",
+      quando: "No login, no dia 15. Se o dia 15 cair em feriado ou fim de semana, no próximo dia útil. Só nesse dia. Ciente dispensa o restante do dia.",
+      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Não fica aberto nos dias seguintes.",
       quem: "israel@mouraleite.com.br.",
       titulo: "Validar o ponto do time",
       corpo: `<p>Valide o ponto do time. O mês fechou de 15/10/2026 até 14/11/2026.</p>
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente. Se a sexta cair no mesmo dia, os dois textos vêm no mesmo aviso.</p>`
+    },
+    {
+      id: "titulos-incompletos",
+      nome: "Títulos incompletos",
+      quando: "No batimento das 7h. Se a pessoa entra depois, abre na hora. Ciente dispensa o restante do dia, inclusive depois de atualizar a página.",
+      logica: "A fila sai dos títulos com situação Incompleto ou Em inclusão, emitidos nos últimos 30 dias. Título que continua na fila no dia seguinte mostra há quantos dias está ciente. Título novo não mostra idade.",
+      quem: "Analista de Pagadoria I.",
+      titulo: "Títulos incompletos",
+      corpo: `<p>Batimento das 7h. Estes títulos ainda estão incompletos no Sienge.</p>
+        <div class="apa-item"><strong>Título 90441 · NF 1822</strong><span>CONSTRUTORA EXEMPLO · vencimento 20/11/2026</span><span style="color:#9a3412;font-weight:700;">Ciente há 1 dia</span></div>
+        <div class="apa-item"><strong>Título 91002 · NF 1900</strong><span>FORNECEDOR NOVO · vencimento 25/11/2026 · Incompleto</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente.</p>`
     },
     {
       id: "esteira",

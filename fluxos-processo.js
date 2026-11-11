@@ -100,6 +100,37 @@ const FluxosProcesso = {
     return this.sou(fluxo, "responsavel") || this.sou(fluxo, "supervisor");
   },
 
+  podeApagar(fluxo) {
+    if (!fluxo || fluxo.oficial) return false;
+    if (this.souAdmin()) return true;
+    return this.podeEditar(fluxo);
+  },
+
+  async fluxoJaUsado(fluxo) {
+    if (!fluxo) return false;
+    if (fluxo.oficial) return true;
+    const id = String(fluxo.id);
+    const nome = this.norm(fluxo.nome);
+    const bate = (it) => {
+      if (!it) return false;
+      if (String(it.motivoId || "") === id) return true;
+      if (nome && nome !== "SEM NOME" && this.norm(it.motivo) === nome) return true;
+      return false;
+    };
+    const app = window.ProcessoContraApp;
+    if (app && Array.isArray(app.itens) && app.itens.some(bate)) return true;
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.collection) return false;
+    try {
+      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "processos_contra"));
+      let usado = false;
+      snap.forEach((d) => { if (!usado && bate(d.data())) usado = true; });
+      return usado;
+    } catch (e) {
+      return false;
+    }
+  },
+
   souAdmin() {
     const eu = this.eu();
     return typeof window.isCrmAdministrator === "function" && window.isCrmAdministrator(eu);
@@ -194,9 +225,11 @@ const FluxosProcesso = {
     try {
       const raw = JSON.parse(localStorage.getItem("crm_fluxos_processo") || "null");
       this.state.fluxos = raw && Array.isArray(raw.fluxos) ? raw.fluxos : [];
+      this.state.excluidos = raw && Array.isArray(raw.excluidos) ? raw.excluidos.map(String) : [];
       this._seq = Number(raw && raw.seq) || 0;
     } catch (e) {
       this.state.fluxos = [];
+      this.state.excluidos = [];
       this._seq = 0;
     }
   },
@@ -211,6 +244,7 @@ const FluxosProcesso = {
       const data = snap.data() || {};
       return {
         fluxos: Array.isArray(data.fluxos) ? data.fluxos : [],
+        excluidos: Array.isArray(data.excluidos) ? data.excluidos.map(String) : [],
         seq: Number(data.seq) || 0
       };
     } catch (e) {
@@ -226,13 +260,25 @@ const FluxosProcesso = {
   aplicarRemoto(remoto) {
     if (!remoto || !Array.isArray(remoto.fluxos) || !remoto.fluxos.length) return false;
     if (this.state.abertoId) return false;
-    const local = Array.isArray(this.state.fluxos) ? this.state.fluxos : [];
+    const excluidos = new Set((this.state.excluidos || []).map(String));
+    (remoto.excluidos || []).forEach((id) => { if (id != null && String(id)) excluidos.add(String(id)); });
+    const local = (Array.isArray(this.state.fluxos) ? this.state.fluxos : []).filter((f) => f && !excluidos.has(String(f.id)));
     const porId = new Map();
-    remoto.fluxos.forEach((f) => { if (f && f.id != null) porId.set(String(f.id), f); });
-    let localMaisNovo = (Number(remoto.seq) || 0) < (Number(this._seq) || 0);
+    let regravar = false;
+    remoto.fluxos.forEach((f) => {
+      if (!f || f.id == null) return;
+      const id = String(f.id);
+      if (excluidos.has(id)) {
+        regravar = true;
+        return;
+      }
+      porId.set(id, f);
+    });
+    let localMaisNovo = (Number(remoto.seq) || 0) < (Number(this._seq) || 0) || regravar;
     local.forEach((f) => {
       if (!f || f.id == null) return;
       const id = String(f.id);
+      if (excluidos.has(id)) return;
       const outro = porId.get(id);
       if (!outro) {
         porId.set(id, f);
@@ -248,8 +294,9 @@ const FluxosProcesso = {
         if (nomeLocal !== nomeRemoto || localAt > remotoAt) localMaisNovo = true;
       }
     });
-    const fundidos = Array.from(porId.values());
+    const fundidos = Array.from(porId.values()).filter((f) => f && !excluidos.has(String(f.id)));
     const antes = JSON.stringify(local);
+    this.state.excluidos = Array.from(excluidos);
     this.state.fluxos = fundidos;
     this._seq = Math.max(Number(this._seq) || 0, Number(remoto.seq) || 0);
     this.normalizarNomes();
@@ -262,6 +309,7 @@ const FluxosProcesso = {
     this._seq = (this._seq || 0) + 1;
     const dados = {
       fluxos: JSON.parse(JSON.stringify(this.state.fluxos || [])),
+      excluidos: (this.state.excluidos || []).map(String),
       seq: this._seq,
       updatedAt: Date.now()
     };
@@ -527,7 +575,7 @@ const FluxosProcesso = {
         </div>
       </div>
       <h3 class="tvig-section-title">Resultados da consulta</h3>
-      <p style="margin: 0 0 10px; color: #64748b; font-size: 0.85rem;">Quem cria o fluxo é o responsável. O supervisor dele também edita e pode trocar o responsável. Copiar gera um fluxo seu, para ajustar sem começar do zero.</p>
+      <p style="margin: 0 0 10px; color: #64748b; font-size: 0.85rem;">Quem cria o fluxo é o responsável. O supervisor dele também edita e pode trocar o responsável. O administrador apaga um fluxo que ainda não foi usado. Copiar gera um fluxo seu, para ajustar sem começar do zero.</p>
       <div id="fluxos-processo-results"></div>
     </div>`;
     this.bindFiltroNome();
@@ -567,7 +615,7 @@ const FluxosProcesso = {
   linha(f) {
     const edita = this.podeEditar(f);
     const nome = String(f.nome || "Sem nome").toUpperCase();
-    const excluir = edita && !f.oficial
+    const excluir = this.podeApagar(f)
       ? `<button type="button" class="tvig-ico is-danger" title="Excluir" onclick="FluxosProcesso.excluir('${this.esc(f.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`
       : "";
     const lapis = edita
@@ -626,12 +674,18 @@ const FluxosProcesso = {
 
   async excluir(id) {
     const fluxo = this.achar(id);
-    if (!fluxo || fluxo.oficial || !this.podeEditar(fluxo)) return;
+    if (!this.podeApagar(fluxo)) return;
+    if (await this.fluxoJaUsado(fluxo)) {
+      alert("Este fluxo já foi usado em um processo e não pode ser apagado.");
+      return;
+    }
     const ok = typeof window.mouraConfirm === "function"
       ? await window.mouraConfirm("Excluir o fluxo " + (fluxo.nome || "sem nome") + "?")
       : window.confirm("Excluir o fluxo " + (fluxo.nome || "sem nome") + "?");
     if (!ok) return;
-    this.state.fluxos = this.state.fluxos.filter((f) => f.id !== fluxo.id);
+    const idStr = String(fluxo.id);
+    this.state.excluidos = Array.from(new Set((this.state.excluidos || []).map(String).concat([idStr])));
+    this.state.fluxos = this.state.fluxos.filter((f) => String(f.id) !== idStr);
     this.persistir();
     if (this.state.consulted) this.consultar();
     else this.renderLista();

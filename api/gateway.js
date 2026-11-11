@@ -17,9 +17,20 @@ const rotas = {
   "caucao-batimento": require("./_lib/morning-warmup"),
   "distrato-followup": require("./_lib/morning-warmup"),
   "valor-receber": require("./_lib/morning-warmup"),
+  "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email")
 };
+
+const { conferirAcesso, modoBloqueio } = require("../lib/integra-auth");
+
+// Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
+// As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
+const ROTAS_COM_LOGIN = new Set([
+  "sienge-proxy", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
+  "controle-comissao", "participacoes", "rydoo-email"
+]);
 
 module.exports.config = {
   api: { bodyParser: false }
@@ -57,5 +68,30 @@ module.exports = async function handler(req, res) {
   }
   const sub = pedacos.slice(1).join("/");
   req.url = "/api/" + nome + (sub ? "/" + sub : "") + busca;
+
+  if (ROTAS_COM_LOGIN.has(nome) && String(req.method || "").toUpperCase() !== "OPTIONS") {
+    const acesso = await conferirAcesso(req);
+    try { res.setHeader("X-Integra-Auth", acesso.motivo); } catch (e) {}
+    if (!acesso.ok) {
+      const bloquear = modoBloqueio();
+      console.warn("[integra-auth] " + JSON.stringify({
+        acao: bloquear ? "bloqueado" : "so-registro",
+        motivo: acesso.motivo,
+        email: acesso.email || "",
+        rota: nome,
+        metodo: req.method,
+        caminho: ("/" + sub).slice(0, 120),
+        origem: req.headers.origin || req.headers.referer || "",
+        ip: String(req.headers["x-forwarded-for"] || "").split(",")[0].trim(),
+        navegador: String(req.headers["user-agent"] || "").slice(0, 120)
+      }));
+      if (bloquear) {
+        res.statusCode = 401;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ error: "Faça login no Integra para acessar este recurso." }));
+        return;
+      }
+    }
+  }
   return fn(req, res);
 };

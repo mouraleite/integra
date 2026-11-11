@@ -350,3 +350,230 @@ window.TitulosIncompletosApp = TitulosIncompletosApp;
 document.addEventListener("tabChanged", function (e) {
   if (e && e.detail === "titulos-incompletos") TitulosIncompletosApp.init();
 });
+
+/* Aviso do batimento das 7h. Ciência do operador vale o dia e sobrevive ao Ctrl+F5. */
+const TitulosIncompletosAviso = {
+  _visto: {},
+  _timer: null,
+
+  esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  },
+
+  hoje() {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date());
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return get("year") + "-" + get("month") + "-" + get("day");
+  },
+
+  partes() {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "America/Sao_Paulo",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(new Date());
+    const get = (t) => parts.find((p) => p.type === t).value;
+    return { h: Number(get("hour")), min: Number(get("minute")) };
+  },
+
+  dataBr(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    return p.length === 3 && p[0].length === 4 ? p[2] + "/" + p[1] + "/" + p[0] : "";
+  },
+
+  moeda(n) {
+    return Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  },
+
+  usuario() {
+    const imp = typeof window.crmImpersonacaoAtual === "function" ? window.crmImpersonacaoAtual() : null;
+    if (imp) return imp;
+    const u = window.AppState && window.AppState.currentUser;
+    if (u) return u;
+    try { return JSON.parse(localStorage.getItem("crm_logged_user") || "null"); } catch (e) { return null; }
+  },
+
+  nomePerfil(user) {
+    const u = user || {};
+    return u.profile_name || u.profile || u.role || "";
+  },
+
+  ehPerfil(user) {
+    const n = String(this.nomePerfil(user))
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!n.includes("ANALISTA") || !n.includes("PAGADORIA")) return false;
+    if (/\bII\b/.test(n) || /\b2\b/.test(n)) return false;
+    return /\bI\b/.test(n) || /\b1\b/.test(n);
+  },
+
+  chave(user, dia) {
+    const u = user || {};
+    const quem = String(u.email || u.name || "op").toLowerCase();
+    return "crm_tin_batimento_" + quem + "_" + dia;
+  },
+
+  jaCiente(user, dia) {
+    if (!dia) return false;
+    const k = this.chave(user, dia);
+    if (this._visto[k]) return true;
+    try { if (localStorage.getItem(k) === "ciente") return true; } catch (e) {}
+    try { if (sessionStorage.getItem(k) === "ciente") return true; } catch (e) {}
+    return false;
+  },
+
+  marcar(user, dia) {
+    const k = this.chave(user, dia);
+    this._visto[k] = true;
+    const gravar = (store) => {
+      try {
+        store.setItem(k, "ciente");
+        return store.getItem(k) === "ciente";
+      } catch (e) {
+        return false;
+      }
+    };
+    if (!gravar(localStorage)) {
+      if (typeof window.ensureCrmStorageRoom === "function") {
+        try { window.ensureCrmStorageRoom(); } catch (e) {}
+      }
+      const native = window._nativeLocalStorageSetItem;
+      if (typeof native === "function") {
+        try { native.call(localStorage, k, "ciente"); } catch (e) {}
+      } else {
+        gravar(localStorage);
+      }
+    }
+    gravar(sessionStorage);
+  },
+
+  async ler() {
+    const fc = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fc || !db || typeof fc.getDoc !== "function" || typeof fc.doc !== "function") return null;
+    const snap = await fc.getDoc(fc.doc(db, "titulos_incompletos_batimento", "atual"));
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    if (!existe) return null;
+    return snap.data() || null;
+  },
+
+  textoDias(n) {
+    const d = Number(n) || 0;
+    if (d === 1) return "Ciente há 1 dia";
+    if (d > 1) return "Ciente há " + d + " dias";
+    return "";
+  },
+
+  abrir(rows, user, dia) {
+    if (document.getElementById("tin-batimento-aviso")) return;
+    const lista = (rows || []).slice().sort((a, b) => {
+      const d = (Number(b.diasCiente) || 0) - (Number(a.diasCiente) || 0);
+      if (d) return d;
+      return String(a.vencimento || "").localeCompare(String(b.vencimento || ""));
+    });
+    const itens = lista.map((row) => {
+      const idade = this.textoDias(row.diasCiente);
+      const doc = [row.tipo, row.documento].filter(Boolean).join(" ");
+      const ven = this.dataBr(row.vencimento);
+      return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+          <strong style="color:#0f172a;font-size:0.88rem;">Título ${this.esc(row.titulo || "—")}${doc ? " · " + this.esc(doc) : ""}</strong>
+          ${idade ? `<span style="flex:none;color:#9a3412;font-weight:800;font-size:0.75rem;">${this.esc(idade)}</span>` : ""}
+        </div>
+        <div style="color:#475569;font-size:0.8rem;margin-top:2px;">${this.esc(row.credor || "—")} · ${this.esc(row.empresa || "—")}</div>
+        <div style="color:#64748b;font-size:0.78rem;margin-top:2px;">${ven ? "Vencimento " + this.esc(ven) + " · " : ""}${this.esc(row.legenda || "Incompleto")} · ${this.esc(this.moeda(row.valor))}</div>
+      </div>`;
+    }).join("");
+    const overlay = document.createElement("div");
+    overlay.id = "tin-batimento-aviso";
+    overlay.setAttribute("role", "alertdialog");
+    overlay.setAttribute("aria-labelledby", "tin-batimento-titulo");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
+    overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);padding:22px 22px 18px;font-family:inherit;">
+      <div id="tin-batimento-titulo" style="font-size:0.95rem;font-weight:800;color:#105436;">Títulos incompletos</div>
+      <p style="margin:8px 0 12px;font-size:0.86rem;color:#1e293b;line-height:1.45;">Batimento das 7h. ${lista.length === 1 ? "Este título ainda está incompleto" : "Estes " + lista.length + " títulos ainda estão incompletos"} no Sienge.</p>
+      <div style="overflow:auto;min-height:0;flex:1;">${itens}</div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+        <button type="button" id="tin-batimento-ciente" style="padding:8px 16px;border-radius:8px;border:0;background:#105436;color:#fff;font-weight:800;cursor:pointer;">Ciente</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const btn = overlay.querySelector("#tin-batimento-ciente");
+    if (btn) btn.addEventListener("click", () => {
+      this.marcar(user, dia);
+      overlay.remove();
+      this.agendarDepois(true);
+    });
+  },
+
+  agendarDepois(ciente) {
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    const p = this.partes();
+    const minutos = p.h * 60 + p.min;
+    let espera;
+    if (ciente || minutos >= 10 * 60) {
+      let delta = (7 * 60 + 5) - minutos;
+      if (delta <= 0) delta += 24 * 60;
+      espera = delta * 60000;
+    } else if (minutos < 7 * 60) {
+      espera = ((7 * 60 + 5) - minutos) * 60000;
+    } else {
+      espera = 45000;
+    }
+    this._timer = setTimeout(() => this.verificar(), Math.max(1000, espera));
+  },
+
+  async verificar() {
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
+    }
+    const u = this.usuario();
+    if (!this.ehPerfil(u)) return;
+    const hoje = this.hoje();
+    if (this.jaCiente(u, hoje) || document.getElementById("tin-batimento-aviso")) {
+      this.agendarDepois(true);
+      return;
+    }
+    let data = null;
+    try { data = await this.ler(); } catch (e) { data = null; }
+    const rows = data && data.date === hoje && data.done && Array.isArray(data.rows) ? data.rows : null;
+    if (rows && rows.length) {
+      this.abrir(rows, u, hoje);
+      return;
+    }
+    this.agendarDepois(false);
+  }
+};
+
+window.TitulosIncompletosAviso = TitulosIncompletosAviso;
+
+document.addEventListener("DOMContentLoaded", function () {
+  let tentativas = 0;
+  const tentar = function () {
+    tentativas += 1;
+    const u = window.AppState && window.AppState.currentUser;
+    if (!u) {
+      if (tentativas < 40) setTimeout(tentar, 1500);
+      return;
+    }
+    if (window.TitulosIncompletosAviso) window.TitulosIncompletosAviso.verificar();
+  };
+  setTimeout(tentar, 2800);
+});

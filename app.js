@@ -114,6 +114,31 @@ window.persistLargeCacheIfRoom = function(key, value) {
     args[1] = init;
   }
 
+  // Chamadas para a API do próprio Integra levam o token do login Microsoft (X-Integra-Token).
+  // Só vai para o nosso servidor; nunca para endereços de fora.
+  function crmIsOwnApiUrl(url) {
+    const u = String(url || "");
+    if (u.startsWith("/api/")) return true;
+    try { return u.startsWith(window.location.origin + "/api/"); } catch (e) { return false; }
+  }
+
+  async function crmStampIntegraToken(args) {
+    if (!crmIsOwnApiUrl(crmRequestUrl(args[0]))) return;
+    const auth = window.MouraAuth;
+    if (!auth || typeof auth.getIntegraToken !== "function") return;
+    const token = await auth.getIntegraToken();
+    if (!token) return;
+    const init = (args[1] && typeof args[1] === "object") ? args[1] : {};
+    const headers = new Headers(init.headers || undefined);
+    if (!init.headers && args[0] && typeof args[0] !== "string" && args[0].headers && typeof args[0].headers.forEach === "function") {
+      args[0].headers.forEach(function(value, key) {
+        if (!headers.has(key)) headers.set(key, value);
+      });
+    }
+    headers.set("X-Integra-Token", token);
+    args[1] = Object.assign({}, init, { headers: headers });
+  }
+
   const _origFetch = window.fetch;
   window.fetch = async function() {
     var args = Array.prototype.slice.call(arguments);
@@ -128,6 +153,7 @@ window.persistLargeCacheIfRoom = function(key, value) {
       }
     }
     try { crmStampApiProfile(args); } catch (e) {}
+    try { await crmStampIntegraToken(args); } catch (e) {}
     return _origFetch.apply(this, args);
   };
 
@@ -144,6 +170,13 @@ window.persistLargeCacheIfRoom = function(key, value) {
           const profile = crmApiProfileHeader();
           if (profile) this.setRequestHeader("X-Crm-Profile", profile);
         }
+      } catch (e) {}
+      try {
+        const auth = window.MouraAuth;
+        const token = crmIsOwnApiUrl(this._crmApiUrl) && auth && typeof auth.getIntegraTokenSync === "function"
+          ? auth.getIntegraTokenSync()
+          : "";
+        if (token) this.setRequestHeader("X-Integra-Token", token);
       } catch (e) {}
       return _xhrSend.apply(this, arguments);
     };
@@ -5197,6 +5230,9 @@ async function processSuccessfulLogin(loggedUser) {
       if (window.AlertaPonto && typeof window.AlertaPonto.verificar === "function") {
         window.AlertaPonto.verificar();
       }
+      if (window.TitulosIncompletosAviso && typeof window.TitulosIncompletosAviso.verificar === "function") {
+        window.TitulosIncompletosAviso.verificar();
+      }
       if (window.DocAssinaturaApp && typeof window.DocAssinaturaApp.avisarPendentes === "function") {
         window.DocAssinaturaApp.avisarPendentes();
       }
@@ -6172,7 +6208,11 @@ window.syncCrmProfilesFromFirebase = async function() {
   if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
   const fc = window.firebaseCollections;
   const gSnap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
-  const cloud = window.crmUsersDocExists(gSnap) ? ((gSnap.data() || {}).crm_moura_profiles || "[]") : "[]";
+  const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
+  if (typeof window.absorbCrmProfileTombstones === "function") {
+    window.absorbCrmProfileTombstones(gData.crm_moura_profiles_removed);
+  }
+  const cloud = gData.crm_moura_profiles || "[]";
   let local = "[]";
   try { local = localStorage.getItem("crm_moura_profiles") || "[]"; } catch (e) {}
   const merged = window.mergeCrmMouraProfiles(local, cloud);
@@ -6235,15 +6275,32 @@ window.persistCrmProfilesNow = async function(profiles) {
   const merged = await fc.runTransaction(window.firebaseDb, async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    const cloud = exists ? ((snap.data() || {}).crm_moura_profiles || "[]") : "[]";
+    const data = exists ? (snap.data() || {}) : {};
+    const cloud = data.crm_moura_profiles || "[]";
+    if (typeof window.absorbCrmProfileTombstones === "function") {
+      window.absorbCrmProfileTombstones(data.crm_moura_profiles_removed);
+    }
     const next = window.mergeCrmMouraProfiles(mem, cloud);
     let list = [];
     try { list = JSON.parse(next); } catch (e) { list = []; }
     const wanted = JSON.parse(mem);
     const ids = new Set(list.map((p) => String(p && p.id || "")));
-    const missing = (Array.isArray(wanted) ? wanted : []).filter((p) => p && p.id && !ids.has(String(p.id)));
+    const removedIds = typeof window.crmProfileTombstones === "function" ? window.crmProfileTombstones() : new Set();
+    const normName = (s) => (typeof window.normalizeCrmProfileName === "function"
+      ? window.normalizeCrmProfileName(s)
+      : String(s || "").toUpperCase());
+    const dropOperador = removedIds.has("operador") || removedIds.has("operador_pagadoria");
+    const missing = (Array.isArray(wanted) ? wanted : []).filter((p) => {
+      if (!p || !p.id || ids.has(String(p.id))) return false;
+      if (removedIds.has(String(p.id))) return false;
+      if (dropOperador && normName(p.name) === "OPERADOR PAGADORIA") return false;
+      return true;
+    });
     if (missing.length) throw new Error("O perfil não entrou na lista salva.");
-    tx.set(docRef, { crm_moura_profiles: next }, { merge: true });
+    const removed = typeof window.crmProfileTombstones === "function"
+      ? JSON.stringify(Array.from(window.crmProfileTombstones()))
+      : "[]";
+    tx.set(docRef, { crm_moura_profiles: next, crm_moura_profiles_removed: removed }, { merge: true });
     return next;
   });
   try {
@@ -6411,6 +6468,15 @@ window.rememberRemovedCrmProfile = function(id) {
   } catch (e) {}
 };
 
+window.absorbCrmProfileTombstones = function(raw) {
+  let ids = [];
+  try { ids = JSON.parse(raw || "[]") || []; } catch (e) { ids = []; }
+  if (!Array.isArray(ids)) return;
+  ids.forEach((id) => {
+    if (id) window.rememberRemovedCrmProfile(id);
+  });
+};
+
 window.forgetRemovedCrmProfile = function(id) {
   const ids = window.crmProfileTombstones();
   if (!ids.delete(String(id || ""))) return;
@@ -6472,7 +6538,12 @@ window.mergeCrmMouraProfiles = function(localStr, cloudStr) {
     byName.set(n, preferKnown);
   });
   const removed = typeof window.crmProfileTombstones === "function" ? window.crmProfileTombstones() : new Set();
-  const kept = Array.from(byName.values()).filter((p) => p && !removed.has(String(p.id)));
+  const dropOperador = removed.has("operador") || removed.has("operador_pagadoria");
+  const kept = Array.from(byName.values()).filter((p) => {
+    if (!p || removed.has(String(p.id))) return false;
+    if (dropOperador && normName(p.name) === "OPERADOR PAGADORIA") return false;
+    return true;
+  });
   return JSON.stringify(kept);
 };
 
@@ -6587,6 +6658,7 @@ window.commitCrmGlobalConfig = async function(payload) {
       if (!at && listStr !== cloudStr) at = Date.now();
       next[kFin] = listStr;
       if (at) next[kAt] = String(at);
+      if (window._finEtapasExcluidasMem) next.crm_moura_financiamento_excluidas = window._finEtapasExcluidasMem;
       window._finEtapasAposCommit = listStr;
       window._finEtapasAtAposCommit = at ? String(at) : "";
     }
@@ -11077,8 +11149,10 @@ window.etapasFinanciamentoSaoPadrao = function(lista) {
   });
 };
 
-/* Etapa apagada nas configurações. A nuvem e o modelo inicial não devolvem essa etapa. */
+/* Etapa apagada nas configurações. A nuvem e o modelo inicial não devolvem essa etapa.
+   fin-04 e fin-09 saíram do modelo e não podem voltar da cópia antiga. */
 window.FIN_ETAPAS_EXCLUIDAS_KEY = "crm_moura_financiamento_excluidas";
+window.FIN_ETAPAS_MODELO_FORA = ["fin-04", "fin-09"];
 
 window.finNomeEtapa = function(e) {
   return String(e && (e.nome || e.name) || "")
@@ -11089,7 +11163,10 @@ window.finNomeEtapa = function(e) {
 window.finEtapasExcluidasLer = function(raw) {
   let o = raw;
   if (typeof raw === "string" || raw == null) {
-    try { o = JSON.parse(raw || localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || "{}"); } catch (e) { o = {}; }
+    const texto = raw == null
+      ? (window._finEtapasExcluidasMem || localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || "{}")
+      : (raw || "{}");
+    try { o = JSON.parse(texto); } catch (e) { o = {}; }
   }
   if (!o || typeof o !== "object") o = {};
   const ids = Array.isArray(o.ids) ? o.ids.map((id) => String(id)).filter(Boolean) : [];
@@ -11101,6 +11178,7 @@ window.finEtapasExcluidasGravar = function(tomb) {
   const ids = Array.from(new Set((tomb && tomb.ids) || []));
   const nomes = Array.from(new Set((tomb && tomb.nomes) || []));
   const raw = JSON.stringify({ ids: ids, nomes: nomes });
+  window._finEtapasExcluidasMem = raw;
   const setter = window._originalSetItem || localStorage.setItem.bind(localStorage);
   try { setter.call(localStorage, window.FIN_ETAPAS_EXCLUIDAS_KEY, raw); } catch (e) {}
   return raw;
@@ -11139,11 +11217,15 @@ window.finEtapasLiberar = function(etapa) {
 window.finEtapasSemExcluidas = function(lista, tomb) {
   const t = tomb || window.finEtapasExcluidasLer();
   const src = Array.isArray(lista) ? lista : [];
-  const ids = new Set(t.ids || []);
-  if (!ids.size) return src.slice();
+  const ids = new Set((t.ids || []).map((id) => String(id)));
+  (window.FIN_ETAPAS_MODELO_FORA || []).forEach((id) => ids.add(String(id)));
+  const nomes = new Set((t.nomes || []).map((n) => window.finNomeEtapa({ nome: n })).filter(Boolean));
+  if (!ids.size && !nomes.size) return src.slice();
   const drop = new Set();
   src.forEach((e) => {
-    if (e && e.id && ids.has(String(e.id))) drop.add(String(e.id));
+    if (!e || !e.id) return;
+    const nome = window.finNomeEtapa(e);
+    if (ids.has(String(e.id)) || (nome && nomes.has(nome))) drop.add(String(e.id));
   });
   let grew = true;
   while (grew) {
@@ -11160,6 +11242,7 @@ window.finEtapasSemExcluidas = function(lista, tomb) {
 
 /* A lista gravada por último vale inteira. Etapa já excluída não volta nem da nuvem nem do modelo. */
 window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloudAt, cloudExcluidasRaw) {
+  window.finEtapasMarcarExcluidas((window.FIN_ETAPAS_MODELO_FORA || []).map((id) => ({ id: id })));
   const tombRaw = window.finEtapasExcluidasUnirNuvem(cloudExcluidasRaw || "");
   const tomb = window.finEtapasExcluidasLer(tombRaw);
   const local = window.finEtapasSemExcluidas(window.parseListaEtapas(localRaw), tomb);
@@ -44401,12 +44484,10 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
   { id: "fin-01", nome: "Enviar Termo de Simulação para financiamento", dias: 1, descricao: "Envio ao cliente do termo contendo as condições preliminares e simulação do financiamento para análise." },
   { id: "fin-02", nome: "Aguardar retorno do cliente", dias: 15, descricao: "Período destinado à manifestação do cliente quanto ao interesse e aceitação das condições apresentadas." },
   { id: "fin-03", nome: "Validar projeto aprovado", dias: 3, descricao: "Conferência da aprovação do projeto e dos documentos necessários para prosseguimento do financiamento." },
-  { id: "fin-04", nome: "Realizar aditamento para financiamento", dias: 5, descricao: "Elaboração e formalização do aditivo contratual adequando o contrato à operação de financiamento." },
   { id: "fin-05", nome: "Emitir Carta de Quitação para Financiamento", dias: 3, descricao: "Emissão da carta informando o saldo a ser quitado pela instituição financeira para conclusão do financiamento." },
   { id: "fin-06", nome: "Aguardar minuta", dias: 30, descricao: "Acompanhamento do recebimento da minuta contratual emitida pela instituição financeira." },
   { id: "fin-07", nome: "Validar minuta", dias: 2, descricao: "Análise e conferência da minuta recebida, verificando informações, valores e condições contratuais." },
   { id: "fin-08", nome: "Aguardar assinatura diretoria", dias: 5, descricao: "Período destinado à coleta das assinaturas dos diretores responsáveis pela formalização do contrato." },
-  { id: "fin-09", nome: "Gerar PFIN", dias: 7, descricao: "Geração do processo financeiro interno para controle e acompanhamento da liberação do crédito." },
   { id: "fin-10", nome: "Acompanhar desbloqueio do crédito", dias: 20, descricao: "Monitoramento da liberação dos recursos financeiros pela instituição financiadora." },
   { id: "fin-11", nome: "Realizar quitação do contrato", dias: 1, descricao: "Baixa financeira e quitação do contrato do cliente após o recebimento dos recursos do financiamento." },
   { id: "fin-12", nome: "Emitir Termo de Quitação para Financiamento", dias: 2, descricao: "Emissão do documento formal que comprove a quitação das obrigações contratuais pela operação de financiamento." }
@@ -44454,16 +44535,22 @@ window.persistEtapasFinanciamento = function() {
   const at = String(Date.now());
   const raw = JSON.stringify(window.EtapasFinanciamentoState);
   window._finEtapasMem = { raw: raw, at: at };
-  localStorage.setItem("crm_moura_financiamento", raw);
   let gravou = false;
-  try { gravou = localStorage.getItem("crm_moura_financiamento") === raw; } catch (e) {}
+  try {
+    localStorage.setItem("crm_moura_financiamento", raw);
+    gravou = localStorage.getItem("crm_moura_financiamento") === raw;
+  } catch (e) {}
   // Data sem a lista faria a lista velha vencer a da nuvem no próximo carregamento.
-  if (gravou) localStorage.setItem("crm_moura_financiamento_at", at);
-  else { try { localStorage.removeItem("crm_moura_financiamento_at"); } catch (e) {} }
+  try {
+    if (gravou) localStorage.setItem("crm_moura_financiamento_at", at);
+    else localStorage.removeItem("crm_moura_financiamento_at");
+  } catch (e) {}
   const fc = window.firebaseCollections;
   if (fc && fc.doc && fc.setDoc && window.firebaseDb) {
-    let excluidas = "";
-    try { excluidas = localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || ""; } catch (e) {}
+    let excluidas = window._finEtapasExcluidasMem || "";
+    if (!excluidas) {
+      try { excluidas = localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || ""; } catch (e) {}
+    }
     const doc = {
       crm_moura_financiamento: raw,
       crm_moura_financiamento_at: at
@@ -54991,6 +55078,9 @@ window.syncGlobalConfigFromFirebase = async function() {
         
         if (globalData) {
             let changed = false;
+            if (typeof window.absorbCrmProfileTombstones === "function") {
+                window.absorbCrmProfileTombstones(globalData.crm_moura_profiles_removed);
+            }
             (function syncPreamblesFromCloud() {
                 const k = "crm_moura_preambles_list";
                 const merged = window.mergePreamblesList(localStorage.getItem(k), globalData[k] || "[]");

@@ -296,6 +296,63 @@ async function logout(opts) {
   window.location.reload();
 }
 
+// Token do login Microsoft que o navegador manda para a API do Integra (cabeçalho X-Integra-Token).
+// Nunca trava a tela: se não conseguir, devolve "" e a chamada segue sem ele.
+let tokenIntegra = { valor: "", exp: 0 };
+let tokenIntegraBuscando = null;
+
+function expiracaoDoToken(token) {
+  try {
+    const parte = String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const dados = JSON.parse(atob(parte + "===".slice((parte.length + 3) % 4)));
+    return Number(dados.exp || 0) * 1000;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function contaMicrosoftAtual() {
+  if (!msalInstance || typeof msalInstance.getAllAccounts !== "function") return null;
+  const contas = msalInstance.getAllAccounts() || [];
+  if (!contas.length) return null;
+  const sessao = getCurrentUser();
+  const email = String((sessao && sessao.email) || "").toLowerCase();
+  return contas.find((c) => String(c.username || "").toLowerCase() === email) || contas[0];
+}
+
+function getIntegraTokenSync() {
+  return tokenIntegra.valor && tokenIntegra.exp - Date.now() > 60 * 1000 ? tokenIntegra.valor : "";
+}
+
+async function buscarTokenIntegra() {
+  if (msalReady) {
+    try { await msalReady; } catch (e) {}
+  }
+  const conta = contaMicrosoftAtual();
+  if (!conta || typeof msalInstance.acquireTokenSilent !== "function") return "";
+  const pedir = async (renovar) => {
+    const r = await msalInstance.acquireTokenSilent({ scopes: ["user.read"], account: conta, forceRefresh: !!renovar });
+    return (r && r.idToken) || "";
+  };
+  let token = await pedir(false);
+  if (!token || expiracaoDoToken(token) - Date.now() < 5 * 60 * 1000) token = await pedir(true);
+  if (token) tokenIntegra = { valor: token, exp: expiracaoDoToken(token) };
+  return token || "";
+}
+
+async function getIntegraToken() {
+  const pronto = getIntegraTokenSync();
+  if (pronto && tokenIntegra.exp - Date.now() > 5 * 60 * 1000) return pronto;
+  if (!tokenIntegraBuscando) {
+    tokenIntegraBuscando = buscarTokenIntegra()
+      .catch(() => "")
+      .finally(() => { tokenIntegraBuscando = null; });
+  }
+  const limite = new Promise((resolve) => setTimeout(() => resolve(""), 3000));
+  const novo = await Promise.race([tokenIntegraBuscando, limite]);
+  return novo || pronto || "";
+}
+
 initSessionChannel();
 initializeMsal();
 
@@ -308,5 +365,7 @@ window.MouraAuth = {
   getAuthConfig: () => g_authConfig,
   saveAuthConfig,
   validateDomain,
-  clearMsalInteractionLock
+  clearMsalInteractionLock,
+  getIntegraToken,
+  getIntegraTokenSync
 };

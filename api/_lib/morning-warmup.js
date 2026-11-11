@@ -5,6 +5,7 @@ const {
 const { todayIsoSP } = require("../../lib/br-calendar");
 const caucaoHandler = require("../../lib/caucao-batimento");
 const { marcarBaixados } = require("../../lib/distrato-followup-core");
+const { aplicarFila, normalizarOutcome, chaveTitulo } = require("../../lib/titulos-incompletos-batimento");
 
 const SIENGE_DOMAIN = "mouraleite";
 // Usuário e senha da API do Sienge ficam nas variáveis da Vercel, nunca no código.
@@ -1286,10 +1287,119 @@ async function dispararValorReceber(req) {
   await continuarValorReceber(req);
 }
 
+const TIN_COL = "titulos_incompletos_batimento";
+const TIN_ID = "atual";
+
+function addDaysIso(iso, n) {
+  const p = String(iso || "").slice(0, 10).split("-").map(Number);
+  const dt = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  return dt.toISOString().slice(0, 10);
+}
+
+function tinUrl(start, end) {
+  return `${SIENGE_BULK_BASE}/bulk-data/v1/outcome?startDate=${encodeURIComponent(start)}`
+    + `&endDate=${encodeURIComponent(end)}`
+    + "&selectionType=I&correctionIndexerId=0&correctionDate=2023-01-01&withAuthorizations=false";
+}
+
+async function buscarOutcomeIncompleto(start, end, depth) {
+  try {
+    const payload = await siengeFetchOnce(tinUrl(start, end));
+    return (payload && payload.data) || [];
+  } catch (err) {
+    const status = Number(err && err.status);
+    if (status === 429 && depth < 4) {
+      await new Promise((r) => setTimeout(r, 2000));
+      return buscarOutcomeIncompleto(start, end, depth + 1);
+    }
+    if (status !== 507 || depth > 6 || start >= end) throw err;
+    const s = new Date(start + "T12:00:00Z");
+    const e = new Date(end + "T12:00:00Z");
+    const midDate = new Date(s.getTime() + Math.floor((e - s) / 2));
+    const mid = midDate.toISOString().slice(0, 10);
+    const next = addDaysIso(mid, 1);
+    if (!(mid >= start && mid < end && next <= end)) throw err;
+    const left = await buscarOutcomeIncompleto(start, mid, depth + 1);
+    const right = await buscarOutcomeIncompleto(next, end, depth + 1);
+    return left.concat(right);
+  }
+}
+
+async function runTitulosIncompletos() {
+  const today = todayIsoSP();
+  const ref = doc(db, TIN_COL, TIN_ID);
+  const snap = await getDoc(ref);
+  const prev = snap.exists() ? (snap.data() || {}) : {};
+  if (prev.date === today && prev.done) return { ok: true, skipped: true, date: today, total: Number(prev.total) || 0 };
+  if (prev.date === today && Number(prev.lockAte || 0) > Date.now()) return { ok: true, locked: true, date: today };
+  await setDoc(ref, { date: today, done: false, lockAte: Date.now() + 2 * 60 * 1000 }, { merge: true });
+  try {
+    const bills = await buscarOutcomeIncompleto(addDaysIso(today, -29), today, 0);
+    const vistos = new Set();
+    const rows = [];
+    (bills || []).forEach((bill) => {
+      const row = normalizarOutcome(bill);
+      if (!row) return;
+      const k = chaveTitulo(row);
+      if (vistos.has(k)) return;
+      vistos.add(k);
+      rows.push(row);
+    });
+    let primeiros = {};
+    try { primeiros = JSON.parse(prev.primeiros || "{}"); } catch (e) { primeiros = {}; }
+    const fila = aplicarFila(rows, primeiros, today);
+    await setDoc(ref, {
+      date: today,
+      done: true,
+      lockAte: 0,
+      at: new Date().toISOString(),
+      total: fila.rows.length,
+      rows: fila.rows,
+      primeiros: JSON.stringify(fila.primeiros)
+    });
+    return { ok: true, date: today, total: fila.rows.length };
+  } catch (e) {
+    try { await setDoc(ref, { lockAte: 0 }, { merge: true }); } catch (e2) {}
+    throw e;
+  }
+}
+
+async function titulosIncompletosHandler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(204).end();
+  }
+  if (!authorized(req)) return res.status(401).json({ error: "unauthorized" });
+  try {
+    const out = await runTitulosIncompletos();
+    return res.status(200).json(out);
+  } catch (e) {
+    console.error("[titulos-incompletos]", e);
+    return res.status(500).json({ error: String((e && e.message) || e) });
+  }
+}
+
+/** Títulos incompletos entram no mesmo batimento das 7h. A chamada é abandonada; a função segue sozinha. */
+async function dispararTitulosIncompletos(req) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    await fetch(`${originFromReq(req)}/api/titulos-incompletos-batimento`, {
+      headers: { Authorization: req.headers.authorization || "" },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handler(req, res) {
   if (String(req.url || "").indexOf("caucao-batimento") >= 0) return caucaoHandler(req, res);
   if (String(req.url || "").indexOf("valor-receber") >= 0) return valorReceberHandler(req, res);
   if (String(req.url || "").indexOf("distrato-followup") >= 0) return distratoFollowupHandler(req, res);
+  if (String(req.url || "").indexOf("titulos-incompletos") >= 0) return titulosIncompletosHandler(req, res);
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     return res.status(204).end();
@@ -1302,6 +1412,7 @@ async function handler(req, res) {
   await dispararDistratoFollowup(req);
   await dispararCredores(req);
   await dispararValorReceber(req);
+  await dispararTitulosIncompletos(req);
 
   const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
   const today = todayIsoSP();

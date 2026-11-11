@@ -645,7 +645,6 @@ const ConfigUsersApp = {
     if (!Array.isArray(this.profiles) || !this.profiles.length) {
       this.profiles = [
         { id: "admin", name: "ADMINISTRADOR" },
-        { id: "operador_pagadoria", name: "OPERADOR PAGADORIA" },
         { id: "operador_cobranca", name: "OPERADOR COBRANÇA" },
         { id: "operador_cobranca_back_office", name: "OPERADOR COBRANÇA BACK OFFICE" },
         { id: "operador_cobranca_terceirizado", name: "OPERADOR COBRANÇA TERCEIRIZADO" },
