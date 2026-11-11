@@ -1,14 +1,13 @@
 // Aviso no topo do Integra:
 // - para o administrador, quando a branch develop (ambiente de teste) tem alterações que ainda não estão na produção;
 // - para todos, quando a página aberta é o próprio ambiente de teste.
-// Lê o repositório público mouraleite/integra pela API do GitHub (sem senha). Guarda a resposta por 10 minutos.
+// Lê o repositório público mouraleite/integra pela API do GitHub (sem senha). Confere a cada 3 minutos e ao voltar para a aba (consulta condicional; só com a aba visível).
 (function () {
   const REPO = "mouraleite/integra";
   const URL_TESTE = "https://crm-gestao-git-develop-crm-mldu.vercel.app/";
   const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
-  const CACHE = "integra_develop_compare_v2";
   const DISPENSADO = "integra_develop_dispensado";
-  const TEMPO_CACHE = 10 * 60 * 1000;
+  const INTERVALO = 3 * 60 * 1000;
   let dados = null;
   let iniciou = false;
 
@@ -207,38 +206,66 @@
     });
   }
 
-  async function consultar() {
-    const guardado = ler(CACHE, sessionStorage);
-    if (guardado) {
-      try {
-        const g = JSON.parse(guardado);
-        if (g && Date.now() - g.em < TEMPO_CACHE) { dados = g.dados; return; }
-      } catch (e) {}
+  // Pergunta ao GitHub com o "ETag" da última resposta: se nada mudou, ele responde 304,
+  // que é rápido e não gasta o limite de 60 consultas por hora.
+  async function pedir(url, reduzir) {
+    const chave = "integra_gh_" + url;
+    let salvo = null;
+    try { salvo = JSON.parse(ler(chave, sessionStorage) || "null"); } catch (e) { salvo = null; }
+    const headers = { Accept: "application/vnd.github+json" };
+    if (salvo && salvo.etag) headers["If-None-Match"] = salvo.etag;
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (res.status === 304 && salvo) return salvo.corpo;
+    if (!res.ok) return salvo ? salvo.corpo : null;
+    const corpo = reduzir(await res.json());
+    gravar(chave, JSON.stringify({ etag: res.headers.get("ETag") || "", corpo }), sessionStorage);
+    return corpo;
+  }
+
+  function versaoDaPagina() {
+    const spans = document.querySelectorAll(".sidebar span, aside span, span");
+    for (let i = 0; i < spans.length; i++) {
+      const m = /^\s*v1\.0\.(\d+)/.exec(spans[i].textContent || "");
+      if (m) return Number(m[1]);
     }
-    const opts = { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" };
-    const [res, resMain] = await Promise.all([
-      fetch("https://api.github.com/repos/" + REPO + "/compare/main...develop", opts),
-      fetch("https://api.github.com/repos/" + REPO + "/commits/main", opts).catch(() => null)
-    ]);
-    if (!res.ok) return;
-    const j = await res.json();
-    let main = null;
-    try { main = resMain && resMain.ok ? await resMain.json() : null; } catch (e) { main = null; }
+    return 0;
+  }
+
+  async function consultar() {
+    const base = "https://api.github.com/repos/" + REPO;
     const versao = (msg) => { const m = /v1\.0\.(\d+)/.exec(String(msg || "")); return m ? Number(m[1]) : 0; };
-    dados = {
+    const cmp = await pedir(base + "/compare/main...develop", (j) => ({
       commits: (j.commits || []).map((c) => ({ sha: c.sha, parents: c.parents, commit: { message: c.commit && c.commit.message, author: c.commit && c.commit.author }, author: c.author ? { login: c.author.login } : null })),
       files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status })),
-      // Versão da produção = último "v1.0.XXXX" da main; base do teste = última versão da main que a develop já contém.
-      versaoProducao: versao(main && main.commit && main.commit.message),
-      versaoBaseTeste: versao(j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message),
+      baseMsg: j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message,
       atrasadoPor: Number(j.behind_by) || 0
+    }));
+    if (!cmp) return;
+    // Na produção, a versão é a da própria página (rodapé do menu). No teste, pergunta ao GitHub.
+    let versaoProducao = ambienteDeTeste() ? 0 : versaoDaPagina();
+    if (!versaoProducao) {
+      const main = await pedir(base + "/commits/main", (j) => ({ msg: j.commit && j.commit.message })).catch(() => null);
+      versaoProducao = versao(main && main.msg);
+    }
+    dados = {
+      commits: cmp.commits,
+      files: cmp.files,
+      // Base do teste = última versão da produção que a develop já contém.
+      versaoProducao,
+      versaoBaseTeste: versao(cmp.baseMsg),
+      atrasadoPor: cmp.atrasadoPor
     };
-    gravar(CACHE, JSON.stringify({ em: Date.now(), dados }), sessionStorage);
   }
+
+  let ultimaConsulta = 0;
 
   async function ciclo() {
     try {
-      if (ehAdmin()) await consultar();
+      // Sem login no GitHub o limite é 60 consultas/hora por rede: só consulta com a aba visível.
+      if (ehAdmin() && document.visibilityState !== "hidden") {
+        ultimaConsulta = Date.now();
+        await consultar();
+      }
     } catch (e) {}
     pintar();
   }
@@ -247,7 +274,14 @@
     if (iniciou) return;
     iniciou = true;
     ciclo();
-    setInterval(ciclo, TEMPO_CACHE);
+    setInterval(ciclo, INTERVALO);
+    // Ao voltar para a aba do Integra, confere na hora (no máximo 1 vez a cada 90 s).
+    const aoVoltar = () => {
+      if (document.visibilityState === "hidden" || Date.now() - ultimaConsulta < 90000) return;
+      ciclo();
+    };
+    document.addEventListener("visibilitychange", aoVoltar);
+    window.addEventListener("focus", aoVoltar);
     // Liga/desliga na hora quando a pessoa ativa ou sai do "Ver como administrador".
     let eraAdmin = ehAdmin();
     setInterval(() => {
@@ -270,5 +304,5 @@
     }
   }, 2000);
 
-  window.IntegraAvisoDevelop = { atualizar: () => { try { sessionStorage.removeItem(CACHE); } catch (e) {} ciclo(); }, abrirResumo };
+  window.IntegraAvisoDevelop = { atualizar: () => ciclo(), abrirResumo };
 })();

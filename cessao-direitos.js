@@ -1329,18 +1329,15 @@ const CessaoPopup = {
     let juros = 0;
     let indexador = "REAL";
     if (recente) {
-      condicoes = this.condicoesDoContrato(condsApi, installments, contract);
       const daTela = (window.AppState && window.AppState.currentContractInstallments) || [];
-      juros = this.jurosDoContrato(contract, condsApi, []
+      const parcelasTaxa = []
         .concat(installments || [])
         .concat(instFin || [])
         .concat(extrato || [])
-        .concat(daTela));
-      indexador = this.indiceDoContrato(condsApi, []
-        .concat(installments || [])
-        .concat(instFin || [])
-        .concat(extrato || [])
-        .concat(daTela), contract);
+        .concat(daTela);
+      juros = this.jurosDoContrato(contract, condsApi, parcelasTaxa);
+      indexador = this.indiceDoContrato(condsApi, parcelasTaxa, contract);
+      condicoes = this.condicoesDoContrato(condsApi, installments, contract, juros);
     }
     if (!condicoes.length) condicoes = [{ id: "c1", tipo: "Mensal", qtde: "", valor: "", vencimento: "" }];
     condicoes.sort((a, b) => this.cmpVencimento(a, b));
@@ -1384,8 +1381,66 @@ const CessaoPopup = {
     });
   },
 
-  /** totalValue do Sienge é o valor presente. Com juros, a parcela do contrato é a prestação da Tabela Price. */
-  valorNominalCondicao(c, qtde, total, contract) {
+  condicaoMensal(c) {
+    const id = String((c && (c.conditionTypeId || c.conditionType)) || "").trim().toUpperCase();
+    const nome = String((c && (c.conditionTypeName || c.description || c.conditionType)) || "").toUpperCase();
+    return id === "PM" || /MENSAL/.test(nome);
+  },
+
+  intervaloCondicao(c) {
+    const id = String((c && (c.conditionTypeId || c.conditionType)) || "").trim().toUpperCase();
+    const nome = String((c && (c.conditionTypeName || c.description || c.conditionType)) || "").toUpperCase();
+    if (id === "PA" || /ANUAL/.test(nome)) return 12;
+    if (id === "PS" || /SEMEST/.test(nome)) return 6;
+    if (/TRIMESTR/.test(nome)) return 3;
+    if (/BIMESTR/.test(nome)) return 2;
+    return 1;
+  },
+
+  mesesEntre(isoA, isoB) {
+    const a = String(isoA || "").slice(0, 10);
+    const b = String(isoB || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return null;
+    const pa = a.split("-").map(Number);
+    const pb = b.split("-").map(Number);
+    return (pb[0] - pa[0]) * 12 + (pb[1] - pa[1]);
+  },
+
+  dataBaseJuros(c, contract) {
+    const primeiro = String((c && (c.firstPayment || c.firstDueDate || c.dueDate)) || "").slice(0, 10);
+    const cands = [
+      c && c.baseDateInterest,
+      c && c.interestBaseDate,
+      c && c.baseDateOfInterest,
+      c && c.baseDate,
+      contract && (contract.contractDate || contract.issueDate || contract.saleDate)
+    ];
+    for (let i = 0; i < cands.length; i++) {
+      const iso = String(cands[i] || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+      const meses = this.mesesEntre(iso, primeiro);
+      if (meses != null && meses > 0 && meses <= 18) return iso;
+    }
+    return "";
+  },
+
+  /** n = meses entre a data-base dos juros e o 1º vencimento, menos o intervalo da condição. n negativo não reduz a parcela. */
+  periodosJurosAntes(c, contract) {
+    const primeiro = String((c && (c.firstPayment || c.firstDueDate || c.dueDate)) || "").slice(0, 10);
+    const base = this.dataBaseJuros(c, contract);
+    const meses = this.mesesEntre(base, primeiro);
+    if (meses == null) return 0;
+    const carencia = Number(c && (c.monthsGracePeriod != null ? c.monthsGracePeriod : c.gracePeriod)) || 0;
+    const n = meses - this.intervaloCondicao(c) - (carencia > 0 ? carencia : 0);
+    return n > 0 ? n : 0;
+  },
+
+  /**
+   * totalValue do Sienge pode ser o valor presente.
+   * Se a data-base dos juros antecede o 1º vencimento por mais de um intervalo, a parcela do contrato é a fatia trazida a valor futuro: fatia × (1+i)^n.
+   * Se a base está a um intervalo do 1º vencimento, o total é o valor presente da série e a parcela é a prestação da Tabela Price.
+   */
+  valorNominalCondicao(c, qtde, total, contract, jurosSerie) {
     const fatia = qtde > 0 && total > 0 ? Math.round((total / qtde) * 100) / 100 : 0;
     const explicito = Number(c.installmentValue || c.installmentAmount || c.installmentBaseValue) || 0;
     if (explicito > 0.009 && explicito + 0.02 < total && explicito > fatia + 0.05) return explicito;
@@ -1393,6 +1448,12 @@ const CessaoPopup = {
     const semPrice = tipo === "S" || tipo === "N";
     let juros = this.taxaMensalPct(c.interestPercentage);
     if (juros == null && contract) juros = this.taxaMensalPct(contract.interestPercentage);
+    if (juros == null && this.condicaoMensal(c) && Number(jurosSerie) > 0) juros = Number(jurosSerie);
+    const nAntes = tipo === "S" ? 0 : this.periodosJurosAntes(c, contract);
+    if (juros > 0 && nAntes > 0 && fatia > 0) {
+      const face = Math.round(fatia * Math.pow(1 + juros / 100, nAntes) * 100) / 100;
+      if (face > fatia + 0.001) return face;
+    }
     if (!semPrice && juros > 0 && qtde > 1 && total > 0) {
       const i = juros / 100;
       const pot = Math.pow(1 + i, qtde);
@@ -1401,15 +1462,15 @@ const CessaoPopup = {
         if (pmt > fatia + 0.02) return pmt;
       }
     }
-    if (explicito > 0.009) return explicito;
+    if (explicito > 0.009 && explicito + 0.02 >= fatia) return explicito;
     return fatia;
   },
 
-  condicoesDoContrato(conds, installments, contract) {
+  condicoesDoContrato(conds, installments, contract, jurosSerie) {
     const rows = (conds || []).map((c, i) => {
       const qtde = Number(c.installmentsNumber || c.numberOfInstallments || c.quantity || c.installments) || 0;
       const total = Number(c.totalValue || c.totalAmount || c.value) || 0;
-      const valor = this.valorNominalCondicao(c, qtde, total, contract);
+      const valor = this.valorNominalCondicao(c, qtde, total, contract, jurosSerie);
       const venc = String(c.firstPayment || c.firstDueDate || c.baseDate || c.dueDate || "").slice(0, 10);
       const tipo = c.conditionTypeName || c.description || c.conditionType || "Mensal";
       if (!(qtde > 0) || !(valor > 0)) return null;
