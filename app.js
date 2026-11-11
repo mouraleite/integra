@@ -9491,7 +9491,11 @@ window.cancelamentoLiberarSeguir = function() {
   btn.style.opacity = ok ? "" : "0.45";
   btn.style.cursor = ok ? "" : "not-allowed";
   const distMsg = leitura.distrato && leitura.distrato.status === "ok" && !leitura.distrato.ok ? leitura.distrato.mensagem : "";
-  btn.title = ok ? "" : (lendo ? "Lendo o documento…" : (distMsg || "Anexe os documentos pedidos, inclusive o distrato assinado deste cliente, título e unidade."));
+  const semDistrato = !!(window._cancelAvaliacao && window._cancelAvaliacao.nexCumprida);
+  const falta = semDistrato
+    ? "Anexe os documentos pedidos."
+    : "Anexe os documentos pedidos, inclusive o distrato assinado deste cliente, título e unidade.";
+  btn.title = ok ? "" : (lendo ? "Lendo o documento…" : (distMsg || falta));
 };
 
 window.cancelamentoMostrarPedidoCertidao = function(classe) {
@@ -9695,7 +9699,8 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
     const obra = await window.cancelamentoLerConstrucao(client);
     const resumo = await window.cancelamentoMontarExtrato(client);
     if (!document.getElementById("cancel-avaliacao-pop")) return;
-    const nex = typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client);
+    const nexFila = /NEX CUMPRIDA/.test(String(client.appliedRule || ""));
+    const nex = nexFila || (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client));
     const info = {
       contrato: resumo.contrato,
       pago: resumo.pago,
@@ -9738,12 +9743,14 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
     };
     let docsHtml = "";
     if (pode.ok) {
-      docsHtml += `<div style="margin-top:12px;">
-        <label style="display:block;font-size:0.82rem;font-weight:700;color:#0f172a;margin-bottom:4px;">Distrato assinado</label>
-        <p style="margin:0 0 6px;font-size:0.78rem;color:#64748b;">Envie o PDF do distrato assinado. O sistema confere se o texto é deste cliente, deste título e desta unidade antes de gravar na unidade.</p>
-        <input type="file" id="cancel-distrato-file" accept=".pdf,application/pdf" onchange="window.cancelamentoAoAnexarDistrato()" style="width:100%;box-sizing:border-box;padding:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;font-size:0.85rem;">
-        <p id="cancel-distrato-aviso" style="margin:6px 0 0;font-size:0.78rem;color:#64748b;"></p>
-      </div>`;
+      if (!nex) {
+        docsHtml += `<div style="margin-top:12px;">
+          <label style="display:block;font-size:0.82rem;font-weight:700;color:#0f172a;margin-bottom:4px;">Distrato assinado</label>
+          <p style="margin:0 0 6px;font-size:0.78rem;color:#64748b;">Envie o PDF do distrato assinado. O sistema confere se o texto é deste cliente, deste título e desta unidade antes de gravar na unidade.</p>
+          <input type="file" id="cancel-distrato-file" accept=".pdf,application/pdf" onchange="window.cancelamentoAoAnexarDistrato()" style="width:100%;box-sizing:border-box;padding:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;font-size:0.85rem;">
+          <p id="cancel-distrato-aviso" style="margin:6px 0 0;font-size:0.78rem;color:#64748b;"></p>
+        </div>`;
+      }
       if (exig.obraAndamento) {
         docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">Obra em andamento: CND e CND da associação dispensadas.</p>`;
       } else {
@@ -9757,12 +9764,13 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
         docsHtml += campoArquivo("cancel-webro-file", "Print da tela da Webro com os boletos baixados", "Este cliente tem a tag Boleto WEBRO. O print sobe no cadastro da unidade.");
       }
     }
-    const pedeDoc = !!pode.ok;
+    const pedeDoc = pode.ok && docsHtml.indexOf("type=\"file\"") >= 0;
+    const avisoNex = "NEX cumprida. O cliente foi notificado e constituído em mora. Não pagou nos 30 dias após a entrega, então não há distrato para assinar.";
     const aviso = pode.ok
-      ? `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#ecfdf5;color:#105436;font-size:0.84rem;font-weight:700;">Pago ${window.cancelContratoEsc(pct)} do contrato, menos de 10%. Restituição zero. Sem construção. Para seguir, anexe o distrato assinado deste cliente, título e unidade.</p>`
+      ? `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#ecfdf5;color:#105436;font-size:0.84rem;font-weight:700;">Pago ${window.cancelContratoEsc(pct)} do contrato, menos de 10%. Restituição zero. Sem construção. ${nex ? avisoNex : "Para seguir, anexe o distrato assinado deste cliente, título e unidade."}</p>`
       : `<p style="margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#fef2f2;color:#991b1b;font-size:0.84rem;">${pode.motivos.map(function(m) { return window.cancelContratoEsc(m); }).join("<br>")}</p>`;
     const seguir = pode.ok
-      ? `<button type="button" class="btn btn-primary" id="cancel-seguir-btn" ${pedeDoc ? "disabled style=\"opacity:0.45;cursor:not-allowed;\" title=\"Anexe os documentos pedidos para seguir com o distrato.\"" : ""} onclick="window.cancelamentoGuardarDocsESeguir(${cidNum}, '${saleJs}')">Seguir para o cancelamento</button>`
+      ? `<button type="button" class="btn btn-primary" id="cancel-seguir-btn" ${pedeDoc ? "disabled style=\"opacity:0.45;cursor:not-allowed;\" title=\"" + (nex ? "Anexe os documentos pedidos." : "Anexe os documentos pedidos para seguir com o distrato.") + "\"" : ""} onclick="window.cancelamentoGuardarDocsESeguir(${cidNum}, '${saleJs}')">Seguir para o cancelamento</button>`
       : (obra.temConstrucao
         ? `<button type="button" class="btn btn-primary" onclick="window.fecharAvaliacaoCancelamento(); window.enviarParaJuridico(${cidNum}, '${saleJs}')">Enviar para o jurídico</button>`
         : "");
@@ -9915,8 +9923,9 @@ window.enviarCancelamentoContrato = async function() {
   }
   if (exig.loteamentoFechado && !exig.obraAndamento && !docs.associacao) { falha("Anexe a CND da associação antes de cancelar."); return; }
   if (exig.webro && !docs.webro) { falha("Anexe o print da baixa da Webro antes de cancelar."); return; }
+  const dispensaDistrato = !!(aval && aval.nexCumprida);
   const leituraDistrato = (window._cancelLeitura || {}).distrato;
-  if (!docs.distrato || !leituraDistrato || !leituraDistrato.ok) {
+  if (!dispensaDistrato && (!docs.distrato || !leituraDistrato || !leituraDistrato.ok)) {
     falha((leituraDistrato && leituraDistrato.mensagem) || "Anexe o distrato assinado deste cliente, título e unidade.");
     return;
   }
@@ -9966,7 +9975,8 @@ window.enviarCancelamentoContrato = async function() {
     });
     const subNome = (window.CANCEL_SUBTIPOS.find(function(s) { return s.codigo === subtipo; }) || {}).nome || subtipo;
     const anexosTxt = [docs.distrato && "distrato assinado", docs.cnd && "CND", docs.associacao && "CND da associação", docs.webro && "print da baixa Webro"].filter(Boolean).join(", ");
-    const resumo = "Contrato " + contract.id + " cancelado no Sienge, subtipo " + subNome + " (" + subtipo + "), motivo " + rot.codigo + " (" + rot.texto + "), título " + client.saleId + " · " + (client.customerName || "") + (anexosTxt ? ". Documentos na unidade: " + anexosTxt : "");
+    const nexNota = dispensaDistrato ? " NEX cumprida: sem distrato assinado, porque a notificação constituiu o cliente em mora." : "";
+    const resumo = "Contrato " + contract.id + " cancelado no Sienge, subtipo " + subNome + " (" + subtipo + "), motivo " + rot.codigo + " (" + rot.texto + "), título " + client.saleId + " · " + (client.customerName || "") + (anexosTxt ? ". Documentos na unidade: " + anexosTxt : "") + nexNota;
     window.cancelContratoRegistrar(client, "ok", resumo, { contractId: contract.id, reason: rot.codigo, reasonTexto: rot.texto, subType: subtipo, date: data, cnd: !!docs.cnd, associacao: !!docs.associacao, webro: !!docs.webro });
     let avisoFollow = "";
     if (window.FollowupCndApp && typeof FollowupCndApp.registrarDoDistrato === "function") {
