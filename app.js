@@ -5262,6 +5262,9 @@ async function processSuccessfulLogin(loggedUser) {
       if (typeof window.checkVistoriasValidationAlerts === "function") {
         window.checkVistoriasValidationAlerts();
       }
+      if (typeof window.iniciarAvisoVistoriaSolicitante === "function") {
+        window.iniciarAvisoVistoriaSolicitante();
+      }
       if (typeof window.checkNexDueAlerts === "function") {
         window.checkNexDueAlerts();
       }

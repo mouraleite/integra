@@ -79,7 +79,31 @@ function _vcLatestDateAmong(keys, dateByKey) {
 function _vcIsFollowupPending(docObj) {
     if (!docObj || docObj.isTest) return false;
     const st = String(docObj.status || '');
-    return st === 'aguardando_fotos' || st === 'aguardando_validacao';
+    return st === 'solicitada' || st === 'aguardando_fotos' || st === 'aguardando_validacao';
+}
+
+function _vcHaPedido(docObj) {
+    const reqDate = _vcTimestampToDateStr(docObj && docObj.createdAt)
+        || _vcTimestampToDateStr(docObj && docObj.requestedAt)
+        || _vcTimestampToDateStr(docObj && docObj.updatedAt);
+    const reqDays = reqDate ? _vcDaysSince(reqDate) : null;
+    if (reqDays === 0) return 'Solicitado hoje';
+    if (reqDays !== null) return `Há ${reqDays} dia(s)`;
+    return '';
+}
+
+function _vcRotuloPedido(docObj) {
+    if (!docObj) return null;
+    if (docObj.status === 'solicitada') {
+        return { statusLabel: 'Pedido da ficha', statusColor: 'color:#0369a1; font-weight:600;', solicitadoHa: _vcHaPedido(docObj) };
+    }
+    if (docObj.status === 'aguardando_fotos') {
+        return { statusLabel: 'Link Enviado – Aguardando Fotos', statusColor: 'color: #d97706; font-weight: 600;', solicitadoHa: _vcHaPedido(docObj) };
+    }
+    if (docObj.status === 'aguardando_validacao') {
+        return { statusLabel: 'Aguardando Validação', statusColor: 'color: #7c3aed; font-weight: 600;', solicitadoHa: '' };
+    }
+    return null;
 }
 
 function _vcIsPendingSuperseded(pendingDoc, latestCheckDate) {
@@ -151,7 +175,7 @@ window.closePendingLinkVistorias = async function(contractKeys, reason) {
     const keys = [...new Set((contractKeys || []).map(_vcNormalizeKey).filter(Boolean))];
     if (!keys.length || !window.firebaseDb || !window.firebaseCollections) return 0;
     const { collection, getDocs, query, where, doc, updateDoc } = window.firebaseCollections;
-    const pendingStatuses = new Set(['aguardando_fotos', 'aguardando_validacao']);
+    const pendingStatuses = new Set(['solicitada', 'aguardando_fotos', 'aguardando_validacao']);
     const keySet = new Set(keys);
     let closed = 0;
     try {
@@ -1055,12 +1079,13 @@ window.VerificarConstrucaoApp = {
                         <table class="cc-table vc-table" id="vc-table">
                             <colgroup>
                                 <col style="width: 38px;">
-                                <col style="width: 96px;">
+                                <col style="width: 88px;">
                                 <col>
                                 <col style="width: 64px;">
-                                <col style="width: 108px;">
-                                <col style="width: 150px;">
-                                <col style="width: 272px;">
+                                <col style="width: 96px;">
+                                <col style="width: 140px;">
+                                <col style="width: 128px;">
+                                <col style="width: 240px;">
                             </colgroup>
                             <thead>
                                 <tr>
@@ -1069,6 +1094,7 @@ window.VerificarConstrucaoApp = {
                                     <th>Cliente</th>
                                     <th>Título</th>
                                     <th class="is-center">Parc. vencidas</th>
+                                    <th>Solicitado por</th>
                                     <th>Última vistoria</th>
                                     <th>Status</th>
                                 </tr>
@@ -1556,7 +1582,7 @@ window.VerificarConstrucaoApp = {
         this.renderKpis(filtered.filter(r => !_vcResolveObraEntry(obrasState, r.costCenterId, r.empreendimento).isOn));
 
         if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7" class="vc-vazio">Nenhum título encontrado com os filtros atuais.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="8" class="vc-vazio">Nenhum título encontrado com os filtros atuais.</td></tr>`;
             return;
         }
 
@@ -1581,7 +1607,7 @@ window.VerificarConstrucaoApp = {
                     <td class="is-center">
                         <input type="checkbox" class="vc-city-cb" data-city="${safeCidade}" onchange="window.VerificarConstrucaoApp.toggleCity(this, '${safeCidade}')">
                     </td>
-                    <td colspan="6"><i data-lucide="map-pin"></i> ${cidade}</td>
+                    <td colspan="7"><i data-lucide="map-pin"></i> ${cidade}</td>
                 </tr>
             `;
 
@@ -1602,14 +1628,14 @@ window.VerificarConstrucaoApp = {
                         <td class="is-center">
                             <input type="checkbox" class="vc-emp-cb city-${safeCidade}" data-city="${safeCidade}" data-emp="${safeEmp}" onchange="window.VerificarConstrucaoApp.toggleEmp(this, '${safeCidade}', '${safeEmp}')" ${isObraAndamento ? 'disabled' : ''}>
                         </td>
-                        <td colspan="6"><i data-lucide="building-2"></i> ${empLabelDisplay}${isObraAndamento ? '<span class="vc-tag is-obra">Obra em andamento</span>' : ''}</td>
+                        <td colspan="7"><i data-lucide="building-2"></i> ${empLabelDisplay}${isObraAndamento ? '<span class="vc-tag is-obra">Obra em andamento</span>' : ''}</td>
                     </tr>
                 `;
 
                 if (isObraAndamento) {
                     html += `
                         <tr class="vc-dispensa">
-                            <td colspan="7">Vistoria dispensada — obras do empreendimento em andamento.</td>
+                            <td colspan="8">Vistoria dispensada — obras do empreendimento em andamento.</td>
                         </tr>
                     `;
                 } else {
@@ -1628,6 +1654,7 @@ window.VerificarConstrucaoApp = {
 
                         const unidadeTxt = _vcPlaceholderUnit(u.unidade) ? "—" : u.unidade;
                         const nomeTxt = _vcPlaceholderName(u.clienteName) ? "—" : u.clienteName;
+                        const pedidoPor = (u.vistoriaAtiva && u.vistoriaAtiva.requestedBy) ? String(u.vistoriaAtiva.requestedBy) : "—";
                         html += `
                             <tr class="vc-linha">
                                 <td class="is-center">
@@ -1637,6 +1664,7 @@ window.VerificarConstrucaoApp = {
                                 <td title="${String(nomeTxt).replace(/"/g, '&quot;')}">${nomeTxt}${_vcRowIsSubjudice(u) ? '<span class="vc-tag is-sj">Sub Judice</span>' : ''}</td>
                                 <td>${u.titulo}</td>
                                 <td class="is-center">${parcelasDisplay}</td>
+                                <td class="vc-pedido" title="${pedidoPor.replace(/"/g, '&quot;')}">${pedidoPor}</td>
                                 <td>${lastVistoriaHtml}</td>
                                 <td>${validAction}</td>
                             </tr>
@@ -1669,7 +1697,8 @@ window.VerificarConstrucaoApp = {
     updateBtn() {
         const cbs = document.querySelectorAll('.vc-row-checkbox:checked');
         const btn = document.getElementById('btn-solicitar-wpp');
-        if (btn) btn.disabled = cbs.length === 0;
+        const temPedido = (this.renderedRows || []).some((r) => r.vistoriaAtiva && r.vistoriaAtiva.status === 'solicitada');
+        if (btn) btn.disabled = cbs.length === 0 && !temPedido;
         const sel = document.getElementById('vc-kpi-sel');
         if (sel) sel.textContent = cbs.length.toLocaleString('pt-BR');
     },
@@ -1681,6 +1710,7 @@ window.VerificarConstrucaoApp = {
         const kpi = (rot, val, cls, id) => `<div class="ppcc-kpi"><span class="ppcc-kpi-rot">${rot}</span><span class="ppcc-kpi-val${cls ? ' ' + cls : ''}"${id ? ` id="${id}"` : ''}>${Number(val).toLocaleString('pt-BR')}</span></div>`;
         box.innerHTML = kpi('Unidades', rows.length)
             + kpi('Pendentes de vistoria', conta('Pendente de Vistoria'), 'is-neg')
+            + kpi('Pedidos da ficha', conta('Pedido da ficha'), 'is-alerta')
             + kpi('Aguardando fotos', conta('Link Enviado – Aguardando Fotos'), 'is-alerta')
             + kpi('Aguardando validação', conta('Aguardando Validação'))
             + kpi('Selecionadas', document.querySelectorAll('.vc-row-checkbox:checked').length, 'is-pos', 'vc-kpi-sel');
@@ -1846,12 +1876,26 @@ window.VerificarConstrucaoApp = {
         if (!this.renderedRows) return;
 
         const cbs = document.querySelectorAll('.vc-row-checkbox:checked');
-        const selected = Array.from(cbs).map(c => this.renderedRows[parseInt(c.value)]);
-        if (selected.length === 0) return;
+        const selected = Array.from(cbs).map(c => this.renderedRows[parseInt(c.value, 10)]).filter(Boolean);
+        const internos = this.renderedRows.filter((r) => r.vistoriaAtiva && r.vistoriaAtiva.status === 'solicitada');
+        const lista = [];
+        const vistos = new Set();
+        internos.concat(selected).forEach((r) => {
+            const st = r.vistoriaAtiva && r.vistoriaAtiva.status;
+            if (st === 'aguardando_fotos' || st === 'aguardando_validacao') return;
+            const chave = (r.vistoriaAtiva && r.vistoriaAtiva.id) || (String(r.titulo || '') + '|' + String(r.unidade || ''));
+            if (vistos.has(chave)) return;
+            vistos.add(chave);
+            lista.push(r);
+        });
+        if (!lista.length) {
+            alert('Não há pedido pendente para disparar. Os pedidos da ficha entram todos no mesmo link.');
+            return;
+        }
 
         const btnWpp = document.getElementById('btn-solicitar-wpp');
         btnWpp.disabled = true;
-        btnWpp.innerHTML = 'Gerando Links...';
+        btnWpp.innerHTML = 'Gerando o link...';
 
         const normalizePhone = (phone) => {
             if (!phone) return '';
@@ -1886,11 +1930,12 @@ window.VerificarConstrucaoApp = {
             const baseUrl = window.location.origin + window.location.pathname.replace(/[^/]*$/, '');
 
             const cityGroups = {};
-            const targetGroups = {};
+            const phones = new Set();
 
-            for (const r of selected) {
+            for (const r of lista) {
                 let vId = r.vistoriaAtiva ? r.vistoriaAtiva.id : null;
                 const loteCoords = await this._fetchLoteCoords(r.costCenterId);
+                const eraPedido = !!(r.vistoriaAtiva && r.vistoriaAtiva.status === 'solicitada');
 
                 const contractKeys = Array.isArray(r.contractKeys) && r.contractKeys.length
                     ? [...r.contractKeys]
@@ -1914,11 +1959,15 @@ window.VerificarConstrucaoApp = {
                         unidade: r.unidade,
                         status: 'aguardando_fotos',
                         loteCoords: loteCoords || null,
-                        createdAt: serverTimestamp()
+                        createdAt: serverTimestamp(),
+                        linkEnviadoEm: new Date().toISOString()
                     });
                     vId = docRef.id;
-                } else if (loteCoords) {
-                    await updateDoc(doc(window.firebaseDb, 'vistorias', vId), { loteCoords });
+                } else {
+                    const patch = { linkEnviadoEm: new Date().toISOString() };
+                    if (loteCoords) patch.loteCoords = loteCoords;
+                    if (eraPedido) patch.status = 'aguardando_fotos';
+                    await updateDoc(doc(window.firebaseDb, 'vistorias', vId), patch);
                 }
 
                 r._generatedVistoriaId = vId;
@@ -1928,49 +1977,31 @@ window.VerificarConstrucaoApp = {
                 cityGroups[r.cidade][r.empreendimento]++;
 
                 const responsibleUsers = getResponsibleUsersByCity(r.cidade);
-                if (responsibleUsers.length === 0) {
-                    const fallbackKey = `sem-responsavel|5515998118246`;
-                    if (!targetGroups[fallbackKey]) {
-                        targetGroups[fallbackKey] = { city: r.cidade, phone: '5515998118246', name: 'Responsável não configurado', rows: [] };
-                    }
-                    targetGroups[fallbackKey].rows.push(r);
-                    continue;
-                }
-
-                responsibleUsers.forEach(user => {
+                responsibleUsers.forEach((user) => {
                     const phone = normalizePhone(user.phone);
-                    const key = `${r.cidade}|${phone}`;
-                    if (!targetGroups[key]) {
-                        targetGroups[key] = { city: r.cidade, phone, name: user.name, rows: [] };
-                    }
-                    targetGroups[key].rows.push(r);
+                    if (phone) phones.add(phone);
                 });
             }
 
-            if (Object.keys(targetGroups).length === 0) {
-                throw new Error('Nenhum responsável por checar vistoria foi encontrado para as cidades selecionadas.');
-            }
+            const idsParam = [...new Set(lista.map(r => r._generatedVistoriaId).filter(Boolean))].join(',');
+            const link = `${baseUrl}vistoria.html?ids=${idsParam}`;
+            const phone = phones.size === 1 ? [...phones][0] : '5515998118246';
 
             const hour = new Date().getHours();
             let greeting = 'Bom dia';
             if (hour >= 12 && hour < 18) greeting = 'Boa tarde';
             else if (hour >= 18) greeting = 'Boa noite';
 
-            Object.values(targetGroups).forEach(target => {
-                const idsParam = [...new Set(target.rows.map(r => r._generatedVistoriaId).filter(Boolean))].join(',');
-                const link = `${baseUrl}vistoria.html?ids=${idsParam}`;
-                let message = `${greeting}!\n\nSegue a lista de vistorias a serem realizadas na cidade *${String(target.city).toUpperCase()}*\n\n`;
-                const empMap = {};
-                target.rows.forEach(r => {
-                    const key = r.empreendimento || 'Empreendimento N/D';
-                    empMap[key] = (empMap[key] || 0) + 1;
-                });
-                Object.entries(empMap).forEach(([emp, count]) => {
+            let message = `${greeting}!\n\nSegue a lista de vistorias pendentes:\n\n`;
+            Object.keys(cityGroups).forEach((cidade) => {
+                message += `*${String(cidade).toUpperCase()}*\n`;
+                Object.entries(cityGroups[cidade]).forEach(([emp, count]) => {
                     message += `- ${String(emp).toUpperCase()} (${count} lote${count > 1 ? 's' : ''})\n`;
                 });
-                message += `\nAcesse o link abaixo para realizar a(s) vistoria(s):\n${link}`;
-                window.open(`https://api.whatsapp.com/send?phone=${target.phone}&text=${encodeURIComponent(message)}`, '_blank');
+                message += '\n';
             });
+            message += `Acesse o link abaixo para realizar as vistorias:\n${link}`;
+            window.open(`https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`, '_blank');
 
             await this.loadData();
 
@@ -1981,9 +2012,9 @@ window.VerificarConstrucaoApp = {
             const b = document.getElementById('btn-solicitar-wpp');
             if (b) {
                 b.innerHTML = '<i data-lucide="message-circle" style="width: 16px;"></i> Solicitar Vistoria (WhatsApp)';
-                b.disabled = false;
                 if (window.lucide) lucide.createIcons();
             }
+            this.updateBtn();
         }
     },
 
@@ -2227,6 +2258,24 @@ window.VerificarConstrucaoApp = {
             document.getElementById('vc-validar-status').textContent = 'Finalizando Vistoria...';
             const { doc, updateDoc, collection, addDoc } = window.firebaseCollections;
             await updateDoc(doc(window.firebaseDb, 'vistorias', v.id), { status: 'concluida' });
+            if (v.origem === 'ficha' && v.requestedByEmail) {
+                await addDoc(collection(window.firebaseDb, 'vistoria_avisos'), {
+                    vistoriaId: v.id,
+                    email: String(v.requestedByEmail).trim().toLowerCase(),
+                    nome: v.requestedBy || '',
+                    clienteName: row.clienteName || v.clienteName || '',
+                    unidade: row.unidade || v.unidade || '',
+                    empreendimento: row.empreendimento || v.empreendimento || '',
+                    cidade: row.cidade || v.cidade || '',
+                    titulo: row.titulo || v.titulo || '',
+                    respostasFormulario: v.respostasFormulario || {},
+                    fotoFrente: v.fotoFrente || '',
+                    fotoMeioFundo: v.fotoMeioFundo || '',
+                    fotoFundoFrente: v.fotoFundoFrente || '',
+                    visto: false,
+                    createdAt: new Date().toISOString()
+                });
+            }
 
             const resps = v.respostasFormulario || {};
             const labels = {
@@ -2702,18 +2751,11 @@ function _vcBuildVistoriaRows(clients, indexes, thresholdDays, recurrenceDays) {
         let solicitadoHa = '';
 
         if (_vcIsFollowupPending(vistoriaAtiva)) {
-            if (vistoriaAtiva.status === 'aguardando_fotos') {
-                statusLabel = 'Link Enviado – Aguardando Fotos';
-                statusColor = 'color: #d97706; font-weight: 600;';
-                const reqDate = _vcTimestampToDateStr(vistoriaAtiva.createdAt)
-                    || _vcTimestampToDateStr(vistoriaAtiva.requestedAt)
-                    || _vcTimestampToDateStr(vistoriaAtiva.updatedAt);
-                const reqDays = reqDate ? _vcDaysSince(reqDate) : null;
-                if (reqDays === 0) solicitadoHa = 'Solicitado hoje';
-                else if (reqDays !== null) solicitadoHa = `Há ${reqDays} dia(s)`;
-            } else if (vistoriaAtiva.status === 'aguardando_validacao') {
-                statusLabel = 'Aguardando Validação';
-                statusColor = 'color: #7c3aed; font-weight: 600;';
+            const rotulo = _vcRotuloPedido(vistoriaAtiva);
+            if (rotulo) {
+                statusLabel = rotulo.statusLabel;
+                statusColor = rotulo.statusColor;
+                solicitadoHa = rotulo.solicitadoHa;
             }
         } else if (hasConstruction) {
             statusLabel = 'Construção Identificada (Dispensado)';
@@ -2778,13 +2820,11 @@ function _vcBuildVistoriaRows(clients, indexes, thresholdDays, recurrenceDays) {
             existing.vistoriaAtiva = v;
             existing.hasConstruction = false;
             if (v.subjudice === true || v.subjudice === 'S') existing.subjudice = true;
-            if (v.status === 'aguardando_validacao') {
-                existing.statusLabel = 'Aguardando Validação';
-                existing.statusColor = 'color: #7c3aed; font-weight: 600;';
-                existing.solicitadoHa = '';
-            } else {
-                existing.statusLabel = 'Link Enviado – Aguardando Fotos';
-                existing.statusColor = 'color: #d97706; font-weight: 600;';
+            const rotulo = _vcRotuloPedido(v);
+            if (rotulo) {
+                existing.statusLabel = rotulo.statusLabel;
+                existing.statusColor = rotulo.statusColor;
+                existing.solicitadoHa = rotulo.solicitadoHa;
             }
             seenPendingIds.add(v.id);
             return;
@@ -2794,17 +2834,10 @@ function _vcBuildVistoriaRows(clients, indexes, thresholdDays, recurrenceDays) {
         const city = v.cidade || (costCenterId && _vcGetCity(costCenterId)) || '-';
         const empreendimento = v.empreendimento || _vcEmpNameFromCc(costCenterId) || '-';
         const empLabel = _vcEmpLabelOf(costCenterId, empreendimento);
-        let statusLabel = 'Aguardando Validação';
-        let statusColor = 'color: #7c3aed; font-weight: 600;';
-        let solicitadoHa = '';
-        if (v.status === 'aguardando_fotos') {
-            statusLabel = 'Link Enviado – Aguardando Fotos';
-            statusColor = 'color: #d97706; font-weight: 600;';
-            const reqDate = _vcTimestampToDateStr(v.createdAt) || _vcTimestampToDateStr(v.requestedAt) || _vcTimestampToDateStr(v.updatedAt);
-            const reqDays = reqDate ? _vcDaysSince(reqDate) : null;
-            if (reqDays === 0) solicitadoHa = 'Solicitado hoje';
-            else if (reqDays !== null) solicitadoHa = `Há ${reqDays} dia(s)`;
-        }
+        const rotulo = _vcRotuloPedido(v) || { statusLabel: 'Aguardando Validação', statusColor: 'color: #7c3aed; font-weight: 600;', solicitadoHa: '' };
+        const statusLabel = rotulo.statusLabel;
+        const statusColor = rotulo.statusColor;
+        const solicitadoHa = rotulo.solicitadoHa;
         const parcelasVencidas = client ? parseInt(client.billCount || client.overdueInstallments || 0) : 0;
         const valorVencido = client ? parseFloat((client.overdueValue || 0) + (client.overdueCharges || 0)) : 0;
         rows.push({
@@ -3073,6 +3106,101 @@ window.checkVistoriaSendAlerts = async function(isTest) {
     modal.style.display = "flex";
 };
 
+function _vcEscAviso(v) {
+    return String(v == null ? "" : v)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function _vcFotoAviso(url, legenda) {
+    if (!url) return "";
+    const safe = _vcEscAviso(url);
+    return `<a href="${safe}" target="_blank" rel="noopener" style="display:block;">
+        <img src="${safe}" alt="${_vcEscAviso(legenda)}" style="width:100%; height:180px; object-fit:cover; border-radius:10px; border:1px solid #cbd5e1; background:#f8fafc;">
+        <div style="font-size:0.75rem; color:#475569; margin-top:4px; text-align:center;">${_vcEscAviso(legenda)}</div>
+    </a>`;
+}
+
+window.abrirAvisoVistoriaSolicitante = function(itens) {
+    const lista = (itens || []).filter((item) => item && item.visto === false);
+    if (!lista.length) return;
+    const chave = lista.map((item) => item.id).sort().join(",");
+    if (window._avisoVistoriaAberto === chave) return;
+    window._avisoVistoriaAberto = chave;
+
+    let modal = document.getElementById("modal-vistoria-resultado-solicitante");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "modal-vistoria-resultado-solicitante";
+        modal.style.cssText = "display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:100000; align-items:flex-start; justify-content:center; overflow:auto; padding:28px 16px;";
+        document.body.appendChild(modal);
+    }
+
+    const blocos = lista.map((item) => {
+        const r = item.respostasFormulario || {};
+        const linha = (rotulo, valor) => `<div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px;"><div style="font-size:0.72rem; color:#64748b; text-transform:uppercase;">${rotulo}</div><strong>${_vcEscAviso(valor || "—")}</strong></div>`;
+        const fotos = [
+            _vcFotoAviso(item.fotoFrente, "Frente"),
+            _vcFotoAviso(item.fotoMeioFundo, "Meio / Fundo"),
+            _vcFotoAviso(item.fotoFundoFrente, "Fundo / Frente")
+        ].filter(Boolean).join("");
+        return `<section style="border:1px solid #e2e8f0; border-radius:12px; padding:14px; margin-bottom:14px; background:#f8fafc;">
+            <strong style="color:#0f172a;">${_vcEscAviso(item.clienteName || "Cliente")} · ${_vcEscAviso(item.unidade || "—")}</strong>
+            <div style="color:#64748b; font-size:0.82rem; margin:4px 0 10px;">${_vcEscAviso(item.cidade || "")} ${item.empreendimento ? "· " + _vcEscAviso(item.empreendimento) : ""} ${item.titulo ? "· Título " + _vcEscAviso(item.titulo) : ""}</div>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;">
+                ${linha("Água", r.possuiAgua)}
+                ${linha("Energia", r.possuiEnergia)}
+                ${linha("Entulho", r.possuiEntulho)}
+                ${linha("Acesso", r.permiteAcesso)}
+                ${linha("Estágio", r.estagioObra)}
+            </div>
+            ${r.observacoes ? `<p style="margin:0 0 12px; color:#334155;">${_vcEscAviso(r.observacoes)}</p>` : ""}
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">${fotos || "<span style='color:#94a3b8;'>Sem fotos anexadas.</span>"}</div>
+        </section>`;
+    }).join("");
+
+    modal.innerHTML = `
+        <div style="background:#fff; width:min(860px, 96vw); border-radius:14px; box-shadow:0 24px 60px rgba(0,0,0,0.28); padding:18px 18px 8px;">
+            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px;">
+                <div>
+                    <h2 style="margin:0; color:#105436; font-size:1.15rem;">Vistoria finalizada</h2>
+                    <p style="margin:6px 0 0; color:#64748b; font-size:0.9rem;">O back office aceitou a vistoria que você pediu pela ficha do cliente.</p>
+                </div>
+                <button type="button" class="btn btn-fechar" onclick="window.fecharAvisoVistoriaSolicitante()">Fechar</button>
+            </div>
+            <div style="max-height:70vh; overflow:auto; padding-right:4px;">${blocos}</div>
+        </div>`;
+    modal.style.display = "flex";
+};
+
+window.fecharAvisoVistoriaSolicitante = async function() {
+    const modal = document.getElementById("modal-vistoria-resultado-solicitante");
+    const ids = String(window._avisoVistoriaAberto || "").split(",").filter(Boolean);
+    window._avisoVistoriaAberto = "";
+    if (modal) modal.style.display = "none";
+    if (!ids.length || !window.firebaseDb || !window.firebaseCollections) return;
+    const { doc, updateDoc } = window.firebaseCollections;
+    await Promise.all(ids.map((id) => updateDoc(doc(window.firebaseDb, "vistoria_avisos", id), {
+        visto: true,
+        vistoEm: new Date().toISOString()
+    }).catch((err) => console.warn("[Vistoria] aviso não marcado", err))));
+};
+
+window.iniciarAvisoVistoriaSolicitante = function() {
+    if (window._avisoVistoriaListener) return;
+    const email = String((window.AppState && AppState.currentUser && AppState.currentUser.email) || "").trim().toLowerCase();
+    if (!email || !window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
+    const { collection, query, where, onSnapshot } = window.firebaseCollections;
+    const q = query(collection(window.firebaseDb, "vistoria_avisos"), where("email", "==", email));
+    window._avisoVistoriaListener = onSnapshot(q, (snap) => {
+        const pendentes = [];
+        snap.forEach((d) => {
+            const data = d.data() || {};
+            if (data.visto === false) pendentes.push({ id: d.id, ...data });
+        });
+        if (pendentes.length) window.abrirAvisoVistoriaSolicitante(pendentes);
+    }, (err) => console.warn("[Vistoria] aviso do solicitante", err));
+};
+
 document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
         if (typeof window.startVistoriaValidationAlertListener === "function") {
@@ -3080,6 +3208,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (typeof window.checkVistoriasValidationAlerts === "function") {
             window.checkVistoriasValidationAlerts();
+        }
+        if (typeof window.iniciarAvisoVistoriaSolicitante === "function") {
+            window.iniciarAvisoVistoriaSolicitante();
         }
         if (typeof window.checkVistoriaSendAlerts === "function") {
             window.checkVistoriaSendAlerts();

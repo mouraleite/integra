@@ -10983,7 +10983,7 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .vc-table tr.vc-cidade svg, .vc-table tr.vc-emp svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
 .cc-table.vc-table tbody tr.vc-dispensa, .cc-table.vc-table tbody tr.vc-dispensa:hover { background: #fffbeb; }
 .cc-table.vc-table tr.vc-dispensa td { text-align: center; color: #92400e; font-style: italic; height: 38px; }
-.cc-table.vc-table td.vc-unidade { font-weight: 800; color: #0f172a; font-variant-numeric: tabular-nums; }
+.cc-table.vc-table td.vc-pedido { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #0f172a; }
 .cc-table.vc-table td.vc-vazio { text-align: center; color: #94a3b8; padding: 26px; height: auto; }
 .vc-pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-weight: 700; font-size: 0.72rem; line-height: 1.5; }
 .vc-pill.is-neg { background: #fef2f2; color: #b91c1c; }

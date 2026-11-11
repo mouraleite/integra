@@ -1304,21 +1304,31 @@ window.solicitarWhatsAppFromClient = async function() {
     const cidade = extractedCity;
     const tituloKey = String(ctx.titulo || contractObj.receivableBillId || saleId || '');
     const costCenterId = String(ctx.costCenterId || empIdStr || '');
-    const lotLabel = window.ConstrucaoApp.formatLotLabel(unidade, costCenterId);
     const requestedBy = (typeof AppState !== "undefined" && AppState.currentUser && AppState.currentUser.name) || "";
 
     try {
         const btn = document.getElementById('btn-solicitar-wpp-client');
         if (btn) btn.disabled = true;
 
-        const { collection, addDoc, query, where, getDocs, updateDoc, doc } = window.firebaseCollections;
-        const baseUrl = window.location.origin + window.location.pathname.replace(/[^/]*$/, '');
-        
-        let vId = null;
-        const q = query(collection(window.firebaseDb, 'vistorias'), where("contractId", "==", String(contractNumber)), where("status", "==", "aguardando_fotos"));
+        const { collection, addDoc, query, where, getDocs } = window.firebaseCollections;
+        const q = query(collection(window.firebaseDb, 'vistorias'), where("contractId", "==", String(contractNumber)));
         const snap = await getDocs(q);
-        if (!snap.empty) {
-            vId = snap.docs[0].id;
+        const abertos = snap.docs.filter((d) => {
+            const st = String((d.data() || {}).status || "");
+            return st === "solicitada" || st === "aguardando_fotos" || st === "aguardando_validacao";
+        });
+        if (abertos.length) {
+            const atual = abertos[0].data() || {};
+            const st = String(atual.status || "");
+            if (btn) btn.disabled = false;
+            if (st === "solicitada") {
+                alert("Este pedido já está na Vistoria" + (atual.requestedBy ? ", feito por " + atual.requestedBy : "") + ". O back office dispara o link junto com os outros pedidos.");
+            } else if (st === "aguardando_validacao") {
+                alert("A vistoria deste título já voltou com fotos e está aguardando validação.");
+            } else {
+                alert("O link desta vistoria já foi disparado e está aguardando as fotos.");
+            }
+            return;
         }
 
         const allKeys = new Set([
@@ -1349,44 +1359,17 @@ window.solicitarWhatsAppFromClient = async function() {
             titulo: tituloKey,
             tituloKey: tituloKey,
             requestedBy: requestedBy,
+            requestedByEmail: String((typeof AppState !== "undefined" && AppState.currentUser && AppState.currentUser.email) || "").trim().toLowerCase(),
+            origem: "ficha",
             requestedAt: new Date().toISOString(),
-            status: 'aguardando_fotos',
+            status: "solicitada",
             createdAt: new Date().toISOString()
         };
 
-        if (!vId) {
-            const docRef = await addDoc(collection(window.firebaseDb, 'vistorias'), newData);
-            vId = docRef.id;
-        } else {
-            const patch = {
-                updatedAt: new Date().toISOString(),
-                requestedAt: new Date().toISOString(),
-                unidade: unidade,
-                costCenterId: costCenterId,
-                empreendimento: empreendimento,
-                cidade: cidade,
-                titulo: tituloKey,
-                tituloKey: tituloKey,
-                contractKeys: Array.from(allKeys),
-                customerId: String(customerId || "")
-            };
-            if (requestedBy) patch.requestedBy = requestedBy;
-            await updateDoc(doc(window.firebaseDb, 'vistorias', vId), patch);
-        }
+        await addDoc(collection(window.firebaseDb, 'vistorias'), newData);
 
-        const url = `${baseUrl}vistoria.html?ids=${vId}`;
-        
-        const hour = new Date().getHours();
-        let greeting = 'Bom dia';
-        if (hour >= 12 && hour < 18) greeting = 'Boa tarde';
-        else if (hour >= 18) greeting = 'Boa noite';
-
-        const message = `${greeting}! Segue a vistoria a ser realizada na cidade:\n\n*${cidade.toUpperCase()}*\n· ${empreendimento.toUpperCase()}\n· Unidade: *${lotLabel || unidade}*\n· Título: ${tituloKey || "-"}\n\nAcesse o link abaixo para realizar a vistoria:\n${url}`;
-        
-        const phone = '5515998118246'; // Default phone
-        window.open(`https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`, '_blank');
-        
         if (btn) btn.disabled = false;
+        alert("Pedido registrado na Vistoria, em nome de " + (requestedBy || "você") + ". O back office dispara um único link com os pedidos pendentes.");
         if (typeof window.loadConstrucoes === "function") window.loadConstrucoes();
 
     } catch (e) {
