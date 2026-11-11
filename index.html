@@ -1359,6 +1359,12 @@
             <span>Suporte</span>
           </a>
         </li>
+        <li class="nav-item" data-tab="teste" data-module="mod_teste">
+          <a onclick="switchTab('teste', 'Teste')" title="Teste">
+            <i data-lucide="flask-conical"></i>
+            <span>Teste</span>
+          </a>
+        </li>
         <!-- 9 - CONFIGURAÇÕES GERAIS -->
         <li class="nav-item nav-group" data-module="mod_cfg">
           <a onclick="toggleNavMenu(event, 'submenu-configuracoes')" title="Configurações gerais">
@@ -1497,6 +1503,11 @@
 
       <section id="tab-suporte" class="tab-pane" style="display: none;">
         <div id="suporte-admin-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: TESTE -->
+      <section id="tab-teste" class="tab-pane" style="display: none;">
+        <div id="teste-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: DASHBOARD DE INADIMPLÊNCIA -->
@@ -8634,6 +8645,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="config-tags.js?v=2093"></script>
   <script defer src="config-users.js?v=2093"></script>
   <script defer src="suporte.js?v=2093"></script>
+  <script defer src="teste.js?v=2093"></script>
   <script defer src="escala-home-office.js?v=2093"></script>
   <script defer src="alerta-ponto.js?v=2093"></script>
   <script defer src="construcao.js?v=2093"></script>
