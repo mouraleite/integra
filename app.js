@@ -3758,13 +3758,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
       return;
     }
   }
-  if (tabId === 'teste' && typeof window.isCrmSuperAdmin === 'function' && !window.isCrmSuperAdmin()) {
-    const canTeste = typeof window.hasCrmPerm === 'function' && window.hasCrmPerm('mod_teste');
-    if (!canTeste) {
-      alert('Sem permissão para o módulo Teste.');
-      return;
-    }
-  }
   if (tabId === 'configuracoes' && typeof window.hasFinCrAction === 'function') {
     const canCfg = window.hasFinCrAction('configuracoes', 'acessar')
       || window.hasFinCrAction('regras_cobranca', 'acessar')
@@ -3964,7 +3957,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "marketing-budget": "Budget",
     "marketing-config": "Configurações",
     suporte: "Suporte",
-    teste: "Teste",
     auditoria: "Auditoria do Sistema",
     "auditoria-login": "Auditoria do Login Sienge",
     "consumo-api": "Consumo de API",
@@ -4050,7 +4042,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "marketing-budget": "wallet",
     "marketing-config": "settings",
     suporte: "headphones",
-    teste: "flask-conical",
     auditoria: "shield",
     "auditoria-login": "log-in",
     "fiscal-inserir-nota": "clipboard-check",
@@ -4232,8 +4223,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof ConfigUsersApp !== "undefined") ConfigUsersApp.loadUsers();
   } else if (tabId === "suporte") {
     if (window.SuporteApp && typeof window.SuporteApp.renderAdmin === "function") window.SuporteApp.renderAdmin();
-  } else if (tabId === "teste") {
-    if (window.TesteApp && typeof window.TesteApp.init === "function") window.TesteApp.init();
   } else if (tabId === "plano-financeiro") {
     if (typeof PlanoFinanceiroApp !== "undefined") PlanoFinanceiroApp.init();
   } else if (tabId === "doc-padrao") {
