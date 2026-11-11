@@ -5,6 +5,7 @@
 (function () {
   const REPO = "mouraleite/integra";
   const URL_TESTE = "https://crm-gestao-git-develop-crm-mldu.vercel.app/";
+  const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
   const CACHE = "integra_develop_compare_v1";
   const DISPENSADO = "integra_develop_dispensado";
   const TEMPO_CACHE = 10 * 60 * 1000;
@@ -60,7 +61,13 @@
       ".avdev-arqs{margin:0;padding-left:18px;font-size:.78rem;color:#475569;columns:2;}",
       ".avdev-passos{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 12px;}",
       ".avdev-passos ol{margin:6px 0 0;padding-left:18px;}",
-      "@media (max-width:640px){.avdev-arqs{columns:1;}}"
+      ".avdev-alt{display:inline-flex;align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:2px;gap:2px;flex-shrink:0;}",
+      ".avdev-alt a{position:relative;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:99px;font-size:.76rem;font-weight:700;color:#475569;text-decoration:none;white-space:nowrap;}",
+      ".avdev-alt a:hover{background:#e2e8f0;}",
+      ".avdev-alt a.on.prod{background:#105436;color:#fff;cursor:default;}",
+      ".avdev-alt a.on.teste{background:#2563eb;color:#fff;cursor:default;}",
+      ".avdev-alt .avdev-ponto{width:8px;height:8px;border-radius:50%;background:#f97316;box-shadow:0 0 0 2px #fff;}",
+      "@media (max-width:640px){.avdev-arqs{columns:1;}.avdev-alt a{padding:5px 8px;}}"
     ].join("");
     document.head.appendChild(st);
   }
@@ -133,7 +140,34 @@
     document.body.appendChild(fundo);
   }
 
+  // Seletor "Produção | Teste" na barra do topo, só para administradores. Abre a mesma tela no outro ambiente.
+  function pintarAlternador() {
+    const barra = document.querySelector(".topbar-actions.topbar-support-wrap") || document.querySelector(".topbar-actions");
+    let alt = document.getElementById("avdev-alt");
+    if (!barra || !ehAdmin()) {
+      if (alt) alt.remove();
+      return;
+    }
+    const caminho = location.pathname.replace(/^\//, "") + location.search + location.hash;
+    const teste = ambienteDeTeste();
+    const pendentes = dados ? alteracoesUteis(dados).length : 0;
+    if (!alt) {
+      alt = document.createElement("div");
+      alt.id = "avdev-alt";
+      alt.className = "avdev-alt";
+      barra.insertBefore(alt, barra.firstChild);
+    }
+    const tituloTeste = pendentes
+      ? pendentes + (pendentes === 1 ? " alteração" : " alterações") + " no teste ainda fora da produção"
+      : "Abrir esta tela no ambiente de teste";
+    alt.innerHTML = `<a class="prod${teste ? "" : " on"}" ${teste ? `href="${URL_PRODUCAO + esc(caminho)}"` : ""} title="${teste ? "Abrir esta tela na produção" : "Você está na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>Produção</a>`
+      + `<a class="teste${teste ? " on" : ""}" ${teste ? "" : `href="${URL_TESTE + esc(caminho)}"`} title="${teste ? "Você está no ambiente de teste" : esc(tituloTeste)}"><i data-lucide="flask-conical" style="width:13px;height:13px;"></i>Teste${pendentes && !teste ? '<span class="avdev-ponto"></span>' : ""}</a>`;
+    if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(alt);
+    else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+  }
+
   function pintar() {
+    pintarAlternador();
     const box = lugar();
     if (!box) return;
     estilo();
