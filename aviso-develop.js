@@ -6,7 +6,7 @@
   const REPO = "mouraleite/integra";
   const URL_TESTE = "https://crm-gestao-git-develop-crm-mldu.vercel.app/";
   const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
-  const CACHE = "integra_develop_compare_v1";
+  const CACHE = "integra_develop_compare_v2";
   const DISPENSADO = "integra_develop_dispensado";
   const TEMPO_CACHE = 10 * 60 * 1000;
   let dados = null;
@@ -159,11 +159,16 @@
       alt.className = "avdev-alt";
       barra.insertBefore(alt, barra.firstChild);
     }
-    const tituloTeste = pendentes
-      ? pendentes + (pendentes === 1 ? " alteração" : " alterações") + " no teste ainda fora da produção"
-      : "Abrir esta tela no ambiente de teste";
-    alt.innerHTML = `<a class="prod${teste ? "" : " on"}" ${teste ? `href="${URL_PRODUCAO + esc(caminho)}"` : ""} title="${teste ? "Abrir esta tela na produção" : "Você está na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>Produção</a>`
-      + `<a class="teste${teste ? " on" : ""}" ${teste ? "" : `href="${URL_TESTE + esc(caminho)}"`} title="${teste ? "Você está no ambiente de teste" : esc(tituloTeste)}"><i data-lucide="flask-conical" style="width:13px;height:13px;"></i>Teste${pendentes && !teste ? '<span class="avdev-ponto"></span>' : ""}</a>`;
+    const vp = dados && dados.versaoProducao;
+    const vt = dados && dados.versaoBaseTeste;
+    const rotuloProd = "Produção" + (vp ? " v" + vp : "");
+    const rotuloTeste = "Teste" + (vt ? " v" + vt : "") + (pendentes ? " +" + pendentes : "");
+    let tituloTeste = teste ? "Você está no ambiente de teste" : "Abrir esta tela no ambiente de teste";
+    if (pendentes) tituloTeste += " • " + pendentes + (pendentes === 1 ? " alteração" : " alterações") + " ainda fora da produção";
+    else if (dados && dados.atrasadoPor) tituloTeste += " • ainda sem as últimas versões da produção (atualiza no próximo deploy)";
+    else if (dados) tituloTeste += " • igual à produção";
+    alt.innerHTML = `<a class="prod${teste ? "" : " on"}" ${teste ? `href="${URL_PRODUCAO + esc(caminho)}"` : ""} title="${teste ? "Abrir esta tela na produção" : "Você está na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>${esc(rotuloProd)}</a>`
+      + `<a class="teste${teste ? " on" : ""}" ${teste ? "" : `href="${URL_TESTE + esc(caminho)}"`} title="${esc(tituloTeste)}"><i data-lucide="flask-conical" style="width:13px;height:13px;"></i>${esc(rotuloTeste)}${pendentes && !teste ? '<span class="avdev-ponto"></span>' : ""}</a>`;
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(alt);
     else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
   }
@@ -210,22 +215,30 @@
         if (g && Date.now() - g.em < TEMPO_CACHE) { dados = g.dados; return; }
       } catch (e) {}
     }
-    const res = await fetch("https://api.github.com/repos/" + REPO + "/compare/main...develop", {
-      headers: { Accept: "application/vnd.github+json" },
-      cache: "no-store"
-    });
+    const opts = { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" };
+    const [res, resMain] = await Promise.all([
+      fetch("https://api.github.com/repos/" + REPO + "/compare/main...develop", opts),
+      fetch("https://api.github.com/repos/" + REPO + "/commits/main", opts).catch(() => null)
+    ]);
     if (!res.ok) return;
     const j = await res.json();
+    let main = null;
+    try { main = resMain && resMain.ok ? await resMain.json() : null; } catch (e) { main = null; }
+    const versao = (msg) => { const m = /v1\.0\.(\d+)/.exec(String(msg || "")); return m ? Number(m[1]) : 0; };
     dados = {
       commits: (j.commits || []).map((c) => ({ sha: c.sha, parents: c.parents, commit: { message: c.commit && c.commit.message, author: c.commit && c.commit.author }, author: c.author ? { login: c.author.login } : null })),
-      files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status }))
+      files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status })),
+      // Versão da produção = último "v1.0.XXXX" da main; base do teste = última versão da main que a develop já contém.
+      versaoProducao: versao(main && main.commit && main.commit.message),
+      versaoBaseTeste: versao(j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message),
+      atrasadoPor: Number(j.behind_by) || 0
     };
     gravar(CACHE, JSON.stringify({ em: Date.now(), dados }), sessionStorage);
   }
 
   async function ciclo() {
     try {
-      if (!ambienteDeTeste() && ehAdmin()) await consultar();
+      if (ehAdmin()) await consultar();
     } catch (e) {}
     pintar();
   }
