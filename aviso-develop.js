@@ -29,8 +29,10 @@
   }
 
   function ehAdmin() {
+    // Administrador de verdade ou quem ligou "Ver como administrador".
     try {
-      if (typeof window.crmAdministradorReal === "function") return !!window.crmAdministradorReal();
+      if (typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal()) return true;
+      if (typeof window.crmVerComoAdmin === "function" && window.crmVerComoAdmin()) return true;
       return typeof window.isCrmSuperAdmin === "function" && !!window.isCrmSuperAdmin();
     } catch (e) {
       return false;
@@ -233,6 +235,15 @@
     iniciou = true;
     ciclo();
     setInterval(ciclo, TEMPO_CACHE);
+    // Liga/desliga na hora quando a pessoa ativa ou sai do "Ver como administrador".
+    let eraAdmin = ehAdmin();
+    setInterval(() => {
+      const agora = ehAdmin();
+      if (agora !== eraAdmin) {
+        eraAdmin = agora;
+        ciclo();
+      }
+    }, 2000);
   }
 
   // Espera o login carregar (o perfil de administrador só é conhecido depois dele).
