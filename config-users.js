@@ -576,6 +576,10 @@ const ConfigUsersApp = {
       submodules: [{ name: "Suporte", key: "sub_suporte_geral", actions: [{ id: "chamados", label: "Suporte" }] }]
     },
     {
+      name: "Teste", icon: "flask-conical", key: "mod_teste", direct: true,
+      submodules: []
+    },
+    {
       name: "Configurações gerais", icon: "settings-2", key: "mod_cfg",
       submodules: [
         {
