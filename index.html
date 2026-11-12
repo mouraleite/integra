@@ -1401,6 +1401,9 @@
             <li data-tab="orion-fechamento" data-module="sub_cfg_apoio_fechamento_meses_acessar">
               <a onclick="switchTab('orion-fechamento', 'Fechamento de meses')">Fechamento de meses</a>
             </li>
+            <li data-tab="orion-departamentos" data-module="sub_cfg_apoio_departamentos_orcamento_acessar">
+              <a onclick="switchTab('orion-departamentos', 'Departamentos do orçamento')">Departamentos do orçamento</a>
+            </li>
             <li data-tab="motivos-cancelamento" data-module="sub_cfg_apoio_motivos_cancelamento_acessar">
               <a onclick="switchTab('motivos-cancelamento', 'Motivos de cancelamento')">Motivos de cancelamento</a>
             </li>
@@ -1772,6 +1775,11 @@
       <!-- TAB: ÓRION (TRANSIÇÃO) - ORÇAMENTOS E FORECASTS -->
       <section id="tab-orion-orcamentos" class="tab-pane" style="display: none;">
         <div id="orion-orcamentos-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: DEPARTAMENTOS DO ORÇAMENTO (vindo do ML Órion) -->
+      <section id="tab-orion-departamentos" class="tab-pane" style="display: none;">
+        <div id="orion-departamentos-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: CONFIGURAÇÕES - TAGS -->
@@ -8736,6 +8744,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-fechamento.js?v=2124"></script>
   <script defer src="orion-orcamento-calc.js?v=2124"></script>
   <script defer src="orion-orcamentos.js?v=2124"></script>
+  <script defer src="orion-departamentos.js?v=2124"></script>
   <script defer src="verificar-construcao.js?v=2124"></script>
   <script defer src="financiamento.js?v=2124"></script>
   <script src="repactuacoes.js?v=2124"></script>

@@ -594,6 +594,7 @@ const ConfigUsersApp = {
             { id: "indices_mercado", label: "Índices de mercado" },
             { id: "premissas_viabilidade", label: "Premissas da viabilidade" },
             { id: "fechamento_meses", label: "Fechamento de meses" },
+            { id: "departamentos_orcamento", label: "Departamentos do orçamento" },
             { id: "motivos_cancelamento", label: "Motivos de cancelamento" },
             { id: "plano_financeiro", label: "Plano Financeiro e Visões" },
             { id: "preambulos", label: "Preâmbulos" },

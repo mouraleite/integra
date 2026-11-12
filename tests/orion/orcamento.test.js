@@ -74,3 +74,27 @@ test("plano ou centro de custo sem correspondência aparece na conferência", ()
   const r = O.prepararDocumentos(arq, "orcamentos");
   assert.strictEqual(r.semMapa.length, 1);
 });
+
+test("departamentos: matriz de centros de custo, planos e usuários", () => {
+  const arq = base.filter((a) => a.tabela !== "departamentos").concat([
+    { tabela: "diretorias", linhas: [{ id: 1, nome: "Diretoria Financeira" }] },
+    { tabela: "departamentos", linhas: [{ id: 3, nome: "Financeiro", diretoria_id: 1 }, { id: 4, nome: "Obras", ativo: false }] },
+    { tabela: "departamento_cost_centers", linhas: [{ departamento_id: 3, cost_center_id: 2, permitido: true }, { departamento_id: 3, cost_center_id: 1, permitido: false }] },
+    { tabela: "departamento_planos", linhas: [{ departamento_id: 3, plano_financeiro_id: 10, permitido: true }] },
+    { tabela: "user_departamentos", linhas: [{ user_id: 5, departamento_id: 3 }] },
+    { tabela: "depara_autorizacao_departamento", linhas: [{ nome_sienge: "FINANCEIRO", sienge_department_id: 12, departamento_id: 3, definido_manual: true }] }
+  ]);
+  const cad = O.prepararDepartamentos(arq);
+  const fin = cad.departamentos.find((d) => d.id === 3);
+  assert.deepStrictEqual(fin.ccs, ["99999"]);
+  assert.deepStrictEqual(fin.planos, ["2010101"]);
+  assert.deepStrictEqual(fin.usuarios, ["marcelo@x"]);
+  assert.strictEqual(fin.diretoria, "Diretoria Financeira");
+  assert.strictEqual(cad.departamentos.find((d) => d.id === 4).ativo, false);
+  assert.strictEqual(cad.depara[0].departamento, 3);
+  assert.strictEqual(O.lancamentoPermitido(cad, 3, "10100", "2010101"), true);
+  assert.strictEqual(O.lancamentoPermitido(cad, 3, "10100", "1010101"), false);
+  cad.produtoPlano = ["99999|2010101"];
+  assert.strictEqual(O.lancamentoPermitido(cad, 3, "10100", "2010101"), false);
+  assert.strictEqual(O.lancamentoPermitido(cad, 3, "99999", "2010101"), true);
+});

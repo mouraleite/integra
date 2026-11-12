@@ -178,5 +178,61 @@
     return out.sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif));
   }
 
-  return { MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
+  /* ---------- departamentos e matriz de permissões do orçamento (Órion) ---------- */
+
+  /** Arquivos exportados -> cadastro de departamentos do orçamento para orion_config/departamentos. */
+  function prepararDepartamentos(arquivos) {
+    const porTabela = {};
+    (arquivos || []).forEach((a) => { if (a && a.tabela && Array.isArray(a.linhas)) porTabela[a.tabela] = a.linhas; });
+    const M = mapas(porTabela);
+    const dir = {};
+    (porTabela.diretorias || []).forEach((d) => { dir[d.id] = String(d.nome || ""); });
+    const ccsPor = {}, planosPor = {}, usuariosPor = {};
+    (porTabela.departamento_cost_centers || []).forEach((r) => {
+      if (r.permitido === false) return;
+      const cc = M.cc[r.cost_center_id];
+      if (cc && cc.id) (ccsPor[r.departamento_id] = ccsPor[r.departamento_id] || new Set()).add(cc.id);
+    });
+    (porTabela.departamento_planos || []).forEach((r) => {
+      if (r.permitido === false) return;
+      const pl = M.plano[r.plano_financeiro_id];
+      if (pl && pl.id) (planosPor[r.departamento_id] = planosPor[r.departamento_id] || new Set()).add(pl.id);
+    });
+    (porTabela.user_departamentos || []).forEach((r) => {
+      const em = M.usuario[r.user_id];
+      if (em) (usuariosPor[r.departamento_id] = usuariosPor[r.departamento_id] || new Set()).add(em);
+    });
+    const ordenar = (s) => [...(s || [])].sort((a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true }));
+    const departamentos = (porTabela.departamentos || []).map((d) => ({
+      id: d.id, nome: String(d.nome || ""), ativo: d.ativo !== false, residual: !!d.is_residual,
+      diretoria: d.diretoria_id != null ? dir[d.diretoria_id] || "" : "",
+      ccs: ordenar(ccsPor[d.id]), planos: ordenar(planosPor[d.id]), usuarios: ordenar(usuariosPor[d.id])
+    })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    const produtoPlano = [];
+    (porTabela.produto_plano_financeiro || []).forEach((r) => {
+      if (r.permitido === false) return;
+      const cc = M.cc[r.produto_id], pl = M.plano[r.plano_financeiro_id];
+      if (cc && pl && cc.id && pl.id) produtoPlano.push(cc.id + "|" + pl.id);
+    });
+    const depara = (porTabela.depara_autorizacao_departamento || []).map((r) => ({
+      nome_sienge: String(r.nome_sienge || ""), sienge_department_id: r.sienge_department_id == null ? null : Number(r.sienge_department_id),
+      departamento: r.departamento_id == null ? null : r.departamento_id, manual: !!r.definido_manual
+    })).sort((a, b) => a.nome_sienge.localeCompare(b.nome_sienge, "pt-BR"));
+    const nomesCc = {}, nomesPlano = {};
+    Object.values(M.cc).forEach((c) => { if (c.id) nomesCc[c.id] = c.nome; });
+    Object.values(M.plano).forEach((p) => { if (p.id) nomesPlano[p.id] = p.nome; });
+    return { departamentos, produtoPlano: produtoPlano.sort(), depara, nomesCc, nomesPlano };
+  }
+
+  /** Mesma regra do Órion (services/auth_matrix.py): departamento × plano obrigatório;
+   *  centro de custo × plano só é exigido quando essa matriz tiver algum vínculo. */
+  function lancamentoPermitido(cad, departamentoId, cc, plano) {
+    const d = (cad && cad.departamentos || []).find((x) => String(x.id) === String(departamentoId));
+    if (!d || (d.planos || []).indexOf(String(plano)) < 0) return false;
+    const pp = (cad && cad.produtoPlano) || [];
+    if (!pp.length) return true;
+    return pp.indexOf(String(cc) + "|" + String(plano)) >= 0;
+  }
+
+  return { prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
