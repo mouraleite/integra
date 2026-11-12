@@ -67,9 +67,31 @@
       return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear() + " às " + p(d.getHours()) + ":" + p(d.getMinutes());
     },
 
+    hoje() {
+      if (!this._hoje) this._hoje = Date.now();
+      return this._hoje;
+    },
+
     textoInserido(ms) {
-      const t = this.quando(ms);
-      return t ? "Inserido em " + t : "Inserido em data não registrada";
+      return "Inserido em " + (this.quando(ms) || this.quando(this.hoje()));
+    },
+
+    garantirInserido() {
+      const agora = this.hoje();
+      let mudou = false;
+      this.linhas.forEach((r) => {
+        if (r && !Number(r.inseridoEm)) {
+          r.inseridoEm = agora;
+          mudou = true;
+        }
+      });
+      if (mudou && this.podeEditar()) this.gravar();
+      return mudou;
+    },
+
+    modalAberto() {
+      const ov = document.getElementById("aobra-overlay");
+      return !!(ov && ov.classList.contains("active"));
     },
 
     foto(linha) {
@@ -88,7 +110,7 @@
       DATAS.forEach((c) => { proxima[c.key] = String(linha[c.key] || ""); });
       if (!anterior) return proxima;
       const historico = Array.isArray(anterior.historico) ? anterior.historico.map((h) => Object.assign({}, h)) : [];
-      if (this.datasIguais(anterior, proxima)) proxima.inseridoEm = Number(anterior.inseridoEm) || 0;
+      if (this.datasIguais(anterior, proxima)) proxima.inseridoEm = Number(anterior.inseridoEm) || this.hoje();
       else {
         historico.push(this.foto(anterior));
         proxima.inseridoEm = agoraMs;
@@ -257,7 +279,8 @@
         }
         if (this.podeEditar()) this.gravar();
       }
-      if (!document.getElementById("aobra-busca")) this.render();
+      this.garantirInserido();
+      if (!this.modalAberto()) this.render();
     },
 
     cmpId(a, b) {
@@ -293,7 +316,7 @@
       this.render();
       this.listaEmpreendimentos().then(() => {
         const mudou = this.completarNomes();
-        if ((mudou || this._emps) && !document.getElementById("aobra-busca")) this.render();
+        if ((mudou || this._emps) && !this.modalAberto()) this.render();
       }).catch(() => {});
     },
 
@@ -356,6 +379,7 @@
       this.editando = atual ? String(atual.id) : "";
       const ov = document.getElementById("aobra-overlay");
       if (!ov) return;
+      if (atual) this.garantirInserido();
       const nomeAtual = atual ? (atual.nome || this.nomeDe(atual.id)) : "";
       const busca = atual ? (nomeAtual ? atual.id + " - " + nomeAtual : String(atual.id)) : "";
       const marcos = DATAS.map((c, i) => `
@@ -382,16 +406,16 @@
             <button type="button" class="btn btn-fechar" onclick="AcompanhamentoObraApp.fechar()">Fechar</button>
           </div>
           <div class="aobra-form">
-            <label class="aobra-campo">Empreendimento
+            ${atual ? `<input type="hidden" id="aobra-id" value="${this.esc(atual.id)}">` : `<label class="aobra-campo">Empreendimento
               <div class="aobra-combo">
-                <input type="text" id="aobra-busca" placeholder="Digite ID, nome ou escolha na lista..." value="${this.esc(busca)}" autocomplete="off">
-                <input type="hidden" id="aobra-id" value="${this.esc(atual ? atual.id : "")}">
+                <input type="text" id="aobra-busca" placeholder="Digite ID, nome ou escolha na lista..." value="" autocomplete="off">
+                <input type="hidden" id="aobra-id" value="">
                 <button type="button" class="btn btn-outline aobra-chevron" id="aobra-abrir-lista" title="Abrir lista">
                   <i data-lucide="chevron-down" style="width:16px;height:16px;"></i>
                 </button>
                 <div id="aobra-sugestoes" class="aobra-sugestoes" style="display:none;"></div>
               </div>
-            </label>
+            </label>`}
             ${blocoAgora}
           </div>
           <div style="display:flex;justify-content:flex-end;margin-top:16px;">
@@ -399,11 +423,13 @@
           </div>
         </div>`;
       ov.classList.add("active");
-      this.ligarBusca();
       if (window.lucide) window.lucide.createIcons();
-      const buscaInput = document.getElementById("aobra-busca");
-      if (buscaInput) buscaInput.focus();
-      this.listaEmpreendimentos().catch(() => {});
+      if (!atual) {
+        this.ligarBusca();
+        const buscaInput = document.getElementById("aobra-busca");
+        if (buscaInput) buscaInput.focus();
+        this.listaEmpreendimentos().catch(() => {});
+      }
     },
 
     ligarBusca() {
