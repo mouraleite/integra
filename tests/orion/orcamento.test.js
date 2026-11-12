@@ -142,3 +142,26 @@ test("orçado x realizado: despesa sai negativa no caixa e vira positiva; corte 
   assert.strictEqual(r.linhas[0].dif, -11990);
   assert.deepStrictEqual(r.foraDoOrcamento, [{ cc: "77777", plano: "2010101", realizado: 1000 }]);
 });
+
+test("vendas: grade, VGV = ticket × unidades, distrato separado e mês fechado", () => {
+  const planas = [
+    { cc: "10100", cc_nome: "E1", plano_venda: "Neutro", mes: 1, vendas: 4, ticket: 25000000, vgv: 100000000 },
+    { cc: "10100", cc_nome: "E1", plano_venda: "Neutro", mes: 5, vendas: -1, ticket: 25000000, vgv: -25000000, obs: "Distrato" },
+    { cc: "10100", cc_nome: "E1", plano_venda: "Neutro", mes: 2, vendas: 3, ticket: 26000000, vgv: 78000000 }
+  ];
+  const g = O.vendasParaGrade(planas);
+  assert.strictEqual(g.length, 2);
+  assert.strictEqual(g[0].distrato, false);
+  assert.strictEqual(g[1].distrato, true);
+  assert.deepStrictEqual(g[0].meses.slice(0, 2), [{ vendas: 4, ticket: 25000000 }, { vendas: 3, ticket: 26000000 }]);
+  g[0].meses[2] = { vendas: 2, ticket: 12345 };
+  const v = O.gradeParaVendas(g, 2027);
+  assert.deepStrictEqual(v.filter((x) => !/Distrato/.test(x.obs)).map((x) => [x.mes, x.vgv]), [[1, 100000000], [2, 78000000], [3, 24690]]);
+  assert.strictEqual(v.find((x) => /Distrato/.test(x.obs) && x.mes === 5).vgv, -25000000); /* como no Órion, linha com observação guarda os 12 meses */
+  const ant = O.vendasParaGrade(planas);
+  assert.match(O.validarVendas(g, ant, [3])[0], /mar está fechado/);
+  assert.deepStrictEqual(O.validarVendas(g, ant, [1]), []);
+  assert.match(O.validarVendas([g[0], g[0]], [], [])[0], /já está no orçamento/);
+  const vazio = O.gradeParaVendas([{ cc: "9", meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) }], 2027);
+  assert.deepStrictEqual(vazio.map((x) => x.mes), [1]);
+});

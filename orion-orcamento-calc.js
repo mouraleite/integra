@@ -351,6 +351,69 @@
     return { linhas: out, foraDoOrcamento: [...realizado.entries()].filter(([k]) => !vistos.has(k)).map(([k, r]) => ({ cc: k.split("|")[0], plano: k.split("|")[1], realizado: soma(r.m) })).filter((x) => x.realizado) };
   }
 
-  return { agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- orçamento de vendas: grade por empreendimento × plano de venda × mês ---------- */
+
+  function chaveVenda(v) {
+    return String(v.cc) + "|" + String(v.plano_venda || "") + "|" + (v.distrato ? "D" : "");
+  }
+
+  /** Linhas planas (uma por mês) -> grade [{cc, cc_nome, plano_venda, distrato, obs, meses:[{vendas, ticket}]}]. */
+  function vendasParaGrade(vendas) {
+    const g = new Map();
+    (vendas || []).forEach((v) => {
+      const distrato = (Number(v.vendas) || 0) < 0 || /distrato/i.test(String(v.obs || ""));
+      const k = chaveVenda({ cc: v.cc, plano_venda: v.plano_venda, distrato });
+      if (!g.has(k)) g.set(k, { cc: String(v.cc), cc_nome: v.cc_nome || "", plano_venda: v.plano_venda || "", orion_plano_venda_id: v.orion_plano_venda_id, distrato, obs: v.obs || "", origem: v.origem || "", juros_mensal: Number(v.juros_mensal) || 0, meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) });
+      const x = g.get(k);
+      const m = Number(v.mes);
+      if (m >= 1 && m <= 12) { x.meses[m - 1].vendas += Number(v.vendas) || 0; if (v.ticket) x.meses[m - 1].ticket = Number(v.ticket) || 0; }
+    });
+    return [...g.values()].sort((a, b) => String(a.cc).localeCompare(String(b.cc), "pt-BR", { numeric: true }) || String(a.plano_venda).localeCompare(String(b.plano_venda), "pt-BR") || (a.distrato ? 1 : 0) - (b.distrato ? 1 : 0));
+  }
+
+  /** Grade -> linhas planas com VGV = ticket × unidades (centavos exatos). Igual ao Órion: mês vazio some,
+   *  mas um empreendimento com uma só linha e tudo vazio fica com o mês 1 zerado. */
+  function gradeParaVendas(grade, ano) {
+    const porCc = {};
+    (grade || []).forEach((l) => { porCc[l.cc] = (porCc[l.cc] || 0) + 1; });
+    const out = [];
+    (grade || []).forEach((l) => {
+      const uteis = [];
+      l.meses.forEach((m, i) => {
+        const vazio = !(Number(m.vendas) || 0) && !(Number(m.ticket) || 0) && !l.obs;
+        if (vazio && porCc[l.cc] > 1) return;
+        if (vazio && porCc[l.cc] === 1) return;
+        uteis.push(i);
+      });
+      if (!uteis.length && porCc[l.cc] === 1) uteis.push(0);
+      uteis.forEach((i) => {
+        const m = l.meses[i];
+        const vendas = Number(m.vendas) || 0, ticket = Number(m.ticket) || 0;
+        out.push({ cc: l.cc, cc_nome: l.cc_nome, plano_venda: l.plano_venda, orion_plano_venda_id: l.orion_plano_venda_id, ano: Number(ano), mes: i + 1,
+          juros_mensal: l.juros_mensal || 0, ticket, vendas, vgv: ticket * vendas, origem: l.origem || "", obs: l.distrato && !/distrato/i.test(l.obs || "") ? ("Distrato " + (l.obs || "")).trim() : (l.obs || "") });
+      });
+    });
+    return out;
+  }
+
+  function validarVendas(grade, gradeAntiga, fechados) {
+    const erros = [];
+    const vistos = new Set();
+    const ant = new Map((gradeAntiga || []).map((l) => [chaveVenda(l), l]));
+    (grade || []).forEach((l) => {
+      const k = chaveVenda(l);
+      if (!l.cc) erros.push("Há linha de venda sem empreendimento.");
+      if (vistos.has(k)) erros.push(`Esta combinação empreendimento + plano já está no orçamento (${l.cc} · ${l.plano_venda || "sem plano"}${l.distrato ? " · distrato" : ""}).`);
+      vistos.add(k);
+      const a = ant.get(k);
+      (fechados || []).forEach((m) => {
+        const n = l.meses[m - 1], v = a ? a.meses[m - 1] : { vendas: 0, ticket: 0 };
+        if ((Number(n.vendas) || 0) !== (Number(v.vendas) || 0) || (Number(n.ticket) || 0) !== (Number(v.ticket) || 0)) erros.push(`O mês ${MESES[m - 1]} está fechado e não pode ser alterado (${l.cc}).`);
+      });
+    });
+    return [...new Set(erros)];
+  }
+
+  return { vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

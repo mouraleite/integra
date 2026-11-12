@@ -276,12 +276,14 @@ const OrionOrcamentosApp = {
 
   async lerApoio() {
     try {
-      const [dep, fech] = await Promise.all([
+      const [dep, fech, pp] = await Promise.all([
         window.OrionStore.ler("departamentos", null),
-        window.OrionStore.ler("fechamento_meses", [])
+        window.OrionStore.ler("fechamento_meses", []),
+        window.OrionStore.ler("planos_pagamento", [])
       ]);
       this.cadDep = dep.itens || null;
       this.fechamento = fech.itens || [];
+      this.planosVenda = (pp.itens || []).map((x) => x.nome).filter(Boolean);
     } catch (e) {
       this.cadDep = null;
       this.fechamento = [];
@@ -298,7 +300,10 @@ const OrionOrcamentosApp = {
   editar() {
     const a = this.aberto;
     if (!a || !this.podeEditarCab(a.cab)) return;
+    const ehVendas = String(a.cab.tipo || "").toUpperCase() === "VENDAS";
     this.edicao = {
+      modo: ehVendas ? "vendas" : "mensal",
+      grade: ehVendas ? this.C().vendasParaGrade(a.vendas) : null,
       linhas: a.itens.map((l) => Object.assign({}, l, { m: l.m.slice() }))
         .sort((x, y) => String(x.cc).localeCompare(String(y.cc), "pt-BR", { numeric: true }) || String(x.plano).localeCompare(String(y.plano), "pt-BR", { numeric: true })),
       erros: [], salvando: false
@@ -336,6 +341,65 @@ const OrionOrcamentosApp = {
     this.render();
   },
 
+  setVenda(i, mes, campo, valor) {
+    const e = this.edicao;
+    if (!e || !e.grade || !e.grade[i]) return;
+    const m = e.grade[i].meses[mes];
+    if (campo === "vendas") m.vendas = Math.trunc(Number(String(valor || "0").replace(/\./g, "").replace(",", ".")) || 0);
+    else m.ticket = this.C().centavos(valor);
+    this.render();
+  },
+
+  removerVenda(i) { if (this.edicao && this.edicao.grade) { this.edicao.grade.splice(i, 1); this.render(); } },
+
+  incluirVenda() {
+    const e = this.edicao;
+    if (!e || !e.grade) return;
+    const cc = String((document.getElementById("oo-nv-cc") || {}).value || "").replace(/\D/g, "");
+    const plano = String((document.getElementById("oo-nv-plano") || {}).value || "");
+    const distrato = !!(document.getElementById("oo-nv-dist") || {}).checked;
+    if (!cc) { e.erros = ["Informe o código do empreendimento (centro de custo do Sienge)."]; return this.render(); }
+    const cad = this.cadDep || {};
+    e.grade.push({ cc, cc_nome: (cad.nomesCc || {})[cc] || "", plano_venda: plano, distrato, obs: distrato ? "Distrato" : "", meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) });
+    e.erros = [];
+    this.render();
+  },
+
+  htmlEdicaoVendas() {
+    const C = this.C();
+    const a = this.aberto;
+    const e = this.edicao;
+    const trav = this.mesesTravados(a.cab);
+    const dis = (mi) => (trav.indexOf(mi + 1) >= 0 ? ' disabled title="mês travado"' : "");
+    const linhas = e.grade.map((l, i) => {
+      const vgv = l.meses.map((m) => (Number(m.ticket) || 0) * (Number(m.vendas) || 0));
+      const tot = vgv.reduce((s, v) => s + v, 0), un = l.meses.reduce((s, m) => s + (Number(m.vendas) || 0), 0);
+      return `<tr class="oo-grupo"><td>${this.esc(l.cc)} ${this.esc(l.cc_nome)} · ${this.esc(l.plano_venda || "sem plano")}${l.distrato ? " (distrato)" : ""}
+          <button type="button" style="border:none;background:none;color:#b91c1c;cursor:pointer;float:right" title="Remover" onclick="OrionOrcamentosApp.removerVenda(${i})">✕</button></td>${vgv.map((v) => `<td class="is-right">${v ? C.fmtReais(v, true) : ""}</td>`).join("")}<td class="is-right">${C.fmtReais(tot, true)}</td></tr>
+        <tr><td style="padding-left:18px">unidades</td>${l.meses.map((m, mi) => `<td><input class="oo-num"${dis(mi)} value="${m.vendas || ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'vendas', this.value)"></td>`).join("")}<td class="is-right">${un}</td></tr>
+        <tr><td style="padding-left:18px">ticket médio (R$)</td>${l.meses.map((m, mi) => `<td><input class="oo-num"${dis(mi)} value="${m.ticket ? C.fmtReais(m.ticket) : ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'ticket', this.value)"></td>`).join("")}<td></td></tr>`;
+    }).join("");
+    const opcoes = (this.planosVenda || []).map((n) => `<option>${this.esc(n)}</option>`).join("");
+    return `
+      ${e.erros.length ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${e.erros.map((x) => this.esc(x)).join("<br>")}</div>` : ""}
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap">
+        <div><label class="ml-emp-filter-label">Empreendimento (código)</label><input id="oo-nv-cc" class="idx-select" style="height:36px;width:150px"></div>
+        <div><label class="ml-emp-filter-label">Plano de venda</label><select id="oo-nv-plano" class="idx-select" style="height:36px;min-width:220px"><option value="">(sem plano)</option>${opcoes}</select></div>
+        <label style="display:flex;gap:6px;align-items:center;height:36px;font-size:0.8rem"><input type="checkbox" id="oo-nv-dist"> distrato</label>
+        <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.incluirVenda()">Incluir linha</button>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.cancelarEdicao()">Cancelar</button>
+          <button type="button" class="btn btn-primary" style="height:36px" ${e.salvando ? "disabled" : ""} onclick="OrionOrcamentosApp.salvarEdicao()">${e.salvando ? "Salvando..." : "Salvar orçamento"}</button>
+        </div>
+      </div>
+      <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">VGV = ticket médio × unidades, como no Órion. Distrato: unidades negativas.${trav.length ? ` Meses travados: ${trav.map((m) => C.MESES[m - 1]).join(", ")}.` : ""}</div>
+      <div class="cc-scroll"><table class="cc-table" style="min-width:1440px">
+        <colgroup><col style="width:280px">${C.MESES.map(() => '<col style="width:88px">').join("")}<col style="width:110px"></colgroup>
+        <thead><tr><th>Empreendimento / plano de venda</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="14" style="text-align:center;padding:30px">Sem linhas. Inclua acima.</td></tr>`}</tbody>
+      </table></div>`;
+  },
+
   grupo(cab) {
     return (this.cab[this.tipo] || []).filter((c) => c.ano === cab.ano && c.tipo === cab.tipo && c.descricao === cab.descricao &&
       c.status !== "Substituído" && String(c.departamento ? c.departamento.id : "") === String(cab.departamento ? cab.departamento.id : ""));
@@ -347,7 +411,12 @@ const OrionOrcamentosApp = {
     const e = this.edicao;
     if (!a || !e || !this.podeEditarCab(a.cab)) return;
     const fechados = this.mesesTravados(a.cab);
-    e.erros = C.validarLinhas(e.linhas, a.itens, {
+    let vendasNovas = a.vendas;
+    if (e.modo === "vendas") {
+      e.erros = C.validarVendas(e.grade, C.vendasParaGrade(a.vendas), fechados);
+      if (e.erros.length) return this.render();
+      vendasNovas = C.gradeParaVendas(e.grade, a.cab.ano);
+    } else e.erros = C.validarLinhas(e.linhas, a.itens, {
       fechados,
       cadDepartamentos: this.cadDep && (this.cadDep.departamentos || []).length ? this.cadDep : null,
       departamentoId: a.cab.departamento ? a.cab.departamento.id : null
@@ -358,7 +427,7 @@ const OrionOrcamentosApp = {
     const fc = this.fc();
     const col = this.COL[this.tipo];
     const id = a.cab._id;
-    const novos = C.emBlocos(id, col.ref, e.linhas, a.vendas);
+    const novos = C.emBlocos(id, col.ref, e.linhas, vendasNovas);
     const quem = this.usuarioEmail();
     try {
       const cabNovo = await fc.runTransaction(window.firebaseDb, async (tx) => {
@@ -372,6 +441,7 @@ const OrionOrcamentosApp = {
         for (let b = novos.length; b < (Number(atual.blocos) || 1); b++) tx.delete(fc.doc(window.firebaseDb, col.itens, `${id}_${b}`));
         const n = Object.assign({}, atual, {
           totais: C.somarLinhas(e.linhas), linhas: e.linhas.length, blocos: novos.length,
+          linhas_venda: (vendasNovas || []).length, vgv: (vendasNovas || []).reduce((s, v) => s + (Number(v.vgv) || 0), 0),
           rev: (Number(atual.rev) || 0) + 1, alterado_por: quem, alterado_em: new Date().toISOString()
         });
         tx.set(ref, n);
@@ -381,6 +451,7 @@ const OrionOrcamentosApp = {
       if (i >= 0) this.cab[this.tipo][i] = cabNovo;
       a.cab = cabNovo;
       a.itens = e.linhas;
+      a.vendas = vendasNovas;
       this.edicao = null;
       this.aviso = "Orçamento salvo.";
     } catch (err) {
@@ -447,6 +518,7 @@ const OrionOrcamentosApp = {
   },
 
   htmlEdicao() {
+    if (this.edicao && this.edicao.modo === "vendas") return this.htmlEdicaoVendas();
     const C = this.C();
     const a = this.aberto;
     const e = this.edicao;
