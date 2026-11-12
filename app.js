@@ -3932,6 +3932,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-premissas": "Premissas da viabilidade",
     "orion-fechamento": "Fechamento de meses",
     "orion-orcamentos": "Orçamentos e forecasts (Órion)",
+    "orion-dfc": "DFC gerencial (Órion)",
     "orion-departamentos": "Departamentos do orçamento",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
@@ -4021,6 +4022,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-premissas": "sliders-horizontal",
     "orion-fechamento": "calendar-check",
     "orion-orcamentos": "orbit",
+    "orion-dfc": "bar-chart-3",
     "orion-departamentos": "network",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
@@ -4270,6 +4272,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionFechamentoApp !== "undefined") OrionFechamentoApp.init();
   } else if (tabId === "orion-orcamentos") {
     if (typeof OrionOrcamentosApp !== "undefined") OrionOrcamentosApp.init();
+  } else if (tabId === "orion-dfc") {
+    if (typeof OrionDfcApp !== "undefined") OrionDfcApp.init();
   } else if (tabId === "orion-departamentos") {
     if (typeof OrionDepartamentosApp !== "undefined") OrionDepartamentosApp.init();
   } else if (tabId === "resultado-caixa") {

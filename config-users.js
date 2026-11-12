@@ -514,7 +514,8 @@ const ConfigUsersApp = {
       name: "Órion (transição)", icon: "orbit", key: "mod_orion",
       submodules: [{ name: "Órion (transição)", key: "sub_orion_geral", actions: [
         { id: "orcamentos", label: "Orçamentos e forecasts" },
-        { id: "aprovar_orcamentos", label: "Aprovar orçamentos e forecasts" }
+        { id: "aprovar_orcamentos", label: "Aprovar orçamentos e forecasts" },
+        { id: "dfc_gerencial", label: "DFC gerencial" }
       ] }]
     },
     {
