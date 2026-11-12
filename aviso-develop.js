@@ -257,7 +257,18 @@
     const atual = ambienteAtual();
     let html = "";
     if (atual) {
-      html += `<div class="avdev-barra teste" style="border-color:${atual.cor};"><span><strong>Ambiente de teste ${esc(atual.pessoa)}</strong> (branch ${esc(atual.branch)}). Esta não é a produção, mas os dados são reais (Sienge e banco do Integra): o que for gravado aqui vale de verdade.</span></div>`;
+      const situacao = textoMinha();
+      const pendente = minhaSolic && minhaSolic.status === "pendente";
+      html += `<div class="avdev-barra teste" style="border-color:${atual.cor};"><span><strong>Ambiente de teste ${esc(atual.pessoa)}</strong> (branch ${esc(atual.branch)}). Esta não é a produção, mas os dados são reais (Sienge e banco do Integra): o que for gravado aqui vale de verdade.${situacao ? `<br><strong>${situacao}</strong>` : ""}</span>
+        <span class="avdev-acoes"><button type="button" class="avdev-btn verde" data-avdev="encaminhar" title="Pede ao administrador para levar as alterações deste ambiente para a produção">${pendente ? "Atualizar solicitação" : "Encaminhar para produção"}</button></span></div>`;
+    }
+    if (adminReal() && solicPendentes.length) {
+      const n = solicPendentes.length;
+      const quem = solicPendentes.map((s) => esc(s.ambienteNome || ambientePorChave(s.ambiente).nome)).join(", ");
+      html += `<div class="avdev-barra solic">
+        <span><strong>${n === 1 ? "1 solicitação" : n + " solicitações"} de envio para a produção</strong> aguardando você: ${quem}.</span>
+        <span class="avdev-acoes"><button type="button" class="avdev-btn verde" data-avdev="solicitacoes">Ver solicitações</button></span>
+      </div>`;
     }
     const pend = comPendencia();
     const assinatura = assinaturaPendencias();
@@ -278,6 +289,8 @@
         const acao = b.getAttribute("data-avdev");
         if (acao === "resumo") abrirResumo();
         if (acao === "dispensar") { gravar(DISPENSADO, assinatura); pintar(); }
+        if (acao === "encaminhar") abrirEncaminhar();
+        if (acao === "solicitacoes") abrirSolicitacoes();
       };
     });
   }
@@ -299,14 +312,14 @@
 
   // Comparação entre dois commits nunca muda: guarda pelo par de SHAs e não pergunta de novo.
   async function comparar(shaMain, shaBranch) {
-    const chave = "integra_cmp_" + shaMain.slice(0, 12) + "_" + shaBranch.slice(0, 12);
+    const chave = "integra_cmp2_" + shaMain.slice(0, 12) + "_" + shaBranch.slice(0, 12);
     try { const s = JSON.parse(ler(chave, sessionStorage) || "null"); if (s) return s; } catch (e) {}
     const res = await fetch(API + "/compare/" + shaMain + "..." + shaBranch, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
     if (!res.ok) return null;
     const j = await res.json();
     const corpo = {
       commits: (j.commits || []).map((c) => ({ sha: c.sha, parents: (c.parents || []).map((p) => ({ sha: p.sha })), commit: { message: c.commit && c.commit.message, author: c.commit && c.commit.author }, author: c.author ? { login: c.author.login } : null })),
-      files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status })),
+      files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status, additions: Number(f.additions) || 0, deletions: Number(f.deletions) || 0 })),
       baseMsg: j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message,
       atrasadoPor: Number(j.behind_by) || 0
     };
@@ -352,13 +365,391 @@
       try {
         const cmp = await comparar(shaMain, sha[amb.branch]);
         if (!cmp) continue; // falha temporária: mantém o que já tinha
-        dados[amb.chave] = { commits: cmp.commits, files: cmp.files, versaoBase: versaoDe(cmp.baseMsg), atrasadoPor: cmp.atrasadoPor };
+        dados[amb.chave] = { commits: cmp.commits, files: cmp.files, versaoBase: versaoDe(cmp.baseMsg), atrasadoPor: cmp.atrasadoPor, sha: sha[amb.branch] };
       } catch (e) {}
     }
     // Na produção, a versão é a da própria página (rodapé do menu). No teste, lê a mensagem do último commit da main.
     let vp = ambienteAtual() ? 0 : versaoDaPagina();
     if (!vp) vp = versaoDe(await mensagemDoCommit(shaMain).catch(() => ""));
     if (vp) versaoProducao = vp;
+  }
+
+  // ===== Solicitações de envio para a produção =====
+  // O desenvolvedor, no ambiente de teste, clica em "Encaminhar para produção": grava um pedido em
+  // Firestore (coleção solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
+  // (não quem está em "Ver como administrador") recebe um pop-up com o pedido e aprova ou recusa.
+  // Aprovar só registra a decisão: a publicação continua sendo "juntar <branch> na main" + deploy.bat.
+  const SOLIC = "solicitacoes_producao";
+  const VISTAS = "integra_solic_vistas";
+  let solicPendentes = [];
+  let minhaSolic = null;
+  let ouvindoSolic = false;
+
+  function fb() {
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    return fx && db ? { fx, db } : null;
+  }
+
+  function adminReal() {
+    try { return typeof window.crmAdministradorReal === "function" && !!window.crmAdministradorReal(); } catch (e) { return false; }
+  }
+
+  function usuarioReal() {
+    const u = (window.AppState && window.AppState.currentUser) || {};
+    const nome = (typeof window.crmNomeReal === "function" && window.crmNomeReal()) || u.name || "";
+    return { nome: String(nome), email: String(u.email || "").toLowerCase() };
+  }
+
+  function ambientePorChave(chave) {
+    return AMBIENTES.find((a) => a.chave === chave) || { chave, nome: chave, branch: chave, cor: "#475569", url: URL_PRODUCAO };
+  }
+
+  async function compararAmbiente(amb) {
+    const branches = await pedir(API + "/branches?per_page=100");
+    if (!Array.isArray(branches)) return null;
+    const m = branches.find((b) => b && b.name === "main");
+    const b = branches.find((x) => x && x.name === amb.branch);
+    if (!m || !b) return null;
+    const cmp = await comparar(m.commit.sha, b.commit.sha);
+    if (!cmp) return null;
+    return { commits: cmp.commits, files: cmp.files, sha: b.commit.sha, shaMain: m.commit.sha, versaoBase: versaoDe(cmp.baseMsg) };
+  }
+
+  function resumoDe(d) {
+    const commits = alteracoesUteis(d).slice().reverse().map((c) => {
+      const msg = String((c.commit && c.commit.message) || "").trim();
+      return {
+        sha: String(c.sha || "").slice(0, 12),
+        titulo: msg.split("\n")[0].slice(0, 300),
+        corpo: msg.split("\n").slice(1).join("\n").trim().slice(0, 2000),
+        autor: (c.commit && c.commit.author && c.commit.author.name) || (c.author && c.author.login) || "",
+        data: (c.commit && c.commit.author && c.commit.author.date) || ""
+      };
+    });
+    const arquivos = ((d && d.files) || []).slice(0, 300).map((f) => ({
+      nome: f.filename, status: f.status, mais: Number(f.additions) || 0, menos: Number(f.deletions) || 0
+    }));
+    const totais = {
+      commits: commits.length,
+      arquivos: arquivos.length,
+      mais: arquivos.reduce((s, f) => s + f.mais, 0),
+      menos: arquivos.reduce((s, f) => s + f.menos, 0)
+    };
+    return { commits, arquivos, totais };
+  }
+
+  function num(n) {
+    return Number(n || 0).toLocaleString("pt-BR");
+  }
+
+  // Parte visual comum: números, arquivos com barra de linhas novas/removidas e lista de alterações.
+  function htmlVisual(r) {
+    const t = (r && r.totais) || { commits: 0, arquivos: 0, mais: 0, menos: 0 };
+    const rotulo = { added: ["novo", "novo"], removed: ["removido", "rem"], modified: ["alterado", "alt"], renamed: ["renomeado", "ren"] };
+    const maior = Math.max(1, ...((r && r.arquivos) || []).map((f) => f.mais + f.menos));
+    const arqs = ((r && r.arquivos) || []).slice().sort((a, b) => (b.mais + b.menos) - (a.mais + a.menos)).map((f) => {
+      const rt = rotulo[f.status] || [f.status, "alt"];
+      const total = f.mais + f.menos;
+      const larg = Math.max(4, Math.round((total / maior) * 100));
+      const pv = total ? Math.round((f.mais / total) * 100) : 0;
+      return `<div class="avsol-arq">
+        <span class="avsol-chip ${rt[1]}">${esc(rt[0])}</span>
+        <span class="avsol-nomearq" title="${esc(f.nome)}">${esc(f.nome)}</span>
+        <span class="avsol-barra"><span style="width:${larg}%;background:linear-gradient(90deg,#16a34a ${pv}%,#dc2626 ${pv}%);"></span></span>
+        <span class="avsol-linhas"><b class="mais">+${num(f.mais)}</b> <b class="menos">−${num(f.menos)}</b></span>
+      </div>`;
+    }).join("");
+    const commits = ((r && r.commits) || []).map((c) => `<li><strong>${esc(c.titulo)}</strong>
+        <span class="avsol-meta">${esc(c.autor)}${c.data ? " • " + esc(fmtData(c.data)) : ""}</span>
+        ${c.corpo ? `<pre>${esc(c.corpo)}</pre>` : ""}</li>`).join("");
+    return `<div class="avsol-cards">
+        <div class="avsol-card"><span>${num(t.commits)}</span>${t.commits === 1 ? "alteração" : "alterações"}</div>
+        <div class="avsol-card"><span>${num(t.arquivos)}</span>${t.arquivos === 1 ? "arquivo" : "arquivos"}</div>
+        <div class="avsol-card mais"><span>+${num(t.mais)}</span>linhas novas</div>
+        <div class="avsol-card menos"><span>−${num(t.menos)}</span>linhas removidas</div>
+      </div>
+      ${commits ? `<div><div class="avsol-tit">O que foi feito</div><ol class="avsol-commits">${commits}</ol></div>` : ""}
+      ${arqs ? `<div><div class="avsol-tit">Arquivos mexidos</div><div class="avsol-arqs">${arqs}</div></div>` : ""}`;
+  }
+
+  function estiloSolic() {
+    if (document.getElementById("avsol-style")) return;
+    const st = document.createElement("style");
+    st.id = "avsol-style";
+    st.textContent = [
+      ".avsol-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;}",
+      ".avsol-card{border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:.74rem;color:#64748b;display:flex;flex-direction:column;gap:2px;}",
+      ".avsol-card span{font-size:1.25rem;font-weight:700;color:#0f172a;line-height:1.1;}",
+      ".avsol-card.mais span{color:#15803d;}.avsol-card.menos span{color:#b91c1c;}",
+      ".avsol-tit{font-size:.74rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.03em;margin:2px 0 6px;}",
+      ".avsol-commits{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;}",
+      ".avsol-commits pre{white-space:pre-wrap;font-family:inherit;margin:2px 0 0;color:#475569;font-size:.8rem;}",
+      ".avsol-meta{display:block;font-size:.72rem;color:#94a3b8;}",
+      ".avsol-arqs{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto;}",
+      ".avsol-arq{display:grid;grid-template-columns:76px minmax(0,1fr) 120px 96px;align-items:center;gap:8px;font-size:.78rem;}",
+      ".avsol-nomearq{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#1e293b;}",
+      ".avsol-barra{height:8px;background:#f1f5f9;border-radius:99px;overflow:hidden;display:block;}",
+      ".avsol-barra span{display:block;height:100%;border-radius:99px;}",
+      ".avsol-linhas{text-align:right;white-space:nowrap;}.avsol-linhas .mais{color:#15803d;}.avsol-linhas .menos{color:#b91c1c;}",
+      ".avsol-chip{display:inline-block;text-align:center;border-radius:99px;padding:1px 8px;font-size:.7rem;font-weight:700;}",
+      ".avsol-chip.novo{background:#dcfce7;color:#166534;}.avsol-chip.alt{background:#dbeafe;color:#1e40af;}",
+      ".avsol-chip.rem{background:#fee2e2;color:#991b1b;}.avsol-chip.ren{background:#f1f5f9;color:#475569;}",
+      ".avsol-pedido{border:1px solid #e2e8f0;border-left:4px solid currentColor;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;}",
+      ".avsol-cab{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}",
+      ".avsol-cab h3{margin:0;font-size:1rem;}",
+      ".avsol-cab .avsol-quem{font-size:.78rem;color:#64748b;}",
+      ".avsol-desc{background:#f8fafc;border-radius:8px;padding:8px 10px;color:#1e293b;white-space:pre-wrap;font-size:.84rem;}",
+      ".avsol-aviso{background:#fff7ed;border:1px solid #fdba74;color:#7c2d12;border-radius:8px;padding:6px 10px;font-size:.78rem;}",
+      ".avsol-acoes{display:flex;gap:6px;flex-wrap:wrap;align-items:center;}",
+      ".avsol-acoes .avdev-btn{padding:6px 12px;font-size:.8rem;color:#105436;}",
+      ".avsol-acoes .avdev-btn.ok{background:#105436;border-color:#105436;color:#fff;}",
+      ".avsol-acoes .avdev-btn.nao{color:#b91c1c;}",
+      ".avsol-recusa{display:none;flex-direction:column;gap:6px;}",
+      ".avsol-recusa.on{display:flex;}",
+      ".avsol-texto{width:100%;min-height:70px;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font:inherit;font-size:.84rem;resize:vertical;box-sizing:border-box;}",
+      ".avsol-feito{border-radius:8px;padding:8px 10px;font-size:.84rem;}",
+      ".avsol-feito.ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#14532d;}",
+      ".avsol-feito.nao{background:#fef2f2;border:1px solid #fecaca;color:#7f1d1d;}",
+      ".avdev-barra.solic{background:#f0fdf4;border:1px solid #86efac;color:#14532d;}",
+      ".avdev-btn.verde{background:#105436;border-color:#105436;color:#fff;}",
+      "@media (max-width:640px){.avsol-cards{grid-template-columns:repeat(2,minmax(0,1fr));}.avsol-arq{grid-template-columns:70px minmax(0,1fr) 84px;}.avsol-barra{display:none;}}"
+    ].join("");
+    document.head.appendChild(st);
+  }
+
+  function abrirModal(titulo, corpo) {
+    estilo();
+    estiloSolic();
+    const fundo = document.createElement("div");
+    fundo.className = "avdev-fundo";
+    fundo.innerHTML = `<div class="avdev-modal" role="dialog" aria-modal="true">
+      <header><h2>${esc(titulo)}</h2><button type="button" class="avdev-btn" data-fechar>Fechar</button></header>
+      <div class="avdev-corpo">${corpo}</div></div>`;
+    fundo.addEventListener("click", (e) => {
+      if (e.target === fundo || (e.target && e.target.hasAttribute && e.target.hasAttribute("data-fechar"))) fundo.remove();
+    });
+    document.body.appendChild(fundo);
+    return fundo;
+  }
+
+  // ---- Lado do desenvolvedor (ambiente de teste) ----
+  async function carregarMinha() {
+    const amb = ambienteAtual();
+    const f = fb();
+    if (!amb || !f) return;
+    try {
+      const snap = await f.fx.getDocs(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("ambiente", "==", amb.chave)));
+      let ultima = null;
+      snap.forEach((d) => {
+        const v = Object.assign({ id: d.id }, d.data());
+        if (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm)) ultima = v;
+      });
+      minhaSolic = ultima;
+    } catch (e) {
+      console.warn("[Encaminhar para produção] Não foi possível ler as solicitações:", e);
+    }
+  }
+
+  function textoMinha() {
+    const s = minhaSolic;
+    if (!s) return "";
+    const quando = fmtData(s.criadoEm);
+    if (s.status === "pendente") return `Solicitação de envio feita em ${esc(quando)}: aguardando o administrador.`;
+    const dias = (Date.now() - Number(s.decididoEm || 0)) / 86400000;
+    if (dias > 7) return "";
+    if (s.status === "aprovado") return `Envio aprovado por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}. Entra na produção na próxima publicação.`;
+    if (s.status === "recusado") return `Envio recusado por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}${s.motivo ? ": " + esc(s.motivo) : "."}`;
+    return "";
+  }
+
+  async function abrirEncaminhar() {
+    const amb = ambienteAtual();
+    if (!amb) return;
+    const fundo = abrirModal("Encaminhar para produção: " + amb.nome, "<p>Conferindo o que este ambiente tem de diferente da produção…</p>");
+    const corpo = fundo.querySelector(".avdev-corpo");
+    let d = null;
+    try { d = await compararAmbiente(amb); } catch (e) { d = null; }
+    if (!d) {
+      corpo.innerHTML = "<p>Não consegui consultar o GitHub agora. Tente de novo em alguns minutos.</p>";
+      return;
+    }
+    const r = resumoDe(d);
+    if (!r.totais.commits) {
+      corpo.innerHTML = `<p>Este ambiente está igual à produção: não há nada para encaminhar.</p>
+        <p style="color:#64748b;">Se você acabou de subir uma alteração, espere 1 minuto e tente de novo.</p>`;
+      return;
+    }
+    const atualizando = minhaSolic && minhaSolic.status === "pendente";
+    corpo.innerHTML = `
+      ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com o que está abaixo.</div>` : ""}
+      ${htmlVisual(r)}
+      <div>
+        <div class="avsol-tit">Explique para o administrador</div>
+        <textarea class="avsol-texto" id="avsol-desc" placeholder="O que foi feito, em qual tela, e como testar.">${esc(atualizando ? minhaSolic.descricao || "" : "")}</textarea>
+      </div>
+      <div class="avsol-acoes">
+        <button type="button" class="avdev-btn ok" id="avsol-enviar">${atualizando ? "Atualizar solicitação" : "Enviar para o administrador"}</button>
+        <button type="button" class="avdev-btn" data-fechar>Cancelar</button>
+      </div>`;
+    corpo.querySelector("#avsol-enviar").onclick = async (ev) => {
+      const btn = ev.currentTarget;
+      const descricao = String(corpo.querySelector("#avsol-desc").value || "").trim();
+      if (descricao.length < 10) {
+        alert("Escreva em poucas palavras o que foi feito e como testar.");
+        return;
+      }
+      const f = fb();
+      if (!f) { alert("O banco do Integra ainda não carregou. Tente de novo."); return; }
+      btn.disabled = true;
+      btn.textContent = "Enviando…";
+      const pedido = Object.assign({
+        ambiente: amb.chave,
+        ambienteNome: amb.nome,
+        branch: amb.branch,
+        sha: d.sha,
+        shaMain: d.shaMain,
+        versaoBase: d.versaoBase || 0,
+        descricao: descricao.slice(0, 4000),
+        solicitante: usuarioReal(),
+        criadoEm: Date.now(),
+        status: "pendente"
+      }, r);
+      try {
+        if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
+        else await f.fx.addDoc(f.fx.collection(f.db, SOLIC), pedido);
+      } catch (e) {
+        console.warn("[Encaminhar para produção] Falha ao gravar:", e);
+        alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
+        btn.disabled = false;
+        btn.textContent = "Enviar para o administrador";
+        return;
+      }
+      corpo.innerHTML = `<div class="avsol-feito ok"><strong>Solicitação enviada.</strong> O administrador vai receber um aviso com o resumo das alterações. Você vê a resposta nesta faixa do ambiente de teste.</div>
+        <div class="avsol-acoes"><button type="button" class="avdev-btn" data-fechar>Fechar</button></div>`;
+      await carregarMinha();
+      pintar();
+    };
+  }
+
+  // ---- Lado do administrador ----
+  function vistas() {
+    try { return JSON.parse(ler(VISTAS, sessionStorage) || "[]"); } catch (e) { return []; }
+  }
+
+  function ouvirPendentes() {
+    if (ouvindoSolic || !adminReal()) return;
+    const f = fb();
+    if (!f || typeof f.fx.onSnapshot !== "function") return;
+    ouvindoSolic = true;
+    try {
+      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("status", "==", "pendente")), (snap) => {
+        const lista = [];
+        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+        lista.sort((a, b) => Number(a.criadoEm) - Number(b.criadoEm));
+        solicPendentes = lista;
+        pintar();
+        const vistos = vistas();
+        const novas = lista.filter((s) => vistos.indexOf(s.id + ":" + s.criadoEm) < 0);
+        if (novas.length && adminReal() && !document.getElementById("avsol-admin")) abrirSolicitacoes();
+      }, (e) => {
+        console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
+        ouvindoSolic = false;
+      });
+    } catch (e) {
+      ouvindoSolic = false;
+    }
+  }
+
+  function htmlPedido(s) {
+    const amb = ambientePorChave(s.ambiente);
+    const d = dados[s.ambiente];
+    const mudouDepois = d && d.sha && s.sha && d.sha !== s.sha;
+    const quem = (s.solicitante && (s.solicitante.nome || s.solicitante.email)) || "desenvolvedor";
+    return `<div class="avsol-pedido" style="color:${esc(amb.cor)};" data-id="${esc(s.id)}">
+      <div class="avsol-cab">
+        <i data-lucide="send" style="width:16px;height:16px;"></i>
+        <h3>${esc(s.ambienteNome || amb.nome)}</h3>
+        <span class="avsol-quem">pedido por ${esc(quem)} em ${esc(fmtData(s.criadoEm))} • branch ${esc(s.branch || amb.branch)}</span>
+      </div>
+      <div style="color:#1e293b;display:flex;flex-direction:column;gap:10px;">
+        ${s.descricao ? `<div class="avsol-desc">${esc(s.descricao)}</div>` : ""}
+        ${mudouDepois ? `<div class="avsol-aviso">Depois deste pedido, subiram mais alterações nesse ambiente. Abra o teste e confira antes de aprovar.</div>` : ""}
+        ${htmlVisual(s)}
+        <div class="avsol-acoes">
+          <button type="button" class="avdev-btn ok" data-sol="aprovar">Aprovar</button>
+          <button type="button" class="avdev-btn nao" data-sol="recusar">Recusar</button>
+          <a class="avdev-btn" href="${esc(amb.url + caminhoAtual())}" target="_blank" rel="noopener">Abrir o ${esc(amb.nome)}</a>
+          <a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a>
+        </div>
+        <div class="avsol-recusa">
+          <textarea class="avsol-texto" placeholder="Motivo da recusa (o desenvolvedor vai ver)."></textarea>
+          <div class="avsol-acoes"><button type="button" class="avdev-btn nao" data-sol="confirmar-recusa">Confirmar recusa</button></div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  async function decidir(caixa, s, status, motivo) {
+    const f = fb();
+    if (!f) return;
+    const quem = usuarioReal();
+    caixa.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    try {
+      await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), {
+        status,
+        motivo: motivo || "",
+        decididoPor: quem.nome || quem.email,
+        decididoPorEmail: quem.email,
+        decididoEm: Date.now()
+      });
+    } catch (e) {
+      console.warn("[Solicitações de envio] Falha ao gravar a decisão:", e);
+      alert("Não foi possível gravar a decisão. Tente de novo.");
+      caixa.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+      return;
+    }
+    const branch = s.branch || ambientePorChave(s.ambiente).branch;
+    const alvo = caixa.querySelector(".avsol-acoes").parentNode;
+    alvo.innerHTML = status === "aprovado"
+      ? `<div class="avsol-feito ok"><strong>Aprovado.</strong> Para publicar: peça ao Claude <b>"juntar ${esc(branch)} na main"</b> e depois rode o <b>deploy.bat</b>.</div>`
+      : `<div class="avsol-feito nao"><strong>Recusado.</strong> O desenvolvedor verá o motivo no ambiente de teste.</div>`;
+  }
+
+  function abrirSolicitacoes() {
+    if (!adminReal() || !solicPendentes.length) return;
+    const antigo = document.getElementById("avsol-admin");
+    if (antigo) antigo.remove();
+    const lista = solicPendentes.slice();
+    const total = lista.length;
+    const fundo = abrirModal(
+      total === 1 ? "Nova solicitação de envio para a produção" : total + " solicitações de envio para a produção",
+      lista.map(htmlPedido).join("")
+    );
+    fundo.id = "avsol-admin";
+    gravar(VISTAS, JSON.stringify(vistas().concat(lista.map((s) => s.id + ":" + s.criadoEm)).slice(-200)), sessionStorage);
+    fundo.querySelectorAll(".avsol-pedido").forEach((caixa) => {
+      const s = lista.find((x) => x.id === caixa.getAttribute("data-id"));
+      if (!s) return;
+      caixa.querySelectorAll("[data-sol]").forEach((b) => {
+        b.onclick = () => {
+          const acao = b.getAttribute("data-sol");
+          if (acao === "aprovar") decidir(caixa, s, "aprovado", "");
+          if (acao === "recusar") {
+            const area = caixa.querySelector(".avsol-recusa");
+            area.classList.toggle("on");
+            if (area.classList.contains("on")) area.querySelector("textarea").focus();
+          }
+          if (acao === "confirmar-recusa") {
+            const motivo = String(caixa.querySelector(".avsol-recusa textarea").value || "").trim();
+            if (!motivo) { alert("Escreva o motivo da recusa."); return; }
+            decidir(caixa, s, "recusado", motivo.slice(0, 2000));
+          }
+        };
+      });
+    });
+    if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(fundo);
+    else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
   }
 
   let ultimaConsulta = 0;
@@ -369,6 +760,10 @@
         ultimaConsulta = Date.now();
         await consultar();
       }
+    } catch (e) {}
+    try {
+      if (ambienteAtual()) await carregarMinha();
+      ouvirPendentes();
     } catch (e) {}
     pintar();
   }
@@ -415,5 +810,5 @@
     }
   }, 2000);
 
-  window.IntegraAvisoDevelop = { atualizar: () => ciclo(), abrirResumo };
+  window.IntegraAvisoDevelop = { atualizar: () => ciclo(), abrirResumo, abrirEncaminhar, abrirSolicitacoes };
 })();

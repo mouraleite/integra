@@ -11,6 +11,18 @@
     { key: "tvoContrato", label: "Prazo máximo legal (TVO Contrato)" }
   ];
   const DATAS = COLUNAS.filter((c) => c.key !== "id");
+  const NUVEM = { colecao: "engenharia_acompanhamento", doc: "obras" };
+  /* Carga inicial da planilha "Previsão término obras" (aba Ver 26-08-26), último dia de cada mês.
+     Só entra quando ainda não existe nada salvo na nuvem. "idem" no Lazer = mesma data da Infraestrutura. */
+  const CARGA_INICIAL = [
+    { id: "13900", infra: "2026-08-31", lazer: "2026-11-30", cliente: "2027-01-31", tvoCliente: "2027-01-31", lo: "2027-04-30", tvoContrato: "2028-12-31" },
+    { id: "14000", infra: "2026-09-30", lazer: "2027-01-31", cliente: "2027-01-31", tvoCliente: "2027-01-31", lo: "2027-04-30", tvoContrato: "2028-12-31" },
+    { id: "14703", infra: "2027-08-31", lazer: "2027-08-31", cliente: "2027-11-30", tvoCliente: "2027-11-30", lo: "2028-03-31", tvoContrato: "2029-01-31" },
+    { id: "14704", infra: "2028-03-31", lazer: "2028-03-31", cliente: "2028-03-31", tvoCliente: "2028-03-31", lo: "2028-07-31", tvoContrato: "2029-01-31" },
+    { id: "16103", infra: "2027-09-30", lazer: "", cliente: "2027-06-30", tvoCliente: "2028-03-31", lo: "2028-03-31", tvoContrato: "2028-02-29" },
+    { id: "17701", infra: "2028-05-31", lazer: "2028-05-31", cliente: "2028-05-31", tvoCliente: "2028-08-31", lo: "2028-11-30", tvoContrato: "2030-06-30" },
+    { id: "15300", infra: "2029-08-31", lazer: "2030-08-31", cliente: "2029-11-30", tvoCliente: "2030-02-28", lo: "", tvoContrato: "2030-02-28" }
+  ];
 
   const AcompanhamentoObraApp = {
     linhas: [],
@@ -116,11 +128,70 @@
       let lista = [];
       try { lista = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { lista = []; }
       this.linhas = Array.isArray(lista) ? lista.filter((r) => r && r.id) : [];
+      this.carregarNuvem();
+    },
+
+    localAt() {
+      try { return Number(localStorage.getItem(KEY + "_at")) || 0; } catch (e) { return 0; }
+    },
+
+    gravarLocal(at) {
+      try {
+        localStorage.setItem(KEY, JSON.stringify(this.linhas));
+        localStorage.setItem(KEY + "_at", String(at || Date.now()));
+      } catch (e) {}
     },
 
     gravar() {
-      const raw = JSON.stringify(this.linhas);
-      try { localStorage.setItem(KEY, raw); } catch (e) {}
+      const at = Date.now();
+      this.gravarLocal(at);
+      this.salvarNuvem(at);
+    },
+
+    async salvarNuvem(at) {
+      const fx = window.firebaseCollections;
+      const db = window.firebaseDb;
+      if (!this.podeEditar() || !fx || !db || typeof fx.setDoc !== "function") return;
+      try {
+        await fx.setDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc), { linhas: this.linhas, savedAt: at || Date.now() });
+      } catch (e) {
+        console.warn("[Acompanhamento de obra] Não foi possível salvar na nuvem:", e);
+      }
+    },
+
+    async carregarNuvem(tentativa) {
+      const fx = window.firebaseCollections;
+      const db = window.firebaseDb;
+      if (!fx || !db || typeof fx.getDoc !== "function") {
+        if ((tentativa || 0) < 20) setTimeout(() => this.carregarNuvem((tentativa || 0) + 1), 500);
+        return;
+      }
+      let snap;
+      try {
+        snap = await fx.getDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc));
+      } catch (e) {
+        console.warn("[Acompanhamento de obra] Não foi possível ler da nuvem:", e);
+        return;
+      }
+      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
+      const data = existe && typeof snap.data === "function" ? snap.data() : null;
+      const local = this.localAt();
+      if (data && Array.isArray(data.linhas)) {
+        const nuvemAt = Number(data.savedAt) || 0;
+        if (nuvemAt >= local || !this.linhas.length) {
+          this.linhas = data.linhas.filter((r) => r && r.id);
+          this.gravarLocal(nuvemAt);
+        } else {
+          this.salvarNuvem(local);
+        }
+      } else if (!existe) {
+        if (!this.linhas.length) {
+          this.linhas = CARGA_INICIAL.map((r) => Object.assign({}, r));
+          this.completarNomes();
+        }
+        if (this.podeEditar()) this.gravar();
+      }
+      if (!document.getElementById("aobra-busca")) this.render();
     },
 
     ordenar(campo) {
