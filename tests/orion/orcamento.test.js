@@ -387,3 +387,18 @@ test("DFC gerencial mensal: séries real, N-1 e referência, cheio e MLDU, por e
   assert.strictEqual(g.total.ref, -96000);
   assert.strictEqual(g.ah, -1);               // saída de 100 contra 50 no ano anterior: AH = (−100 − (−50)) / 50 = −100%
 });
+
+test("orçado × realizado: leitura executiva, pontos de atenção e maiores causas", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const r = C.insightsBloco([
+    { produto: "100", produto_nome: "Obra A", plano: "1", plano_nome: "Material", ref: 1000000, real: 1500000 },
+    { produto: "100", produto_nome: "Obra A", plano: "2", plano_nome: "Serviços", ref: 500000, real: 400000 },
+    { produto: "200", produto_nome: "Obra B", plano: "1", plano_nome: "Material", ref: 300000, real: 300000 }
+  ], "DESPESAS", "Despesas");
+  assert.strictEqual(r.var, 400000);
+  assert.strictEqual(r.favoravel, false);
+  assert.deepStrictEqual(r.alertas.map((a) => a.titulo), ["Desvio material", "Concentração de desvio"]);
+  assert.strictEqual(r.linhas.length, 2);
+  assert.strictEqual(r.porProduto[0].chave, "100");
+  assert.ok(Math.abs(r.linhas[0].peso - 5 / 6) < 1e-9);
+});

@@ -797,6 +797,36 @@
     return { empresas, total };
   }
 
+  /**
+   * Leitura executiva de um bloco (Órion › Orçado × Realizado › Consolidado): linhas {produto, produto_nome, plano, plano_nome, ref, real}
+   * em centavos (despesa positiva). tipo: DESPESAS | RECEITAS | RESULTADO. Devolve totais, veredito, pontos de atenção
+   * (desvio material ≥ 5%, concentração ≥ 25%), maiores causas por empreendimento e as linhas com peso no desvio.
+   */
+  function insightsBloco(linhas, tipo, rotulo) {
+    const inv = tipo === "DESPESAS";
+    const fav = (v) => (inv ? v <= 0 : v >= 0);
+    const ls = (linhas || []).map((l) => { const v = l.real - l.ref; return Object.assign({}, l, { var: v, abs: Math.abs(v), perc: l.ref ? v / Math.abs(l.ref) : (l.real ? 1 : 0), favoravel: fav(v), semaforo: semaforo(l.real, l.ref, tipo) }); })
+      .filter((l) => l.abs > 0).sort((a, b) => b.abs - a.abs);
+    const ref = (linhas || []).reduce((s2, l) => s2 + l.ref, 0), real = (linhas || []).reduce((s2, l) => s2 + l.real, 0);
+    const v = real - ref, perc = ref ? v / Math.abs(ref) : 0;
+    const totAbs = ls.reduce((s2, l) => s2 + l.abs, 0) || 1;
+    ls.forEach((l) => { l.peso = l.abs / totAbs; });
+    const agrupa = (campo, nome) => {
+      const m = new Map();
+      ls.forEach((l) => { const k = l[campo]; if (!m.has(k)) m.set(k, { chave: k, nome: l[nome] || k, var: 0, abs: 0, ref: 0, real: 0 }); const g = m.get(k); g.var += l.var; g.abs += l.abs; g.ref += l.ref; g.real += l.real; });
+      return [...m.values()].map((g) => Object.assign(g, { peso: g.abs / totAbs, favoravel: fav(g.var) })).sort((a, b) => b.abs - a.abs);
+    };
+    const favoravel = fav(v);
+    const alertas = [];
+    if (!favoravel && Math.abs(perc) >= 0.05) alertas.push({ tom: "vermelho", titulo: "Desvio material", detalhe: `${rotulo}: referência ${fmtReais(ref, true)} · realizado ${fmtReais(real, true)} (${(perc * 100).toFixed(1)}%).` });
+    if (ls[0] && ls[0].peso >= 0.25) alertas.push({ tom: "amarelo", titulo: "Concentração de desvio", detalhe: `${ls[0].produto_nome || ls[0].produto} · ${ls[0].plano_nome || ls[0].plano} concentra ${(ls[0].peso * 100).toFixed(0)}% do desvio absoluto.` });
+    const sinal = v >= 0 ? "acima" : "abaixo";
+    const narrativa = `${rotulo} ${sinal} da referência em ${fmtReais(Math.abs(v), true)} (${(Math.abs(perc) * 100).toFixed(1)}%). ` +
+      (favoravel ? `${ls.length} linha(s) com desvio; resultado favorável.` : `Revise os ${Math.min(5, ls.length)} maiores desvios abaixo.`);
+    return { ref, real, var: v, perc, favoravel, veredito: v === 0 ? "neutro" : favoravel ? "favoravel" : "desfavoravel", linhas: ls, porProduto: agrupa("produto", "produto_nome"), porPlano: agrupa("plano", "plano_nome"), alertas, narrativa,
+      contagem: { comDesvio: ls.length, favoravel: ls.filter((l) => l.favoravel).length, desfavoravel: ls.filter((l) => !l.favoravel).length } };
+  }
+
   /** Grupo de recebimento pelo nome do plano (mesma regra do Órion: Recebimento por Grupo). */
   function grupoRecebimento(nome) {
     const n = String(nome || "").toUpperCase();
@@ -935,6 +965,6 @@
     return s;
   }
 
-  return { dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

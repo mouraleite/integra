@@ -3938,6 +3938,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-resumo": "Resumo do orçamento (Órion)",
     "orion-analitico": "Analítico de gastos (Órion)",
     "orion-analise": "Análise de orçamento (Órion)",
+    "orion-oxr": "Orçado × Realizado (Órion)",
     "orion-carga": "Carga do Órion",
     "orion-departamentos": "Departamentos do orçamento",
     "documentos-sienge": "Tipos de Documento",
@@ -4034,6 +4035,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-resumo": "layout-dashboard",
     "orion-analitico": "table-2",
     "orion-analise": "list-tree",
+    "orion-oxr": "scale",
     "orion-carga": "upload",
     "orion-departamentos": "network",
     "documentos-sienge": "file-check",
@@ -4288,6 +4290,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionDfcApp !== "undefined") OrionDfcApp.init();
   } else if (tabId === "orion-carga") {
     if (typeof OrionCargaApp !== "undefined") OrionCargaApp.init();
+  } else if (tabId === "orion-oxr") {
+    if (typeof OrionOxRApp !== "undefined") OrionOxRApp.init();
   } else if (tabId === "orion-analise") {
     if (typeof OrionAnaliseApp !== "undefined") OrionAnaliseApp.init();
   } else if (tabId === "orion-analitico") {
