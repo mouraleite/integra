@@ -996,6 +996,78 @@
     return Math.abs(p) >= 0.05 ? "material" : "desfavoravel";
   }
 
-  return { leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+
+  /* ---------- importação por Excel (Órion: services/excel_validator.py, tudo ou nada) ---------- */
+  const COLUNAS_EXCEL_MENSAL = ["produto", "plano_financeiro"].concat(MESES.map((m) => m.toLowerCase())).concat(["observacao"]);
+
+  /** Normaliza o cabeçalho como o Órion (minúsculas, sem espaços e acentos): "Plano Financeiro" → "plano_financeiro". */
+  function colunaExcel(h) {
+    return String(h == null ? "" : h).trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_");
+  }
+
+  /**
+   * Valida as linhas de uma planilha de despesas/receitas (matriz: 1ª linha = cabeçalho).
+   * Produto e plano aceitam "código - nome", só o código ou só o nome. Regras do Órion:
+   * V01 obrigatório, V02 produto inexistente, V03 plano inexistente, V04 plano não autorizado no departamento,
+   * V06 valor mensal inválido, V07 produto+plano duplicado. Qualquer erro: nada é aplicado.
+   * o: { ccs: [{id, nome}], planos: [{id, nome}], permitido(cc, plano) → bool (opcional) }
+   */
+  function validarPlanilhaMensal(matriz, o) {
+    const linhasM = (matriz || []).filter((r) => (r || []).some((v) => v != null && String(v).trim() !== ""));
+    if (!linhasM.length) return { erros: [{ linha: 1, campo: "", codigo: "V00", mensagem: "A planilha está vazia." }], linhas: [] };
+    const cab = linhasM[0].map(colunaExcel);
+    const idx = {};
+    cab.forEach((c, i) => { if (c && idx[c] == null) idx[c] = i; });
+    const faltam = ["produto", "plano_financeiro"].filter((c) => idx[c] == null);
+    if (faltam.length) return { erros: [{ linha: 1, campo: faltam.join(", "), codigo: "V00", mensagem: `Cabeçalho sem a(s) coluna(s) ${faltam.join(", ")}. Use o modelo (produto, plano_financeiro, jan…dez, observacao).` }], linhas: [] };
+    const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    const achar = (lista, raw) => {
+      const t = String(raw).trim(), cod = /^\s*([\d.]+)\s*(-|$)/.exec(t);
+      const porId = new Map((lista || []).map((x) => [dig(x.id), x]));
+      if (cod && porId.has(dig(cod[1]))) return porId.get(dig(cod[1]));
+      const nome = (cod ? t.slice(cod[0].length) : t).trim().toLowerCase();
+      return (lista || []).find((x) => String(x.nome || "").trim().toLowerCase() === nome || (String(x.id) + " - " + String(x.nome || "")).toLowerCase() === t.toLowerCase()) || null;
+    };
+    const num = (v) => {
+      if (v == null || String(v).trim() === "") return 0;
+      if (typeof v === "number") return isNaN(v) ? null : v;
+      let s = String(v).trim().replace(/\s/g, "").replace(/^R\$/, "");
+      if (/,/.test(s)) s = s.replace(/\./g, "").replace(",", ".");
+      const n = Number(s);
+      return isNaN(n) ? null : n;
+    };
+    const erros = [], linhas = [], vistas = new Set();
+    const E = (linha, campo, codigo, mensagem) => erros.push({ linha, campo, codigo, mensagem });
+    linhasM.slice(1).forEach((r, k) => {
+      const n = k + 2;
+      const pr = String(r[idx.produto] == null ? "" : r[idx.produto]).trim(), pl = String(r[idx.plano_financeiro] == null ? "" : r[idx.plano_financeiro]).trim();
+      let ok = true;
+      if (!pr) { E(n, "produto", "V01", "Campo obrigatório 'produto' está vazio."); ok = false; }
+      if (!pl) { E(n, "plano_financeiro", "V01", "Campo obrigatório 'plano_financeiro' está vazio."); ok = false; }
+      const cc = pr ? achar(o.ccs, pr) : null, pla = pl ? achar(o.planos, pl) : null;
+      if (pr && !cc) { E(n, "produto", "V02", `Produto '${pr}' não encontrado no sistema.`); ok = false; }
+      if (pl && !pla) { E(n, "plano_financeiro", "V03", `Plano Financeiro '${pl}' não encontrado no sistema.`); ok = false; }
+      if (cc && pla && o.permitido && !o.permitido(dig(cc.id), dig(pla.id))) { E(n, "plano_financeiro", "V04", `Plano '${pl}' não está autorizado para o departamento/produto.`); ok = false; }
+      const m = new Array(12).fill(0);
+      MESES.forEach((mm, i) => {
+        const c = idx[mm.toLowerCase()];
+        const v = c == null ? 0 : num(r[c]);
+        if (v == null) { E(n, mm.toLowerCase(), "V06", `Valor inválido na coluna '${mm.toLowerCase()}': '${r[c]}'.`); ok = false; } else m[i] = Math.round(v * 100);
+      });
+      if (cc && pla) {
+        const ch = dig(cc.id) + "|" + dig(pla.id);
+        if (vistas.has(ch)) { E(n, "produto/plano_financeiro", "V07", `Combinação Produto='${pr}' + Plano='${pl}' duplicada na planilha.`); ok = false; } else vistas.add(ch);
+      }
+      if (ok) linhas.push({ cc: dig(cc.id), cc_nome: cc.nome || "", plano: dig(pla.id), plano_nome: pla.nome || "", m, total: somaMeses(m), obs: idx.observacao == null || r[idx.observacao] == null ? "" : String(r[idx.observacao]).trim() });
+    });
+    return { erros, linhas: erros.length ? [] : linhas };
+  }
+
+  /** Matriz para exportar (ou o modelo vazio): cabeçalho do modelo + uma linha por item, em reais. */
+  function planilhaMensal(linhas) {
+    return [COLUNAS_EXCEL_MENSAL].concat((linhas || []).map((l) => [`${l.cc} - ${l.cc_nome || ""}`, `${l.plano} - ${l.plano_nome || ""}`].concat((l.m || []).map((v) => (Number(v) || 0) / 100)).concat([l.obs || ""])));
+  }
+
+  return { validarPlanilhaMensal, planilhaMensal, colunaExcel, COLUNAS_EXCEL_MENSAL, leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

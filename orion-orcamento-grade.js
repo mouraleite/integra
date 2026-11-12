@@ -210,6 +210,81 @@ Object.assign(window.OrionOrcamentosApp, {
     this.render();
   },
 
+  /* ---------- Excel (Órion: Importação / Exportação Excel — baixar modelo, exportar, importar tudo ou nada) ---------- */
+  excelAlternar() { const e = this.edicao; if (!e) return; e.excel = e.excel ? null : { erros: [], linhas: null, arquivo: "" }; this.render(); },
+  excelNome(sufixo) { const a = this.aberto.cab; return `${sufixo}_${String(a.tipo || "").toLowerCase()}_${a.ano}${a.versao ? "_v" + a.versao : ""}.xlsx`; },
+  excelBaixar(matriz, nome) {
+    if (typeof XLSX === "undefined") { this.edicao.erros = ["O gerador de Excel não carregou. Recarregue a página."]; return this.render(); }
+    const ws = XLSX.utils.aoa_to_sheet(matriz);
+    ws["!cols"] = [{ wch: 40 }, { wch: 36 }].concat(new Array(12).fill({ wch: 12 })).concat([{ wch: 30 }]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Orcamento");
+    XLSX.writeFile(wb, nome);
+  },
+  excelModelo() { this.excelBaixar(this.C().planilhaMensal([]), this.excelNome("modelo")); },
+  excelExportar() { this.excelBaixar(this.C().planilhaMensal(this.edicao.linhas), this.excelNome("orcamento")); },
+  /** Cadastro para validar a planilha: todos os empreendimentos e planos conhecidos; a autorização do departamento é a regra V04. */
+  excelCadastro() {
+    const cad = this.cadDep || {};
+    const ccs = new Map(), planos = new Map();
+    Object.entries(cad.nomesCc || {}).forEach(([k, n]) => ccs.set(String(k), { id: String(k), nome: n }));
+    ((window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || []).forEach((c) => { const k = String(c.id); if (!ccs.has(k)) ccs.set(k, { id: k, nome: c.name || c.nome || "" }); });
+    Object.entries(cad.nomesPlano || {}).forEach(([k, n]) => planos.set(String(k), { id: String(k), nome: n }));
+    (this.edicao.linhas || []).concat(this.aberto.itens || []).forEach((l) => { if (!ccs.has(String(l.cc))) ccs.set(String(l.cc), { id: String(l.cc), nome: l.cc_nome || "" }); if (!planos.has(String(l.plano))) planos.set(String(l.plano), { id: String(l.plano), nome: l.plano_nome || "" }); });
+    const cab = this.aberto.cab, C = this.C();
+    const d = cab && cab.departamento ? (cad.departamentos || []).find((x) => String(x.id) === String(cab.departamento.id)) : null;
+    const permitido = d && (d.planos || []).length ? (cc, pl) => C.lancamentoPermitido(cad, d.id, cc, pl) : null;
+    return { ccs: [...ccs.values()], planos: [...planos.values()], permitido };
+  },
+  async excelImportar(input) {
+    const e = this.edicao, f = input.files && input.files[0];
+    input.value = "";
+    if (!e || !f) return;
+    if (typeof XLSX === "undefined") { e.excel.erros = [{ linha: "", campo: "", codigo: "", mensagem: "O leitor de Excel não carregou. Recarregue a página." }]; return this.render(); }
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+      const m = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+      const r = this.C().validarPlanilhaMensal(m, this.excelCadastro());
+      e.excel = { erros: r.erros, linhas: r.erros.length ? null : r.linhas, arquivo: f.name };
+    } catch (err) { e.excel = { erros: [{ linha: "", campo: "", codigo: "", mensagem: "Não consegui ler o arquivo: " + (err.message || err) }], linhas: null, arquivo: f.name }; }
+    this.render();
+  },
+  excelAplicar() {
+    const e = this.edicao;
+    if (!e || !e.excel || !e.excel.linhas) return;
+    const trav = this.mesesTravados(this.aberto.cab);
+    const atual = new Map(e.linhas.map((l) => [String(l.cc) + "|" + String(l.plano), l]));
+    // meses travados (fechados) continuam com o valor de hoje, como na digitação
+    const novas = e.excel.linhas.map((l) => { const x = atual.get(l.cc + "|" + l.plano); const m = l.m.map((v, i) => (trav.indexOf(i + 1) >= 0 ? (x ? x.m[i] : 0) : v)); return Object.assign({}, x || {}, l, { m, total: this.C().somaMeses(m) }); });
+    e.linhas = novas.sort((x, y) => String(x.cc).localeCompare(String(y.cc), "pt-BR", { numeric: true }) || String(x.plano).localeCompare(String(y.plano), "pt-BR", { numeric: true }));
+    const n = novas.length;
+    e.excel = null;
+    e.aviso = `Planilha aplicada na grade: ${n} linha(s). Confira e clique em Salvar para gravar (nada foi gravado ainda).`;
+    this.render();
+  },
+  htmlExcel() {
+    const e = this.edicao, x = e.excel;
+    if (!x) return "";
+    const C = this.C();
+    const tot = x.linhas ? C.somarLinhas(x.linhas).total : 0;
+    return `<div style="border:1px solid #cbd5e1;border-radius:10px;padding:12px 14px;margin-bottom:10px;background:#f8fafc">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="color:#105436">Importação / exportação Excel</b><button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionOrcamentosApp.excelAlternar()">Fechar</button></div>
+      <div style="font-size:0.75rem;color:#475569;margin-bottom:8px">1. Baixe o modelo (ou exporte a versão atual) · 2. Preencha: produto e plano por código ou nome, valores de jan a dez em reais, observação · 3. Envie o arquivo: o sistema valida sem gravar · 4. Sem erros, aplique na grade e clique em Salvar. Tudo ou nada: com qualquer erro, nenhuma linha entra.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.excelModelo()">Baixar modelo</button>
+        <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.excelExportar()">Exportar versão atual</button>
+        <label class="btn btn-primary" style="height:36px;display:inline-flex;align-items:center;cursor:pointer;margin:0">Enviar planilha (.xlsx)<input type="file" accept=".xlsx,.xls" style="display:none" onchange="OrionOrcamentosApp.excelImportar(this)"></label>
+        ${x.arquivo ? `<span style="font-size:0.75rem;color:#334155">${this.esc(x.arquivo)}</span>` : ""}</div>
+      ${x.erros.length ? `<div style="margin-top:8px;color:#991b1b;font-size:0.78rem"><b>${x.erros.length} erro(s) — nada será importado.</b> Corrija a planilha e envie de novo.</div>
+        <div class="cc-scroll" style="max-height:240px;margin-top:6px"><table class="cc-table"><colgroup><col style="width:60px"><col style="width:160px"><col style="width:60px"><col></colgroup><thead><tr><th>Linha</th><th>Campo</th><th>Código</th><th>Mensagem</th></tr></thead>
+        <tbody>${x.erros.map((r) => `<tr><td>${this.esc(r.linha)}</td><td>${this.esc(r.campo)}</td><td>${this.esc(r.codigo)}</td><td style="white-space:normal">${this.esc(r.mensagem)}</td></tr>`).join("")}</tbody></table></div>` : ""}
+      ${x.linhas ? `<div style="margin-top:8px;font-size:0.8rem;color:#105436"><b>Planilha válida:</b> ${x.linhas.length} linha(s), total ${C.fmtReais(tot, true)}. Ao aplicar, a grade passa a ter exatamente as linhas da planilha (as que não estão nela saem).
+        <button type="button" class="btn btn-primary" style="height:34px;margin-left:8px" onclick="OrionOrcamentosApp.excelAplicar()">Aplicar na grade</button></div>` : ""}</div>`;
+  },
+
+  /* ---------- meses visíveis (Órion: seletor de meses da grade) ---------- */
+  alternarMesGrade(m) { const e = this.edicao; if (!e) return; e.ocultos = e.ocultos || {}; if (m === "todos") e.ocultos = {}; else e.ocultos[m] = !e.ocultos[m]; this.render(); },
+
   htmlEdicao() {
     if (this.edicao && this.edicao.modo === "vendas") return this.htmlEdicaoVendas();
     this.estilosGrade();
@@ -249,6 +324,7 @@ Object.assign(window.OrionOrcamentosApp, {
     const tot = C.somarLinhas(e.linhas);
     const ccs = this.ccsParaEscolher(), planos = this.planosParaEscolher();
     const ccSel = ccs.find((c) => c.id === String(e.novoCc));
+    const oc = e.ocultos || {};
     return `
       ${e.erros.length ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${e.erros.map((x) => this.esc(x)).join("<br>")}</div>` : ""}
       <datalist id="og-lista-cc">${ccs.map((c) => `<option value="${this.esc(c.id + " - " + c.nome)}">`).join("")}</datalist>
@@ -260,14 +336,21 @@ Object.assign(window.OrionOrcamentosApp, {
         <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.incluirLinha()">Incluir linha</button>
         <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.todosGrupos(false)">Abrir todos</button>
         <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.todosGrupos(true)">Recolher todos</button>
+        <button type="button" class="btn ${e.excel ? "btn-primary" : "btn-secondary"}" onclick="OrionOrcamentosApp.excelAlternar()">Excel</button>
         <div style="margin-left:auto;display:flex;gap:8px">
           <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.cancelarEdicao()">Cancelar</button>
           <button type="button" class="btn btn-primary" ${e.salvando ? "disabled" : ""} onclick="OrionOrcamentosApp.salvarEdicao()">${e.salvando ? "Salvando..." : "Salvar"}</button>
         </div>
       </div>
+      ${this.htmlExcel()}
+      ${e.aviso ? `<div style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;color:#105436;border-radius:8px;margin-bottom:8px;font-size:0.8rem">${this.esc(e.aviso)}</div>` : ""}
+      <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:0.72rem;color:#64748b">Meses na tela:
+        ${C.MESES.map((m, i) => `<button type="button" class="btn ${oc[i] ? "btn-secondary" : "btn-primary"}" style="height:26px;padding:0 8px;font-size:0.68rem" onclick="OrionOrcamentosApp.alternarMesGrade(${i})">${m}</button>`).join("")}
+        <button type="button" class="btn btn-secondary" style="height:26px;padding:0 8px;font-size:0.68rem" onclick="OrionOrcamentosApp.alternarMesGrade('todos')">Todos</button></div>
+      <style>${C.MESES.map((m, i) => (oc[i] ? `#og-grade col.og-cm${i}{visibility:collapse}` : "")).join("")}</style>
       <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">Dicas: Enter desce para a linha de baixo; colar do Excel preenche vários meses e linhas; passe o mouse num mês e clique em → para repetir o valor nos meses seguintes.${a.base ? " Em amarelo: diferente da versão anterior." : ""}${trav.length ? ` Meses travados (fechados${this.tipo === "forecasts" && a.cab.mes_corte ? " ou antes do corte" : ""}): ${trav.map((m) => C.MESES[m - 1]).join(", ")}.` : ""}</div>
       <div class="cc-scroll" style="max-height:70vh"><table class="cc-table" id="og-grade" style="min-width:1600px">
-        <colgroup><col style="width:280px">${C.MESES.map(() => '<col style="width:88px">').join("")}<col style="width:110px"><col style="width:150px"><col style="width:34px"></colgroup>
+        <colgroup><col style="width:280px">${C.MESES.map((m, i) => `<col class="og-cm${i}" style="width:88px">`).join("")}<col style="width:110px"><col style="width:150px"><col style="width:34px"></colgroup>
         <thead><tr><th>Empreendimento / plano</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th><th>Nota</th><th></th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="16" style="text-align:center;padding:30px">Sem linhas. Escolha o empreendimento e o plano acima e clique em Incluir linha.</td></tr>`}
         <tr class="oo-total" style="position:sticky;bottom:0"><td>Total</td>${tot.m.map((v, m) => `<td class="is-right" id="og-f-${m}">${C.fmtReais(v, true)}</td>`).join("")}<td class="is-right" id="og-ft">${C.fmtReais(tot.total, true)}</td><td></td><td></td></tr></tbody>

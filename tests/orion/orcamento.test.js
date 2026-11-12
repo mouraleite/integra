@@ -418,3 +418,23 @@ test("analítico: leitura executiva e destaque das linhas com a regra do Órion"
   assert.strictEqual(C.destaqueLinha(100, 120, "DESPESAS"), "material");
   assert.strictEqual(C.destaqueLinha(100, 100, "DESPESAS"), "");
 });
+
+test("excel do orçamento: modelo, exportação e validação tudo-ou-nada com as regras do Órion", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const ccs = [{ id: "10100", nome: "CERQUEIRA CÉSAR - CHÁCARA" }, { id: "10200", nome: "JARDIM PRIMAVERA" }];
+  const planos = [{ id: "2050105", nome: "Despesas Bancárias" }, { id: "2030211", nome: "Despesas Legais" }];
+  const linhas = [{ cc: "10100", cc_nome: "CERQUEIRA CÉSAR - CHÁCARA", plano: "2050105", plano_nome: "Despesas Bancárias", m: [100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 250055], obs: "nota" }];
+  const mat = C.planilhaMensal(linhas);
+  assert.deepStrictEqual(mat[0].slice(0, 3), ["produto", "plano_financeiro", "jan"]);
+  const ida = C.validarPlanilhaMensal(mat, { ccs, planos });
+  assert.deepStrictEqual(ida.erros, []);
+  assert.deepStrictEqual(ida.linhas[0].m, linhas[0].m);
+  assert.strictEqual(ida.linhas[0].obs, "nota");
+  const ruim = C.validarPlanilhaMensal([["Produto", "Plano Financeiro", "Jan", "Fev"], ["10200", "Despesas Legais", "1.234,50", "x"], ["", "2050105", 1, 1], ["99999 - NADA", "Inexistente", 0, 0], ["JARDIM PRIMAVERA", "2030211 - Despesas Legais", 0, 0]],
+    { ccs, planos, permitido: (cc, pl) => !(cc === "10200" && pl === "9") });
+  assert.deepStrictEqual(ruim.erros.map((e) => [e.linha, e.codigo]), [[2, "V06"], [3, "V01"], [4, "V02"], [4, "V03"], [5, "V07"]]);
+  assert.deepStrictEqual(ruim.linhas, []);
+  const neg = C.validarPlanilhaMensal([["produto", "plano_financeiro", "jan"], ["10100", "2050105", 5]], { ccs, planos, permitido: () => false });
+  assert.deepStrictEqual(neg.erros.map((e) => e.codigo), ["V04"]);
+  assert.strictEqual(C.validarPlanilhaMensal([["x", "y"]], { ccs, planos }).erros[0].codigo, "V00");
+});
