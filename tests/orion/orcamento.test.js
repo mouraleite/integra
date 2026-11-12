@@ -402,3 +402,19 @@ test("orçado × realizado: leitura executiva, pontos de atenção e maiores cau
   assert.strictEqual(r.porProduto[0].chave, "100");
   assert.ok(Math.abs(r.linhas[0].peso - 5 / 6) < 1e-9);
 });
+
+test("analítico: leitura executiva e destaque das linhas com a regra do Órion", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const l = C.leituraExecutiva([{ orcado: 100000, realizado: 150000 }, { orcado: 200000, realizado: 200000 }, { orcado: 0, realizado: 5000 }], "DESPESAS", "orçado");
+  assert.strictEqual(l.varRs, 55000);
+  assert.strictEqual(l.favoravel, false);
+  assert.strictEqual(l.comDesvioCount, 2);
+  assert.strictEqual(l.materialCount, 2);
+  assert.strictEqual(l.narrativa, "R$ 550 acima da referência (18,3%). 2 linha(s) com desvio material requer atenção.");
+  assert.strictEqual(C.leituraExecutiva([{ orcado: 100, realizado: 100 }], "DESPESAS").narrativa, "Sem desvios relevantes vs orçado.");
+  assert.strictEqual(C.leituraExecutiva([{ orcado: 10000000, realizado: 9000000 }], "DESPESAS").narrativa, "R$ 10K abaixo da referência (-10,0%). 1 linha(s) com movimento.");
+  assert.strictEqual(C.destaqueLinha(100, 90, "DESPESAS"), "favoravel");
+  assert.strictEqual(C.destaqueLinha(100, 104, "DESPESAS"), "desfavoravel");
+  assert.strictEqual(C.destaqueLinha(100, 120, "DESPESAS"), "material");
+  assert.strictEqual(C.destaqueLinha(100, 100, "DESPESAS"), "");
+});

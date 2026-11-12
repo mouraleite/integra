@@ -48,6 +48,13 @@ const OrionAnaliticoApp = {
       .cc-table tr.oa-det td { background:#fffdf5 !important; font-size:0.7rem; }
       .oa-seta { cursor:pointer; border:none; background:none; font-size:0.85rem; color:#105436; padding:0 4px; }
       .oa-neg { color:#b91c1c; }
+      .cc-table tr.oa-hl-favoravel td { background:#f0fdf4 !important; }
+      .cc-table tr.oa-hl-material td { background:#fff7ed !important; }
+      .cc-table tr.oa-hl-desfavoravel td { background:#fef2f2 !important; }
+      .cc-table.oa-p2 th, .cc-table.oa-p2 td { white-space:nowrap; }
+      .cc-table.oa-p2 .oa-m0 { border-left:1px solid #e2e8f0; }
+      .cc-table.oa-p2 .oa-tt { background:#f1f5f9; font-weight:700; }
+      .cc-table.oa-p2 .oa-tt0 { border-left:2px solid #cbd5e1; }
     `;
     document.head.appendChild(st);
   },
@@ -115,7 +122,8 @@ const OrionAnaliticoApp = {
     const o = ms.map((m) => x.o[m - 1]), r = ms.map((m) => x.r[m - 1]);
     const rec = this.dados && this.dados.tipo === "RECEITAS";
     const s = ms.map((m) => (rec ? x.r[m - 1] - x.o[m - 1] : x.o[m - 1] - x.r[m - 1]));
-    return `<tr class="oa-cab ${cls}"><td rowspan="4" style="vertical-align:top;${nivel === 2 ? "padding-left:22px" : ""}">${seta}${rotulo}<div style="margin-top:4px">${this.farol(x.semaforo)}</div></td><td>${ref}</td>${cel(o, x.orcado)}</tr>
+    const hl = C.destaqueLinha ? C.destaqueLinha(x.orcado, x.realizado, rec ? "RECEITAS" : "DESPESAS") : "";
+    return `<tr class="oa-cab ${cls} ${hl ? "oa-hl-" + hl : ""}"><td rowspan="4" style="vertical-align:top;${nivel === 2 ? "padding-left:22px" : ""}">${seta}${rotulo}<div style="margin-top:4px">${this.farol(x.semaforo)}</div></td><td>${ref}</td>${cel(o, x.orcado)}</tr>
       <tr class="${cls}"><td>Realizado</td>${cel(r, x.realizado)}</tr>
       <tr class="${cls}"><td>Saldo</td>${cel(s, x.saldo, true)}</tr>
       <tr class="${cls}"><td>Desvio %</td>${ms.map((m) => `<td class="is-right">${pct(x.o[m - 1], x.r[m - 1])}</td>`).join("")}<td class="is-right"><b>${pct(x.orcado, x.realizado)}</b></td></tr>`;
@@ -163,6 +171,62 @@ const OrionAnaliticoApp = {
     if (i) { i.focus(); i.setSelectionRange(v.length, v.length); }
   },
 
+  /** Faixa de leitura executiva + legenda do semáforo (Órion: DesvioExecStrip + DesvioLegend). */
+  htmlLeitura(itens, tipo) {
+    const C = this.C();
+    if (!itens.length || !C.leituraExecutiva) return "";
+    const ref = this.base === "forecast" ? "forecast" : "orçado";
+    const l = C.leituraExecutiva(itens, tipo, ref);
+    const cor = l.favoravel ? "#1b8253" : "#ef4444";
+    return `<div style="border:1px solid #e2e8f0;border-left:4px solid ${cor};border-radius:8px;padding:8px 12px;background:#fff;margin-bottom:6px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;font-size:0.8rem">
+        <span><b>${this.esc(l.narrativa)}</b></span>
+        <span>Realizado <b>${C.fmtReais(l.real, true)}</b> · ${ref} <b>${C.fmtReais(l.ref, true)}</b> · variação <b style="color:${l.favoravel ? "#105436" : "#b91c1c"}">${C.fmtReais(l.varRs, true)} (${(l.perc * 100).toFixed(1).replace(".", ",")}%)</b></span>
+        <span style="color:#64748b">${l.comDesvioCount} linha(s) com desvio · ${l.materialCount} material(is) desfavorável(is)</span></div>
+      <div style="font-size:0.68rem;color:#64748b;margin-bottom:8px">SEMÁFORO <span style="color:#cbd5e1">●</span> Imaterial (&lt; R$ 5 mil) <span style="color:#10b981">●</span> Favorável ou ≤ 5% <span style="color:#fbbf24">●</span> Atenção (≤ 10%) <span style="color:#ef4444">●</span> Acima do limite · fundo da linha: <span style="background:#f0fdf4;padding:0 4px">favorável</span> <span style="background:#fff7ed;padding:0 4px">desvio material</span> <span style="background:#fef2f2;padding:0 4px">desfavorável</span></div>`;
+  },
+
+  /** Analítico de Gastos II do Órion: uma linha por plano (todos os produtos somados), e por mês referência / realizado / variação. */
+  htmlPlanoII(a, ms) {
+    const C = this.C();
+    const f = (c) => C.fmtReais(c, true);
+    const ref = this.base === "forecast" ? "Forecast" : "Orçado";
+    const rec = this.dados.tipo === "RECEITAS";
+    const comTotal = ms.length > 1;
+    const vr = (o, r) => (rec ? r - o : o - r);
+    const cab1 = ms.map((m) => `<th colspan="3" class="is-center oa-m0">${C.MESES[m - 1]}</th>`).join("") + (comTotal ? `<th colspan="3" class="is-center oa-tt0">Total</th>` : "");
+    const cab2 = ms.map(() => `<th class="is-right oa-m0">${ref}</th><th class="is-right">Realizado</th><th class="is-right">Variação</th>`).join("") + (comTotal ? `<th class="is-right oa-tt0">${ref}</th><th class="is-right">Realizado</th><th class="is-right">Variação</th>` : "");
+    const ncol = 1 + ms.length * 3 + (comTotal ? 3 : 0);
+    let corpo = "";
+    a.linhas.forEach((x) => {
+      const hl = C.destaqueLinha(x.orcado, x.realizado, rec ? "RECEITAS" : "DESPESAS");
+      const ab = !!this.abertos[x.chave];
+      corpo += `<tr class="${hl ? "oa-hl-" + hl : ""}"><td><button type="button" class="oa-seta" title="Ver os pagamentos do realizado deste plano" onclick="OrionAnaliticoApp.alternar('${this.esc(x.chave)}')">${ab ? "▾" : "▸"}</button>${this.esc(x.plano)} ${this.esc(x.plano_nome)}</td>
+        ${ms.map((m) => { const v = vr(x.o[m - 1], x.r[m - 1]); return `<td class="is-right oa-m0">${f(x.o[m - 1])}</td><td class="is-right"><b>${f(x.r[m - 1])}</b></td><td class="is-right" style="color:${v >= 0 ? "#047857" : "#b91c1c"}">${f(v)}</td>`; }).join("")}
+        ${comTotal ? (() => { const v = vr(x.orcado, x.realizado); return `<td class="is-right oa-tt oa-tt0">${f(x.orcado)}</td><td class="is-right oa-tt">${f(x.realizado)}</td><td class="is-right oa-tt" style="color:${v >= 0 ? "#047857" : "#b91c1c"}">${f(v)}</td>`; })() : ""}</tr>`;
+      if (ab) corpo += this.linhasPagPlano(x, ms, ncol);
+    });
+    const t = a.total;
+    const vt = (o, r) => vr(o, r);
+    corpo += `<tr class="oa-total"><td>Total</td>${ms.map((m) => `<td class="is-right">${f(t.o[m - 1])}</td><td class="is-right">${f(t.r[m - 1])}</td><td class="is-right">${f(vt(t.o[m - 1], t.r[m - 1]))}</td>`).join("")}${comTotal ? `<td class="is-right">${f(t.orcado)}</td><td class="is-right">${f(t.realizado)}</td><td class="is-right">${f(vt(t.orcado, t.realizado))}</td>` : ""}</tr>`;
+    return `<div class="cc-scroll" style="max-height:70vh"><table class="cc-table or-larga oa-p2">
+      <thead><tr><th rowspan="2" style="min-width:280px">Plano financeiro</th>${cab1}</tr><tr>${cab2}</tr></thead><tbody>${corpo}</tbody></table></div>
+      <div style="font-size:0.7rem;color:#64748b;margin-top:4px">Variação = ${rec ? "realizado − " + ref.toLowerCase() : ref.toLowerCase() + " − realizado"} (positivo = favorável). Clique na seta do plano para ver os pagamentos de todos os centros de custo.</div>`;
+  },
+
+  /** Pagamentos do realizado de um plano em todos os centros de custo da linha (Analítico II). */
+  linhasPagPlano(x, ms, ncol) {
+    const C = this.C(), R = this.R();
+    const set = new Set(ms), ccs = new Set((x.filhos || []).map((y) => y.cc));
+    const nomes = new Map((x.filhos || []).map((y) => [y.cc, y.cc_nome]));
+    const emp = this.empresas && this.empresas.length ? new Set(this.empresas.map(String)) : null;
+    const rows = R.detalhe(this.dados.real, (a) => a.plano === x.plano && ccs.has(a.cc) && set.has(a.mes) && (!emp || emp.has(String(a.empresa))), this.dados.tipo === "RECEITAS" ? 1 : -1);
+    if (!rows.length) return `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px">Nenhum pagamento no realizado deste plano no período.</td></tr>`;
+    const fmtD = (d) => (d ? d.split("-").reverse().join("/") : "—");
+    const MAX = 300;
+    const corpo = rows.slice(0, MAX).map((p) => `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px;white-space:normal">${fmtD(p.data)} · <b>${C.fmtReais(C.centavos(p.valor), true)}</b> · ${this.esc(p.credor || "—")} · ${this.esc(p.cc)} ${this.esc(nomes.get(p.cc) || "")} · ${this.esc(p.documento || "")}${p.titulo ? ` · título ${this.esc(p.titulo)}` : ""}${p.parcela ? `/${this.esc(p.parcela)}` : ""} · empresa ${this.esc(p.empresa)}</td></tr>`).join("");
+    return corpo + `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px"><b>${rows.length} pagamento(s)</b>${rows.length > MAX ? ` (mostrando ${MAX}; veja todos em Lançamentos)` : ""} · total <b>${C.fmtReais(rows.reduce((s2, p) => s2 + C.centavos(p.valor), 0), true)}</b> (valores rateados pelo plano e centro de custo do movimento)</td></tr>`;
+  },
+
   htmlResultado() {
     if (this.visao === "pagamentos") return this.htmlPagamentos();
     const C = this.C();
@@ -172,6 +236,8 @@ const OrionAnaliticoApp = {
     const a = C.analiticoGastos(f.linhas, f.alocacoes, ms, this.visao, d.tipo);
     const ehRec = d.tipo === "RECEITAS";
     const colspan = ms.length + 3;
+    const folhas = this.visao === "cc" ? a.linhas : [].concat(...a.linhas.map((x) => x.filhos || []));
+    const leitura = this.htmlLeitura(folhas, d.tipo);
     const nomeCc = (x) => `${this.esc(x.cc)} ${this.esc(x.cc_nome)}`;
     const nomePl = (x) => `${this.esc(x.plano)} ${this.esc(x.plano_nome)}${x.fora ? " <i>(sem orçado)</i>" : ""}`;
     let corpo = "";
@@ -199,14 +265,15 @@ const OrionAnaliticoApp = {
     const pctT = t.orcado ? ((t.realizado - t.orcado) / Math.abs(t.orcado) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%" : "—";
     return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao, tipos: [d.tipo] }).versao) : ""} · ${d.docs} documento(s) de ${ehRec ? "receitas" : "despesas"}${C.RECORTES[this.conteudo] ? " · só planos de " + C.RECORTES[this.conteudo].rotulo.toLowerCase() : ""} · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(d.empresas.join(", "))}), só dos centros de custo e planos do orçamento.
         Total ${ref.toLowerCase()} ${C.fmtReais(t.orcado, true)} · realizado ${C.fmtReais(t.realizado, true)} · desvio ${pctT} · ${a.comDesvio} linha(s) com atenção ou acima do limite. ${ehRec ? `Saldo = realizado − ${ref.toLowerCase()} (negativo = recebeu menos).` : `Saldo = ${ref.toLowerCase()} − realizado (negativo = gastou mais).`}</div>
-      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table or-larga">
+      ${leitura}
+      ${this.visao === "plano" ? this.htmlPlanoII(a, ms) : `<div class="cc-scroll" style="max-height:70vh"><table class="cc-table or-larga">
         
         <thead><tr><th>${this.visao === "grupo" ? "Grupo de recebimento / centro de custo e plano" : this.visao === "plano" ? "Plano / centro de custo" : "Centro de custo / plano"}</th><th>Métrica</th>${ms.map((m) => `<th class="is-right">${C.MESES[m - 1]}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="${colspan}" style="text-align:center;padding:30px">Nenhuma linha${C.RECORTES[this.conteudo] ? " com plano de " + C.RECORTES[this.conteudo].rotulo.toLowerCase() : ""}.</td></tr>`}
           <tr class="oa-total"><td>Total</td><td>${ref}</td>${tot(t.o, t.orcado)}</tr>
           <tr class="oa-total"><td></td><td>Realizado</td>${tot(t.r, t.realizado)}</tr>
           <tr class="oa-total"><td></td><td>Saldo</td>${tot(t.o.map((v, i) => (ehRec ? t.r[i] - v : v - t.r[i])), t.saldo)}</tr></tbody>
-      </table></div>`;
+      </table></div>`}`;
   },
 
   render() {

@@ -965,6 +965,37 @@
     return s;
   }
 
-  return { insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+
+  /**
+   * Leitura executiva do Analítico de gastos (Órion: buildExecInsights em lib/orcamentoDesvioUi.ts).
+   * itens: [{ orcado, realizado }] em centavos (o "orcado" é a referência: orçado ou forecast). tipo: DESPESAS | RECEITAS.
+   * Material = |desvio %| ≥ 5%; linha com desvio = variação acima de R$ 0,01. Favorável: despesa abaixo / receita acima.
+   */
+  function leituraExecutiva(itens, tipo, refRotulo) {
+    const fav = (v) => (tipo === "DESPESAS" ? v <= 0 : v >= 0);
+    const ls = (itens || []).map((x) => { const ref = Number(x.orcado) || 0, real = Number(x.realizado) || 0, v = real - ref; const p = ref !== 0 ? v / Math.abs(ref) : real !== 0 ? 1 : 0; return { ref, real, v, p, abs: Math.abs(v), material: Math.abs(p) >= 0.05, favoravel: fav(v) }; });
+    const comDesvio = ls.filter((l) => l.abs > 1);
+    const ref = ls.reduce((s, l) => s + l.ref, 0), real = ls.reduce((s, l) => s + l.real, 0), v = real - ref;
+    const perc = ref !== 0 ? v / Math.abs(ref) : 0;
+    const favoravel = fav(v);
+    const material = comDesvio.filter((l) => l.material && !l.favoravel);
+    const k = (c) => { const r = Math.abs(c) / 100; return r >= 1e6 ? `R$ ${(r / 1e6).toFixed(1)}M` : r >= 1e3 ? `R$ ${(r / 1e3).toFixed(0)}K` : `R$ ${Math.round(r).toLocaleString("pt-BR")}`; };
+    const pc = (x) => `${(x * 100).toFixed(1).replace(".", ",")}%`;
+    const rot = refRotulo || "orçado";
+    const narrativa = !comDesvio.length ? `Sem desvios relevantes vs ${rot}.`
+      : favoravel ? `${k(v)} ${v >= 0 ? "acima" : "abaixo"} da referência (${pc(perc)}). ${comDesvio.length} linha(s) com movimento.`
+      : `${k(v)} ${v >= 0 ? "acima" : "abaixo"} da referência (${pc(perc)}). ${material.length} linha(s) com desvio material requer atenção.`;
+    return { ref, real, varRs: v, perc, favoravel, materialCount: material.length, comDesvioCount: comDesvio.length, narrativa };
+  }
+
+  /** Destaque da linha como no Órion (rowHighlightClass): favorável verde, material desfavorável laranja, demais desfavoráveis vermelho claro. */
+  function destaqueLinha(ref, real, tipo) {
+    const v = real - ref, p = ref !== 0 ? v / Math.abs(ref) : real !== 0 ? 1 : 0;
+    if (p === 0) return "";
+    if (tipo === "DESPESAS" ? v <= 0 : v >= 0) return "favoravel";
+    return Math.abs(p) >= 0.05 ? "material" : "desfavoravel";
+  }
+
+  return { leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
