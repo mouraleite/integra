@@ -519,6 +519,28 @@ const OrionOrcamentosApp = {
     } else if (cab.versao_base) {
       dif = `<div style="margin-top:8px;font-size:0.72rem;color:#64748b">A versão anterior (${this.esc(cab.versao_base)}) não está no Integra.</div>`;
     }
+    let vendas = "";
+    if ((a.vendas || []).length) {
+      const g = new Map();
+      a.vendas.forEach((v) => {
+        const k = v.cc + "|" + v.plano_venda + "|" + (v.vendas < 0 || /distrato/i.test(v.obs) ? "D" : "");
+        if (!g.has(k)) g.set(k, { cc: v.cc, cc_nome: v.cc_nome, plano: v.plano_venda, distrato: k.endsWith("|D"), qt: new Array(12).fill(0), vgv: new Array(12).fill(0) });
+        const x = g.get(k);
+        if (v.mes >= 1 && v.mes <= 12) { x.qt[v.mes - 1] += v.vendas; x.vgv[v.mes - 1] += v.vgv; }
+      });
+      const linhasV = [...g.values()].sort((x, y) => String(x.cc).localeCompare(String(y.cc), "pt-BR", { numeric: true }));
+      const totQt = new Array(12).fill(0), totV = new Array(12).fill(0);
+      linhasV.forEach((x) => x.qt.forEach((q, i) => { totQt[i] += q; totV[i] += x.vgv[i]; }));
+      const soma = (arr) => arr.reduce((s, v) => s + v, 0);
+      vendas = `<div style="margin:14px 0 6px;font-weight:800;color:#105436">Vendas: unidades e VGV por mês (R$)</div>
+        <div class="cc-scroll"><table class="cc-table" style="min-width:1372px">
+        <colgroup><col style="width:260px">${C.MESES.map(() => '<col style="width:84px">').join("")}<col style="width:104px"></colgroup>
+        <thead><tr><th>Empreendimento / plano de venda</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${linhasV.map((x) => `<tr class="oo-grupo"><td>${this.esc(x.cc)} ${this.esc(x.cc_nome)} · ${this.esc(x.plano || "sem plano")}${x.distrato ? " (distrato)" : ""}</td>${x.vgv.map((v) => `<td class="is-right">${v ? C.fmtReais(v, true) : ""}</td>`).join("")}<td class="is-right">${C.fmtReais(soma(x.vgv), true)}</td></tr>
+          <tr><td style="padding-left:18px">unidades</td>${x.qt.map((q) => `<td class="is-right">${q || ""}</td>`).join("")}<td class="is-right">${soma(x.qt)}</td></tr>`).join("")}
+        <tr class="oo-total"><td>Total VGV</td>${totV.map((v) => `<td class="is-right">${C.fmtReais(v, true)}</td>`).join("")}<td class="is-right">${C.fmtReais(soma(totV), true)}</td></tr>
+        <tr class="oo-total"><td>Total unidades</td>${totQt.map((q) => `<td class="is-right">${q}</td>`).join("")}<td class="is-right">${soma(totQt)}</td></tr></tbody></table></div>`;
+    }
     const hist = (cab.historico || []).length ? `<div style="margin:14px 0 6px;font-weight:800;color:#105436">Histórico de aprovação</div>
       <div class="cc-scroll"><table class="cc-table"><colgroup><col style="width:170px"><col style="width:130px"><col style="width:130px"><col style="width:220px"><col></colgroup>
       <thead><tr><th>Quando</th><th>De</th><th>Para</th><th>Quem</th><th>Motivo</th></tr></thead>
@@ -536,7 +558,7 @@ const OrionOrcamentosApp = {
         ${this.htmlAcoes()}
         ${cab.motivo_reabertura ? `<span style="align-self:center;font-size:0.75rem;color:#92400e">Motivo da reabertura: ${this.esc(cab.motivo_reabertura)}</span>` : ""}
       </div>
-      ${this.edicao ? this.htmlEdicao() + dif + hist : `
+      ${this.edicao ? this.htmlEdicao() + vendas + dif + hist : `
       <div style="display:flex;gap:6px;margin-bottom:8px">
         <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.setVisao('cc')">Por centro de custo</button>
         <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.setVisao('plano')">Por plano</button>
@@ -547,7 +569,7 @@ const OrionOrcamentosApp = {
         <thead><tr><th>${this.visao === "cc" ? "Centro de custo / plano" : "Plano / centro de custo"}</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="14" style="text-align:center;padding:30px">Sem linhas.</td></tr>`}
         <tr class="oo-total"><td>Total</td>${tot.m.map((v) => `<td class="is-right">${C.fmtReais(v, true)}</td>`).join("")}<td class="is-right">${C.fmtReais(tot.total, true)}</td></tr></tbody>
-      </table></div>${dif}${hist}`}`;
+      </table></div>${vendas}${dif}${hist}`}`;
   },
 
   render() {
