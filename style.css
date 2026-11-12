@@ -12337,3 +12337,13 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .anexos-juridico-load .loading-progress-bar,
 .anexos-ficha-bar { width: 8%; animation: anexos-jur-carga 8s ease-out forwards; }
 @keyframes anexos-jur-carga { from { width: 8%; } to { width: 92%; } }
+
+/* Órion (transição): tabelas largas (mês a mês) — cada coluna no tamanho do número, com rolagem lateral, sem cortar valores */
+.cc-table.or-larga { width: max-content; min-width: 100%; table-layout: auto; }
+.cc-table.or-larga th, .cc-table.or-larga td { white-space: nowrap; overflow: visible; text-overflow: clip; }
+.cc-table.or-larga td.is-right, .cc-table.or-larga th.is-right { min-width: 92px; font-variant-numeric: tabular-nums; }
+.cc-table.or-larga thead tr:nth-child(2) th { top: 27px; }
+.cc-table.or-larga tbody td:first-child { position: sticky; left: 0; z-index: 1; background: #fff; min-width: 260px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; box-shadow: 2px 0 0 #e2e8f0; }
+.cc-table.or-larga thead th:first-child { position: sticky; left: 0; z-index: 3; }
+.cc-table.or-larga tbody tr:nth-child(even) td:first-child { background: #f7faf8; }
+.cc-table.or-larga tbody tr:hover td:first-child { background: #e7f6ee; }

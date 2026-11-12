@@ -192,7 +192,7 @@ const OrionDfcApp = {
         <button type="button" class="btn ${this.ahavMensal ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.alternarAhAv()">AH/AV mensal</button>
         <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem;margin-left:auto" onclick="OrionDfcApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.expandir(false)">Recolher</button>
       </div>
-      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table odf-tab">
+      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table odf-tab or-larga">
         <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:280px">EMPRESA / GRUPO / ${this.agrupar === "centro" ? "CENTRO DE CUSTO" : "PLANO"}</th>${cab1}</tr><tr>${cab2}</tr></thead>
         <tbody>${r.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem movimento.</td></tr>`}
           <tr class="odf-total"><td style="position:sticky;left:0;background:#105436">Geração de caixa</td>${cel(r.total)}</tr></tbody></table></div>`;
