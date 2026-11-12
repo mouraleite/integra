@@ -86,6 +86,8 @@ const OrionCargaApp = {
     if (V.carga) await passo("Viabilidades", async () => { await V.confirmarCarga(); return V.carga.resultado; });
     clearInterval(this.timer);
     this.timer = null;
+    // o resultado fica nesta tela; as outras telas voltam ao normal (sem a prévia da carga aberta)
+    [P, D, O, V].forEach((a) => { if (a) { a.carga = null; try { a.render(); } catch (e) { /* tela não aberta */ } } });
     this.etapa = "fim";
     this.render();
   },
