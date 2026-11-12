@@ -133,8 +133,8 @@ const AlertasPopupApp = {
     {
       id: "esteira",
       nome: "Etapas vencidas na esteira",
-      quando: "Na segunda-feira às 08:00. Se a segunda não for dia útil, no próximo dia útil. Se a pessoa entra depois, abre na hora e vale para aquela semana. Uma vez por semana, ao fechar.",
-      logica: "Lista só financiamento em aberto cuja etapa atual da esteira está com o prazo estourado.",
+      quando: "Todo dia às 08:00, enquanto a etapa continuar vencida. Se a pessoa entra depois, abre na hora. Fechar dispensa só aquele dia, inclusive depois de atualizar a página.",
+      logica: "Lista só financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. Esses mesmos casos ficam em destaque na lista de financiamentos em aberto.",
       quem: "Administrador e operador de cobrança back office.",
       titulo: "Etapas vencidas na esteira",
       corpo: `<p>Estes financiamentos estão com a etapa atual fora do prazo.</p>

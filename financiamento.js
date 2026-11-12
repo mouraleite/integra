@@ -665,19 +665,36 @@ const FinanciamentoApp = {
     const countEl = document.getElementById("fin-abertos-count");
     if (!tbody) return;
     const rows = this.listOpenProcesses();
-    if (countEl) countEl.textContent = rows.length ? (rows.length + (rows.length === 1 ? " em andamento" : " em andamento")) : "";
+    const atrasos = this.atrasadosEsteira();
+    const ordem = new Map();
+    atrasos.forEach((item, i) => ordem.set(String(item.row.key), i));
+    const nVenc = atrasos.length;
+    if (countEl) {
+      countEl.style.color = nVenc ? "#b91c1c" : "#64748b";
+      countEl.textContent = rows.length
+        ? (rows.length + " em andamento" + (nVenc ? (" · " + nVenc + (nVenc === 1 ? " vencida" : " vencidas")) : ""))
+        : "";
+    }
     if (!rows.length) {
       tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:22px;color:#94a3b8;">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</td></tr>';
       return;
     }
-    tbody.innerHTML = rows.map(({ key, proc }) => {
+    const lista = rows.slice().sort((a, b) => {
+      const ia = ordem.has(String(a.key)) ? ordem.get(String(a.key)) : 100000;
+      const ib = ordem.has(String(b.key)) ? ordem.get(String(b.key)) : 100000;
+      return ia - ib;
+    });
+    tbody.innerHTML = lista.map(({ key, proc }) => {
       const safeKey = String(key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      return `<tr tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}" style="cursor:pointer;" onmouseover="this.style.background='#f0fdf4'" onmouseout="this.style.background=''">
-        <td style="padding:10px;font-weight:700;font-size:0.75rem;color:#0f172a;">${this.esc(proc.customerName || proc.customerId || "—")}</td>
+      const vencida = ordem.has(String(key));
+      const fundo = vencida ? "#fef2f2" : "";
+      const hover = vencida ? "#fee2e2" : "#f0fdf4";
+      return `<tr tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}" style="cursor:pointer;background:${fundo};${vencida ? "box-shadow:inset 4px 0 0 #b91c1c;" : ""}" onmouseover="this.style.background='${hover}'" onmouseout="this.style.background='${fundo}'">
+        <td style="padding:10px;font-weight:700;font-size:0.75rem;color:${vencida ? "#991b1b" : "#0f172a"};">${this.esc(proc.customerName || proc.customerId || "—")}</td>
         <td style="padding:10px;font-size:0.75rem;">${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
         <td style="padding:10px;font-size:0.75rem;font-weight:800;">${this.esc(proc.titulo || "—")}</td>
         <td style="padding:10px;font-size:0.75rem;">${this.esc(this.formatUnidade(proc.unit || "—"))}</td>
-        <td style="padding:10px;font-size:0.75rem;color:#105436;font-weight:600;">${this.esc(this.etapaLabel(proc))}</td>
+        <td style="padding:10px;font-size:0.75rem;color:${vencida ? "#b91c1c" : "#105436"};font-weight:700;">${this.esc(this.etapaLabel(proc))}${vencida ? ' <span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#fee2e2;color:#991b1b;font-size:0.65rem;font-weight:800;letter-spacing:0.02em;">VENCIDA</span>' : ""}</td>
         <td style="padding:10px;font-size:0.75rem;color:#64748b;">${this.esc(this.fmtDate(proc.updatedAt || proc.startedAt))}</td>
       </tr>`;
     }).join("");
@@ -998,9 +1015,14 @@ const FinanciamentoApp = {
     return typeof window.isCobrancaBackOfficeUser === "function" && window.isCobrancaBackOfficeUser(efetivo);
   },
 
-  chaveAlertaEsteira(segunda) {
-    const u = (window.AppState && window.AppState.currentUser) || {};
-    return "crm_fin_esteira_" + String(u.email || u.name || "op").toLowerCase() + "_" + segunda;
+  chaveAlertaEsteira(dia) {
+    let u = window.AppState && window.AppState.currentUser;
+    if (!u || !(u.email || u.name)) {
+      try { u = JSON.parse(localStorage.getItem("crm_logged_user") || "null"); } catch (e) { u = null; }
+    }
+    const imp = typeof window.crmImpersonacaoAtual === "function" ? window.crmImpersonacaoAtual() : null;
+    const quem = imp || u || {};
+    return "crm_fin_esteira_" + String(quem.email || quem.name || "op").toLowerCase() + "_" + dia;
   },
 
   atrasadosEsteira() {
@@ -1021,24 +1043,21 @@ const FinanciamentoApp = {
     }
     if (!this.usuarioVeAlertaEsteira()) return;
     const hoje = this.hojeIso();
-    const alerta = this.diaAlertaEsteira(hoje);
-    if (hoje < alerta) {
-      const alvo = new Date(alerta + "T08:00:00");
-      this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, alvo.getTime() - Date.now()));
+    const oito = new Date(hoje + "T08:00:00");
+    if (Date.now() < oito.getTime()) {
+      this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, oito.getTime() - Date.now()));
       return;
     }
     this.abrirAlertaEsteira();
-    const proxima = this.somarDias(this.segundaDaSemana(hoje), 7);
-    const quando = new Date(proxima + "T08:00:00");
-    this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, quando.getTime() - Date.now()));
+    const amanha = new Date(this.somarDias(hoje, 1) + "T08:00:00");
+    this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, amanha.getTime() - Date.now()));
   },
 
   abrirAlertaEsteira() {
     if (!this.usuarioVeAlertaEsteira()) return;
     const hoje = this.hojeIso();
-    const alerta = this.diaAlertaEsteira(hoje);
-    if (hoje < alerta) return;
-    const chave = this.chaveAlertaEsteira(this.segundaDaSemana(hoje));
+    if (Date.now() < new Date(hoje + "T08:00:00").getTime()) return;
+    const chave = this.chaveAlertaEsteira(hoje);
     try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
     const lista = this.atrasadosEsteira();
     if (!lista.length || document.getElementById("fin-alerta")) return;
@@ -1082,7 +1101,7 @@ const FinanciamentoApp = {
 
   async abrirDoAlerta(key) {
     const hoje = this.hojeIso();
-    this.fecharAlertaEsteira(this.chaveAlertaEsteira(this.segundaDaSemana(hoje)));
+    this.fecharAlertaEsteira(this.chaveAlertaEsteira(hoje));
     if (typeof window.switchTab === "function") window.switchTab("financiamento", "Financiamento");
     await this.abrirAberto(key);
   },

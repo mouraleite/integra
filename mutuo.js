@@ -955,9 +955,10 @@ window.MutuoApp = {
       ".mtd-page{display:flex;flex-direction:column;gap:14px;}",
       ".mtd-topo{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;}",
       ".mtd-campo{display:flex;flex-direction:column;gap:4px;font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;}",
-      ".mtd-campo select,.mtd-campo input{height:34px;border:1px solid #cbd5e1;border-radius:6px;padding:0 8px;font-size:.85rem;color:#0f172a;background:#fff;text-transform:none;font-weight:500;}",
-      ".mtd-acoes{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;}",
-      ".mtd-acoes .btn{display:inline-flex;align-items:center;gap:6px;}",
+      ".mtd-campo select,.mtd-campo input{height:40px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;font-size:.88rem;color:#0f172a;background:#fff;text-transform:none;font-weight:500;letter-spacing:0;}",
+      ".mtd-acoes{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;align-items:flex-end;}",
+      ".mtd-acoes .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:40px;box-sizing:border-box;padding:0 16px;margin:0;line-height:1;white-space:nowrap;}",
+      ".mtd-acoes .btn svg{width:16px;height:16px;flex-shrink:0;}",
       ".mtd-info{display:flex;flex-wrap:wrap;gap:8px;font-size:.78rem;color:#334155;}",
       ".mtd-chip{background:#eef8f2;color:#105436;border-radius:99px;padding:4px 10px;font-weight:600;}",
       ".mtd-chip.hoje{background:#105436;color:#fff;}",
@@ -992,13 +993,6 @@ window.MutuoApp = {
       ".mtd-cc td.mtd-quebra{white-space:normal;}"
     ].join("");
     document.head.appendChild(st);
-  },
-
-  empresasDoFiltro() {
-    const base = [["TODAS", "Todas as empresas"], ["ITU", "Terras de Itu"], ["RAMOS", "Reserva dos Ramos"]];
-    if (this.ehMutuo()) base.push(["ITATINGA", "Novo Horizonte Itatinga"]);
-    base.push(["TAGUAI", "SPE Taguaí III"]);
-    return base;
   },
 
   lancamentosVisiveis() {
@@ -1067,7 +1061,7 @@ window.MutuoApp = {
       </div>
       <div class="cc-scroll">
         <table class="cc-table mtd-cc">
-          <colgroup><col style="width:160px"><col><col style="width:90px"><col style="width:220px"><col style="width:80px"><col style="width:90px"><col style="width:70px"><col style="width:110px"></colgroup>
+          <colgroup><col style="width:160px"><col><col style="width:90px"><col style="width:220px"><col style="width:80px"><col style="width:118px"><col style="width:70px"><col style="width:110px"></colgroup>
           <thead><tr>${th("rotulo", "Empresa")}${th("credor", "Credor")}${th("documento", "Documento")}${th("plano", "Plano financeiro")}${th("situacao", "Situação", "is-center")}${th("data", "Pagto / Vencto", "is-center")}${th("rateio", "Rateio", "is-right")}${th("valor", "Valor rateado", "is-right")}</tr></thead>
           <tbody>${linhas}${total}</tbody>
         </table>
@@ -1135,7 +1129,15 @@ window.MutuoApp = {
         <div class="loading-spinner" aria-hidden="true"></div>
         <div class="loading-status-text">${this.esc(this.progresso || "Carregando…")}</div>
       </div>` : "";
-    const opcoesEmp = this.empresasDoFiltro().map((e) => `<option value="${e[0]}"${this.empresa === e[0] ? " selected" : ""}>${this.esc(e[1])}</option>`).join("");
+    const itensEmp = Object.keys(this.EMPRESAS)
+      .filter((k) => this.ehMutuo() || k !== "ITATINGA")
+      .map((k) => ({ id: String(this.EMPRESAS[k].siengeId), label: this.EMPRESAS[k].razao, chave: k }))
+      .sort((a, b) => Number(a.id) - Number(b.id));
+    const empSel = this.empresa === "TODAS" ? "TODAS" : String((this.EMPRESAS[this.empresa] || {}).siengeId || "TODAS");
+    this._itensEmp = itensEmp;
+    const filtroEmp = window.MlSelectUnico
+      ? MlSelectUnico.html({ id: "mtd-emp", label: "Empresa", items: itensEmp, selectedId: empSel, todos: { id: "TODAS", label: "Todas as empresas" }, largura: "420px" })
+      : "";
     root.innerHTML = `<div class="mtd-page">
       <div class="mtd-topo">
         <label class="mtd-campo">Operação
@@ -1144,7 +1146,7 @@ window.MutuoApp = {
             <option value="MUTUO"${this.ehMutuo() ? " selected" : ""}>Mútuo entre empresas</option>
           </select>
         </label>
-        <label class="mtd-campo">Empresa<select id="mtd-emp">${opcoesEmp}</select></label>
+        ${filtroEmp}
         <label class="mtd-campo">Mês/Ano<input type="month" id="mtd-mes" value="${this.esc(this.mesAno || this.hojeIso().slice(0, 7))}"></label>
         <div class="mtd-acoes">
           <button type="button" class="btn btn-primary cc-atualizar" id="mtd-consultar" ${ocupado ? "disabled" : ""}><i data-lucide="refresh-cw"></i> Consultar despesas</button>
@@ -1184,8 +1186,17 @@ window.MutuoApp = {
       this.limpar();
       this.consultar();
     };
-    const emp = $("mtd-emp");
-    if (emp) emp.onchange = () => { this.empresa = emp.value; this.resultado = null; this.recalcularNdPrevistas(); this.render(); };
+    if (window.MlSelectUnico) {
+      MlSelectUnico.bind("mtd-emp", {
+        onSelect: (id) => {
+          const it = (this._itensEmp || []).find((i) => i.id === id);
+          this.empresa = it ? it.chave : "TODAS";
+          this.resultado = null;
+          this.recalcularNdPrevistas();
+          this.render();
+        }
+      });
+    }
     const mes = $("mtd-mes");
     if (mes) mes.onchange = () => { this.mesAno = mes.value; this.limpar(); this.consultar(); };
     const c = $("mtd-consultar");
