@@ -124,3 +124,21 @@ test("mês fechado não pode mudar nem ser removido", () => {
   assert.deepStrictEqual(O.validarLinhas([nova], [], { cadDepartamentos: cad, departamentoId: 3 }), []);
   assert.match(O.validarLinhas([{ cc: "1", plano: "9", m: [] }], [], { cadDepartamentos: cad, departamentoId: 3 })[0], /Permissão negada/);
 });
+
+test("orçado x realizado: despesa sai negativa no caixa e vira positiva; corte por mês", () => {
+  const rea = O.agregarRealizado([
+    { cc: "10100", plano: "2010101", mes: 1, valor: -500.1 },
+    { cc: "10100", plano: "2010101", mes: 2, valor: -100 },
+    { cc: "10100", plano: "2010101", mes: 3, valor: -999 },
+    { cc: "10100", plano: "2010101", mes: 2, valor: 20 },
+    { cc: "77777", plano: "2010101", mes: 1, valor: -10 },
+    { cc: "10100", plano: "2010101", mes: 0, valor: -1 }
+  ], -1);
+  assert.deepStrictEqual(rea.get("10100|2010101").m.slice(0, 3), [50010, 8000, 99900]);
+  const linhas = [{ cc: "10100", plano: "2010101", m: [60000, 10000, 10000, 0, 0, 0, 0, 0, 0, 0, 0, 0], total: 80000 }];
+  const r = O.orcadoRealizado(linhas, rea, 2);
+  assert.strictEqual(r.linhas[0].orcado, 70000);
+  assert.strictEqual(r.linhas[0].realizado, 58010);
+  assert.strictEqual(r.linhas[0].dif, -11990);
+  assert.deepStrictEqual(r.foraDoOrcamento, [{ cc: "77777", plano: "2010101", realizado: 1000 }]);
+});

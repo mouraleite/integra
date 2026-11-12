@@ -316,6 +316,41 @@
     return out;
   }
 
-  return { STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- orçado x realizado (realizado pela regra do Integra: caixa e bancos) ---------- */
+
+  /** alocacoes: [{ cc, plano, mes (1..12), valor (R$, sinal da DFC do Integra) }]; sinal: -1 despesas, +1 receitas.
+   *  Devolve Map "cc|plano" -> { m: [12 centavos], total }. */
+  function agregarRealizado(alocacoes, sinal) {
+    const s = sinal == null ? 1 : sinal;
+    const out = new Map();
+    (alocacoes || []).forEach((a) => {
+      const mes = Number(a.mes);
+      if (!(mes >= 1 && mes <= 12)) return;
+      const k = String(a.cc || "") + "|" + String(a.plano || "");
+      if (!out.has(k)) out.set(k, { m: new Array(12).fill(0), total: 0 });
+      const x = out.get(k);
+      const c = centavos(Number(a.valor) * s);
+      x.m[mes - 1] += c;
+      x.total += c;
+    });
+    return out;
+  }
+
+  /** Linhas do orçado x realizado até o mês "ate" (1..12): orçado no período, realizado, diferença e % realizado. */
+  function orcadoRealizado(linhas, realizado, ate) {
+    const ateN = Math.max(0, Math.min(12, Number(ate) || 0));
+    const soma = (m) => m.slice(0, ateN).reduce((s, v) => s + v, 0);
+    const vistos = new Set();
+    const out = (linhas || []).map((l) => {
+      const k = l.cc + "|" + l.plano;
+      vistos.add(k);
+      const r = realizado.get(k);
+      const orc = soma(l.m), rea = r ? soma(r.m) : 0;
+      return { cc: l.cc, cc_nome: l.cc_nome, plano: l.plano, plano_nome: l.plano_nome, orcado_ano: l.total, orcado: orc, realizado: rea, dif: rea - orc, perc: orc ? rea / orc : null };
+    });
+    return { linhas: out, foraDoOrcamento: [...realizado.entries()].filter(([k]) => !vistos.has(k)).map(([k, r]) => ({ cc: k.split("|")[0], plano: k.split("|")[1], realizado: soma(r.m) })).filter((x) => x.realizado) };
+  }
+
+  return { agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
