@@ -98,3 +98,29 @@ test("departamentos: matriz de centros de custo, planos e usuários", () => {
   assert.strictEqual(O.lancamentoPermitido(cad, 3, "10100", "2010101"), false);
   assert.strictEqual(O.lancamentoPermitido(cad, 3, "99999", "2010101"), true);
 });
+
+test("fluxo de aprovação igual ao do Órion", () => {
+  assert.deepStrictEqual(O.resolverTransicao("Rascunho", "Em aprovação"), { destino: "Em aprovação", acao: "enviar" });
+  assert.deepStrictEqual(O.resolverTransicao("Em aprovação", "Aprovado"), { destino: "Fechado", acao: "aprovar" });
+  assert.deepStrictEqual(O.resolverTransicao("Fechado", "Solicitação Reabertura").acao, "solicitar_reabertura");
+  assert.deepStrictEqual(O.resolverTransicao("Solicitação Reabertura", "Reaberto").acao, "aprovar_reabertura");
+  assert.throws(() => O.resolverTransicao("Rascunho", "Fechado"), /Não é permitido ir de Rascunho para Fechado/);
+  assert.strictEqual(O.editavel("Rascunho"), true);
+  assert.strictEqual(O.editavel("Reaberto"), true);
+  assert.strictEqual(O.editavel("Em aprovação"), false);
+  assert.strictEqual(O.editavel("Substituído"), false);
+  O.acoesDoStatus("Em aprovação").forEach((a) => assert.strictEqual(O.resolverTransicao("Em aprovação", a.para).acao, a.acao));
+});
+
+test("mês fechado não pode mudar nem ser removido", () => {
+  const velha = { cc: "10100", plano: "2010101", m: [100, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+  const nova = { cc: "10100", plano: "2010101", m: [100, 999, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5] };
+  assert.strictEqual(O.mesFechadoAlterado(nova, velha, [1, 2]), 2);
+  assert.strictEqual(O.mesFechadoAlterado(nova, velha, [1]), 0);
+  assert.match(O.validarLinhas([], [velha], { fechados: [2] })[0], /não pode ser removida/);
+  assert.deepStrictEqual(O.validarLinhas([nova], [velha], { fechados: [1, 3] }), []);
+  assert.match(O.validarLinhas([nova, nova], [], {})[0], /já está no orçamento/);
+  const cad = { departamentos: [{ id: 3, planos: ["2010101"] }], produtoPlano: [] };
+  assert.deepStrictEqual(O.validarLinhas([nova], [], { cadDepartamentos: cad, departamentoId: 3 }), []);
+  assert.match(O.validarLinhas([{ cc: "1", plano: "9", m: [] }], [], { cadDepartamentos: cad, departamentoId: 3 })[0], /Permissão negada/);
+});

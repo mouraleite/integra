@@ -234,5 +234,88 @@
     return pp.indexOf(String(cc) + "|" + String(plano)) >= 0;
   }
 
-  return { prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
+  /* ---------- fluxo de aprovação (mesma tabela do Órion: services/budget_status.py) ---------- */
+
+  const STATUS_BLOQUEADO = ["Aprovado", "Fechado", "Em aprovação", "Solicitação Reabertura"];
+  const ACOES_GESTOR = ["aprovar", "rejeitar", "recusar_reabertura", "aprovar_reabertura"];
+
+  /** Devolve { destino, acao } ou lança erro com a mesma mensagem do Órion. */
+  function resolverTransicao(statusAtual, pedido) {
+    const atual = String(statusAtual || "").trim();
+    const novo = String(pedido || "").trim();
+    if ((atual === "Rascunho" || atual === "Reaberto") && novo === "Em aprovação") return { destino: "Em aprovação", acao: "enviar" };
+    if (atual === "Em aprovação" && (novo === "Fechado" || novo === "Aprovado")) return { destino: "Fechado", acao: "aprovar" };
+    if (atual === "Em aprovação" && novo === "Rascunho") return { destino: "Rascunho", acao: "rejeitar" };
+    if ((atual === "Fechado" || atual === "Aprovado") && novo === "Solicitação Reabertura") return { destino: "Solicitação Reabertura", acao: "solicitar_reabertura" };
+    if (atual === "Solicitação Reabertura" && novo === "Fechado") return { destino: "Fechado", acao: "recusar_reabertura" };
+    if (atual === "Solicitação Reabertura" && novo === "Reaberto") return { destino: "Reaberto", acao: "aprovar_reabertura" };
+    throw new Error(`Não é permitido ir de ${atual || "—"} para ${novo || "—"}.`);
+  }
+
+  /** Ações possíveis a partir do status (botões da tela). */
+  function acoesDoStatus(status) {
+    const s = String(status || "");
+    if (s === "Rascunho" || s === "Reaberto") return [{ para: "Em aprovação", rotulo: "Enviar para aprovação", acao: "enviar" }];
+    if (s === "Em aprovação") return [{ para: "Fechado", rotulo: "Aprovar", acao: "aprovar" }, { para: "Rascunho", rotulo: "Devolver para ajuste", acao: "rejeitar" }];
+    if (s === "Fechado" || s === "Aprovado") return [{ para: "Solicitação Reabertura", rotulo: "Pedir reabertura", acao: "solicitar_reabertura", motivo: true }];
+    if (s === "Solicitação Reabertura") return [{ para: "Reaberto", rotulo: "Aprovar reabertura", acao: "aprovar_reabertura" }, { para: "Fechado", rotulo: "Recusar reabertura", acao: "recusar_reabertura" }];
+    return [];
+  }
+
+  function editavel(status) {
+    return STATUS_BLOQUEADO.indexOf(String(status || "")) < 0 && String(status || "") !== "Substituído";
+  }
+
+  /** Meses fechados (1..12) do ano a partir de orion_config/fechamento_meses. */
+  function mesesFechados(listaFechamento, ano) {
+    return (listaFechamento || []).filter((r) => Number(r.ano) === Number(ano)).map((r) => Number(r.mes)).filter((m) => m >= 1 && m <= 12);
+  }
+
+  /** Igual a mes_fechado_alterado do Órion: devolve o 1º mês fechado (1..12) cujo valor mudou, ou 0. */
+  function mesFechadoAlterado(linhaNova, linhaAntiga, fechados) {
+    for (const m of (fechados || []).slice().sort((a, b) => a - b)) {
+      const novo = linhaNova && linhaNova.m ? Number(linhaNova.m[m - 1]) || 0 : 0;
+      const velho = linhaAntiga && linhaAntiga.m ? Number(linhaAntiga.m[m - 1]) || 0 : 0;
+      if (novo !== velho) return m;
+    }
+    return 0;
+  }
+
+  /** Valida o conjunto de linhas antes de gravar: repetidas, mês fechado alterado e permissão do departamento. */
+  function validarLinhas(linhas, antigas, opts) {
+    const o = opts || {};
+    const erros = [];
+    const vistos = new Set();
+    const mapaAnt = new Map((antigas || []).map((l) => [l.cc + "|" + l.plano, l]));
+    (linhas || []).forEach((l) => {
+      const k = l.cc + "|" + l.plano;
+      if (!l.cc || !l.plano) erros.push("Há linha sem centro de custo ou sem plano.");
+      if (vistos.has(k)) erros.push(`A combinação ${l.cc} + ${l.plano} já está no orçamento.`);
+      vistos.add(k);
+      const mf = mesFechadoAlterado(l, mapaAnt.get(k), o.fechados);
+      if (mf) erros.push(`O mês ${MESES[mf - 1]} está fechado e não pode ser alterado (${l.cc} + ${l.plano}).`);
+      if (o.cadDepartamentos && o.departamentoId != null && !lancamentoPermitido(o.cadDepartamentos, o.departamentoId, l.cc, l.plano)) {
+        erros.push(`Permissão negada: o departamento não orça ${l.cc} + ${l.plano}.`);
+      }
+    });
+    (antigas || []).forEach((a) => {
+      const k = a.cc + "|" + a.plano;
+      if (!vistos.has(k)) {
+        const mf = mesFechadoAlterado(null, a, o.fechados);
+        if (mf) erros.push(`O mês ${MESES[mf - 1]} está fechado: a linha ${a.cc} + ${a.plano} não pode ser removida.`);
+      }
+    });
+    return [...new Set(erros)];
+  }
+
+  /** Divide linhas em blocos de documento. */
+  function emBlocos(id, ref, itens, vendas) {
+    const n = Math.max(1, Math.ceil(Math.max((itens || []).length, (vendas || []).length) / ITENS_POR_DOC));
+    const out = [];
+    for (let b = 0; b < n; b++) out.push({ _id: `${id}_${b}`, [ref]: String(id), bloco: b, itens: (itens || []).slice(b * ITENS_POR_DOC, (b + 1) * ITENS_POR_DOC), vendas: (vendas || []).slice(b * ITENS_POR_DOC, (b + 1) * ITENS_POR_DOC) });
+    return out;
+  }
+
+  return { STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+    prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

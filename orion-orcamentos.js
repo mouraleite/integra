@@ -15,6 +15,10 @@ const OrionOrcamentosApp = {
   carregando: false,
   erro: "",
   carga: null,
+  edicao: null,
+  cadDep: null,
+  fechamento: [],
+  aviso: "",
 
   C() { return window.OrionOrcamentoCalc; },
   root() { return document.getElementById("orion-orcamentos-root"); },
@@ -38,6 +42,8 @@ const OrionOrcamentosApp = {
     st.id = "oo-estilos";
     st.textContent = `
       .cc-table tr.oo-total td { background:#105436 !important; color:#fff !important; font-weight:700; }
+      .cc-table input.oo-num { width:100%; box-sizing:border-box; height:26px; border:1px solid #d6e2db; border-radius:5px; padding:0 4px; font-size:0.7rem; text-align:right; font-variant-numeric:tabular-nums; }
+      .cc-table input.oo-num:disabled { background:#f1f5f9; color:#64748b; }
       .cc-table tr.oo-grupo td { background:#e7f6ee !important; color:#105436 !important; font-weight:700; }
     `;
     document.head.appendChild(st);
@@ -47,6 +53,7 @@ const OrionOrcamentosApp = {
     this.estilos();
     this.render();
     if (!this.cab[this.tipo]) this.carregar();
+    this.lerApoio();
   },
 
   async carregar() {
@@ -74,7 +81,7 @@ const OrionOrcamentosApp = {
   setDept(d) { this.dept = d; this.aberto = null; this.render(); },
   setSubst(v) { this.verSubstituidos = !!v; this.render(); },
   setVisao(v) { this.visao = v; this.render(); },
-  fechar() { this.aberto = null; this.render(); },
+  fechar() { this.aberto = null; this.edicao = null; this.aviso = ""; this.render(); },
 
   async lerItens(id) {
     const fc = this.fc();
@@ -89,6 +96,7 @@ const OrionOrcamentosApp = {
   },
 
   async abrir(id) {
+    this.edicao = null;
     this.carregando = true;
     this.render();
     try {
@@ -244,6 +252,246 @@ const OrionOrcamentosApp = {
     </table></div><div style="margin-top:8px;font-size:0.72rem;color:#64748b">Clique numa linha para ver o detalhe por centro de custo, plano e mês.</div>`;
   },
 
+  /* ---------- edição e aprovação (parte 2) ---------- */
+
+  usuarioEmail() {
+    return String((window.OrionStore && window.OrionStore.usuario()) || "").toLowerCase();
+  },
+
+  ehGestor() {
+    if (this.ehAdmin()) return true;
+    return typeof window.hasCrmPerm === "function" && window.hasCrmPerm("sub_orion_geral_aprovar_orcamentos_acessar");
+  },
+
+  /** Pode editar: permissão de edição e ser usuário do departamento (quando o cadastro de departamentos existir). */
+  podeEditarCab(cab) {
+    if (!cab || !this.C().editavel(cab.status)) return false;
+    if (this.ehAdmin()) return true;
+    if (typeof window.hasCrmPerm !== "function" || !window.hasCrmPerm("sub_orion_geral_orcamentos_editar")) return false;
+    const cad = this.cadDep;
+    if (!cad || !(cad.departamentos || []).length || !cab.departamento) return true;
+    const d = cad.departamentos.find((x) => String(x.id) === String(cab.departamento.id));
+    return !!(d && (d.usuarios || []).indexOf(this.usuarioEmail()) >= 0);
+  },
+
+  async lerApoio() {
+    try {
+      const [dep, fech] = await Promise.all([
+        window.OrionStore.ler("departamentos", null),
+        window.OrionStore.ler("fechamento_meses", [])
+      ]);
+      this.cadDep = dep.itens || null;
+      this.fechamento = fech.itens || [];
+    } catch (e) {
+      this.cadDep = null;
+      this.fechamento = [];
+    }
+  },
+
+  /** Meses que não podem mudar: fechados no Fechamento de meses e, no forecast, os anteriores ao mês de corte. */
+  mesesTravados(cab) {
+    const s = new Set(this.C().mesesFechados(this.fechamento, cab.ano));
+    if (this.tipo === "forecasts" && cab.mes_corte) for (let m = 1; m < Number(cab.mes_corte); m++) s.add(m);
+    return [...s].sort((x, y) => x - y);
+  },
+
+  editar() {
+    const a = this.aberto;
+    if (!a || !this.podeEditarCab(a.cab)) return;
+    this.edicao = {
+      linhas: a.itens.map((l) => Object.assign({}, l, { m: l.m.slice() }))
+        .sort((x, y) => String(x.cc).localeCompare(String(y.cc), "pt-BR", { numeric: true }) || String(x.plano).localeCompare(String(y.plano), "pt-BR", { numeric: true })),
+      erros: [], salvando: false
+    };
+    this.render();
+  },
+
+  cancelarEdicao() { this.edicao = null; this.render(); },
+
+  setValor(i, mes, valor) {
+    const e = this.edicao;
+    if (!e || !e.linhas[i]) return;
+    const l = e.linhas[i];
+    l.m[mes] = this.C().centavos(valor);
+    l.total = this.C().somaMeses(l.m);
+    this.render();
+  },
+
+  removerLinha(i) {
+    if (!this.edicao) return;
+    this.edicao.linhas.splice(i, 1);
+    this.render();
+  },
+
+  incluirLinha() {
+    const e = this.edicao;
+    if (!e) return;
+    const cc = String((document.getElementById("oo-novo-cc") || {}).value || "").replace(/\D/g, "");
+    const plano = String((document.getElementById("oo-novo-plano") || {}).value || "").replace(/\D/g, "");
+    if (!cc || !plano) { e.erros = ["Informe o código do centro de custo e do plano (do Sienge)."]; return this.render(); }
+    if (e.linhas.some((l) => l.cc === cc && l.plano === plano)) { e.erros = [`A combinação ${cc} + ${plano} já está no orçamento.`]; return this.render(); }
+    const cad = this.cadDep || {};
+    e.linhas.push({ cc, cc_nome: (cad.nomesCc || {})[cc] || "", plano, plano_nome: (cad.nomesPlano || {})[plano] || "", m: new Array(12).fill(0), total: 0, obs: "" });
+    e.erros = [];
+    this.render();
+  },
+
+  grupo(cab) {
+    return (this.cab[this.tipo] || []).filter((c) => c.ano === cab.ano && c.tipo === cab.tipo && c.descricao === cab.descricao &&
+      c.status !== "Substituído" && String(c.departamento ? c.departamento.id : "") === String(cab.departamento ? cab.departamento.id : ""));
+  },
+
+  async salvarEdicao() {
+    const C = this.C();
+    const a = this.aberto;
+    const e = this.edicao;
+    if (!a || !e || !this.podeEditarCab(a.cab)) return;
+    const fechados = this.mesesTravados(a.cab);
+    e.erros = C.validarLinhas(e.linhas, a.itens, {
+      fechados,
+      cadDepartamentos: this.cadDep && (this.cadDep.departamentos || []).length ? this.cadDep : null,
+      departamentoId: a.cab.departamento ? a.cab.departamento.id : null
+    });
+    if (e.erros.length) return this.render();
+    e.salvando = true;
+    this.render();
+    const fc = this.fc();
+    const col = this.COL[this.tipo];
+    const id = a.cab._id;
+    const novos = C.emBlocos(id, col.ref, e.linhas, a.vendas);
+    const quem = this.usuarioEmail();
+    try {
+      const cabNovo = await fc.runTransaction(window.firebaseDb, async (tx) => {
+        const ref = fc.doc(window.firebaseDb, col.cab, id);
+        const s = await tx.get(ref);
+        if (!s.exists()) throw new Error("Este orçamento não existe mais no Integra.");
+        const atual = s.data();
+        if ((Number(atual.rev) || 0) !== (Number(a.cab.rev) || 0)) throw new Error(`Este orçamento foi alterado por ${atual.alterado_por || "outra pessoa"} depois que você abriu. Volte à lista, abra de novo e refaça.`);
+        if (!C.editavel(atual.status)) throw new Error(`O orçamento está "${atual.status}" e não pode ser editado.`);
+        for (const b of novos) { const { _id, ...dados } = b; tx.set(fc.doc(window.firebaseDb, col.itens, _id), dados); }
+        for (let b = novos.length; b < (Number(atual.blocos) || 1); b++) tx.delete(fc.doc(window.firebaseDb, col.itens, `${id}_${b}`));
+        const n = Object.assign({}, atual, {
+          totais: C.somarLinhas(e.linhas), linhas: e.linhas.length, blocos: novos.length,
+          rev: (Number(atual.rev) || 0) + 1, alterado_por: quem, alterado_em: new Date().toISOString()
+        });
+        tx.set(ref, n);
+        return n;
+      });
+      const i = (this.cab[this.tipo] || []).findIndex((c) => c._id === id);
+      if (i >= 0) this.cab[this.tipo][i] = cabNovo;
+      a.cab = cabNovo;
+      a.itens = e.linhas;
+      this.edicao = null;
+      this.aviso = "Orçamento salvo.";
+    } catch (err) {
+      e.salvando = false;
+      e.erros = [err.message || String(err)];
+    }
+    this.render();
+  },
+
+  async mudarStatus(para) {
+    const C = this.C();
+    const a = this.aberto;
+    if (!a) return;
+    let trans;
+    try { trans = C.resolverTransicao(a.cab.status, para); } catch (err) { this.erro = err.message; return this.render(); }
+    if (C.ACOES_GESTOR.indexOf(trans.acao) >= 0 && !this.ehGestor()) { this.erro = "Sem permissão para aprovar ou rejeitar."; return this.render(); }
+    if (trans.acao !== "solicitar_reabertura" && C.ACOES_GESTOR.indexOf(trans.acao) < 0 && !this.podeEditarCab(Object.assign({}, a.cab, { status: "Rascunho" }))) {
+      this.erro = "Sem permissão para enviar este orçamento."; return this.render();
+    }
+    let motivo = "";
+    if (trans.acao === "solicitar_reabertura") {
+      motivo = (window.prompt("Motivo da solicitação de reabertura:") || "").trim();
+      if (!motivo) { this.erro = "Informe o motivo da solicitação de reabertura."; return this.render(); }
+    } else if (!window.confirm(`Confirmar: ${a.cab.status} → ${trans.destino}?`)) return;
+    const fc = this.fc();
+    const col = this.COL[this.tipo];
+    const quem = this.usuarioEmail();
+    const agora = new Date().toISOString();
+    const alvos = this.grupo(a.cab).length ? this.grupo(a.cab) : [a.cab];
+    this.carregando = true;
+    this.render();
+    try {
+      for (const alvo of alvos) {
+        if (trans.acao === "aprovar_reabertura") {
+          /* Igual ao Órion: guarda uma cópia fechada (Substituído) antes de reabrir. */
+          const copia = await this.lerItens(alvo._id);
+          const snapId = `${alvo._id}_fechado_${Date.now()}`;
+          for (const b of C.emBlocos(snapId, col.ref, copia.itens, copia.vendas)) { const { _id, ...d } = b; await fc.setDoc(fc.doc(window.firebaseDb, col.itens, _id), d); }
+          await fc.setDoc(fc.doc(window.firebaseDb, col.cab, snapId), Object.assign({}, copia.cab, { _id: snapId, status: "Substituído", versao_base: alvo._id, historico: [], copia_de: alvo._id, copiado_em: agora }));
+        }
+        await fc.runTransaction(window.firebaseDb, async (tx) => {
+          const ref = fc.doc(window.firebaseDb, col.cab, alvo._id);
+          const s = await tx.get(ref);
+          const atual = s.data();
+          C.resolverTransicao(atual.status, para); // confere de novo com o que está no banco
+          const n = Object.assign({}, atual, {
+            status: trans.destino,
+            motivo_reabertura: trans.acao === "solicitar_reabertura" ? motivo : (trans.acao === "recusar_reabertura" ? "" : atual.motivo_reabertura || ""),
+            historico: (atual.historico || []).concat([{ de: atual.status, para: trans.destino, por: quem, em: agora, motivo: motivo || (trans.acao === "aprovar_reabertura" ? atual.motivo_reabertura || "" : "") }]),
+            rev: (Number(atual.rev) || 0) + 1, alterado_por: quem, alterado_em: agora
+          });
+          tx.set(ref, n);
+        });
+      }
+      this.cab[this.tipo] = null;
+      await this.carregar();
+      await this.abrir(a.cab._id);
+      this.aviso = `Status alterado para ${trans.destino}${alvos.length > 1 ? ` (${alvos.length} documentos do mesmo orçamento)` : ""}.`;
+    } catch (err) {
+      this.erro = err.message || String(err);
+    }
+    this.carregando = false;
+    this.render();
+  },
+
+  htmlEdicao() {
+    const C = this.C();
+    const a = this.aberto;
+    const e = this.edicao;
+    const fechados = this.mesesTravados(a.cab);
+    const linhas = e.linhas.map((l, i) => `<tr>
+      <td style="white-space:normal">${this.esc(l.cc)} ${this.esc(l.cc_nome)}<br><small>${this.esc(l.plano)} ${this.esc(l.plano_nome)}</small></td>
+      ${l.m.map((v, mi) => `<td><input class="oo-num" ${fechados.indexOf(mi + 1) >= 0 ? "disabled title=\"mês fechado\"" : ""} value="${v ? C.fmtReais(v) : ""}" onchange="OrionOrcamentosApp.setValor(${i}, ${mi}, this.value)"></td>`).join("")}
+      <td class="is-right"><b>${C.fmtReais(l.total)}</b></td>
+      <td class="is-center"><button type="button" class="op-del" style="border:none;background:none;color:#b91c1c;cursor:pointer" title="Remover linha" onclick="OrionOrcamentosApp.removerLinha(${i})">✕</button></td></tr>`).join("");
+    const tot = C.somarLinhas(e.linhas);
+    return `
+      ${e.erros.length ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${e.erros.map((x) => this.esc(x)).join("<br>")}</div>` : ""}
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap">
+        <div><label class="ml-emp-filter-label">Centro de custo (código)</label><input id="oo-novo-cc" class="idx-select" style="height:36px;width:150px"></div>
+        <div><label class="ml-emp-filter-label">Plano (código)</label><input id="oo-novo-plano" class="idx-select" style="height:36px;width:150px"></div>
+        <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.incluirLinha()">Incluir linha</button>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.cancelarEdicao()">Cancelar</button>
+          <button type="button" class="btn btn-primary" style="height:36px" ${e.salvando ? "disabled" : ""} onclick="OrionOrcamentosApp.salvarEdicao()">${e.salvando ? "Salvando..." : "Salvar orçamento"}</button>
+        </div>
+      </div>
+      ${fechados.length ? `<div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">Meses travados (fechados${this.tipo === "forecasts" && a.cab.mes_corte ? " ou antes do corte" : ""}): ${fechados.map((m) => C.MESES[m - 1]).join(", ")}.</div>` : ""}
+      <div class="cc-scroll"><table class="cc-table" style="min-width:1440px">
+        <colgroup><col style="width:240px">${C.MESES.map(() => '<col style="width:88px">').join("")}<col style="width:110px"><col style="width:34px"></colgroup>
+        <thead><tr><th>Centro de custo / plano</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th><th></th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="15" style="text-align:center;padding:30px">Sem linhas. Inclua acima.</td></tr>`}
+        <tr class="oo-total"><td>Total</td>${tot.m.map((v) => `<td class="is-right">${C.fmtReais(v, true)}</td>`).join("")}<td class="is-right">${C.fmtReais(tot.total)}</td><td></td></tr></tbody>
+      </table></div>`;
+  },
+
+  htmlAcoes() {
+    const C = this.C();
+    const cab = this.aberto.cab;
+    const botoes = [];
+    if (!this.edicao && this.podeEditarCab(cab)) botoes.push(`<button type="button" class="btn btn-primary" style="height:32px" onclick="OrionOrcamentosApp.editar()">Editar</button>`);
+    if (!this.edicao) {
+      C.acoesDoStatus(cab.status).forEach((x) => {
+        const gestor = C.ACOES_GESTOR.indexOf(x.acao) >= 0;
+        const pode = gestor ? this.ehGestor() : (x.acao === "solicitar_reabertura" ? true : this.podeEditarCab(Object.assign({}, cab, { status: "Rascunho" })));
+        if (pode) botoes.push(`<button type="button" class="btn ${x.acao === "aprovar" || x.acao === "aprovar_reabertura" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.mudarStatus('${this.esc(x.para)}')">${this.esc(x.rotulo)}</button>`);
+      });
+    }
+    return botoes.join("");
+  },
+
   htmlDetalhe() {
     const C = this.C();
     const a = this.aberto;
@@ -284,6 +532,11 @@ const OrionOrcamentosApp = {
           ${cab.vgv ? `<div class="ppcc-kpi"><span class="ppcc-kpi-rot">VGV</span><span class="ppcc-kpi-val">${C.fmtReais(cab.vgv, true)}</span></div>` : ""}
         </div>
       </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+        ${this.htmlAcoes()}
+        ${cab.motivo_reabertura ? `<span style="align-self:center;font-size:0.75rem;color:#92400e">Motivo da reabertura: ${this.esc(cab.motivo_reabertura)}</span>` : ""}
+      </div>
+      ${this.edicao ? this.htmlEdicao() + dif + hist : `
       <div style="display:flex;gap:6px;margin-bottom:8px">
         <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.setVisao('cc')">Por centro de custo</button>
         <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.setVisao('plano')">Por plano</button>
@@ -294,7 +547,7 @@ const OrionOrcamentosApp = {
         <thead><tr><th>${this.visao === "cc" ? "Centro de custo / plano" : "Plano / centro de custo"}</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="14" style="text-align:center;padding:30px">Sem linhas.</td></tr>`}
         <tr class="oo-total"><td>Total</td>${tot.m.map((v) => `<td class="is-right">${C.fmtReais(v, true)}</td>`).join("")}<td class="is-right">${C.fmtReais(tot.total, true)}</td></tr></tbody>
-      </table></div>${dif}${hist}`;
+      </table></div>${dif}${hist}`}`;
   },
 
   render() {
@@ -325,7 +578,8 @@ const OrionOrcamentosApp = {
     root.innerHTML = `${barra}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.htmlCarga()}
-      <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: mostra os orçamentos e forecasts trazidos do Órion para conferência. A edição continua no Órion até a parte 2 desta etapa.</div>
+      <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: orçamentos e forecasts trazidos do Órion. Enquanto o Órion estiver em uso, combine com a equipe em qual dos dois sistemas cada orçamento será editado, para não haver duas versões.</div>
+      ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${corpo}`;
     if (window.lucide) window.lucide.createIcons();
   }
