@@ -1236,6 +1236,9 @@
             <li data-tab="orion-viabilidades" data-module="sub_orion_geral_viabilidades_acessar">
               <a onclick="switchTab('orion-viabilidades', 'Viabilidades (Órion)')">Viabilidades</a>
             </li>
+            <li data-tab="orion-acompanhamento" data-module="sub_orion_geral_acompanhamento_acessar">
+              <a onclick="switchTab('orion-acompanhamento', 'Acompanhamento de empreendimentos (Órion)')">Acompanhamento de empreendimentos</a>
+            </li>
           </ul>
         </li>
         <!-- 5 - FISCAL / CONTABIL -->
@@ -1818,6 +1821,11 @@
       <!-- TAB: ÓRION (TRANSIÇÃO) - ANÁLISE DE ORÇAMENTO -->
       <section id="tab-orion-analise" class="tab-pane" style="display: none;">
         <div id="orion-analise-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: ÓRION (TRANSIÇÃO) - ACOMPANHAMENTO DE EMPREENDIMENTOS -->
+      <section id="tab-orion-acompanhamento" class="tab-pane" style="display: none;">
+        <div id="orion-acompanhamento-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: ÓRION (TRANSIÇÃO) - VIABILIDADES -->
@@ -8804,6 +8812,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-viabilidade-calc.js?v=2127"></script>
   <script defer src="orion-viabilidades.js?v=2127"></script>
   <script defer src="orion-viabilidade-edicao.js?v=2127"></script>
+  <script defer src="orion-acompanhamento.js?v=2127"></script>
   <script defer src="orion-carga.js?v=2127"></script>
   <script defer src="orion-departamentos.js?v=2127"></script>
   <script defer src="orion-departamentos-ui.js?v=2127"></script>

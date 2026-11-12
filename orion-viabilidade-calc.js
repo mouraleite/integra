@@ -697,5 +697,83 @@
     ];
   }
 
-  return { STATUS, prepararViabilidades, dre, faseDoDoc, consolidar, calcular, montarFases, irr, npv, mirr, acelerarCurva, extrairCurva, aplicarOffset, parseCondicoes, calcularCustosFunding, cronogramaFunding, taxaMensalFunding, pyRound };
+  /** Soma os fluxos mensais de várias fases (mesmo mês 1) nas colunas que o acompanhamento usa. */
+  function somarFluxos(resultados) {
+    const n = Math.max(0, ...resultados.map((r) => r.monthly_cashflow.length));
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const m = { Receitas: 0, Obras: 0, Despesas: 0, Impostos: 0, Terreno: 0, Funding: 0, Fluxo: 0 };
+      resultados.forEach((r) => {
+        const x = r.monthly_cashflow[i];
+        if (!x) return;
+        m.Receitas += x.Receitas; m.Obras += x.Obras; m.Despesas += x.Despesas; m.Impostos += x.Impostos; m.Terreno += x.Terreno;
+        m.Funding += x.Funding_Entrada - x.Funding_Despesas; m.Fluxo += x.Fluxo_de_Caixa;
+      });
+      out.push(m);
+    }
+    return out;
+  }
+
+  /**
+   * Acompanhamento do empreendimento: viabilidade aprovada (previsto, mês 1 = "inicio" AAAA-MM) × realizado do caixa da obra.
+   * realizado: [{ ano, mes, valor }] em reais com o sinal da DFC (entradas +, saídas −). ate: último mês completo (AAAA-MM).
+   * Devolve por ano e por mês: previsto (entradas, saídas, fluxo), realizado (entradas, saídas, fluxo), diferenças e acumulados,
+   * e a projeção "realizado até hoje + previsto daqui para frente" com TIR, VPL e exposição.
+   */
+  function acompanhamento(o) {
+    const [ai, mi] = String(o.inicio || "").split("-").map(Number);
+    const [aa, ma] = String(o.ate || "").split("-").map(Number);
+    if (!ai || !mi) return null;
+    const idx = (a, m) => (a - ai) * 12 + (m - mi);
+    const corte = aa && ma ? idx(aa, ma) : -1;   // índice (0 = mês 1 da viabilidade) do último mês completo
+    const fl = o.fluxo || [];
+    const real = new Map();
+    (o.realizado || []).forEach((x) => {
+      const i = idx(Number(x.ano), Number(x.mes));
+      if (!real.has(i)) real.set(i, { ent: 0, sai: 0 });
+      const r = real.get(i);
+      if (x.valor >= 0) r.ent += x.valor; else r.sai += -x.valor;
+    });
+    const ini = Math.min(0, ...[...real.keys()]);
+    const fim = Math.max(fl.length - 1, corte, ...[...real.keys()]);
+    const meses = [];
+    let acPrev = 0, acReal = 0, acProj = 0;
+    for (let i = ini; i <= fim; i++) {
+      const p = fl[i] || null;
+      const pEnt = p ? p.Receitas + Math.max(0, p.Funding) : 0;
+      const pSai = p ? p.Obras + p.Despesas + p.Impostos + p.Terreno + Math.max(0, -p.Funding) : 0;
+      const pFl = p ? p.Fluxo : 0;
+      const r = real.get(i) || { ent: 0, sai: 0 };
+      const passado = i <= corte;
+      const rFl = r.ent - r.sai;
+      const proj = passado ? rFl : pFl;
+      acPrev += pFl; acReal += passado ? rFl : 0; acProj += proj;
+      const a = ai + Math.floor((mi - 1 + i) / 12), m = ((mi - 1 + i) % 12 + 12) % 12 + 1;
+      meses.push({ i, ano: a, mes: m, passado, prev: { ent: pEnt, sai: pSai, fluxo: pFl, det: p }, real: passado ? { ent: r.ent, sai: r.sai, fluxo: rFl } : null, proj, acPrev, acReal: passado ? acReal : null, acProj });
+    }
+    const anos = new Map();
+    meses.forEach((m) => {
+      if (!anos.has(m.ano)) anos.set(m.ano, { ano: m.ano, prev: { ent: 0, sai: 0, fluxo: 0 }, real: { ent: 0, sai: 0, fluxo: 0 }, proj: 0, temReal: false, mesesReais: 0 });
+      const y = anos.get(m.ano);
+      y.prev.ent += m.prev.ent; y.prev.sai += m.prev.sai; y.prev.fluxo += m.prev.fluxo; y.proj += m.proj;
+      if (m.real) { y.temReal = true; y.mesesReais++; y.real.ent += m.real.ent; y.real.sai += m.real.sai; y.real.fluxo += m.real.fluxo; }
+    });
+    const tma = Math.pow(1 + (o.tmaAnual == null ? 0.12 : o.tmaAnual), 1 / 12) - 1;
+    const serie = meses.map((m) => m.proj);
+    const tir = irr(serie);
+    let ac = 0, mn = 0;
+    serie.forEach((v) => { ac += v; if (ac < mn) mn = ac; });
+    const passados = meses.filter((m) => m.passado);
+    const soma = (l, f) => l.reduce((s, x) => s + f(x), 0);
+    return {
+      meses, anos: [...anos.values()],
+      ate: { prev: { ent: soma(passados, (m) => m.prev.ent), sai: soma(passados, (m) => m.prev.sai), fluxo: soma(passados, (m) => m.prev.fluxo) },
+        real: { ent: soma(passados, (m) => m.real.ent), sai: soma(passados, (m) => m.real.sai), fluxo: soma(passados, (m) => m.real.fluxo) } },
+      projecao: { resultado: soma(meses, (m) => m.proj), tir_aa: tir === null || tir <= -1 ? null : (Math.pow(1 + tir, 12) - 1) * 100, vpl: npv(tma, serie), exposicao: Math.min(0, mn) },
+      previsto: { resultado: soma(meses, (m) => m.prev.fluxo) },
+      mesesPassados: passados.length, foraDoPrazo: [...real.keys()].filter((i) => i < 0 || i >= fl.length).length
+    };
+  }
+
+  return { somarFluxos, acompanhamento, STATUS, prepararViabilidades, dre, faseDoDoc, consolidar, calcular, montarFases, irr, npv, mirr, acelerarCurva, extrairCurva, aplicarOffset, parseCondicoes, calcularCustosFunding, cronogramaFunding, taxaMensalFunding, pyRound };
 });

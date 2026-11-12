@@ -520,7 +520,8 @@ const ConfigUsersApp = {
         { id: "analitico_gastos", label: "Analítico de gastos" },
         { id: "analise_orcamento", label: "Análise de orçamento" },
         { id: "dfc_gerencial", label: "DFC gerencial" },
-        { id: "viabilidades", label: "Viabilidades" }
+        { id: "viabilidades", label: "Viabilidades" },
+        { id: "acompanhamento", label: "Acompanhamento de empreendimentos" }
       ] }]
     },
     {

@@ -63,3 +63,18 @@ test("viabilidade: DRE, carga e consolidação das fases", () => {
     assert.ok(Math.abs(k.exposicao_maxima - r.indicators.exposicao_maxima) < 0.005);
   }
 });
+
+test("acompanhamento: previsto da viabilidade × realizado do caixa, por mês e por ano", () => {
+  const fluxo = [
+    { Receitas: 0, Obras: 100, Despesas: 10, Impostos: 0, Terreno: 50, Funding: 0, Fluxo: -160 },
+    { Receitas: 300, Obras: 100, Despesas: 10, Impostos: 12, Terreno: 0, Funding: 0, Fluxo: 178 },
+    { Receitas: 300, Obras: 0, Despesas: 10, Impostos: 12, Terreno: 0, Funding: 0, Fluxo: 278 }
+  ];
+  const a = V.acompanhamento({ fluxo, inicio: "2025-12", ate: "2026-01", realizado: [{ ano: 2025, mes: 12, valor: -200 }, { ano: 2026, mes: 1, valor: 250 }, { ano: 2026, mes: 1, valor: -90 }, { ano: 2026, mes: 2, valor: 999 }] });
+  assert.strictEqual(a.meses.length, 3);
+  assert.deepStrictEqual(a.meses.map((m) => [m.ano, m.mes, m.passado]), [[2025, 12, true], [2026, 1, true], [2026, 2, false]]);
+  assert.deepStrictEqual(a.ate.real, { ent: 250, sai: 290, fluxo: -40 });
+  assert.strictEqual(a.ate.prev.fluxo, 18);
+  assert.strictEqual(a.projecao.resultado, -40 + 278);     // realizado até jan + previsto de fev (o realizado de fev ainda não conta)
+  assert.deepStrictEqual(a.anos.map((y) => [y.ano, y.prev.fluxo, y.real.fluxo]), [[2025, -160, -200], [2026, 456, 160]]);
+});
