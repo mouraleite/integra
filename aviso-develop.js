@@ -1,14 +1,18 @@
-// Aviso no topo do Integra:
-// - para o administrador, quando a branch develop (ambiente de teste) tem alterações que ainda não estão na produção;
-// - para todos, quando a página aberta é o próprio ambiente de teste.
-// Lê o repositório público mouraleite/integra pela API do GitHub (sem senha). Confere a cada 3 minutos e ao voltar para a aba (consulta condicional; só com a aba visível).
+// Aviso no topo do Integra, um por ambiente de teste (cada desenvolvedor tem a sua branch e o seu endereço):
+// - para o administrador, quando a branch de teste tem alterações que ainda não estão na produção;
+// - para todos, quando a página aberta é um ambiente de teste.
+// Lê o repositório público mouraleite/integra pela API do GitHub (sem senha). Confere a cada 5 minutos e ao voltar para a aba (consulta condicional; só com a aba visível).
+// Para um novo desenvolvedor: acrescentar uma linha em AMBIENTES e cadastrar o endereço no Entra ID (SPA).
 (function () {
   const REPO = "mouraleite/integra";
-  const URL_TESTE = "https://crm-gestao-git-develop-crm-mldu.vercel.app/";
   const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
-  const DISPENSADO = "integra_develop_dispensado";
-  const INTERVALO = 3 * 60 * 1000;
-  let dados = null;
+  const AMBIENTES = [
+    { chave: "dani", nome: "Teste Dani", pessoa: "da Dani", branch: "develop", host: "crm-gestao-git-develop-", url: "https://crm-gestao-git-develop-crm-mldu.vercel.app/", cor: "#2563eb" },
+    { chave: "marcelo", nome: "Teste Marcelo", pessoa: "do Marcelo", branch: "Marcelo", host: "crm-gestao-git-marcelo-", url: "https://crm-gestao-git-marcelo-crm-mldu.vercel.app/", cor: "#7c3aed" }
+  ];
+  const INTERVALO = 5 * 60 * 1000;
+  const dados = {}; // chave do ambiente -> dados da comparação com a main (null se a branch não existir)
+  let versaoProducao = 0;
   let iniciou = false;
 
   function esc(v) {
@@ -23,8 +27,15 @@
     try { (store || localStorage).setItem(chave, valor); } catch (e) {}
   }
 
-  function ambienteDeTeste() {
-    return String(location.hostname || "").toLowerCase().indexOf("crm-gestao-git-develop") === 0;
+  function chaveDispensado(amb) {
+    // A Dani mantém a chave antiga para não reaparecer um aviso já dispensado.
+    return amb.chave === "dani" ? "integra_develop_dispensado" : "integra_teste_dispensado_" + amb.chave;
+  }
+
+  // Ambiente de teste aberto nesta página (ou null na produção).
+  function ambienteAtual() {
+    const host = String(location.hostname || "").toLowerCase();
+    return AMBIENTES.find((a) => host.indexOf(a.host) === 0) || null;
   }
 
   function ehAdmin() {
@@ -65,8 +76,8 @@
       ".avdev-alt{display:inline-flex;align-items:center;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:2px;gap:2px;flex-shrink:0;}",
       ".avdev-alt a{position:relative;display:inline-flex;align-items:center;gap:5px;padding:5px 11px;border-radius:99px;font-size:.76rem;font-weight:700;color:#475569;text-decoration:none;white-space:nowrap;}",
       ".avdev-alt a:hover{background:#e2e8f0;}",
-      ".avdev-alt a.on.prod{background:#105436;color:#fff;cursor:default;}",
-      ".avdev-alt a.on.teste{background:#2563eb;color:#fff;cursor:default;}",
+      ".avdev-alt a.on{color:#fff;cursor:default;}",
+      ".avdev-alt a.on.prod{background:#105436;}",
       ".avdev-alt .avdev-ponto{width:8px;height:8px;border-radius:50%;background:#f97316;box-shadow:0 0 0 2px #fff;}",
       "@media (max-width:640px){.avdev-arqs{columns:1;}.avdev-alt a{padding:5px 8px;}}"
     ].join("");
@@ -90,7 +101,7 @@
   }
 
   function alteracoesUteis(cmp) {
-    return (cmp.commits || []).filter((c) => !(c.parents && c.parents.length > 1));
+    return ((cmp && cmp.commits) || []).filter((c) => !(c.parents && c.parents.length > 1));
   }
 
   function fmtData(iso) {
@@ -101,10 +112,12 @@
     }
   }
 
-  function abrirResumo() {
-    if (!dados) return;
+  function abrirResumo(chave) {
+    const amb = AMBIENTES.find((a) => a.chave === chave) || AMBIENTES[0];
+    const d = dados[amb.chave];
+    if (!d) return;
     estilo();
-    const lista = alteracoesUteis(dados).slice().reverse();
+    const lista = alteracoesUteis(d).slice().reverse();
     const itens = lista.map((c) => {
       const msg = String((c.commit && c.commit.message) || "").trim();
       const titulo = msg.split("\n")[0];
@@ -117,19 +130,19 @@
         ${resto ? `<pre>${esc(resto)}</pre>` : ""}
       </div>`;
     }).join("");
-    const arqs = (dados.files || []).map((f) => `<li>${esc(f.filename)} <span style="color:#94a3b8;">(${esc(nomeArquivoStatus(f.status))})</span></li>`).join("");
+    const arqs = (d.files || []).map((f) => `<li>${esc(f.filename)} <span style="color:#94a3b8;">(${esc(nomeArquivoStatus(f.status))})</span></li>`).join("");
     const fundo = document.createElement("div");
     fundo.className = "avdev-fundo";
     fundo.innerHTML = `<div class="avdev-modal" role="dialog" aria-modal="true">
-      <header><h2>Alterações no ambiente de teste (ainda fora da produção)</h2><button type="button" class="avdev-btn" data-fechar>Fechar</button></header>
+      <header><h2>Alterações no ambiente de teste ${esc(amb.pessoa)} (ainda fora da produção)</h2><button type="button" class="avdev-btn" data-fechar>Fechar</button></header>
       <div class="avdev-corpo">
         ${itens || "<p>Nenhuma descrição disponível.</p>"}
-        ${arqs ? `<div><strong>Arquivos mexidos (${(dados.files || []).length})</strong><ul class="avdev-arqs">${arqs}</ul></div>` : ""}
+        ${arqs ? `<div><strong>Arquivos mexidos (${(d.files || []).length})</strong><ul class="avdev-arqs">${arqs}</ul></div>` : ""}
         <div class="avdev-passos">
           <strong>Como levar para a produção</strong>
           <ol>
-            <li>Teste no <a href="${URL_TESTE}" target="_blank" rel="noopener">ambiente de teste</a> (usa os dados reais).</li>
-            <li>Se estiver tudo certo, peça ao Claude: <b>"juntar develop na main"</b>.</li>
+            <li>Teste no <a href="${esc(amb.url)}" target="_blank" rel="noopener">ambiente de teste ${esc(amb.pessoa)}</a> (usa os dados reais).</li>
+            <li>Se estiver tudo certo, peça ao Claude: <b>"juntar ${esc(amb.branch)} na main"</b>.</li>
             <li>Rode o <b>deploy.bat</b>.</li>
           </ol>
         </div>
@@ -141,7 +154,7 @@
     document.body.appendChild(fundo);
   }
 
-  // Seletor "Produção | Teste" na barra do topo, só para administradores. Abre a mesma tela no outro ambiente.
+  // Seletor "Produção | Teste Dani | Teste Marcelo" na barra do topo, só para administradores. Abre a mesma tela no outro ambiente.
   function pintarAlternador() {
     const barra = document.querySelector(".topbar-actions.topbar-support-wrap") || document.querySelector(".topbar-actions");
     let alt = document.getElementById("avdev-alt");
@@ -150,24 +163,29 @@
       return;
     }
     const caminho = location.pathname.replace(/^\//, "") + location.search + location.hash;
-    const teste = ambienteDeTeste();
-    const pendentes = dados ? alteracoesUteis(dados).length : 0;
+    const atual = ambienteAtual();
     if (!alt) {
       alt = document.createElement("div");
       alt.id = "avdev-alt";
       alt.className = "avdev-alt";
       barra.insertBefore(alt, barra.firstChild);
     }
-    const vp = dados && dados.versaoProducao;
-    const vt = dados && dados.versaoBaseTeste;
-    const rotuloProd = "Produção" + (vp ? " v" + vp : "");
-    const rotuloTeste = "Teste" + (vt ? " v" + vt : "") + (pendentes ? " +" + pendentes : "");
-    let tituloTeste = teste ? "Você está no ambiente de teste" : "Abrir esta tela no ambiente de teste";
-    if (pendentes) tituloTeste += " • " + pendentes + (pendentes === 1 ? " alteração" : " alterações") + " ainda fora da produção";
-    else if (dados && dados.atrasadoPor) tituloTeste += " • ainda sem as últimas versões da produção (atualiza no próximo deploy)";
-    else if (dados) tituloTeste += " • igual à produção";
-    alt.innerHTML = `<a class="prod${teste ? "" : " on"}" ${teste ? `href="${URL_PRODUCAO + esc(caminho)}"` : ""} title="${teste ? "Abrir esta tela na produção" : "Você está na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>${esc(rotuloProd)}</a>`
-      + `<a class="teste${teste ? " on" : ""}" ${teste ? "" : `href="${URL_TESTE + esc(caminho)}"`} title="${esc(tituloTeste)}"><i data-lucide="flask-conical" style="width:13px;height:13px;"></i>${esc(rotuloTeste)}${pendentes && !teste ? '<span class="avdev-ponto"></span>' : ""}</a>`;
+    const naProd = !atual;
+    let html = `<a class="prod${naProd ? " on" : ""}" ${naProd ? "" : `href="${URL_PRODUCAO + esc(caminho)}"`} title="${naProd ? "Você está na produção" : "Abrir esta tela na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>Produção${versaoProducao ? " v" + versaoProducao : ""}</a>`;
+    AMBIENTES.forEach((amb) => {
+      const d = dados[amb.chave];
+      if (d === null) return; // branch não existe no GitHub
+      const aqui = atual && atual.chave === amb.chave;
+      const pendentes = d ? alteracoesUteis(d).length : 0;
+      const rotulo = amb.nome + (d && d.versaoBase ? " v" + d.versaoBase : "") + (pendentes ? " +" + pendentes : "");
+      let titulo = aqui ? "Você está no ambiente de teste " + amb.pessoa : "Abrir esta tela no ambiente de teste " + amb.pessoa;
+      titulo += " (branch " + amb.branch + ")";
+      if (pendentes) titulo += " • " + pendentes + (pendentes === 1 ? " alteração" : " alterações") + " ainda fora da produção";
+      else if (d && d.atrasadoPor) titulo += " • ainda sem as últimas versões da produção";
+      else if (d) titulo += " • igual à produção";
+      html += `<a class="${aqui ? "on" : ""}" style="${aqui ? "background:" + amb.cor + ";" : ""}" ${aqui ? "" : `href="${esc(amb.url) + esc(caminho)}"`} title="${esc(titulo)}"><i data-lucide="flask-conical" style="width:13px;height:13px;${aqui ? "" : "color:" + amb.cor + ";"}"></i>${esc(rotulo)}${pendentes && !aqui ? '<span class="avdev-ponto"></span>' : ""}</a>`;
+    });
+    alt.innerHTML = html;
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(alt);
     else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
   }
@@ -177,37 +195,43 @@
     const box = lugar();
     if (!box) return;
     estilo();
+    const atual = ambienteAtual();
     let html = "";
-    if (ambienteDeTeste()) {
-      html += `<div class="avdev-barra teste"><span><strong>Ambiente de teste.</strong> Esta não é a produção, mas os dados são reais (Sienge e banco do Integra): o que for gravado aqui vale de verdade.</span></div>`;
+    if (atual) {
+      html += `<div class="avdev-barra teste" style="border-color:${atual.cor};"><span><strong>Ambiente de teste ${esc(atual.pessoa)}</strong> (branch ${esc(atual.branch)}). Esta não é a produção, mas os dados são reais (Sienge e banco do Integra): o que for gravado aqui vale de verdade.</span></div>`;
     }
-    if (dados && !ambienteDeTeste() && ehAdmin()) {
-      const lista = alteracoesUteis(dados);
-      const topo = dados.commits && dados.commits.length ? dados.commits[dados.commits.length - 1].sha : "";
-      if (lista.length && ler(DISPENSADO) !== topo) {
+    if (!atual && ehAdmin()) {
+      AMBIENTES.forEach((amb) => {
+        const d = dados[amb.chave];
+        if (!d) return;
+        const lista = alteracoesUteis(d);
+        const topo = d.commits && d.commits.length ? d.commits[d.commits.length - 1].sha : "";
+        if (!lista.length || ler(chaveDispensado(amb)) === topo) return;
         const autores = Array.from(new Set(lista.map((c) => (c.commit && c.commit.author && c.commit.author.name) || ""))).filter(Boolean).join(", ");
         html += `<div class="avdev-barra alteracoes">
-          <span><strong>Há ${lista.length} ${lista.length === 1 ? "alteração" : "alterações"} no ambiente de teste</strong> que ainda não ${lista.length === 1 ? "está" : "estão"} na produção${autores ? " (" + esc(autores) + ")" : ""}. Quer ver antes de levar para a produção?</span>
+          <span><strong>Há ${lista.length} ${lista.length === 1 ? "alteração" : "alterações"} no ambiente de teste ${esc(amb.pessoa)}</strong> que ainda não ${lista.length === 1 ? "está" : "estão"} na produção${autores ? " (" + esc(autores) + ")" : ""}. Quer ver antes de levar para a produção?</span>
           <span class="avdev-acoes">
-            <button type="button" class="avdev-btn forte" data-avdev="resumo">Ver o que mudou</button>
-            <a class="avdev-btn" href="${URL_TESTE}" target="_blank" rel="noopener">Abrir o ambiente de teste</a>
-            <button type="button" class="avdev-btn" data-avdev="dispensar" data-sha="${esc(topo)}">Dispensar</button>
+            <button type="button" class="avdev-btn forte" data-avdev="resumo" data-amb="${esc(amb.chave)}">Ver o que mudou</button>
+            <a class="avdev-btn" href="${esc(amb.url)}" target="_blank" rel="noopener">Abrir o ${esc(amb.nome)}</a>
+            <button type="button" class="avdev-btn" data-avdev="dispensar" data-amb="${esc(amb.chave)}" data-sha="${esc(topo)}">Dispensar</button>
           </span>
         </div>`;
-      }
+      });
     }
     box.innerHTML = html;
     box.querySelectorAll("[data-avdev]").forEach((b) => {
       b.onclick = () => {
         const acao = b.getAttribute("data-avdev");
-        if (acao === "resumo") abrirResumo();
-        if (acao === "dispensar") { gravar(DISPENSADO, b.getAttribute("data-sha") || ""); pintar(); }
+        const chave = b.getAttribute("data-amb");
+        const amb = AMBIENTES.find((a) => a.chave === chave);
+        if (acao === "resumo") abrirResumo(chave);
+        if (acao === "dispensar" && amb) { gravar(chaveDispensado(amb), b.getAttribute("data-sha") || ""); pintar(); }
       };
     });
   }
 
-  // Pergunta ao GitHub com o "ETag" da última resposta: se nada mudou, ele responde 304,
-  // que é rápido e não gasta o limite de 60 consultas por hora.
+  // Pergunta ao GitHub com o "ETag" da última resposta: se nada mudou, ele responde 304.
+  // Devolve undefined quando a branch não existe (404).
   async function pedir(url, reduzir) {
     const chave = "integra_gh_" + url;
     let salvo = null;
@@ -216,6 +240,7 @@
     if (salvo && salvo.etag) headers["If-None-Match"] = salvo.etag;
     const res = await fetch(url, { headers, cache: "no-store" });
     if (res.status === 304 && salvo) return salvo.corpo;
+    if (res.status === 404) return undefined;
     if (!res.ok) return salvo ? salvo.corpo : null;
     const corpo = reduzir(await res.json());
     gravar(chave, JSON.stringify({ etag: res.headers.get("ETag") || "", corpo }), sessionStorage);
@@ -234,27 +259,32 @@
   async function consultar() {
     const base = "https://api.github.com/repos/" + REPO;
     const versao = (msg) => { const m = /v1\.0\.(\d+)/.exec(String(msg || "")); return m ? Number(m[1]) : 0; };
-    const cmp = await pedir(base + "/compare/main...develop", (j) => ({
-      commits: (j.commits || []).map((c) => ({ sha: c.sha, parents: c.parents, commit: { message: c.commit && c.commit.message, author: c.commit && c.commit.author }, author: c.author ? { login: c.author.login } : null })),
-      files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status })),
-      baseMsg: j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message,
-      atrasadoPor: Number(j.behind_by) || 0
-    }));
-    if (!cmp) return;
-    // Na produção, a versão é a da própria página (rodapé do menu). No teste, pergunta ao GitHub.
-    let versaoProducao = ambienteDeTeste() ? 0 : versaoDaPagina();
-    if (!versaoProducao) {
-      const main = await pedir(base + "/commits/main", (j) => ({ msg: j.commit && j.commit.message })).catch(() => null);
-      versaoProducao = versao(main && main.msg);
+    for (const amb of AMBIENTES) {
+      try {
+        const cmp = await pedir(base + "/compare/main..." + encodeURIComponent(amb.branch), (j) => ({
+          commits: (j.commits || []).map((c) => ({ sha: c.sha, parents: c.parents, commit: { message: c.commit && c.commit.message, author: c.commit && c.commit.author }, author: c.author ? { login: c.author.login } : null })),
+          files: (j.files || []).map((f) => ({ filename: f.filename, status: f.status })),
+          baseMsg: j.merge_base_commit && j.merge_base_commit.commit && j.merge_base_commit.commit.message,
+          atrasadoPor: Number(j.behind_by) || 0
+        }));
+        if (cmp === undefined) { dados[amb.chave] = null; continue; }
+        if (!cmp) continue; // falha temporária: mantém o que já tinha
+        dados[amb.chave] = {
+          commits: cmp.commits,
+          files: cmp.files,
+          // Base do teste = última versão da produção que a branch já contém.
+          versaoBase: versao(cmp.baseMsg),
+          atrasadoPor: cmp.atrasadoPor
+        };
+      } catch (e) {}
     }
-    dados = {
-      commits: cmp.commits,
-      files: cmp.files,
-      // Base do teste = última versão da produção que a develop já contém.
-      versaoProducao,
-      versaoBaseTeste: versao(cmp.baseMsg),
-      atrasadoPor: cmp.atrasadoPor
-    };
+    // Na produção, a versão é a da própria página (rodapé do menu). No teste, pergunta ao GitHub.
+    let vp = ambienteAtual() ? 0 : versaoDaPagina();
+    if (!vp) {
+      const main = await pedir(base + "/commits/main", (j) => ({ msg: j.commit && j.commit.message })).catch(() => null);
+      vp = versao(main && main.msg);
+    }
+    if (vp) versaoProducao = vp;
   }
 
   let ultimaConsulta = 0;
@@ -275,9 +305,9 @@
     iniciou = true;
     ciclo();
     setInterval(ciclo, INTERVALO);
-    // Ao voltar para a aba do Integra, confere na hora (no máximo 1 vez a cada 90 s).
+    // Ao voltar para a aba do Integra, confere na hora (no máximo 1 vez a cada 2 min).
     const aoVoltar = () => {
-      if (document.visibilityState === "hidden" || Date.now() - ultimaConsulta < 90000) return;
+      if (document.visibilityState === "hidden" || Date.now() - ultimaConsulta < 120000) return;
       ciclo();
     };
     document.addEventListener("visibilitychange", aoVoltar);
