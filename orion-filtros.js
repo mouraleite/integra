@@ -77,6 +77,7 @@ const OrionFiltros = {
     const fixa = (l) => { app.empresas = l.length === todos.length ? [] : l; app.render(); };
     window.MlEmpresaFilter.bind(nome + "-emp", {
       toggleOpen: () => { app.empAberto = !app.empAberto; app.render(); },
+      close: () => { app.empAberto = false; setTimeout(() => app.render(), 0); },
       setQuery: (q) => { app.empBusca = q; app.render(); },
       toggleId: (id, on) => { const l = atuais().filter((x) => x !== String(id)); if (on) l.push(String(id)); fixa(l.length ? l : todos.slice()); },
       selectAll: () => fixa(todos.slice()),
