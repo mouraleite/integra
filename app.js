@@ -11478,6 +11478,8 @@ window.buildJudicialStageCatalog = function() {
   return items;
 };
 
+window.JUDICIAL_AGREEMENT_PHASE = "Acordo Realizado";
+
 window.resolveJudicialStage = function(fase, faseId) {
   const catalog = window.buildJudicialStageCatalog();
   if (faseId) {
@@ -11519,7 +11521,10 @@ window.getClientJudicialPhaseInfo = function(client) {
   if (!client) return empty;
   const cid = String(client.customerId);
   const customerNotes = (window.AppState && AppState.judNotes && AppState.judNotes[cid]) ? AppState.judNotes[cid] : [];
-  const validJudNotes = customerNotes.filter(n => n && n.type === "Judicial" && n.fase !== "Nota Interna" && n.status !== "Cancelada");
+  const validJudNotes = customerNotes.filter(n => n && n.type === "Judicial"
+    && n.fase !== "Nota Interna"
+    && n.fase !== window.JUDICIAL_AGREEMENT_PHASE
+    && n.status !== "Cancelada");
   if (validJudNotes.length === 0) return empty;
   validJudNotes.sort((a, b) => new Date(b.date) - new Date(a.date));
   const last = validJudNotes[0];
@@ -14931,7 +14936,8 @@ function syncJudicialOccurrenceFormLock(saleObj) {
   const btnSave = document.getElementById("btn-save-jud-occurrence");
   const lockIds = [
     "jud-fase", "jud-note-text", "jud-prazo-date", "jud-pin-checkbox",
-    "jud-reneg-sinal-type", "jud-reneg-sinal-value", "jud-reneg-installments", "jud-reneg-first-date"
+    "jud-reneg-sinal-type", "jud-reneg-sinal-value", "jud-reneg-installments", "jud-reneg-first-date",
+    "jud-agreement-file"
   ];
 
   if (banner) banner.style.display = canInsert ? "none" : "flex";
@@ -44522,6 +44528,7 @@ window.updateJudFaseDropdown = function() {
   let html = `<option value="">Selecione...</option>`;
   const catalog = typeof window.buildJudicialStageCatalog === 'function' ? window.buildJudicialStageCatalog() : [];
   catalog.forEach(s => {
+    if (window.nomeEtapaJudicial(s) === "ACORDO REALIZADO") return;
     if (s.hasChildren) {
       html += `<option value="" disabled style="font-weight:700; color:#374151; background:#f3f4f6;">${esc(s.label)}</option>`;
     } else {
@@ -44529,6 +44536,7 @@ window.updateJudFaseDropdown = function() {
     }
   });
   html += `<option value="Nota Interna">Nota Interna</option>`;
+  html += `<option value="${esc(window.JUDICIAL_AGREEMENT_PHASE)}" data-id="acordo-realizado" data-dias="0">${esc(window.JUDICIAL_AGREEMENT_PHASE)}</option>`;
   html += `<option value="Proposta de renegociação">Proposta de renegociação</option>`;
   sel.innerHTML = html;
 };
@@ -44568,6 +44576,8 @@ window.pintarAvisoSemAlteracao = function() {
 window.handleJudFaseChange = function(sel) {
    const selectedOption = sel && sel.options ? sel.options[sel.selectedIndex] : null;
    const dias = selectedOption ? selectedOption.getAttribute('data-dias') : null;
+   const faseAcordo = window.JUDICIAL_AGREEMENT_PHASE;
+   const isAgreement = !!(sel && sel.value === faseAcordo);
    const pin = window._judSemAlteracao;
    const faseIdSel = selectedOption ? selectedOption.getAttribute("data-id") : null;
    const mesma = !!(pin && sel && String(sel.value || "") === String(pin.fase || "")
@@ -44582,15 +44592,20 @@ window.handleJudFaseChange = function(sel) {
    const pinRow = document.getElementById('jud-pin-row');
    const btnSave = document.getElementById('btn-save-jud-occurrence');
    const judRenegContainer = document.getElementById('jud-reneg-proposal-container');
+   const agreementFileRow = document.getElementById('jud-agreement-file-row');
 
    if (judRenegContainer) {
        judRenegContainer.style.display = (sel.value === 'Proposta de renegociação') ? 'block' : 'none';
    }
+   if (agreementFileRow) agreementFileRow.style.display = isAgreement ? 'block' : 'none';
 
-   if (sel.value === 'Nota Interna' || sel.value === 'Proposta de renegociação') {
+   if (sel.value === 'Nota Interna' || sel.value === 'Proposta de renegociação' || isAgreement) {
        if (prazoRow) prazoRow.style.display = 'none';
        if (pinRow) pinRow.style.display = (sel.value === 'Nota Interna') ? 'block' : 'none';
-       if (btnSave) btnSave.innerHTML = `<i data-lucide="save" style="width: 16px;"></i> Gravar ${sel.value === 'Proposta de renegociação' ? 'proposta' : 'nota interna'}`;
+       if (btnSave) {
+           const action = isAgreement ? 'Acordo Realizado' : (sel.value === 'Proposta de renegociação' ? 'proposta' : 'nota interna');
+           btnSave.innerHTML = `<i data-lucide="save" style="width: 16px;"></i> Gravar ${action}`;
+       }
        if (prazoInput) {
            prazoInput.removeAttribute('readonly');
            prazoInput.value = '';
@@ -52359,19 +52374,64 @@ document.addEventListener('click', (e) => {
   }
 });
 
-window.saveJudicialOccurrence = function() {
+function getJudicialAgreementUnitContext() {
+  const state = window.AppState || {};
+  const sales = Array.isArray(state.sales) ? state.sales : [];
+  const ids = [
+    state.currentSalesContractId,
+    state.selectedContractId,
+    state.selectedSaleId,
+    state.currentReceivableBillId
+  ].filter(Boolean).map(String);
+  let sale = null;
+  for (let i = 0; i < ids.length && !sale; i++) {
+    sale = sales.find((item) => item && [
+      item.id, item.receivableBillId, item.contractId, item.salesContractId
+    ].some((id) => id != null && String(id) === ids[i])) || null;
+  }
+  if (!sale) throw new Error("Não foi possível identificar o contrato/unidade selecionado.");
+
+  const unitIdParts = String(sale.unitId || "").split("-");
+  const unitsValue = Array.isArray(sale.units) ? sale.units[0] : sale.units;
+  const unitName = String(
+    sale.unitName
+    || sale.unityName
+    || (typeof unitsValue === "string" ? unitsValue : (unitsValue && (unitsValue.name || unitsValue.unitName)))
+    || unitIdParts.slice(2).join("-")
+    || ""
+  ).replace(/^Quadra-Lote:\s*/i, "").trim();
+  let costCenterId = String(
+    state.currentCostCenterId
+    || sale.costCenterId
+    || sale.enterpriseId
+    || unitIdParts[1]
+    || ""
+  ).split(",")[0].trim();
+  if (typeof window.getPrimaryCostCenter === "function") {
+    costCenterId = String(window.getPrimaryCostCenter(costCenterId) || costCenterId).trim();
+  }
+  if (!costCenterId || !unitName || unitName === "N/D") {
+    throw new Error("Não foi possível identificar o centro de custo e a unidade do Sienge.");
+  }
+  return { sale: sale, costCenterId: costCenterId, unitName: unitName };
+}
+
+window.saveJudicialOccurrence = async function() {
   if (typeof canInsertJudicialOccurrence === "function" && !canInsertJudicialOccurrence()) {
     alert("Cliente não está mais Sub Judice. Registre novas ocorrências na aba Ocorrências e Promessas.");
     if (typeof syncJudicialOccurrenceFormLock === "function") syncJudicialOccurrenceFormLock();
     return;
   }
 
+  const occurrenceCustomerId = AppState.selectedCustomerId;
+  const occurrenceAuthor = AppState.currentUser ? AppState.currentUser.name : "Advogado";
   const faseEl = document.getElementById("jud-fase");
   const noteEl = document.getElementById("jud-note-text");
   const prazoEl = document.getElementById("jud-prazo-date");
   const pinEl = document.getElementById("jud-pin-checkbox");
 
   const fase = faseEl ? faseEl.value : "";
+  const isAgreement = fase === window.JUDICIAL_AGREEMENT_PHASE;
   const faseId = (faseEl && faseEl.options[faseEl.selectedIndex]) ? (faseEl.options[faseEl.selectedIndex].getAttribute('data-id') || null) : null;
   if (fase === "Proposta de renegociação") {
       if (typeof window.applyRenegotiationText === 'function') {
@@ -52384,6 +52444,8 @@ window.saveJudicialOccurrence = function() {
   const text = noteEl ? noteEl.value.trim().toUpperCase() : "";
   const prazo = prazoEl ? prazoEl.value : "";
   const isPinned = pinEl ? pinEl.checked : false;
+  const agreementFileInput = document.getElementById("jud-agreement-file");
+  const agreementFile = agreementFileInput && agreementFileInput.files ? agreementFileInput.files[0] : null;
 
   if (!fase) {
     alert("Selecione o Andamento/Fase Processual.");
@@ -52394,32 +52456,92 @@ window.saveJudicialOccurrence = function() {
     return;
   }
   
-  if (fase !== 'Nota Interna' && fase !== 'Proposta de renegociação') {
+  if (isAgreement && !agreementFile) {
+    alert("Anexe o acordo judicial para registrá-lo.");
+    return;
+  }
+  if (isAgreement && agreementFile
+    && (!/\.pdf$/i.test(String(agreementFile.name || ""))
+      || (agreementFile.type && agreementFile.type !== "application/pdf"))) {
+    alert("O acordo judicial deve ser anexado em PDF.");
+    return;
+  }
+  if (fase !== 'Nota Interna' && fase !== 'Proposta de renegociação' && !isAgreement) {
     if (!prazo) {
       alert("Informe o prazo para resolução.");
       return;
     }
   }
 
+  let agreementAttachment = null;
+  if (isAgreement) {
+    if (typeof window.anexosUploadUnitAttachment !== "function") {
+      alert("O envio de anexos ao Sienge não está disponível. Atualize a tela e tente novamente.");
+      return;
+    }
+    const saveButton = document.getElementById("btn-save-jud-occurrence");
+    const previousButtonHtml = saveButton ? saveButton.innerHTML : "";
+    if (saveButton) {
+      saveButton.disabled = true;
+      saveButton.innerHTML = '<i data-lucide="loader-2" class="spin" style="width: 16px;"></i> Enviando acordo ao Sienge...';
+      if (window.lucide) window.lucide.createIcons();
+    }
+    try {
+      const unitContext = getJudicialAgreementUnitContext();
+      const uploaded = await window.anexosUploadUnitAttachment({
+        file: agreementFile,
+        tagLabel: "ACORDO JUDICIAL",
+        context: "acordo-realizado",
+        sale: unitContext.sale,
+        costCenterId: unitContext.costCenterId,
+        unitName: unitContext.unitName
+      });
+      agreementAttachment = {
+        name: agreementFile.name,
+        fileName: uploaded.fileName,
+        description: uploaded.description,
+        unitId: uploaded.unitId,
+        tag: uploaded.tag
+      };
+    } catch (uploadError) {
+      if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.innerHTML = previousButtonHtml;
+        if (window.lucide) window.lucide.createIcons();
+      }
+      alert("Não foi possível enviar o acordo à unidade do Sienge. A ocorrência não foi gravada.\n"
+        + ((uploadError && uploadError.message) || uploadError));
+      return;
+    }
+    if (saveButton) {
+      saveButton.disabled = false;
+      saveButton.innerHTML = previousButtonHtml;
+      if (window.lucide) window.lucide.createIcons();
+    }
+  }
+
   const pinSem = window._judSemAlteracao;
   const segueSemAlteracao = !!(pinSem && pinSem.etapaInicio
-    && fase !== "Nota Interna" && fase !== "Proposta de renegociação"
+    && fase !== "Nota Interna" && fase !== "Proposta de renegociação" && !isAgreement
     && String(pinSem.fase || "") === String(fase)
     && (!pinSem.faseId || !faseId || String(pinSem.faseId) === String(faseId)));
 
   const occurrence = {
     id: 'jud_' + Date.now(),
     date: new Date().toISOString(),
-    author: AppState.currentUser ? AppState.currentUser.name : "Advogado",
+    author: occurrenceAuthor,
     fase: fase,
     faseId: faseId,
     text: text,
-    prazo: (fase !== 'Nota Interna') ? (segueSemAlteracao && pinSem.prazo ? String(pinSem.prazo).slice(0, 10) : prazo) : null,
+    prazo: (fase !== 'Nota Interna' && fase !== 'Proposta de renegociação' && !isAgreement)
+      ? (segueSemAlteracao && pinSem.prazo ? String(pinSem.prazo).slice(0, 10) : prazo)
+      : null,
     pinned: isPinned,
     type: "Judicial",
     semAlteracao: segueSemAlteracao,
     etapaInicio: segueSemAlteracao ? pinSem.etapaInicio : null
   };
+  if (agreementAttachment) occurrence.agreementAttachment = agreementAttachment;
 
   if (!AppState.judNotes) AppState.judNotes = {};
   try {
@@ -52430,7 +52552,7 @@ window.saveJudicialOccurrence = function() {
         : Object.assign({}, localJudNotes, AppState.judNotes);
     }
   } catch (e) {}
-  const judKey = String(AppState.selectedCustomerId);
+  const judKey = String(occurrenceCustomerId);
   const judExisting = window.getCustomerNotesList
     ? window.getCustomerNotesList(AppState.judNotes, judKey)
     : (AppState.judNotes[judKey] || []);
@@ -52439,27 +52561,23 @@ window.saveJudicialOccurrence = function() {
     : judExisting.concat([occurrence]);
   localStorage.setItem("crm_moura_jud_notes", JSON.stringify(AppState.judNotes));
   if (window.saveJudNotesToFirebase) {
-    window.saveJudNotesToFirebase(AppState.selectedCustomerId);
+    window.saveJudNotesToFirebase(occurrenceCustomerId);
   }
 
-  // Clear fields
-  window._judSemAlteracao = null;
-  if(faseEl) faseEl.value = "";
-  if(noteEl) {
-    noteEl.value = "";
-    noteEl.placeholder = "Descreva os detalhes do andamento ou contato com o cliente...";
+  if (String(AppState.selectedCustomerId) === String(occurrenceCustomerId)) {
+    window._judSemAlteracao = null;
+    if(faseEl) faseEl.value = "";
+    if (agreementFileInput) agreementFileInput.value = "";
+    if(noteEl) {
+      noteEl.value = "";
+      noteEl.placeholder = "Descreva os detalhes do andamento ou contato com o cliente...";
+    }
+    if(prazoEl) prazoEl.value = "";
+    if(pinEl) pinEl.checked = false;
+    if (faseEl && typeof window.handleJudFaseChange === "function") window.handleJudFaseChange(faseEl);
+    if (typeof window.pintarAvisoSemAlteracao === "function") window.pintarAvisoSemAlteracao();
+    window.renderJudicialTimeline();
   }
-  if(prazoEl) prazoEl.value = "";
-  if(pinEl) pinEl.checked = false;
-  if (typeof window.pintarAvisoSemAlteracao === "function") window.pintarAvisoSemAlteracao();
-
-  // Restore defaults
-  const prazoRow = document.getElementById('jud-prazo-row');
-  const pinRow = document.getElementById('jud-pin-row');
-  if (prazoRow) prazoRow.style.display = 'block';
-  if (pinRow) pinRow.style.display = 'none';
-
-  window.renderJudicialTimeline();
 };
 
 window.filterJudicialHistory = function(filter, btnEl) {
@@ -52675,7 +52793,10 @@ window.renderJudicialTimeline = function() {
     }
 
     let repetirBtnHtml = "";
-    if (canInsertJud && occ.id === mostRecentOccId && !isExpired && occ.fase !== 'Nota Interna' && occ.fase !== 'Proposta de renegociação') {
+    if (canInsertJud && occ.id === mostRecentOccId && !isExpired
+      && occ.fase !== 'Nota Interna'
+      && occ.fase !== 'Proposta de renegociação'
+      && occ.fase !== window.JUDICIAL_AGREEMENT_PHASE) {
         repetirBtnHtml = `
             <button class="btn btn-outline btn-sm" type="button" onclick="window.repeatJudicialOcc('${encodeURIComponent(occ.id || occ.date || "")}')" style="padding: 2px 8px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; font-weight: 700; letter-spacing: 0.02em;">
                SEM ALTERAÇÃO
@@ -52733,6 +52854,13 @@ window.renderJudicialTimeline = function() {
     if (isCancelled) {
       mainText = `<del style="color: var(--color-text-muted);">${mainText}</del>`;
     }
+    const agreementAttachmentHtml = occ.agreementAttachment
+      ? `<div style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:6px;padding:5px 8px;font-size:0.72rem;color:#166534;">
+          <i data-lucide="paperclip" style="width:13px;height:13px;flex-shrink:0;"></i>
+          Acordo anexado à unidade do Sienge (tag: ${window.occurrenceAnexoEsc ? window.occurrenceAnexoEsc(occ.agreementAttachment.tag || "ACORDO JUDICIAL") : "ACORDO JUDICIAL"}):
+          ${window.occurrenceAnexoEsc ? window.occurrenceAnexoEsc(occ.agreementAttachment.name || occ.agreementAttachment.fileName || "Arquivo") : "Arquivo"}
+        </div>`
+      : "";
 
     let pinBtnHtml = "";
     if (occ.fase === 'Nota Interna') {
@@ -52794,6 +52922,7 @@ window.renderJudicialTimeline = function() {
     
     html += `
         <div style="font-size: 0.85rem; color: #334155; white-space: pre-wrap; ${occ.fase === 'Nota Interna' ? 'line-height: 24px; background-image: repeating-linear-gradient(transparent, transparent 23px, rgba(245,158,11,0.2) 23px, rgba(245,158,11,0.2) 24px); background-attachment: local; padding: 0 4px;' : 'line-height: 1.5;'}">${pastTextsHtml}${mainText}</div>
+        ${agreementAttachmentHtml}
         ${typeof window.occurrenceAttachmentsHtml === "function" ? window.occurrenceAttachmentsHtml(occ) : ""}
         ${editInfoHtml}
         ${isCancelled ? cancelInfoHtml : ''}
@@ -52944,13 +53073,19 @@ window.repeatJudicialOcc = function(key) {
     : ((AppState.notes && AppState.notes[customerId]) || []);
   const occ = judList.concat(normalList).find((item) => item && (String(item.id) === token || String(item.date) === token));
   if (!occ) return;
+  if (occ.fase === window.JUDICIAL_AGREEMENT_PHASE) {
+    alert("Acordo Realizado é um registro de ocorrência e não pode ser repetido como etapa sem alteração.");
+    return;
+  }
 
   const faseEl = document.getElementById("jud-fase");
   const noteEl = document.getElementById("jud-note-text");
   const prazoEl = document.getElementById("jud-prazo-date");
 
   const notas = judList.filter((n) => n && n.type === "Judicial" && n.status !== "Cancelada"
-    && n.fase !== "Nota Interna" && n.fase !== "Proposta de renegociação");
+    && n.fase !== "Nota Interna"
+    && n.fase !== "Proposta de renegociação"
+    && n.fase !== window.JUDICIAL_AGREEMENT_PHASE);
   notas.sort((a, b) => new Date(a.date) - new Date(b.date));
   let inicio = occ;
   const idx = notas.findIndex((n) => String(n.id || "") === String(occ.id || "") || String(n.date) === String(occ.date));
