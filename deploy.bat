@@ -67,15 +67,29 @@ echo [5/5] Enviando tags para o GitHub...
 git push --tags
 echo       OK - Tags enviadas
 echo.
-REM --- 6) ATUALIZA O AMBIENTE DE TESTE (branch develop) ---
-REM So avanca a develop; se a Danielle tiver algo la que ainda nao entrou na main, nao mexe.
-echo [6/6] Atualizando o ambiente de teste (develop)...
+REM --- 6) ATUALIZA OS AMBIENTES DE TESTE (develop = Dani, Marcelo, lucelia) ---
+REM So avanca a branch; se o desenvolvedor tiver algo la que ainda nao entrou na main, nao mexe.
+echo [6/6] Atualizando os ambientes de teste...
 git push origin main:develop >nul 2>&1
 if errorlevel 1 (
-    echo       AVISO - A develop tem alteracoes que ainda nao estao na main.
-    echo                O ambiente de teste NAO foi atualizado. Peca ao Claude: "juntar develop na main".
+    echo       AVISO - Teste Dani: a develop tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar develop na main".
 ) else (
-    echo       OK - Ambiente de teste igual a producao
+    echo       OK - Teste Dani igual a producao
+)
+git push origin main:Marcelo >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Marcelo: a branch Marcelo tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar Marcelo na main".
+) else (
+    echo       OK - Teste Marcelo igual a producao
+)
+git push origin main:lucelia >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Lucelia: a branch lucelia tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar lucelia na main".
+) else (
+    echo       OK - Teste Lucelia igual a producao
 )
 echo.
 
