@@ -101,6 +101,28 @@ async function fetchIpea(code, dataInicial) {
   return parseIpea(r.body, dataInicial);
 }
 
+/** Boletim Focus (expectativas anuais) do Banco Central. Só IPCA e IGP-M, como no ML Órion. */
+const FOCUS_INDICADORES = { "IPCA": "IPCA", "IGP-M": "IGP-M", "IGPM": "IGP-M" };
+
+async function consultarFocus(res, indicador) {
+  const ind = FOCUS_INDICADORES[String(indicador || "").toUpperCase()];
+  if (!ind) return send(res, 400, { erro: "Indicador do Focus inválido (use IPCA ou IGP-M)" }, true);
+  const filtro = encodeURIComponent(`Indicador eq '${ind}' and baseCalculo eq 0`);
+  const path = "/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoAnuais" +
+    `?$format=json&$filter=${filtro}&$orderby=${encodeURIComponent("Data desc")}&$top=20` +
+    "&$select=Indicador,Data,Mediana,Media,DataReferencia";
+  try {
+    const r = await httpsGet("olinda.bcb.gov.br", path, 15000);
+    if (r.status < 400) {
+      const json = JSON.parse(r.body);
+      return send(res, 200, (json && json.value) || [], true);
+    }
+    return send(res, 502, { erro: "Focus indisponível (" + r.status + ")" }, true);
+  } catch (e) {
+    return send(res, 502, { erro: "Focus indisponível" }, true);
+  }
+}
+
 function simOptante(v) {
   const t = String(v || "").toLowerCase();
   if (t === "sim" || t === "true") return true;
@@ -183,6 +205,8 @@ module.exports = async function handler(req, res) {
     return;
   }
   const url = new URL(req.url || "", "http://localhost");
+  const focus = (req.query && req.query.focus) || url.searchParams.get("focus");
+  if (focus) return consultarFocus(res, focus);
   const cnpj = String((req.query && req.query.cnpj) || url.searchParams.get("cnpj") || "").replace(/\D/g, "");
   if (cnpj || /\/cnpj\b/.test(url.pathname)) return consultarCnpj(res, cnpj);
   const code = String(url.searchParams.get("code") || "4391").replace(/\D/g, "") || "4391";

@@ -1379,6 +1379,9 @@
             <li data-tab="indexadores" data-module="sub_cfg_apoio_indexadores_acessar">
               <a onclick="switchTab('indexadores', 'Indexadores')">Indexadores</a>
             </li>
+            <li data-tab="indices-mercado" data-module="sub_cfg_apoio_indices_mercado_acessar">
+              <a onclick="switchTab('indices-mercado', 'Índices de mercado')">Índices de mercado</a>
+            </li>
             <li data-tab="motivos-cancelamento" data-module="sub_cfg_apoio_motivos_cancelamento_acessar">
               <a onclick="switchTab('motivos-cancelamento', 'Motivos de cancelamento')">Motivos de cancelamento</a>
             </li>
@@ -1730,6 +1733,11 @@
       </section>
       <section id="tab-indexadores" class="tab-pane" style="display: none; height: 100%;">
         <div id="indexadores-root"></div>
+      </section>
+
+      <!-- TAB: ÍNDICES DE MERCADO (vindo do ML Órion) -->
+      <section id="tab-indices-mercado" class="tab-pane" style="display: none;">
+        <div id="indices-mercado-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: CONFIGURAÇÕES - TAGS -->
@@ -8686,6 +8694,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="fiscal-enviar-nota.js?v=2124"></script>
   <script defer src="fiscal-rastrear-pedido.js?v=2124"></script>
   <script defer src="indexadores.js?v=2124"></script>
+  <script defer src="indices-mercado-calc.js?v=2124"></script>
+  <script defer src="indices-mercado.js?v=2124"></script>
   <script defer src="verificar-construcao.js?v=2124"></script>
   <script defer src="financiamento.js?v=2124"></script>
   <script src="repactuacoes.js?v=2124"></script>

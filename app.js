@@ -3928,6 +3928,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fiscal-rastrear-pedido": "Rastrear pedido",
     "plano-financeiro": "Plano Financeiro e Visões",
     "indexadores": "Indexadores Financeiros",
+    "indices-mercado": "Índices de mercado",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
     "compromissario_associacoes": "Compromissário (Associações)",
@@ -4012,6 +4013,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "participacoes": "pie-chart",
     "plano-financeiro": "layout-list",
     "indexadores": "trending-up",
+    "indices-mercado": "line-chart",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
     "compromissario_associacoes": "users-round",
@@ -4252,6 +4254,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof FluxoCaixaDiarioApp !== "undefined") FluxoCaixaDiarioApp.init();
   } else if (tabId === "mutuo") {
     if (typeof MutuoApp !== "undefined") MutuoApp.init();
+  } else if (tabId === "indices-mercado") {
+    if (typeof IndicesMercadoApp !== "undefined") IndicesMercadoApp.init();
   } else if (tabId === "resultado-caixa") {
     if (typeof ResultadoCaixaApp !== "undefined") ResultadoCaixaApp.init();
   } else if (tabId === "investimento") {
