@@ -345,3 +345,25 @@ test("orçamento vigente: um por departamento e tipo, como no Órion", () => {
   assert.deepStrictEqual(pega([cab("4", "Rascunho", "2026-01-01"), cab("5", "Em aprovação", "2026-02-01")]), ["5"]);
   assert.deepStrictEqual(pega([cab("6", "Aprovado", "2026-01-01"), cab("7", "Aprovado", "2026-01-01", { departamento: { id: 19 } })]).sort(), ["6", "7"]);
 });
+
+test("análise de orçamento (Órion atual): real até o corte + forecast, contra o ano seguinte, cheio e MLDU", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const r = C.analiseOrcamentoAnual({
+    n_fc: [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(1000) }],
+    ref: [{ cc: "100", plano: "2001", m: m(1500) }],
+    n_real: [{ cc: "100", plano: "2001", mes: 1, valor: -7 }, { cc: "100", plano: "2001", mes: 11, valor: -999 }],
+    corte: 9,
+    grupoDe: () => ({ id: "g_05", codigo: "05.03", nome: "ADMINISTRATIVAS" }),
+    empresaDe: () => ({ id: "6", nome: "ARAÇARI SPE", fator: 0.4 })
+  });
+  const pl = r.empresas[0].filhos[0].filhos[0].filhos[0];
+  assert.strictEqual(pl.n[0], 700);          // jan: realizado
+  assert.strictEqual(pl.n[1], 0);            // fev: sem realizado (antes do corte vale o realizado)
+  assert.strictEqual(pl.n[10], 1000);        // nov: forecast (depois do corte)
+  assert.strictEqual(pl.per.ytg.n, 3000);
+  assert.strictEqual(pl.per.fy.ref, 18000);
+  assert.strictEqual(pl.n_mldu[0], 280);
+  assert.strictEqual(r.total.per.ytd.n, 700);
+  assert.strictEqual(r.empresas[0].filhos[0].codigo, "05.03");
+});

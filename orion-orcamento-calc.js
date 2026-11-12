@@ -663,6 +663,77 @@
     return { empresas, total, corte, semGrupo };
   }
 
+  /**
+   * Análise de Orçamento no formato atual do Órion: N = realizado do ano até o corte + forecast do ano depois do corte,
+   * contra a referência do ano seguinte (orçado ou forecast), mês a mês, cheio e MLDU (% de consolidação da empresa).
+   * o: { n_fc: linhas do forecast do ano, n_real: alocações do ano (sinal da DFC), ref: linhas da referência (ano seguinte),
+   *      corte (1..12), grupoDe(plano)->{id,nome}|null, empresaDe(cc)->{id,nome,fator} }. Despesa positiva (centavos).
+   * Árvore empresa › grupo › empreendimento (centro de custo) › plano, com meses e totais YTD / YTG / FY.
+   */
+  function analiseOrcamentoAnual(o) {
+    const corte = Math.max(0, Math.min(12, Number(o.corte) || 0));
+    const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    const folhas = new Map();
+    const folha = (cc, pl, cn, pn) => {
+      const k = cc + "|" + pl;
+      if (!folhas.has(k)) folhas.set(k, { cc, plano: pl, cc_nome: cn || "", plano_nome: pn || "", fc: new Array(12).fill(0), real: new Array(12).fill(0), ref: new Array(12).fill(0) });
+      const f = folhas.get(k);
+      if (!f.cc_nome && cn) f.cc_nome = cn;
+      if (!f.plano_nome && pn) f.plano_nome = pn;
+      return f;
+    };
+    (o.n_fc || []).forEach((l) => { const f = folha(dig(l.cc), dig(l.plano), l.cc_nome, l.plano_nome); (l.m || []).forEach((v, i) => { f.fc[i] += Number(v) || 0; }); });
+    (o.ref || []).forEach((l) => { const f = folha(dig(l.cc), dig(l.plano), l.cc_nome, l.plano_nome); (l.m || []).forEach((v, i) => { f.ref[i] += Number(v) || 0; }); });
+    const ccs = new Set([...folhas.values()].map((f) => f.cc)), planos = new Set([...folhas.values()].map((f) => f.plano));
+    (o.n_real || []).forEach((a) => {
+      const cc = dig(a.cc), pl = dig(a.plano), m = Number(a.mes);
+      if (!ccs.has(cc) || !planos.has(pl) || !(m >= 1 && m <= corte)) return;
+      folha(cc, pl).real[m - 1] += centavos(-Number(a.valor));
+    });
+    const z = () => new Array(12).fill(0);
+    const serie = (f, fator) => {
+      const n = f.real.map((v, i) => (i < corte ? v : f.fc[i]));
+      return { n, ref: f.ref.slice(), n_mldu: n.map((v) => Math.round(v * fator)), ref_mldu: f.ref.map((v) => Math.round(v * fator)) };
+    };
+    const somaSeries = (lista) => { const out = { n: z(), ref: z(), n_mldu: z(), ref_mldu: z() }; lista.forEach((x) => ["n", "ref", "n_mldu", "ref_mldu"].forEach((k) => x[k].forEach((v, i) => { out[k][i] += v; }))); return out; };
+    const periodos = (x) => {
+      const p = (de, ate) => { const o2 = {}; ["n", "ref", "n_mldu", "ref_mldu"].forEach((k) => { o2[k] = x[k].slice(de, ate).reduce((a, b) => a + b, 0); }); return o2; };
+      return { ytd: p(0, corte), ytg: p(corte, 12), fy: p(0, 12) };
+    };
+    const no = (tipo, id, nome, codigo, filhos, base) => { const x = base || somaSeries(filhos); return Object.assign({ tipo, id, nome, codigo, filhos: filhos || [] }, x, { per: periodos(x) }); };
+    const arv = new Map();
+    let semGrupo = 0;
+    folhas.forEach((f) => {
+      const g = o.grupoDe ? o.grupoDe(f.plano) : null;
+      if (!g) { semGrupo++; return; }
+      const e = (o.empresaDe && o.empresaDe(f.cc)) || { id: "_sem", nome: "Sem empresa", fator: 0 };
+      if (!arv.has(e.id)) arv.set(e.id, { e, grupos: new Map() });
+      const ge = arv.get(e.id).grupos;
+      if (!ge.has(g.id)) ge.set(g.id, { g, ccs: new Map() });
+      const cm = ge.get(g.id).ccs;
+      if (!cm.has(f.cc)) cm.set(f.cc, []);
+      cm.get(f.cc).push(f);
+    });
+    const cmp = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    const vazio = (x) => !["n", "ref"].some((k) => x[k].some((v) => v));
+    const empresas = [];
+    [...arv.values()].sort((a, b) => cmp(a.e.nome, b.e.nome)).forEach(({ e, grupos }) => {
+      const gs = [];
+      [...grupos.values()].sort((a, b) => cmp(a.g.codigo || a.g.id, b.g.codigo || b.g.id)).forEach(({ g, ccs: cm }) => {
+        const cs = [];
+        [...cm.entries()].sort((a, b) => cmp(a[0], b[0])).forEach(([cc, fs]) => {
+          const ps = fs.sort((a, b) => cmp(a.plano, b.plano))
+            .map((f) => no("plano", e.id + "|" + g.id + "|" + cc + "|" + f.plano, f.plano_nome || f.plano, f.plano, [], serie(f, Number(e.fator) || 0)))
+            .filter((x) => !vazio(x));
+          if (ps.length) cs.push(no("centro", e.id + "|" + g.id + "|" + cc, fs[0].cc_nome || cc, cc, ps));
+        });
+        if (cs.length) gs.push(no("grupo", e.id + "|" + g.id, g.nome, g.codigo || "", cs));
+      });
+      if (gs.length) empresas.push(no("empresa", e.id, e.nome, e.id, gs));
+    });
+    return { empresas, total: no("total", "total", "Total", "", empresas), corte, semGrupo };
+  }
+
   /** Grupo de recebimento pelo nome do plano (mesma regra do Órion: Recebimento por Grupo). */
   function grupoRecebimento(nome) {
     const n = String(nome || "").toUpperCase();
@@ -801,6 +872,6 @@
     return s;
   }
 
-  return { analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

@@ -1,24 +1,19 @@
-/* Órion (transição) › Análise de orçamento — vindo do ML Órion (Orçamento › Análise de Orçamento, despesas por empreendimento).
- * Árvore empresa › grupo da DFC do Integra › centro de custo › plano, com a projeção N (realizado até o mês de corte + forecast
- * nos meses seguintes) comparada com o orçado e com o forecast, no ano, no acumulado até o corte (YTD) e no restante (YTG).
- * Corte: último mês fechado em sequência na tela Fechamento de meses (mesma regra do Órion). Só leitura.
- * Diferença para o Órion: os grupos são os da visão DFC do Integra (regra do Integra), e não há visão MLDU (vem com a Consolidação). */
+/* Órion (transição) › Análise de orçamento — igual à tela atual do ML Órion (Orçamento › Análise de Orçamento).
+ * YTD = realizado do ano até o mês de corte; YTG = forecast do ano depois do corte; FY = YTD + YTG.
+ * Comparado com o orçado (ou o forecast de mesma versão) do ano seguinte. Cheio e MLDU lado a lado (MLDU = % de consolidação
+ * da empresa no cadastro de Empresas do Integra). Só despesas, despesa positiva.
+ * Filtros: diretoria, departamento, empresas, ano, comparar com, versão, corte YTD, grupo e empreendimento.
+ * Navegação na visão DFC do Integra: empresa › grupo › empreendimento › plano, mês a mês, com semáforo. Só leitura. */
 const OrionAnaliseApp = {
   ano: String(new Date().getFullYear()),
-  dept: "TODOS",
-  versao: "",
-  periodo: "ano",
-  empresas: [],
+  diretoria: "", dept: "TODOS", versao: "", base: "orcamento", corte: null, grupo: "", cc: "",
+  empresas: [], empAberto: false, empBusca: "",
+  series: { n: true, ref: true, n_mldu: true, ref_mldu: true },
   cabs: { orcamentos: null, forecasts: null },
-  dados: null,
-  abertos: {},
-  carregando: false,
-  erro: "",
-  passo: "",
-  COL: {
-    orcamentos: { cab: "orion_orcamentos", itens: "orion_orcamento_itens" },
-    forecasts: { cab: "orion_forecasts", itens: "orion_forecast_itens" }
-  },
+  cadDep: null, fechamento: [],
+  dados: null, abertos: {}, carregando: false, erro: "", passo: "",
+  COL: { orcamentos: { cab: "orion_orcamentos", itens: "orion_orcamento_itens" }, forecasts: { cab: "orion_forecasts", itens: "orion_forecast_itens" } },
+  MESES: ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"],
 
   C() { return window.OrionOrcamentoCalc; },
   R() { return window.OrionRealizado; },
@@ -26,22 +21,27 @@ const OrionAnaliseApp = {
   root() { return document.getElementById("orion-analise-root"); },
   esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); },
 
-  init() {
-    this.estilos();
-    this.render();
-    if (!this.cabs.orcamentos) this.lerCabecalhos();
-  },
+  init() { this.estilos(); this.render(); if (!this.cabs.orcamentos) this.lerCabecalhos(); },
 
   estilos() {
     if (document.getElementById("oan-estilos")) return;
     const st = document.createElement("style");
     st.id = "oan-estilos";
     st.textContent = `
-      .cc-table tr.oan-empresa td { background:#105436 !important; color:#fff !important; font-weight:700; cursor:pointer; }
-      .cc-table tr.oan-grupo td { background:#e7f6ee !important; color:#105436 !important; font-weight:700; cursor:pointer; }
-      .cc-table tr.oan-centro td { background:#f8fafc !important; font-weight:600; cursor:pointer; }
-      .cc-table tr.oan-total td { background:#0f3d27 !important; color:#fff !important; font-weight:800; }
-      .oan-neg { color:#b91c1c; } .oan-pos { color:#105436; }
+      .oan-tab td, .oan-tab th { white-space:nowrap; font-size:0.7rem; padding:4px 6px !important; }
+      .oan-tab tr.oan-empresa td { background:#e2e8f0 !important; font-weight:800; cursor:pointer; border-left:3px solid #105436; }
+      .oan-tab tr.oan-grupo td { background:#f1f5f9 !important; font-weight:700; cursor:pointer; }
+      .oan-tab tr.oan-centro td { background:#f8fafc !important; font-weight:600; cursor:pointer; }
+      .oan-tab tr.oan-total td { background:#105436 !important; color:#fff !important; font-weight:800; }
+      .oan-tab th.oan-mes { text-align:center; border-left:2px solid #cbd5e1; }
+      .oan-tab td.oan-ini { border-left:2px solid #e2e8f0; }
+      .oan-tab .oan-cod { color:#64748b; font-family:monospace; margin-right:6px; }
+      .oan-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-bottom:12px; }
+      .oan-card { border:1px solid #e2e8f0; border-radius:10px; padding:10px 14px; background:#fff; font-size:0.75rem; }
+      .oan-card .l { display:flex; justify-content:space-between; padding:2px 0; }
+      .oan-card .big { font-size:1.05rem; font-weight:800; }
+      .oan-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+      .oan-neg { color:#b91c1c; }
     `;
     document.head.appendChild(st);
   },
@@ -56,20 +56,32 @@ const OrionAnaliseApp = {
         snap.forEach((d) => l.push(d.data()));
         this.cabs[k] = l;
       }
-      const anos = [...new Set(this.cabs.orcamentos.concat(this.cabs.forecasts).map((c) => c.ano))].sort((a, b) => b - a);
+      const anos = [...new Set(this.cabs.forecasts.concat(this.cabs.orcamentos).map((c) => c.ano))].sort((a, b) => b - a);
       if (anos.length && anos.indexOf(Number(this.ano)) < 0) this.ano = String(anos[0]);
-      const f = await window.OrionStore.ler("fechamento_meses", []);
-      this.fechamento = f.itens || [];
+      this.fechamento = (await window.OrionStore.ler("fechamento_meses", [])).itens || [];
+      this.cadDep = (await window.OrionStore.ler("departamentos", null)).itens || null;
     } catch (e) { this.erro = e.message || String(e); }
     this.render();
   },
 
   limpar() { this.dados = null; this.abertos = {}; this.render(); },
-  setAno(v) { this.ano = v; this.versao = ""; this.limpar(); },
-  setDept(v) { this.dept = v; this.limpar(); },
-  setVersao(v) { this.versao = v; this.limpar(); },
-  setPeriodo(v) { this.periodo = v; this.render(); },
+  set(campo, v) { this[campo] = v; if (["ano"].indexOf(campo) >= 0) { this.versao = ""; this.corte = null; } if (campo === "diretoria") this.dept = "TODOS"; if (["ano", "dept", "diretoria", "versao", "base", "corte"].indexOf(campo) >= 0) this.limpar(); else this.render(); },
+  alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
   alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
+  expandir(abrir) {
+    this.abertos = {};
+    if (abrir && this.dados) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); marca(this.montar().empresas); }
+    this.render();
+  },
+
+  corteAtual() { return this.corte != null ? Number(this.corte) : this.C().corteForecast(this.fechamento || [], this.ano); },
+
+  /** Departamentos do filtro: um, ou os da diretoria, ou todos. */
+  deptsFiltro() {
+    if (this.dept && this.dept !== "TODOS") return [String(this.dept)];
+    if (!this.diretoria || !this.cadDep) return null;
+    return (this.cadDep.departamentos || []).filter((d) => String(d.diretoria || "") === this.diretoria).map((d) => String(d.id));
+  },
 
   async lerLinhas(col, cab) {
     const fc = this.fc(), blocos = [];
@@ -82,82 +94,122 @@ const OrionAnaliseApp = {
 
   async calcular() {
     const C = this.C(), R = this.R();
-    this.carregando = true;
-    this.erro = "";
-    this.dados = null;
-    this.render();
+    this.carregando = true; this.erro = ""; this.dados = null; this.render();
     try {
       if (!R) throw new Error("Arquivo do realizado não carregou. Recarregue a página.");
-      const o = { ano: this.ano, dept: this.dept, tipos: ["DESPESAS"] };
-      const orcDocs = C.documentosVigentes(this.cabs.orcamentos || [], Object.assign({ base: "orcamento" }, o)).docs;
-      const fv = C.documentosVigentes(this.cabs.forecasts || [], Object.assign({ base: "forecast", versao: this.versao }, o));
-      if (!orcDocs.length && !fv.docs.length) throw new Error(`Nenhum orçamento ou forecast de despesas de ${this.ano} no Integra. Faça a carga em Órion (transição) › Carga do Órion.`);
-      this.passo = `Lendo ${orcDocs.length + fv.docs.length} documento(s)…`;
-      this.render();
-      const orc = [], fcl = [];
-      for (const c of orcDocs) orc.push(...(await this.lerLinhas("orcamentos", c)));
-      for (const c of fv.docs) fcl.push(...(await this.lerLinhas("forecasts", c)));
-      const corte = C.corteForecast(this.fechamento || [], this.ano);
-      const ccs = [...new Set(orc.concat(fcl).map((l) => String(l.cc).replace(/\D/g, "")))];
+      const ano = Number(this.ano), anoRef = ano + 1;
+      const depts = this.deptsFiltro();
+      const doDept = (c) => !depts || depts.indexOf(String(c.departamento ? c.departamento.id : "")) >= 0;
+      const fcN = C.documentosVigentes((this.cabs.forecasts || []).filter(doDept), { ano, base: "forecast", versao: this.versao, tipos: ["DESPESAS"] });
+      let ref, refDesc;
+      if (this.base === "forecast") { ref = C.documentosVigentes((this.cabs.forecasts || []).filter(doDept), { ano: anoRef, base: "forecast", versao: fcN.versao, tipos: ["DESPESAS"] }); refDesc = `forecast ${anoRef} (${ref.versao || "—"})`; }
+      else { ref = C.documentosVigentes((this.cabs.orcamentos || []).filter(doDept), { ano: anoRef, base: "orcamento", tipos: ["DESPESAS"] }); refDesc = `orçado ${anoRef}`; }
+      const avisos = [];
+      if (!fcN.docs.length) avisos.push(`Não há forecast de despesas de ${ano} — o YTG fica zerado.`);
+      if (!ref.docs.length) avisos.push(this.base === "forecast" ? `Não há forecast de despesas em ${anoRef} com a descrição «${fcN.versao}».` : `Não há orçamento de despesas de ${anoRef} — a referência fica zerada.`);
+      this.passo = "Lendo forecast e referência…"; this.render();
+      const nfc = [], refL = [];
+      for (const c of fcN.docs) nfc.push(...(await this.lerLinhas("forecasts", c)));
+      for (const c of ref.docs) refL.push(...(await this.lerLinhas(this.base === "forecast" ? "forecasts" : "orcamentos", c)));
+      const corte = this.corteAtual();
+      const ccs = [...new Set(nfc.concat(refL).map((l) => String(l.cc).replace(/\D/g, "")))];
       const empresas = R.empresasDosCcs(ccs);
       let real = { alocacoes: [], movimentos: 0 };
       if (corte >= 1 && empresas.length) {
-        this.passo = `Lendo o realizado de jan a ${C.MESES[corte - 1]}/${this.ano} (${empresas.length} empresa(s))…`;
-        this.render();
-        real = await R.buscar(Number(this.ano), corte, empresas);
+        this.passo = `Lendo o realizado de jan a ${this.MESES[corte - 1].toLowerCase()}/${ano} (${empresas.length} empresa(s))…`; this.render();
+        real = await R.buscar(ano, corte, empresas);
       }
-      this.dados = { orc, fcl, real, corte, empresas, versao: fv.versao, docs: orcDocs.length + fv.docs.length };
+      this.dados = { nfc, refL, real, corte, empresas, versao: fcN.versao, refDesc, anoRef, avisos };
     } catch (e) { this.erro = e.message || String(e); }
-    this.carregando = false;
-    this.passo = "";
+    this.carregando = false; this.passo = "";
     this.render();
+  },
+
+  fatorMldu(empresaId) {
+    const fx = window.FluxoCaixaApp;
+    const lista = fx && typeof fx.allCompanies === "function" ? fx.allCompanies() : [];
+    const c = lista.find((x) => String(x.id) === String(empresaId));
+    return c && c.consolidacao ? (Number(c.pct) || 0) / 100 : 0;
   },
 
   montar() {
     const C = this.C(), R = this.R(), F = window.OrionFiltros;
     const d = this.dados;
-    const fo = F.filtrarEmpresas(this, d.orc, d.real.alocacoes), ff = F.filtrarEmpresas(this, d.fcl, []);
+    let nfc = d.nfc, refL = d.refL, al = d.real.alocacoes;
+    if (this.empresas.length) { const a = F.filtrarEmpresas(this, nfc, al); nfc = a.linhas; al = a.alocacoes; refL = F.filtrarEmpresas(this, refL, []).linhas; }
+    if (this.cc) { const k = String(this.cc); nfc = nfc.filter((l) => String(l.cc).replace(/\D/g, "") === k); refL = refL.filter((l) => String(l.cc).replace(/\D/g, "") === k); }
     const grupos = {};
-    (R.grupos() || []).forEach((g) => { if (g && g.id) grupos[g.id] = g.name || g.nome || g.id; });
+    (R.grupos() || []).forEach((g) => { if (g && g.id) grupos[g.id] = g; });
     const mapa = F.mapaCcEmpresa();
-    return C.analiseOrcamento({
-      orc: fo.linhas, fc: ff.linhas, alocacoes: fo.alocacoes, corte: d.corte,
-      grupoDe: (p) => { const gid = R.grupoDe(p); return gid ? { id: gid, nome: grupos[gid] || gid } : null; },
-      empresaDe: (cc) => { const id = mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "Sem empresa no cadastro" : `${id} - ${F.nomeEmpresa(id) || ""}`.trim() }; }
+    return C.analiseOrcamentoAnual({
+      n_fc: nfc, ref: refL, n_real: al, corte: d.corte,
+      grupoDe: (p) => { const gid = R.grupoDe(p); if (!gid || (this.grupo && gid !== this.grupo)) return null; const g = grupos[gid] || {}; return { id: gid, nome: g.name || g.nome || gid, codigo: g.code || g.codigo || "" }; },
+      empresaDe: (cc) => { const id = mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; }
     });
   },
 
-  htmlResultado() {
-    const C = this.C();
+  farol(n, ref) {
+    const s = this.C().semaforo(n, ref, "DESPESAS");
+    const cores = { azul: "#0ea5e9", cinza: "#cbd5e1", verde: "#10b981", amarelo: "#fbbf24", vermelho: "#ef4444" };
+    return `<span class="oan-dot" style="background:${cores[s.cor]}" title="${this.esc(s.titulo)}"></span>`;
+  },
+  R$(c) { const C = this.C(); const v = C.reais(c); const t = Math.abs(v).toLocaleString("pt-BR", { maximumFractionDigits: 0 }); return `${v < -0.5 ? "-" : ""}R$ ${t}`; },
+
+  htmlCards(a) {
     const d = this.dados;
-    const a = this.montar();
-    const p = this.periodo;
-    const f = (c) => C.fmtReais(c, true);
-    const pct = (v, ref) => (ref ? `${(((v - ref) / Math.abs(ref)) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%` : "—");
-    const cls = (v) => (v > 0 ? "oan-neg" : v < 0 ? "oan-pos" : "");
+    const card = (t, sub, p) => {
+      const v = p.n - p.ref;
+      return `<div class="oan-card"><div style="display:flex;justify-content:space-between"><div><b>${t}</b><div style="color:#64748b">${sub}</div></div>${this.farol(p.n, p.ref)}</div>
+        <div class="l"><span>${this.esc(this.ano)}</span><span class="big">${this.R$(p.n)}</span></div>
+        <div class="l"><span>${this.base === "forecast" ? "FC" : "ORÇ"} ${d.anoRef}</span><span>${this.R$(p.ref)}</span></div>
+        <div class="l"><span>VAR</span><span class="${v > 0 ? "oan-neg" : ""}">${this.R$(v)} ${p.ref ? ((v / Math.abs(p.ref)) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%" : "100,0%"}</span></div></div>`;
+    };
+    const t = a.total.per, c = d.corte;
+    return `<div class="oan-cards">${card("YTD", c ? `jan–${this.MESES[c - 1].toLowerCase()}` : "—", t.ytd)}${card("YTG", c < 12 ? `${this.MESES[c].toLowerCase()}–dez` : "—", t.ytg)}${card("FY", "YTD + YTG", t.fy)}</div>`;
+  },
+
+  htmlTabela(a) {
+    const d = this.dados;
+    const S = this.series;
+    const refT = (this.base === "forecast" ? "FC " : "ORÇ ") + d.anoRef;
+    const blocos = [];
+    if (S.n || S.ref) blocos.push({ n: "n", r: "ref", tn: "REAL " + this.ano, tr: refT, tv: "VAR" });
+    if (S.n_mldu || S.ref_mldu) blocos.push({ n: "n_mldu", r: "ref_mldu", tn: "MLDU REAL", tr: "MLDU " + refT, tv: "VAR MLDU" });
+    const colsMes = blocos.reduce((s, b) => s + (S[b.n] ? 1 : 0) + (S[b.r] ? 1 : 0) + 1, 0);
+    const cab1 = this.MESES.map((m) => `<th class="oan-mes" colspan="${colsMes}">${m}</th>`).join("") + `<th class="oan-mes" colspan="${colsMes}">FY</th>`;
+    const sub = blocos.map((b) => `${S[b.n] ? `<th class="is-right">${b.tn}</th>` : ""}${S[b.r] ? `<th class="is-right">${b.tr}</th>` : ""}<th class="is-right">${b.tv}</th>`).join("");
+    const cab2 = new Array(13).fill(sub).join("");
+    const celulas = (x) => {
+      let h = "";
+      for (let i = 0; i <= 12; i++) {
+        blocos.forEach((b, bi) => {
+          const n = i < 12 ? x[b.n][i] : x.per.fy[b.n], r = i < 12 ? x[b.r][i] : x.per.fy[b.r];
+          const ini = bi === 0 ? " oan-ini" : "";
+          let first = true;
+          const td = (v) => { const c = first ? ini : ""; first = false; return `<td class="is-right${c}${v < -0.5 ? " oan-neg" : ""}">${this.R$(v)}</td>`; };
+          if (S[b.n]) h += td(n);
+          if (S[b.r]) h += td(r);
+          h += `<td class="is-right${first ? ini : ""}">${this.farol(n, r)}${this.R$(n - r)}</td>`;
+        });
+      }
+      return h;
+    };
     const linha = (x, nivel) => {
-      const v = x[p];
-      const temFilhos = x.filhos && x.filhos.length;
+      const tem = x.filhos && x.filhos.length;
       const ab = !!this.abertos[x.id];
-      const rot = `${temFilhos ? (ab ? "▾ " : "▸ ") : ""}${this.esc(x.nome)}`;
-      let out = `<tr class="oan-${x.tipo}" ${temFilhos ? `onclick="OrionAnaliseApp.alternar('${this.esc(x.id)}')"` : ""}>
-        <td style="padding-left:${8 + nivel * 16}px">${rot}</td>
-        <td class="is-right"><b>${f(v.n)}</b></td><td class="is-right">${f(v.orcado)}</td>
-        <td class="is-right ${cls(v.n - v.orcado)}">${f(v.n - v.orcado)}</td><td class="is-right ${cls(v.n - v.orcado)}">${pct(v.n, v.orcado)}</td>
-        <td class="is-right">${f(v.forecast)}</td><td class="is-right ${cls(v.n - v.forecast)}">${f(v.n - v.forecast)}</td><td class="is-right ${cls(v.n - v.forecast)}">${pct(v.n, v.forecast)}</td>
-        <td class="is-right">${f(v.realizado)}</td></tr>`;
-      if (temFilhos && ab) x.filhos.forEach((y) => { out += linha(y, nivel + 1); });
+      const cls = { empresa: "oan-empresa", grupo: "oan-grupo", centro: "oan-centro" }[x.tipo] || "";
+      let out = `<tr class="${cls}" ${tem ? `onclick="OrionAnaliseApp.alternar('${this.esc(x.id)}')"` : ""}><td style="position:sticky;left:0;background:inherit;z-index:1;padding-left:${8 + nivel * 16}px">${tem ? (ab ? "▾ " : "▸ ") : ""}<span class="oan-cod">${this.esc(x.codigo)}</span>${this.esc(x.nome)}</td>${celulas(x)}</tr>`;
+      if (tem && ab) x.filhos.forEach((y) => { out += linha(y, nivel + 1); });
       return out;
     };
-    const t = a.total[p];
-    const perTxt = { ano: "ano inteiro", ytd: `até ${d.corte ? C.MESES[d.corte - 1] : "—"} (YTD)`, ytg: `depois de ${d.corte ? C.MESES[d.corte - 1] : "—"} (YTG)` }[p];
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">Corte: ${d.corte ? C.MESES[d.corte - 1] + "/" + this.esc(this.ano) : "nenhum mês fechado"} (Fechamento de meses) · N = realizado até o corte + forecast ${this.esc(d.versao || "")} depois · ${d.docs} documento(s) · ${d.real.movimentos} movimentos do caixa · período: ${perTxt}. Diferença positiva (vermelho) = gasto acima da referência.${a.semGrupo ? ` ${a.semGrupo} linha(s) com plano fora da visão DFC do Integra não entram.` : ""}</div>
-      <div class="cc-scroll" style="max-height:72vh"><table class="cc-table">
-        <colgroup><col><col style="width:130px"><col style="width:130px"><col style="width:120px"><col style="width:80px"><col style="width:130px"><col style="width:120px"><col style="width:80px"><col style="width:130px"></colgroup>
-        <thead><tr><th>Empresa / grupo / centro de custo / plano</th><th class="is-right">N (projeção)</th><th class="is-right">Orçado</th><th class="is-right">N − orçado</th><th class="is-right">%</th><th class="is-right">Forecast</th><th class="is-right">N − forecast</th><th class="is-right">%</th><th class="is-right">Realizado</th></tr></thead>
-        <tbody>${a.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="9" style="text-align:center;padding:30px">Sem despesas.</td></tr>`}
-          <tr class="oan-total"><td>Total</td><td class="is-right">${f(t.n)}</td><td class="is-right">${f(t.orcado)}</td><td class="is-right">${f(t.n - t.orcado)}</td><td class="is-right">${pct(t.n, t.orcado)}</td><td class="is-right">${f(t.forecast)}</td><td class="is-right">${f(t.n - t.forecast)}</td><td class="is-right">${pct(t.n, t.forecast)}</td><td class="is-right">${f(t.realizado)}</td></tr>
-        </tbody></table></div>`;
+    const btnS = (k, t) => `<button type="button" class="btn ${S[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.alternarSerie('${k}')">${t}</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;margin:6px 0"><b>Navegação</b><span style="font-size:0.7rem;color:#64748b">VISÃO DFC</span>
+        <span style="margin-left:auto;font-size:0.7rem;color:#64748b">SÉRIES</span>${btnS("n", this.ano + " cheio")}${btnS("ref", refT + " cheio")}${btnS("n_mldu", this.ano + " MLDU")}${btnS("ref_mldu", refT + " MLDU")}
+        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false)">Recolher</button></div>
+      <div class="cc-scroll" style="max-height:68vh"><table class="cc-table oan-tab">
+        <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:300px">EMPRESA / GRUPO / EMPREENDIMENTO</th>${cab1}</tr><tr>${cab2}</tr></thead>
+        <tbody>${a.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem despesas para os filtros.</td></tr>`}
+          <tr class="oan-total"><td style="position:sticky;left:0;background:#105436">TOTAL</td>${celulas(a.total)}</tr></tbody></table></div>`;
   },
 
   render() {
@@ -168,30 +220,37 @@ const OrionAnaliseApp = {
     const todos = (this.cabs.orcamentos || []).concat(this.cabs.forecasts || []);
     const anos = [...new Set(todos.map((c) => c.ano))].sort((a, b) => b - a);
     if (!anos.length) anos.push(Number(this.ano));
-    const depts = new Map();
-    todos.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
+    const cad = this.cadDep || {};
+    const diretorias = [...new Set((cad.departamentos || []).map((d) => d.diretoria).filter(Boolean))].sort();
+    const deps = (cad.departamentos || []).filter((d) => !this.diretoria || d.diretoria === this.diretoria).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
     const vs = C.versoesForecast(this.cabs.forecasts || [], this.ano, ["DESPESAS"]);
-    const btn = (v, t) => `<button type="button" class="btn ${this.periodo === v ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliseApp.setPeriodo('${v}')">${t}</button>`;
+    const corte = this.corteAtual();
+    const op = (v, t, sel) => `<option value="${this.esc(v)}" ${String(v) === String(sel) ? "selected" : ""}>${this.esc(t)}</option>`;
+    const R = this.R();
+    const grupos = this.dados && R ? (R.grupos() || []).filter((g) => g && g.id && g.type !== "formula") : [];
+    const ccsDados = this.dados ? [...new Set(this.dados.nfc.concat(this.dados.refL).map((l) => String(l.cc).replace(/\D/g, "")))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })) : [];
+    const nomesCc = cad.nomesCc || {};
+    const empSlot = this.dados && window.MlEmpresaFilter ? window.MlEmpresaFilter.html({ id: "OrionAnaliseApp-emp", label: "Empresa", items: this.dados.empresas.map((id) => ({ id: String(id), label: `${id} - ${String(window.OrionFiltros.nomeEmpresa(id) || "").toUpperCase()}` })), selectedIds: this.empresas.length ? this.empresas : this.dados.empresas.map(String), open: !!this.empAberto, query: this.empBusca || "", emptyMeansAll: true }) : "";
+    const a = this.dados ? this.montar() : null;
     root.innerHTML = `
-      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionAnaliseApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionAnaliseApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Versão do forecast</label><select class="idx-select" style="height:40px;min-width:170px" onchange="OrionAnaliseApp.setVersao(this.value)">${vs.map((v, i) => `<option value="${this.esc(v.descricao)}" ${(this.versao ? v.descricao === this.versao : i === 0) ? "selected" : ""}>${this.esc(v.descricao)}${i === 0 ? " (mais recente)" : ""}</option>`).join("") || "<option>sem forecast</option>"}</select></div>
-        <div style="display:flex;gap:6px">${btn("ano", "Ano")}${btn("ytd", "Até o corte (YTD)")}${btn("ytg", "Depois do corte (YTG)")}</div>
-        <div id="oan-emp-slot"></div>
+      <div style="font-size:0.8rem;color:#475569;margin-bottom:10px">YTD real ${this.esc(this.ano)}, YTG forecast, FY contra ${this.base === "forecast" ? "forecast" : "orçado"} ${Number(this.ano) + 1}. Cheio e MLDU lado a lado. Despesa positiva.</div>
+      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:12px;border:1px solid #e2e8f0;border-radius:10px">
+        <div><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" style="height:40px;min-width:160px" onchange="OrionAnaliseApp.set('diretoria', this.value)">${op("", "Todas", this.diretoria)}${diretorias.map((x) => op(x, x, this.diretoria)).join("")}</select></div>
+        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:200px" onchange="OrionAnaliseApp.set('dept', this.value)">${op("TODOS", "Todos", this.dept)}${deps.map((d) => op(d.id, d.nome, this.dept)).join("")}</select></div>
+        ${empSlot ? `<div id="oan-emp">${empSlot}</div>` : ""}
+        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionAnaliseApp.set('ano', this.value)">${anos.map((x) => op(x, x, this.ano)).join("")}</select></div>
+        <div><label class="ml-emp-filter-label">Comparar com</label><div style="display:flex"><button type="button" class="btn ${this.base === "orcamento" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliseApp.set('base', 'orcamento')">Orçado</button><button type="button" class="btn ${this.base === "forecast" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliseApp.set('base', 'forecast')">Forecast</button></div></div>
+        <div><label class="ml-emp-filter-label">Versão</label><select class="idx-select" style="height:40px;min-width:160px" onchange="OrionAnaliseApp.set('versao', this.value)">${vs.map((v, i) => op(v.descricao, v.descricao, this.versao || (i === 0 ? v.descricao : ""))).join("") || "<option>sem forecast</option>"}</select></div>
+        <div><label class="ml-emp-filter-label">Corte YTD</label><select class="idx-select" style="height:40px" onchange="OrionAnaliseApp.set('corte', this.value)">${this.MESES.map((m, i) => op(i + 1, m.charAt(0) + m.slice(1).toLowerCase(), corte)).join("")}</select></div>
+        ${this.dados ? `<div><label class="ml-emp-filter-label">Grupo</label><select class="idx-select" style="height:40px;min-width:180px" onchange="OrionAnaliseApp.set('grupo', this.value)">${op("", "Todos", this.grupo)}${grupos.map((g) => op(g.id, `${g.code || g.codigo || ""} ${g.name || g.nome || g.id}`.trim(), this.grupo)).join("")}</select></div>
+        <div><label class="ml-emp-filter-label">Empreendimento</label><select class="idx-select" style="height:40px;min-width:200px" onchange="OrionAnaliseApp.set('cc', this.value)">${op("", "Todos", this.cc)}${ccsDados.map((c) => op(c, `${c} - ${nomesCc[c] || ""}`, this.cc)).join("")}</select></div>` : ""}
         <button type="button" class="btn btn-primary" style="height:40px;margin-left:auto" ${this.carregando ? "disabled" : ""} onclick="OrionAnaliseApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button>
       </div>
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
+      ${this.dados && this.dados.avisos.length ? `<div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:10px;font-size:0.78rem">${this.dados.avisos.map((x) => this.esc(x)).join("<br>")}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
-      ${this.dados ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o departamento e a versão do forecast e clique em Calcular. O realizado é lido do Sienge na hora (até o mês de corte).</div>`)}`;
-    if (this.dados && window.MlEmpresaFilter) {
-      const slot = document.getElementById("oan-emp-slot");
-      if (slot) {
-        const F = window.OrionFiltros;
-        slot.innerHTML = window.MlEmpresaFilter.html({ id: "OrionAnaliseApp-emp", label: "Empresas", items: this.dados.empresas.map((id) => ({ id: String(id), label: `${id} - ${String(F.nomeEmpresa(id) || "").toUpperCase()}` })), selectedIds: this.empresas.length ? this.empresas : this.dados.empresas.map(String), open: !!this.empAberto, query: this.empBusca || "", emptyMeansAll: true });
-        F.bind(this, "OrionAnaliseApp", this.dados.empresas);
-      }
-    }
+      ${a ? this.htmlCards(a) + `<div style="font-size:0.7rem;color:#64748b;margin:-4px 0 8px">SEMÁFORO <span class="oan-dot" style="background:#cbd5e1"></span>Imaterial (&lt; R$ 5 mil) <span class="oan-dot" style="background:#10b981"></span>Favorável ou ≤ 5% <span class="oan-dot" style="background:#fbbf24"></span>Atenção (≤ 10%) <span class="oan-dot" style="background:#ef4444"></span>Acima do limite <span class="oan-dot" style="background:#0ea5e9"></span>Novo · Referência: ${this.esc(this.dados.refDesc)} · forecast ${this.esc(this.dados.versao || "—")} · ${this.dados.real.movimentos} movimentos do caixa${a.semGrupo ? ` · ${a.semGrupo} linha(s) fora da visão DFC` : ""}</div>` + this.htmlTabela(a) : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha os filtros e clique em Calcular. O realizado é lido do Sienge na hora (até o corte).</div>`)}`;
+    if (this.dados && window.OrionFiltros) window.OrionFiltros.bind(this, "OrionAnaliseApp", this.dados.empresas);
   }
 };
 
