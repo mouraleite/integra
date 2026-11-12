@@ -132,7 +132,39 @@ const OrionAnaliticoApp = {
     return corpo + `<tr class="oa-det"><td colspan="${colspan - 1}" style="padding-left:30px"><b>${rows.length} pagamento(s)</b> (valores rateados pelo plano e centro de custo do movimento)</td><td class="is-right"><b>${C.fmtReais(rows.reduce((s, p) => s + C.centavos(p.valor), 0), true)}</b></td></tr>`;
   },
 
+  /** Realizado detalhado (Órion: Realizado CP): todos os pagamentos/recebimentos do caixa que formam o realizado das linhas do orçamento. */
+  htmlPagamentos() {
+    const C = this.C(), R = this.R(), F = window.OrionFiltros;
+    const d = this.dados;
+    const ms = new Set(F.mesesAtivos(this, d.ate));
+    const linhas = C.filtrarRecorte(d.desp, this.conteudo);
+    const chaves = new Set(linhas.map((l) => l.cc + "|" + l.plano));
+    const nomes = new Map(linhas.map((l) => [l.cc + "|" + l.plano, l]));
+    const emp = this.empresas && this.empresas.length ? new Set(this.empresas.map(String)) : null;
+    const q = String(this.buscaPag || "").trim().toLowerCase();
+    let rows = R.detalhe(d.real, (a) => chaves.has(a.cc + "|" + a.plano) && ms.has(a.mes) && (!emp || emp.has(String(a.empresa))), d.tipo === "RECEITAS" ? 1 : -1);
+    if (q) rows = rows.filter((p) => `${p.credor} ${p.documento} ${p.titulo} ${p.cc} ${p.plano} ${(nomes.get(p.cc + "|" + p.plano) || {}).cc_nome || ""} ${(nomes.get(p.cc + "|" + p.plano) || {}).plano_nome || ""}`.toLowerCase().indexOf(q) >= 0);
+    const tot = rows.reduce((s2, p) => s2 + C.centavos(p.valor), 0);
+    const MAX = 2000;
+    const fmtD = (x) => (x ? x.split("-").reverse().join("/") : "—");
+    const corpo = rows.slice(0, MAX).map((p) => { const l = nomes.get(p.cc + "|" + p.plano) || {}; return `<tr><td>${fmtD(p.data)}</td><td>${this.esc(p.empresa)}</td><td>${this.esc(p.cc)} ${this.esc(l.cc_nome || "")}</td><td>${this.esc(p.plano)} ${this.esc(l.plano_nome || "")}</td><td>${this.esc(p.credor || "—")}</td><td>${this.esc(p.documento)}</td><td>${this.esc(p.titulo)}${p.parcela ? "/" + this.esc(p.parcela) : ""}</td><td class="is-right">${C.fmtReais(C.centavos(p.valor), true)}</td></tr>`; }).join("");
+    return `<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:8px"><div><label class="ml-emp-filter-label">Buscar</label><input id="oa-busca-pag" class="idx-select" style="height:40px;width:320px;box-sizing:border-box" placeholder="Buscar credor, documento ou nº…" value="${this.esc(this.buscaPag || "")}" oninput="OrionAnaliticoApp.setBuscaPag(this.value)"></div>
+        <div style="font-size:0.75rem;color:#334155;padding-bottom:10px"><b>${rows.length}</b> lançamento(s) · total <b>${C.fmtReais(tot, true)}</b>${rows.length > MAX ? ` · mostrando os ${MAX} primeiros (use a busca)` : ""}. Valores rateados pelo centro de custo e plano do movimento, só das linhas do orçamento.</div></div>
+      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table">
+        <colgroup><col style="width:90px"><col style="width:70px"><col style="width:220px"><col style="width:220px"><col><col style="width:150px"><col style="width:110px"><col style="width:120px"></colgroup>
+        <thead><tr><th>Data</th><th>Empresa</th><th>Centro de custo</th><th>Plano</th><th>${d.tipo === "RECEITAS" ? "Cliente" : "Credor"}</th><th>Documento</th><th>Título/parcela</th><th class="is-right">Valor</th></tr></thead>
+        <tbody>${corpo || `<tr><td colspan="8" style="text-align:center;padding:30px">Nenhum lançamento.</td></tr>`}</tbody></table></div>`;
+  },
+
+  setBuscaPag(v) {
+    this.buscaPag = v;
+    this.render();
+    const i = document.getElementById("oa-busca-pag");
+    if (i) { i.focus(); i.setSelectionRange(v.length, v.length); }
+  },
+
   htmlResultado() {
+    if (this.visao === "pagamentos") return this.htmlPagamentos();
     const C = this.C();
     const d = this.dados, F = window.OrionFiltros;
     const ms = F.mesesAtivos(this, d.ate);
@@ -193,6 +225,7 @@ const OrionAnaliticoApp = {
       <div style="display:flex;gap:6px">
           <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('cc')">I · Centro de custo e plano</button>
           <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button>
+          <button type="button" class="btn ${this.visao === "pagamentos" ? "btn-primary" : "btn-secondary"}" style="height:40px" title="Realizado detalhado (como o Realizado CP do Órion): cada pagamento ou recebimento" onclick="OrionAnaliticoApp.setVisao('pagamentos')">Lançamentos</button>
           ${this.tipoAtual() === "RECEITAS" ? `<button type="button" class="btn ${this.visao === "grupo" ? "btn-primary" : "btn-secondary"}" style="height:40px" title="Recebimento por grupo (como no Órion): à vista, sinal, parcelado, recorrente, outros" onclick="OrionAnaliticoApp.setVisao('grupo')">III · Por grupo de recebimento</button>` : ""}</div>`;
     root.innerHTML = `${window.OrionFiltros.html(this, "OrionAnaliticoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano, [this.tipoAtual()]), empresas: this.dados ? this.dados.empresas : [], comMeses: !!this.dados, extra: visoes })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
