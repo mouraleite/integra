@@ -403,7 +403,7 @@ const OrionOrcamentosApp = {
         </div>
       </div>
       <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">VGV = ticket médio × unidades, como no Órion. Distrato: unidades negativas.${trav.length ? ` Meses travados: ${trav.map((m) => C.MESES[m - 1]).join(", ")}.` : ""}</div>
-      <div class="cc-scroll"><table class="cc-table" style="min-width:1440px">
+      <div class="cc-scroll"><table class="cc-table or-larga" style="min-width:1440px">
         <colgroup><col style="width:280px">${C.MESES.map(() => '<col style="width:88px">').join("")}<col style="width:110px"></colgroup>
         <thead><tr><th>Empreendimento / plano de venda</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${linhas || `<tr><td colspan="14" style="text-align:center;padding:30px">Sem linhas. Inclua acima.</td></tr>`}</tbody>
@@ -551,7 +551,7 @@ const OrionOrcamentosApp = {
         </div>
       </div>
       ${fechados.length ? `<div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">Meses travados (fechados${this.tipo === "forecasts" && a.cab.mes_corte ? " ou antes do corte" : ""}): ${fechados.map((m) => C.MESES[m - 1]).join(", ")}.</div>` : ""}
-      <div class="cc-scroll"><table class="cc-table" style="min-width:1440px">
+      <div class="cc-scroll"><table class="cc-table or-larga" style="min-width:1440px">
         <colgroup><col style="width:240px">${C.MESES.map(() => '<col style="width:88px">').join("")}<col style="width:110px"><col style="width:34px"></colgroup>
         <thead><tr><th>Centro de custo / plano</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th><th></th></tr></thead>
         <tbody>${linhas || `<tr><td colspan="15" style="text-align:center;padding:30px">Sem linhas. Inclua acima.</td></tr>`}
@@ -680,7 +680,7 @@ const OrionOrcamentosApp = {
       linhasV.forEach((x) => x.qt.forEach((q, i) => { totQt[i] += q; totV[i] += x.vgv[i]; }));
       const soma = (arr) => arr.reduce((s, v) => s + v, 0);
       vendas = `<div style="margin:14px 0 6px;font-weight:800;color:#105436">Vendas: unidades e VGV por mês (R$)</div>
-        <div class="cc-scroll"><table class="cc-table" style="min-width:1372px">
+        <div class="cc-scroll"><table class="cc-table or-larga" style="min-width:1372px">
         <colgroup><col style="width:260px">${C.MESES.map(() => '<col style="width:84px">').join("")}<col style="width:104px"></colgroup>
         <thead><tr><th>Empreendimento / plano de venda</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${linhasV.map((x) => `<tr class="oo-grupo"><td>${this.esc(x.cc)} ${this.esc(x.cc_nome)} · ${this.esc(x.plano || "sem plano")}${x.distrato ? " (distrato)" : ""}</td>${x.vgv.map((v) => `<td class="is-right">${v ? C.fmtReais(v, true) : ""}</td>`).join("")}<td class="is-right">${C.fmtReais(soma(x.vgv), true)}</td></tr>
@@ -711,7 +711,7 @@ const OrionOrcamentosApp = {
         <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:32px" onclick="OrionOrcamentosApp.setVisao('plano')">Por plano</button>
         <button type="button" class="btn btn-secondary" style="height:32px;margin-left:auto" onclick="OrionOrcamentosApp.fechar()">Voltar à lista</button>
       </div>
-      <div class="cc-scroll"><table class="cc-table" style="min-width:1372px">
+      <div class="cc-scroll"><table class="cc-table or-larga" style="min-width:1372px">
         <colgroup><col style="width:260px">${C.MESES.map(() => '<col style="width:84px">').join("")}<col style="width:104px"></colgroup>
         <thead><tr><th>${this.visao === "cc" ? "Centro de custo / plano" : "Plano / centro de custo"}</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="14" style="text-align:center;padding:30px">Sem linhas.</td></tr>`}

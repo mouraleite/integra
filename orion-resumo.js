@@ -209,7 +209,8 @@ const OrionResumoApp = {
   grafico(mensal, ref) {
     const C = this.C();
     if (!mensal.length) return "";
-    const W = Math.max(520, mensal.length * 80), H = 220, pad = 36, base = H - 28;
+    const W = Math.max(1100, mensal.length * 90), H = 250, pad = 60, base = H - 28;
+    const curto = (c) => { const v = C.reais(c), a = Math.abs(v); return (v < 0 ? "-" : "") + (a >= 1e6 ? (a / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mi" : a >= 1e3 ? Math.round(a / 1e3).toLocaleString("pt-BR") + " mil" : Math.round(a).toLocaleString("pt-BR")); };
     let acc = 0;
     const acum = mensal.map((m) => (acc += m.res_realizado));
     const vals = mensal.flatMap((m) => [m.res_orcado, m.res_realizado]).concat(acum, [0]);
@@ -221,10 +222,11 @@ const OrionResumoApp = {
       const x0 = pad + i * passo + passo / 2;
       const b = (v, x, cor, tit) => `<rect x="${x}" y="${Math.min(y(v), y(0))}" width="${bw}" height="${Math.max(1, Math.abs(y(v) - y(0)))}" fill="${cor}"><title>${tit}: ${C.fmtReais(v, true)}</title></rect>`;
       return b(m.res_orcado, x0 - bw - 1, "#94a3b8", `${C.MESES[m.mes - 1]} ${ref.toLowerCase()}`) + b(m.res_realizado, x0 + 1, m.res_realizado < 0 ? "#ef4444" : "#1b8253", `${C.MESES[m.mes - 1]} realizado`) +
+        `<text x="${x0 + 1 + bw / 2}" y="${m.res_realizado < 0 ? y(m.res_realizado) + 12 : y(m.res_realizado) - 4}" font-size="10" font-weight="700" text-anchor="middle" fill="${m.res_realizado < 0 ? "#b91c1c" : "#105436"}">${curto(m.res_realizado)}</text>` +
         `<text x="${x0}" y="${H - 10}" font-size="11" text-anchor="middle" fill="#475569">${C.MESES[m.mes - 1]}</text>`;
     }).join("");
     const linha = acum.map((v, i) => `${pad + i * passo + passo / 2},${y(v)}`).join(" ");
-    return `<div class="cc-scroll" style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;padding:6px 6px 0"><svg width="${W}" height="${H}" role="img" aria-label="Geração de caixa por mês">
+    return `<div class="cc-scroll" style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;padding:6px 6px 0"><svg viewBox="0 0 ${W} ${H}" width="100%" style="max-height:300px;display:block" role="img" aria-label="Geração de caixa por mês">
         <line x1="${pad}" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="#cbd5e1"/>
         <text x="4" y="${y(max) + 4}" font-size="10" fill="#64748b">${C.fmtReais(max, true)}</text><text x="4" y="${y(min) + 4}" font-size="10" fill="#64748b">${C.fmtReais(min, true)}</text>
         ${barras}<polyline points="${linha}" fill="none" stroke="#f59e0b" stroke-width="2"/>${acum.map((v, i) => `<circle cx="${pad + i * passo + passo / 2}" cy="${y(v)}" r="3" fill="#f59e0b"><title>Acumulado realizado: ${C.fmtReais(v, true)}</title></circle>`).join("")}

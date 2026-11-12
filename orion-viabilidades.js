@@ -241,7 +241,7 @@ const OrionViabilidadesApp = {
     const linhas = l.map((d) => {
       const r = this.resultados(d), t = r.total;
       return `<tr style="cursor:pointer" onclick="OrionViabilidadesApp.abrir('${this.esc(d._id)}')">
-        <td>${this.esc(d.project_name)}${d.versao_de ? ' <span style="font-size:0.68rem;color:#64748b">(versão)</span>' : ""}</td>
+        <td title="${this.esc(d.project_name)}">${this.esc(d.project_name)}${d.versao_de ? ' <span style="font-size:0.68rem;color:#64748b">(versão)</span>' : ""}</td>
         <td>${this.esc(d.city)}</td><td>${this.esc(d.status)}</td>
         <td class="is-right">${d.qtd_fases != null ? d.qtd_fases : this.fasesDe(d).length}</td>
         ${r.erro ? `<td colspan="6" class="ov-neg">Erro no cálculo: ${this.esc(r.erro)}</td>` : t ? `
@@ -250,7 +250,7 @@ const OrionViabilidadesApp = {
         <td${this.neg(t.vpl)}>${this.R(t.vpl)}</td><td class="is-right ov-neg">${this.R(t.exposicao_maxima)}</td>` : `<td colspan="6">Sem fase.</td>`}</tr>`;
     });
     return `<div class="cc-scroll"><table class="cc-table">
-      <colgroup><col><col style="width:140px"><col style="width:120px"><col style="width:60px"><col style="width:140px"><col style="width:140px"><col style="width:80px"><col style="width:90px"><col style="width:140px"><col style="width:140px"></colgroup>
+      <colgroup><col><col style="width:120px"><col style="width:110px"><col style="width:50px"><col style="width:140px"><col style="width:140px"><col style="width:80px"><col style="width:90px"><col style="width:140px"><col style="width:140px"></colgroup>
       <thead><tr><th>Viabilidade</th><th>Cidade</th><th>Status</th><th class="is-right">Fases</th><th class="is-right">VGV líquido (R$)</th><th class="is-right">Lucro líquido (R$)</th><th class="is-right">Margem</th><th class="is-right">TIR a.a.</th><th class="is-right">VPL (R$)</th><th class="is-right">Exposição máx. (R$)</th></tr></thead>
       <tbody>${linhas.length ? linhas.join("") : `<tr><td colspan="10" style="text-align:center;padding:30px">Nenhuma viabilidade para exibir.${(this.lista || []).length ? "" : " A carga do Órion ainda não foi feita."}</td></tr>`}</tbody>
     </table></div>
@@ -289,9 +289,10 @@ const OrionViabilidadesApp = {
       ${card("Retorno com juros", this.P(ind.retorno_com_juros))}
       ${card("Retorno sem juros", this.P(ind.retorno_sem_juros))}
     </div>`;
-    const linhasDre = V.dre(fluxo).map((l) => `<tr class="${l.nivel === 0 ? "ov-grupo" : ""}">
+    const dreL = V.dre(fluxo), rl = (dreL.find((l) => l.nome === "Receita líquida") || {}).valor || 0;
+    const linhasDre = dreL.map((l) => `<tr class="${l.nivel === 0 ? "ov-grupo" : ""}">
       <td style="${l.nivel === 2 ? "padding-left:22px" : l.nivel === 1 ? "font-weight:600" : ""}">${this.esc(l.nome)}</td>
-      <td${this.neg(l.valor)}>${this.R(l.valor)}</td><td class="is-right">${l.perc != null ? this.P(l.perc) : ""}</td></tr>`).join("");
+      <td${this.neg(l.valor)}>${this.R(l.valor)}</td><td class="is-right">${l.perc != null ? this.P(l.perc) : rl > 0 ? this.P((l.valor / rl) * 100) : ""}</td></tr>`).join("");
     let acc = 0;
     const tot = { Receitas: 0, Impostos: 0, Obras: 0, Despesas: 0, Terreno: 0, Funding_Entrada: 0, Funding_Despesas: 0, Fluxo_de_Caixa: 0 };
     const linhasFluxo = fluxo.map((m) => {
@@ -378,7 +379,7 @@ const OrionViabilidadesApp = {
     root.innerHTML = `${barra}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.htmlCarga()}
-      <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: viabilidades trazidas do Órion, calculadas com o mesmo motor do Órion. A edição das premissas de cada viabilidade (receitas, obras, despesas, impostos, permuta e funding) ainda é feita no Órion; aqui é consulta e troca de status.</div>
+      <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: viabilidades trazidas do Órion, calculadas com o mesmo motor do Órion. Para alterar receitas, obras, despesas, impostos, permuta, funding, dados físicos ou datas, use Editar premissas: o resultado é recalculado na hora.</div>
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${corpo}`;
     if (window.lucide) window.lucide.createIcons();

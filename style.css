@@ -12354,12 +12354,18 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 @keyframes anexos-jur-carga { from { width: 8%; } to { width: 92%; } }
 
 /* Órion (transição): tabelas largas (mês a mês) — cada coluna no tamanho do número, com rolagem lateral, sem cortar valores */
+/* Órion (transição): campos de edição no tamanho da caixa (o .idx-select padrão tem 260px mínimos e sobrepunha os campos nas grades) */
+[id^="orion-"][id$="-root"] .idx-select { min-width: 0; }
+[id^="orion-"][id$="-root"] select.idx-select { min-width: 120px; }
+[id^="orion-"][id$="-root"] input.idx-select { cursor: text; font-variant-numeric: tabular-nums; }
+[id^="orion-"][id$="-root"] td .idx-select, [id^="orion-"][id$="-root"] td input { min-width: 0; max-width: 100%; box-sizing: border-box; }
 .cc-table.or-larga { width: max-content; min-width: 100%; table-layout: auto; }
 .cc-table.or-larga th, .cc-table.or-larga td { white-space: nowrap; overflow: visible; text-overflow: clip; }
 .cc-table.or-larga td.is-right, .cc-table.or-larga th.is-right { min-width: 92px; font-variant-numeric: tabular-nums; }
-.cc-table.or-larga thead tr:nth-child(2) th { top: 27px; }
+.cc-table.or-larga thead { position: sticky; top: 0; z-index: 4; }
+.cc-table.or-larga thead th { position: relative; top: auto; }
 .cc-table.or-larga tbody td:first-child { position: sticky; left: 0; z-index: 1; background: #fff; min-width: 260px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; box-shadow: 2px 0 0 #e2e8f0; }
-.cc-table.or-larga thead th:first-child { position: sticky; left: 0; z-index: 3; }
+.cc-table.or-larga thead tr:first-child th:first-child { position: sticky; left: 0; z-index: 5; }
 .cc-table.or-larga tbody tr:nth-child(even) td:first-child { background: #f7faf8; }
 .cc-table.or-larga tbody tr:hover td:first-child { background: #e7f6ee; }
 /* Usuários e Perfis: lista do navegador aparece na hora e fica travada enquanto a nuvem responde */
