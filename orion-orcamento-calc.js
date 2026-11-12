@@ -734,6 +734,69 @@
     return { empresas, total: no("total", "total", "Total", "", empresas), corte, semGrupo };
   }
 
+  /**
+   * DFC gerencial no formato atual do Órion: mês a mês, séries Real, Real MLDU, N-1, N-1 MLDU, Referência (orçado ou forecast)
+   * e Referência MLDU, com AH (real × N-1) e AV (sobre as entradas realizadas). Árvore empresa › grupo da visão DFC › plano
+   * (agrupar = "visao") ou › centro de custo (agrupar = "centro"). Valores com o sinal da DFC (entradas +, saídas −), centavos.
+   * o: { real, n1: alocações (reais, sinal DFC, com gid, empresa, cc, plano, mes); ref: linhas {cc, plano, m[12], sinal};
+   *      grupoDe(plano)->gid; grupos: [{id, name, code}]; empresaDe(cc ou empresa)->{id, nome, fator}; nomeCc, nomePlano }.
+   */
+  function dfcGerencialMensal(o) {
+    const SER = ["real", "real_mldu", "n1", "n1_mldu", "ref", "ref_mldu"];
+    const z = () => new Array(12).fill(0);
+    const folhas = new Map();
+    const gnome = {};
+    (o.grupos || []).forEach((g) => { if (g && g.id) gnome[g.id] = g; });
+    const folha = (emp, gid, chave, nome) => {
+      const k = emp.id + "|" + gid + "|" + chave;
+      if (!folhas.has(k)) { const f = { emp, gid, chave, nome }; SER.forEach((x) => { f[x] = z(); }); folhas.set(k, f); }
+      return folhas.get(k);
+    };
+    const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    const porCentro = o.agrupar === "centro";
+    const add = (lista, serie) => (lista || []).forEach((a) => {
+      const m = Number(a.mes);
+      if (!a.gid || !(m >= 1 && m <= 12)) return;
+      const emp = o.empresaDe(dig(a.cc), String(a.empresa || ""));
+      const ch = porCentro ? dig(a.cc) : dig(a.plano);
+      const f = folha(emp, a.gid, ch, porCentro ? (o.nomeCc ? o.nomeCc(ch) : ch) : (o.nomePlano ? o.nomePlano(ch) : ch));
+      const c = centavos(Number(a.valor));
+      f[serie][m - 1] += c;
+      f[serie + "_mldu"][m - 1] += Math.round(c * (Number(emp.fator) || 0));
+    });
+    add(o.real, "real");
+    add(o.n1, "n1");
+    (o.ref || []).forEach((l) => {
+      const gid = o.grupoDe(dig(l.plano));
+      if (!gid) return;
+      const emp = o.empresaDe(dig(l.cc), "");
+      const ch = porCentro ? dig(l.cc) : dig(l.plano);
+      const f = folha(emp, gid, ch, porCentro ? (l.cc_nome || ch) : (l.plano_nome || ch));
+      (l.m || []).forEach((v, i) => { const c = (Number(v) || 0) * (l.sinal || 1); f.ref[i] += c; f.ref_mldu[i] += Math.round(c * (Number(emp.fator) || 0)); });
+    });
+    const soma = (lista) => { const x = {}; SER.forEach((k) => { x[k] = z(); lista.forEach((y) => y[k].forEach((v, i) => { x[k][i] += v; })); }); return x; };
+    const tot = (x) => { const t = {}; SER.forEach((k) => { t[k] = x[k].reduce((a, b) => a + b, 0); }); return t; };
+    const no = (tipo, id, codigo, nome, filhos, base) => { const x = base || soma(filhos); return Object.assign({ tipo, id, codigo, nome, filhos: filhos || [] }, x, { total: tot(x) }); };
+    const cmp = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    const arv = new Map();
+    folhas.forEach((f) => {
+      if (!arv.has(f.emp.id)) arv.set(f.emp.id, { emp: f.emp, g: new Map() });
+      const g = arv.get(f.emp.id).g;
+      if (!g.has(f.gid)) g.set(f.gid, []);
+      g.get(f.gid).push(f);
+    });
+    const empresas = [...arv.values()].sort((a, b) => cmp(a.emp.id, b.emp.id)).map(({ emp, g }) => no("empresa", emp.id, emp.id, emp.nome,
+      [...g.entries()].sort((a, b) => cmp((gnome[a[0]] || {}).code || a[0], (gnome[b[0]] || {}).code || b[0])).map(([gid, fs]) => no("categoria", emp.id + "|" + gid, (gnome[gid] || {}).code || "", (gnome[gid] || {}).name || gid,
+        fs.sort((a, b) => cmp(a.chave, b.chave)).map((f) => no(porCentro ? "centro" : "plano", emp.id + "|" + gid + "|" + f.chave, f.chave, f.nome, [], f))))));
+    const total = no("total", "total", "", "Geração de caixa", empresas);
+    const entradas = (x) => x.real.reduce((s2, v) => s2 + (v > 0 ? v : 0), 0);
+    const totEnt = empresas.reduce((s2, e) => s2 + e.filhos.reduce((s3, c) => s3 + Math.max(0, c.total.real), 0), 0);
+    const ahav = (x) => { x.ah = x.total.n1 ? (x.total.real - x.total.n1) / Math.abs(x.total.n1) : null; x.av = totEnt ? x.total.real / totEnt : null; x.ah_m = x.real.map((v, i) => (x.n1[i] ? (v - x.n1[i]) / Math.abs(x.n1[i]) : null)); (x.filhos || []).forEach(ahav); };
+    ahav(total);
+    void entradas;
+    return { empresas, total };
+  }
+
   /** Grupo de recebimento pelo nome do plano (mesma regra do Órion: Recebimento por Grupo). */
   function grupoRecebimento(nome) {
     const n = String(nome || "").toUpperCase();
@@ -872,6 +935,6 @@
     return s;
   }
 
-  return { analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

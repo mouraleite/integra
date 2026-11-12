@@ -107,47 +107,95 @@ const OrionDfcApp = {
     return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${cores[s.cor] || "#cbd5e1"};display:inline-block"></span>${this.esc(s.titulo)}</span>`;
   },
 
-  /** DFC com os filtros de empresa e meses aplicados ao que já foi lido. */
+  agrupar: "visao",
+  series: { real_mldu: true, n1: true, n1_mldu: true, ref: true, ref_mldu: true },
+  ahavMensal: false,
+  abertos: {},
+  setAgrupar(v) { this.agrupar = v; this.abertos = {}; this.render(); },
+  alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
+  alternarAhAv() { this.ahavMensal = !this.ahavMensal; this.render(); },
+  alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
+  expandir(abrir) {
+    this.abertos = {};
+    if (abrir && this.resultado) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); marca(this.montar().empresas); }
+    this.render();
+  },
+
+  fatorMldu(empresaId) {
+    const fx = window.FluxoCaixaApp;
+    const lista = fx && typeof fx.allCompanies === "function" ? fx.allCompanies() : [];
+    const c = lista.find((x) => String(x.id) === String(empresaId));
+    return c && c.consolidacao ? (Number(c.pct) || 0) / 100 : 0;
+  },
+
+  /** DFC gerencial mês a mês (formato atual do Órion), com os filtros de empresa e meses aplicados ao que já foi lido. */
   montar() {
     const C = this.C(), R = this.R(), F = window.OrionFiltros;
     const d = this.resultado;
-    const ms = new Set(F.mesesAtivos(this, d.ate));
+    const ms = new Set(F.mesesAtivos(this, 12));
+    const fl = (l) => l.filter((a) => ms.has(Number(a.mes)));
     const f = F.filtrarEmpresas(this, d.linhas, d.real.alocacoes), fN1 = F.filtrarEmpresas(this, [], d.realN1.alocacoes);
-    const orcP = {}, orcA = {};
-    f.linhas.forEach((l) => {
-      const g = R.grupoDe(l.plano);
-      if (!g) return;
-      (l.m || []).forEach((v, i) => { const c = (Number(v) || 0) * l.sinal; orcA[g] = (orcA[g] || 0) + c; if (ms.has(i + 1)) orcP[g] = (orcP[g] || 0) + c; });
+    const ref = f.linhas.map((l) => Object.assign({}, l, { m: (l.m || []).map((v, i) => (ms.has(i + 1) ? v : 0)) }));
+    const mapa = F.mapaCcEmpresa();
+    const cad = (window.OrionDepartamentosApp && window.OrionDepartamentosApp.dados && window.OrionDepartamentosApp.dados.itens) || {};
+    const nomesCc = Object.assign({}, cad.nomesCc || {}), nomesPl = Object.assign({}, cad.nomesPlano || {});
+    d.linhas.forEach((l) => { if (l.cc_nome) nomesCc[l.cc] = l.cc_nome; if (l.plano_nome) nomesPl[String(l.plano).replace(/\D/g, "")] = l.plano_nome; });
+    return C.dfcGerencialMensal({
+      real: fl(f.alocacoes), n1: fl(fN1.alocacoes), ref, grupos: R.grupos(), agrupar: this.agrupar,
+      grupoDe: (p) => R.grupoDe(p),
+      empresaDe: (cc, emp) => { const id = emp || mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; },
+      nomeCc: (cc) => nomesCc[cc] || cc, nomePlano: (p) => nomesPl[p] || p
     });
-    const porGrupo = (alocs) => { const out = {}; alocs.forEach((x) => { if (ms.has(x.mes)) out[x.gid] = (out[x.gid] || 0) + C.centavos(x.valor); }); return out; };
-    const grupos = R.grupos();
-    const dfc = C.dfcGerencial(grupos, orcP, porGrupo(f.alocacoes), porGrupo(fN1.alocacoes));
-    const dfcAno = C.dfcGerencial(grupos, orcA, {}, {});
-    const anoPor = Object.fromEntries(dfcAno.linhas.map((l) => [l.id, l.orcado]));
-    dfc.linhas.forEach((l) => { l.orcado_ano = anoPor[l.id] || 0; });
-    dfc.geracao.orcado_ano = dfcAno.geracao.orcado;
-    return Object.assign(dfc, { ate: d.ate, meses: [...ms].sort((a, b) => a - b), empresas: this.empresas && this.empresas.length ? this.empresas : d.empresas, docs: d.docs, movimentos: d.movimentos, movimentosN1: d.movimentosN1 });
   },
 
   htmlResultado() {
     const C = this.C();
+    const d = this.resultado;
     const r = this.montar();
-    if (!r) return "";
-    const pct = (v) => (v == null ? "—" : (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
-    const f = (c) => C.fmtReais(c, true);
-    const linhas = r.linhas.map((l) => `<tr class="${l.nivel === 1 ? "oo-grupo" : ""}">
-      <td style="${l.nivel === 2 ? "padding-left:18px" : ""}">${this.esc(l.nome)}</td>
-      <td class="is-right">${f(l.orcado_ano)}</td><td class="is-right">${f(l.orcado)}</td><td class="is-right">${f(l.realizado)}</td>
-      <td class="is-right" style="color:${l.dif < 0 ? "#b91c1c" : "#105436"}">${f(l.dif)}</td><td>${this.farol(l.semaforo)}</td>
-      <td class="is-right">${f(l.n1)}</td><td class="is-right">${pct(l.ah)}</td><td class="is-right">${pct(l.av)}</td></tr>`).join("");
-    const g = r.geracao;
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">${r.meses.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao }).versao) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC, 100% das empresas: ${this.esc(r.empresas.join(", "))}) · ${r.movimentos} movimentos (${r.movimentosN1} em ${Number(this.ano) - 1}). Sinal da DFC: entradas positivas, saídas negativas. AH = realizado contra realizado do ano anterior; AV = sobre o total de entradas realizado.</div>
-      <div class="cc-scroll"><table class="cc-table">
-        <colgroup><col><col style="width:120px"><col style="width:120px"><col style="width:120px"><col style="width:120px"><col style="width:160px"><col style="width:120px"><col style="width:80px"><col style="width:80px"></colgroup>
-        <thead><tr><th>Grupo da DFC</th><th class="is-right">Orçado no ano</th><th class="is-right">Orçado no período</th><th class="is-right">Realizado</th><th class="is-right">Diferença</th><th>Semáforo</th><th class="is-right">Realizado ${Number(this.ano) - 1}</th><th class="is-right">AH</th><th class="is-right">AV</th></tr></thead>
-        <tbody>${linhas}
-          <tr class="oo-total"><td>Geração de caixa</td><td class="is-right">${f(g.orcado_ano)}</td><td class="is-right">${f(g.orcado)}</td><td class="is-right">${f(g.realizado)}</td><td class="is-right">${f(g.realizado - g.orcado)}</td><td>${this.farol(g.semaforo)}</td><td class="is-right">${f(g.n1)}</td><td class="is-right">${pct(g.n1 ? (g.realizado - g.n1) / Math.abs(g.n1) : null)}</td><td></td></tr>
-        </tbody></table></div>`;
+    const ano = Number(this.ano);
+    const refT = this.base === "forecast" ? "FC" : "Orç";
+    const SER = [["real", "Real", true], ["real_mldu", "MLDU"], ["n1", String(ano - 1)], ["n1_mldu", `${ano - 1} MLDU`], ["ref", refT], ["ref_mldu", `${refT} MLDU`]];
+    const ativas = SER.filter(([k, , lock]) => lock || this.series[k]);
+    const nCol = ativas.length + (this.ahavMensal ? 2 : 0);
+    const v = (c) => { const x = C.reais(c); return Math.abs(x) < 0.5 ? "–" : `${x < 0 ? "-" : ""}${Math.abs(x).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`; };
+    const pct = (x) => (x == null ? "–" : (x * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
+    const entMes = new Array(12).fill(0);
+    r.empresas.forEach((e) => e.filhos.forEach((g) => g.real.forEach((y, i) => { if (y > 0) entMes[i] += y; })));
+    const cel = (x) => {
+      let h = "";
+      for (let i = 0; i < 12; i++) {
+        ativas.forEach(([k], j) => { h += `<td class="is-right${j === 0 ? " odf-ini" : ""}${x[k][i] < 0 ? " odf-neg" : ""}">${v(x[k][i])}</td>`; });
+        if (this.ahavMensal) h += `<td class="is-right">${pct(x.ah_m ? x.ah_m[i] : null)}</td><td class="is-right">${pct(entMes[i] && x.real[i] ? x.real[i] / entMes[i] : null)}</td>`;
+      }
+      ativas.forEach(([k], j) => { h += `<td class="is-right${j === 0 ? " odf-ini" : ""}${x.total[k] < 0 ? " odf-neg" : ""}"><b>${v(x.total[k])}</b></td>`; });
+      h += `<td class="is-right">${pct(x.ah)}</td><td class="is-right">${pct(x.av)}</td>`;
+      return h;
+    };
+    const linha = (x, nivel) => {
+      const tem = x.filhos && x.filhos.length;
+      const ab = !!this.abertos[x.id];
+      let out = `<tr class="odf-${x.tipo}" ${tem ? `onclick="OrionDfcApp.alternar('${this.esc(x.id)}')"` : ""}><td style="position:sticky;left:0;background:inherit;z-index:1;padding-left:${8 + nivel * 16}px">${tem ? (ab ? "▾ " : "▸ ") : ""}<span class="odf-cod">${this.esc(x.codigo)}</span>${this.esc(x.nome)}</td>${cel(x)}</tr>`;
+      if (tem && ab) x.filhos.forEach((y) => { out += linha(y, nivel + 1); });
+      return out;
+    };
+    const sub = ativas.map(([, t]) => `<th class="is-right">${this.esc(t)}</th>`).join("") + (this.ahavMensal ? '<th class="is-right">AH</th><th class="is-right">AV</th>' : "");
+    const cab1 = C.MESES.map((m) => `<th class="odf-mes" colspan="${nCol}">${m}</th>`).join("") + `<th class="odf-mes" colspan="${ativas.length + 2}">Total ${ano}</th>`;
+    const cab2 = new Array(12).fill(sub).join("") + ativas.map(([, t]) => `<th class="is-right">${this.esc(t)}</th>`).join("") + '<th class="is-right">AH %</th><th class="is-right">AV %</th>';
+    const btn = (k, t, lock) => `<button type="button" class="btn ${lock || this.series[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" ${lock ? "disabled" : `onclick="OrionDfcApp.alternarSerie('${k}')"`}>${this.esc(t)}</button>`;
+    return `<style>.odf-tab td,.odf-tab th{white-space:nowrap;font-size:0.7rem;padding:4px 6px !important}.odf-tab tr.odf-empresa td{background:#e2e8f0 !important;font-weight:800;cursor:pointer}.odf-tab tr.odf-categoria td{background:#f1f5f9 !important;font-weight:700;cursor:pointer}.odf-tab tr.odf-total td{background:#105436 !important;color:#fff !important;font-weight:800}.odf-tab th.odf-mes{text-align:center;border-left:2px solid #cbd5e1}.odf-tab td.odf-ini{border-left:2px solid #e2e8f0}.odf-cod{color:#64748b;font-family:monospace;margin-right:6px}.odf-neg{color:#b91c1c}</style>
+      <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">${this.base === "forecast" ? "Forecast " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao }).versao) : "Orçado"} ${this.esc(this.ano)} · ${d.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC, empresas ${this.esc(d.empresas.join(", "))}) até ${C.MESES[d.ate - 1]} · ${d.movimentos} movimentos (${d.movimentosN1} em ${ano - 1}). MLDU = % de consolidação da empresa (cadastro de Empresas). Sinal da DFC: entradas +, saídas −.</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        <span style="font-size:0.68rem;color:#64748b">AGRUPAR</span>
+        <button type="button" class="btn ${this.agrupar === "visao" ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.setAgrupar('visao')">Visão DFC <small>padrão</small></button>
+        <button type="button" class="btn ${this.agrupar === "centro" ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.setAgrupar('centro')">Centro de custo</button>
+        <span style="font-size:0.68rem;color:#64748b;margin-left:10px">SÉRIES</span>${SER.map(([k, t, lock]) => btn(k, t === "Real" ? "Real cheio" : t, lock)).join("")}
+        <button type="button" class="btn ${this.ahavMensal ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.alternarAhAv()">AH/AV mensal</button>
+        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem;margin-left:auto" onclick="OrionDfcApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.expandir(false)">Recolher</button>
+      </div>
+      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table odf-tab">
+        <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:280px">EMPRESA / GRUPO / ${this.agrupar === "centro" ? "CENTRO DE CUSTO" : "PLANO"}</th>${cab1}</tr><tr>${cab2}</tr></thead>
+        <tbody>${r.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem movimento.</td></tr>`}
+          <tr class="odf-total"><td style="position:sticky;left:0;background:#105436">Geração de caixa</td>${cel(r.total)}</tr></tbody></table></div>`;
   },
 
   render() {

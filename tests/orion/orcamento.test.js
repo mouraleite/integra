@@ -367,3 +367,23 @@ test("análise de orçamento (Órion atual): real até o corte + forecast, contr
   assert.strictEqual(r.total.per.ytd.n, 700);
   assert.strictEqual(r.empresas[0].filhos[0].codigo, "05.03");
 });
+
+test("DFC gerencial mensal: séries real, N-1 e referência, cheio e MLDU, por empresa › grupo › plano", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const r = C.dfcGerencialMensal({
+    real: [{ gid: "g_02", cc: "100", plano: "2001", mes: 1, valor: -100, empresa: "6" }, { gid: "g_01", cc: "100", plano: "1001", mes: 1, valor: 400, empresa: "6" }],
+    n1: [{ gid: "g_02", cc: "100", plano: "2001", mes: 1, valor: -50, empresa: "6" }],
+    ref: [{ cc: "100", plano: "2001", plano_nome: "Material", m: m(8000), sinal: -1 }],
+    grupoDe: (p) => (String(p).startsWith("2") ? "g_02" : "g_01"),
+    grupos: [{ id: "g_01", code: "01", name: "Entradas" }, { id: "g_02", code: "05.03", name: "Administrativas" }],
+    empresaDe: () => ({ id: "6", nome: "ARAÇARI SPE", fator: 0.5 }), agrupar: "visao"
+  });
+  const e = r.empresas[0];
+  assert.strictEqual(e.filhos.length, 2);
+  const g = e.filhos.find((x) => x.codigo === "05.03");
+  assert.strictEqual(g.real[0], -10000);
+  assert.strictEqual(g.real_mldu[0], -5000);
+  assert.strictEqual(g.total.ref, -96000);
+  assert.strictEqual(g.ah, -1);               // saída de 100 contra 50 no ano anterior: AH = (−100 − (−50)) / 50 = −100%
+});
