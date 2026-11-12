@@ -314,3 +314,34 @@ test("recebimento por grupo (regra do nome do plano do Órion)", () => {
   const a = C.analiticoGastos(rec, [], [1], "grupo", "RECEITAS");
   assert.deepStrictEqual(a.linhas.map((x) => [x.grupo, x.orcado, x.filhos.length]), [["À vista", 110, 2], ["Parcelado / financiamento", 50, 1]]);
 });
+
+test("análise de orçamento: realizado até o corte + forecast depois, por empresa › grupo › centro › plano", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const r = C.analiseOrcamento({
+    orc: [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(1000) }, { cc: "100", plano: "9999", m: m(5) }],
+    fc: [{ cc: "100", plano: "2001", m: m(800) }],
+    alocacoes: [{ cc: "100", plano: "2001", mes: 1, valor: -9 }, { cc: "100", plano: "2001", mes: 5, valor: -100 }, { cc: "999", plano: "2001", mes: 1, valor: -50 }],
+    corte: 3,
+    grupoDe: (p) => (p === "2001" ? { id: "g_02", nome: "Custos" } : null),
+    empresaDe: () => ({ id: "1", nome: "Empresa 1" })
+  });
+  assert.strictEqual(r.semGrupo, 1);
+  assert.strictEqual(r.empresas.length, 1);
+  const pl = r.empresas[0].filhos[0].filhos[0].filhos[0];
+  assert.strictEqual(pl.ytd.n, 900);               // jan 900 (R$ 9,00), fev e mar 0
+  assert.strictEqual(pl.ytg.n, 9 * 800);           // abr..dez = forecast; o realizado de maio não entra (depois do corte)
+  assert.strictEqual(pl.ano.orcado, 12000);
+  assert.strictEqual(pl.ano.forecast, 9600);
+  assert.strictEqual(r.total.ano.n, 900 + 7200);
+});
+
+test("orçamento vigente: um por departamento e tipo, como no Órion", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const cab = (id, status, criado, extra) => Object.assign({ _id: id, orion_id: Number(id) || 0, ano: 2026, tipo: "DESPESAS", descricao: "x" + id, status, criado_em: criado, departamento: { id: 18 } }, extra || {});
+  const pega = (l) => C.documentosVigentes(l, { ano: 2026, base: "orcamento", tipos: ["DESPESAS"] }).docs.map((d) => d._id);
+  assert.deepStrictEqual(pega([cab("1", "Fechado", "2025-12-01"), cab("2", "Aprovado", "2026-01-10"), cab("3", "Rascunho", "2026-03-01")]), ["2"]);
+  assert.deepStrictEqual(pega([cab("1", "Reaberto", "2026-01-01"), cab("1_fechado_9", "Substituído", "2026-01-01", { versao_base: "1" })]), ["1_fechado_9"]);
+  assert.deepStrictEqual(pega([cab("4", "Rascunho", "2026-01-01"), cab("5", "Em aprovação", "2026-02-01")]), ["5"]);
+  assert.deepStrictEqual(pega([cab("6", "Aprovado", "2026-01-01"), cab("7", "Aprovado", "2026-01-01", { departamento: { id: 19 } })]).sort(), ["6", "7"]);
+});

@@ -603,6 +603,66 @@
     return { linhas, total, meses: r.meses, comDesvio };
   }
 
+  /**
+   * Análise de Orçamento (Órion: despesas por empreendimento). Árvore empresa › grupo › centro de custo › plano.
+   * N (projeção) = realizado nos meses até o corte + forecast nos meses seguintes; comparado com o orçado e com o forecast.
+   * Períodos: ano, YTD (até o corte) e YTG (depois do corte). Despesas em positivo (centavos).
+   * o: entrada { orc: linhas do orçamento, fc: linhas do forecast, alocacoes, corte, grupoDe(plano)->{id,nome}|null, empresaDe(cc)->{id,nome} }.
+   */
+  function analiseOrcamento(o) {
+    const corte = Math.max(0, Math.min(12, Number(o.corte) || 0));
+    const folhas = new Map();
+    const folha = (cc, pl, cn, pn) => {
+      const k = cc + "|" + pl;
+      if (!folhas.has(k)) folhas.set(k, { cc, plano: pl, cc_nome: cn || "", plano_nome: pn || "", orc: new Array(12).fill(0), fc: new Array(12).fill(0), real: new Array(12).fill(0) });
+      const f = folhas.get(k);
+      if (!f.cc_nome && cn) f.cc_nome = cn;
+      if (!f.plano_nome && pn) f.plano_nome = pn;
+      return f;
+    };
+    const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    (o.orc || []).forEach((l) => { const f = folha(dig(l.cc), dig(l.plano), l.cc_nome, l.plano_nome); (l.m || []).forEach((v, i) => { f.orc[i] += Number(v) || 0; }); });
+    (o.fc || []).forEach((l) => { const f = folha(dig(l.cc), dig(l.plano), l.cc_nome, l.plano_nome); (l.m || []).forEach((v, i) => { f.fc[i] += Number(v) || 0; }); });
+    const ccs = new Set([...folhas.values()].map((f) => f.cc)), planos = new Set([...folhas.values()].map((f) => f.plano));
+    (o.alocacoes || []).forEach((a) => {
+      const cc = dig(a.cc), pl = dig(a.plano), m = Number(a.mes);
+      if (!ccs.has(cc) || !planos.has(pl) || !(m >= 1 && m <= 12)) return;
+      folha(cc, pl).real[m - 1] += centavos(-Number(a.valor));
+    });
+    const soma = (arr, de, ate) => arr.slice(de, ate).reduce((s, v) => s + v, 0);
+    const per = (x) => {
+      const n = x.real.map((v, i) => (i < corte ? v : x.fc[i]));
+      const p = (de, ate) => ({ n: soma(n, de, ate), orcado: soma(x.orc, de, ate), forecast: soma(x.fc, de, ate), realizado: soma(x.real, de, ate) });
+      return { meses_n: n, ano: p(0, 12), ytd: p(0, corte), ytg: p(corte, 12) };
+    };
+    const somaVet = (lista, campo) => { const v = new Array(12).fill(0); lista.forEach((x) => x[campo].forEach((y, i) => { v[i] += y; })); return v; };
+    const no = (tipo, id, nome, filhos, base) => {
+      const x = base || { orc: somaVet(filhos, "orc"), fc: somaVet(filhos, "fc"), real: somaVet(filhos, "real") };
+      return Object.assign({ tipo, id, nome, filhos: filhos || [] }, x, per(x));
+    };
+    const arv = new Map();
+    let semGrupo = 0;
+    folhas.forEach((f) => {
+      const g = o.grupoDe ? o.grupoDe(f.plano) : null;
+      if (!g) { semGrupo++; return; }
+      const e = (o.empresaDe && o.empresaDe(f.cc)) || { id: "_sem", nome: "Sem empresa" };
+      if (!arv.has(e.id)) arv.set(e.id, { e, grupos: new Map() });
+      const ge = arv.get(e.id).grupos;
+      if (!ge.has(g.id)) ge.set(g.id, { g, ccs: new Map() });
+      const cm = ge.get(g.id).ccs;
+      if (!cm.has(f.cc)) cm.set(f.cc, []);
+      cm.get(f.cc).push(f);
+    });
+    const cmp = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    const empresas = [...arv.values()].sort((a, b) => cmp(a.e.nome, b.e.nome)).map(({ e, grupos }) =>
+      no("empresa", e.id, e.nome, [...grupos.values()].sort((a, b) => cmp(a.g.id, b.g.id)).map(({ g, ccs: cm }) =>
+        no("grupo", e.id + "|" + g.id, g.nome, [...cm.entries()].sort((a, b) => cmp(a[0], b[0])).map(([cc, fs]) =>
+          no("centro", e.id + "|" + g.id + "|" + cc, `${cc} ${fs[0].cc_nome || ""}`.trim(),
+            fs.sort((a, b) => cmp(a.plano, b.plano)).map((f) => no("plano", e.id + "|" + g.id + "|" + cc + "|" + f.plano, `${f.plano} ${f.plano_nome || ""}`.trim(), [], { orc: f.orc, fc: f.fc, real: f.real }))))))));
+    const total = no("total", "total", "Total", empresas);
+    return { empresas, total, corte, semGrupo };
+  }
+
   /** Grupo de recebimento pelo nome do plano (mesma regra do Órion: Recebimento por Grupo). */
   function grupoRecebimento(nome) {
     const n = String(nome || "").toUpperCase();
@@ -644,6 +704,19 @@
    * Forecast: só uma versão (a escolhida ou, se vazia, a mais recente); somar versões diferentes contaria o mesmo gasto várias vezes.
    * Em cada documento (tipo × descrição × departamento × empreendimento) fica o de maior número de versão.
    */
+  /** Ordem de criação (o Órion usa o maior id): data de criação e, no empate, o id do Órion. */
+  function maisNovo(a, b) {
+    const ca = String(a.criado_em || ""), cb = String(b.criado_em || "");
+    if (ca !== cb) return ca > cb ? a : b;
+    return (Number(a.orion_id) || 0) >= (Number(b.orion_id) || 0) ? a : b;
+  }
+
+  /**
+   * Documentos que entram nas telas de acompanhamento (mesma regra do Órion, escolher_documentos_leitura):
+   * - orçamento: um por departamento e tipo — o mais novo Aprovado/Fechado; se não houver, a foto do reaberto; senão o mais novo não substituído;
+   * - forecast: só a versão escolhida (ou, sem escolha, a de maior mês de corte), um documento por departamento e tipo.
+   * Somar documentos diferentes do mesmo departamento contaria o mesmo gasto duas vezes.
+   */
   function documentosVigentes(cabs, o) {
     const tp = (o.tipos || ["DESPESAS", "RECEITAS"]).map((t) => t.toUpperCase());
     let versao = "";
@@ -651,17 +724,33 @@
       const vs = versoesForecast(cabs, o.ano, tp);
       versao = o.versao && vs.some((v) => v.descricao === o.versao) ? o.versao : (vs[0] ? vs[0].descricao : "");
     }
-    const l = (cabs || []).filter((c) => String(c.ano) === String(o.ano) && c.status !== "Substituído" &&
-      tp.indexOf(String(c.tipo).toUpperCase()) >= 0 &&
-      (!o.dept || o.dept === "TODOS" || String(c.departamento ? c.departamento.id : "") === String(o.dept)) &&
-      (o.base !== "forecast" || String(c.descricao || "") === versao));
-    const m = new Map();
-    l.forEach((c) => {
-      const k = [String(c.tipo).toUpperCase(), c.descricao, c.departamento ? c.departamento.id : "", c.produto ? c.produto.id : ""].join("|");
-      const atual = m.get(k);
-      if (!atual || (Number(c.versao) || 0) > (Number(atual.versao) || 0)) m.set(k, c);
+    const doAno = (cabs || []).filter((c) => String(c.ano) === String(o.ano) && tp.indexOf(String(c.tipo).toUpperCase()) >= 0 &&
+      (!o.dept || o.dept === "TODOS" || String(c.departamento ? c.departamento.id : "") === String(o.dept)));
+    const grupos = new Map();
+    doAno.forEach((c) => {
+      const k = String(c.tipo).toUpperCase() + "|" + (c.departamento ? c.departamento.id : "");
+      if (!grupos.has(k)) grupos.set(k, []);
+      grupos.get(k).push(c);
     });
-    return { docs: [...m.values()], versao };
+    const docs = [];
+    grupos.forEach((l) => {
+      if (o.base === "forecast") {
+        const da = l.filter((c) => c.status !== "Substituído" && String(c.descricao || "") === versao);
+        if (da.length) docs.push(da.reduce((a, b) => ((Number(b.versao) || 0) > (Number(a.versao) || 0) ? b : a)));
+        return;
+      }
+      const aprov = l.filter((c) => c.status === "Aprovado" || c.status === "Fechado");
+      if (aprov.length) { docs.push(aprov.reduce(maisNovo)); return; }
+      const reab = l.filter((c) => c.status === "Reaberto" || c.status === "Solicitação Reabertura");
+      if (reab.length) {
+        const r = reab.reduce(maisNovo);
+        const foto = l.filter((c) => c.status === "Substituído" && (String(c.versao_base) === String(r._id) || String(c.foto_de || "") === String(r._id)));
+        if (foto.length) { docs.push(foto.reduce(maisNovo)); return; }
+      }
+      const vivos = l.filter((c) => c.status !== "Substituído");
+      if (vivos.length) docs.push(vivos.reduce(maisNovo));
+    });
+    return { docs, versao };
   }
 
   /* ---------- novo orçamento / nova versão de forecast (regra do Órion) ---------- */
@@ -712,6 +801,6 @@
     return s;
   }
 
-  return { grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
