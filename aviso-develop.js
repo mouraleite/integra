@@ -207,9 +207,8 @@
         const lista = alteracoesUteis(d);
         const topo = d.commits && d.commits.length ? d.commits[d.commits.length - 1].sha : "";
         if (!lista.length || ler(chaveDispensado(amb)) === topo) return;
-        const autores = Array.from(new Set(lista.map((c) => (c.commit && c.commit.author && c.commit.author.name) || ""))).filter(Boolean).join(", ");
         html += `<div class="avdev-barra alteracoes">
-          <span><strong>Há ${lista.length} ${lista.length === 1 ? "alteração" : "alterações"} no ambiente de teste ${esc(amb.pessoa)}</strong> que ainda não ${lista.length === 1 ? "está" : "estão"} na produção${autores ? " (" + esc(autores) + ")" : ""}. Quer ver antes de levar para a produção?</span>
+          <span><strong>Há ${lista.length} ${lista.length === 1 ? "alteração" : "alterações"} no ambiente de teste ${esc(amb.pessoa)}</strong> que ainda não ${lista.length === 1 ? "está" : "estão"} na produção. Quer ver antes de levar para a produção?</span>
           <span class="avdev-acoes">
             <button type="button" class="avdev-btn forte" data-avdev="resumo" data-amb="${esc(amb.chave)}">Ver o que mudou</button>
             <a class="avdev-btn" href="${esc(amb.url)}" target="_blank" rel="noopener">Abrir o ${esc(amb.nome)}</a>

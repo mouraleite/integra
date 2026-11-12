@@ -750,8 +750,10 @@ const ComprasPrevisoesApp = {
       const rows = (data && data.results) || [];
       rows.forEach((bill) => {
         if (!bill || String(bill.id) === String(selfId)) return;
-        if (String(bill.contractNumber || "").trim() !== String(contract)) return;
-        if (bill.measurementNumber == null || bill.measurementNumber === "") return;
+        if (!this.mesmoContrato(this.numeroContratoBill(bill), contract)) return;
+        const temMedicao = bill.measurementNumber != null && bill.measurementNumber !== "";
+        const nota = this.isNotaDoc(bill.documentIdentificationId, bill.documentIdentificationName, bill);
+        if (!temMedicao && !nota) return;
         if (this.DOC_PREVISAO[this.docCode(bill.documentIdentificationId)]) return;
         found.push(bill);
       });
@@ -760,6 +762,49 @@ const ComprasPrevisoesApp = {
       if (!rows.length || rows.length < 200 || (count && offset >= count)) break;
     }
     return found;
+  },
+
+  numeroContratoBill(bill) {
+    if (!bill) return "";
+    const raw = bill.contractNumber != null
+      ? bill.contractNumber
+      : (bill.supplyContractNumber != null ? bill.supplyContractNumber : bill.contractId);
+    return String(raw == null ? "" : raw).trim();
+  },
+
+  contratoNumeroPct(bill, titleId) {
+    const direto = this.numeroContratoBill(bill);
+    if (direto) return direto;
+    const parcelas = (this.state.parcelas || []).concat((this.state.parcelasCache || {})[titleId] || []);
+    const linha = parcelas.find((p) => this.docCode(p && p.docId) === "PCT" && this.pedidoKey(p.documento));
+    if (linha) return String(Number(String(linha.documento).trim()));
+    const doc = String(bill && bill.documentNumber || "").trim();
+    if (this.pedidoKey(doc)) return String(Number(doc));
+    return "";
+  },
+
+  async medicoesContrato(companyId, contract) {
+    const docs = ["CT", "PCT"];
+    let negado = false;
+    for (let i = 0; i < docs.length; i++) {
+      try {
+        const med = await window.siengeFetchWithRetry(
+          "/supply-contracts/measurements/all?documentId=" + encodeURIComponent(docs[i]) +
+          "&contractNumber=" + encodeURIComponent(contract) +
+          "&companyId=" + encodeURIComponent(companyId) + "&limit=200",
+          1
+        );
+        const results = (med && med.results) || [];
+        if (results.length) return results;
+      } catch (e) {
+        if (/403/.test(String((e && e.message) || e || ""))) negado = true;
+      }
+    }
+    if (negado) {
+      const err = new Error("403");
+      throw err;
+    }
+    return [];
   },
 
   async buscarNotasContrato(titulo) {
@@ -784,16 +829,11 @@ const ComprasPrevisoesApp = {
     let contract = "";
     try {
       const bill = await window.siengeFetchWithRetry("/bills/" + encodeURIComponent(titleId), 1);
-      contract = String(bill && bill.contractNumber || "").trim();
+      contract = this.contratoNumeroPct(bill, titleId);
       const companyId = bill && (bill.companyId || bill.debtorId);
       const creditorId = bill && bill.creditorId;
       if (!contract || !companyId) throw new Error("sem contrato");
-      const med = await window.siengeFetchWithRetry(
-        "/supply-contracts/measurements/all?documentId=CT&contractNumber=" + encodeURIComponent(contract) +
-        "&companyId=" + encodeURIComponent(companyId) + "&limit=200",
-        1
-      );
-      const measurements = (med && med.results) || [];
+      const measurements = await this.medicoesContrato(companyId, contract);
       const byNumber = {};
       measurements.forEach((m) => { if (m && m.measurementNumber != null) byNumber[String(m.measurementNumber)] = m; });
       const dates = measurements.map((m) => String(m.measurementDate || "").slice(0, 10)).filter(Boolean).sort();
