@@ -438,3 +438,22 @@ test("excel do orçamento: modelo, exportação e validação tudo-ou-nada com a
   assert.deepStrictEqual(neg.erros.map((e) => e.codigo), ["V04"]);
   assert.strictEqual(C.validarPlanilhaMensal([["x", "y"]], { ccs, planos }).erros[0].codigo, "V00");
 });
+
+test("vendas: IPCA em cascata e Excel de vendas com as regras do Órion", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  assert.ok(Math.abs(C.taxaMensalIpca("4,5", "% a.a.") - (Math.pow(1.045, 1 / 12) - 1)) < 1e-12);
+  assert.strictEqual(C.taxaMensalIpca(1, "% a.m."), 0.01);
+  const meses = Array.from({ length: 12 }, (_, i) => ({ vendas: 1, ticket: i === 0 ? 10000000 : 0 }));
+  const r = C.aplicarIpcaTicket(meses, 0, 0.01, [3]);
+  assert.deepStrictEqual(r.slice(0, 4).map((m) => m.ticket), [10000000, 10100000, 0, 10303010]);
+  const ccs = [{ id: "10100", nome: "LOTEAMENTO A" }];
+  const planosVenda = ["Neutro - ABERTO", "Distrato"];
+  const ok = C.validarPlanilhaVendas([["Produto", "Plano de Venda", "Mês", "Nº Vendas", "Ticket Médio (R$)", "VGV (R$)"], ["10100 - LOTEAMENTO A", "Neutro - ABERTO", 1, 3, 150000, 450000], ["10100", "Distrato", 2, 1, 0, 120000]], { ccs, planosVenda });
+  assert.deepStrictEqual(ok.erros, []);
+  assert.deepStrictEqual(ok.grade.map((g) => [g.cc, g.plano_venda, g.distrato, g.meses[0].vendas, g.meses[0].ticket, g.meses[1].vendas, g.meses[1].ticket]),
+    [["10100", "Neutro - ABERTO", false, 3, 15000000, 0, 0], ["10100", "Distrato", true, 0, 0, -1, 12000000]]);
+  const ida = C.validarPlanilhaVendas(C.planilhaVendas(ok.grade), { ccs, planosVenda });
+  assert.deepStrictEqual(ida.grade, ok.grade.map((g) => Object.assign({}, g, { origem: "excel" })));
+  const ruim = C.validarPlanilhaVendas([["produto", "plano_venda", "mes", "numero_vendas", "ticket_medio", "vgv"], ["10100", "Neutro - ABERTO", 13, 1, 1, 1], ["99", "X", 1, -1, 1, 1], ["10100", "Neutro - ABERTO", 1, 1, 1, 1], ["10100", "Neutro - ABERTO", 1, 2, 1, 1]], { ccs, planosVenda });
+  assert.deepStrictEqual(ruim.erros.map((e) => [e.linha, e.codigo]), [[2, "V05"], [3, "V02"], [3, "V03"], [3, "V06"], [5, "V07"]]);
+});

@@ -365,7 +365,7 @@ const OrionOrcamentosApp = {
   incluirVenda() {
     const e = this.edicao;
     if (!e || !e.grade) return;
-    const cc = String((document.getElementById("oo-nv-cc") || {}).value || "").replace(/\D/g, "");
+    const cc = String((document.getElementById("oo-nv-cc") || {}).value || "").split(" - ")[0].replace(/\D/g, "");
     const plano = String((document.getElementById("oo-nv-plano") || {}).value || "");
     const distrato = !!(document.getElementById("oo-nv-dist") || {}).checked;
     if (!cc) { e.erros = ["Informe o código do empreendimento (centro de custo do Sienge)."]; return this.render(); }

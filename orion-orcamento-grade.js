@@ -357,3 +357,157 @@ Object.assign(window.OrionOrcamentosApp, {
       </table></div>`;
   }
 });
+
+/* Órion (transição) › edição do orçamento/forecast de VENDAS, no jeito do Órion (orcamento/vendas/page.tsx):
+ * abas Orçamento de vendas / Orçamento de distratos / Vendas líquidas; repetir valor nos meses seguintes (→);
+ * IPCA em cascata no ticket médio (% a.a. ou % a.m.); escolher os meses na tela; busca; Excel (modelo, exportar, importar tudo ou nada).
+ * A gravação continua em salvarEdicao() (mesmas validações e conferência de versão). */
+Object.assign(window.OrionOrcamentosApp, {
+  setAbaVendas(v) { if (this.edicao) { this.edicao.abaVendas = v; this.render(); } },
+  setBuscaVendas(v) {
+    const e = this.edicao; if (!e) return;
+    e.buscaVendas = v; this.render();
+    const i = document.getElementById("og-busca-v"); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); }
+  },
+  replicarVenda(i, mi, campo) {
+    const e = this.edicao; if (!e || !e.grade || !e.grade[i]) return;
+    const trav = this.mesesTravados(this.aberto.cab), l = e.grade[i], v = l.meses[mi][campo];
+    const alvo = []; for (let m = mi + 1; m < 12; m++) if (trav.indexOf(m + 1) < 0) alvo.push(m);
+    if (!alvo.length) return;
+    if (alvo.some((m) => l.meses[m][campo]) && !window.confirm("Existem valores já preenchidos nos meses seguintes. Deseja sobrescrever?")) return;
+    alvo.forEach((m) => { l.meses[m][campo] = v; });
+    e.aviso = `Valor de ${this.C().MESES[mi]} repetido nos meses seguintes. Clique em Salvar para gravar.`;
+    this.render();
+  },
+  ipcaAbrir(i, mi) { const e = this.edicao; if (!e) return; e.ipca = { i, mi, valor: (e.ipca && e.ipca.valor) || "", unidade: (e.ipca && e.ipca.unidade) || "% a.a." }; this.render(); const x = document.getElementById("og-ipca-v"); if (x) x.focus(); },
+  ipcaSet(campo, v) { const e = this.edicao; if (!e || !e.ipca) return; e.ipca[campo] = v; const p = document.getElementById("og-ipca-prev"); if (p) p.textContent = this.ipcaPrevia(); },
+  ipcaPrevia() {
+    const x = this.edicao.ipca, t = this.C().taxaMensalIpca(x.valor, x.unidade);
+    if (t == null || String(x.valor).trim() === "") return "Digite a taxa.";
+    const f = (n) => n.toLocaleString("pt-BR", { maximumFractionDigits: 4 });
+    return `Equivale a ${f(t * 100)}% ao mês (${f((Math.pow(1 + t, 12) - 1) * 100)}% em 12 meses).`;
+  },
+  ipcaAplicar() {
+    const e = this.edicao, x = e && e.ipca; if (!x) return;
+    const C = this.C(), t = C.taxaMensalIpca(x.valor, x.unidade);
+    if (t == null || String(x.valor).trim() === "") { e.erros = ["Digite a taxa de IPCA (ex.: 4,5)."]; return this.render(); }
+    const l = e.grade[x.i];
+    if (!(Number(l.meses[x.mi].ticket) > 0)) { e.erros = [`O ticket médio de ${C.MESES[x.mi]} está vazio: o IPCA em cascata parte do ticket deste mês. Preencha o ticket ou escolha outro mês.`]; e.ipca = null; return this.render(); }
+    l.meses = C.aplicarIpcaTicket(l.meses, x.mi, t, this.mesesTravados(this.aberto.cab));
+    e.aviso = `IPCA de ${x.valor}${x.unidade} aplicado no ticket médio de ${C.MESES[x.mi]} em diante (${l.cc} · ${l.plano_venda || "sem plano"}). Clique em Salvar para gravar.`;
+    e.ipca = null; e.erros = [];
+    this.render();
+  },
+
+  htmlEdicaoVendas() {
+    this.estilosGrade();
+    const C = this.C(), a = this.aberto, e = this.edicao;
+    const trav = this.mesesTravados(a.cab);
+    const dis = (mi) => (trav.indexOf(mi + 1) >= 0 ? ' disabled title="mês travado"' : "");
+    const aba = e.abaVendas || "vendas", oc = e.ocultos || {};
+    const q = String(e.buscaVendas || "").trim().toLowerCase();
+    const casa = (l) => !q || `${l.cc} ${l.cc_nome} ${l.plano_venda}`.toLowerCase().indexOf(q) >= 0;
+    const f = (c) => C.fmtReais(c, true);
+    let corpo = "";
+    if (aba === "liquidas") {
+      const por = new Map();
+      e.grade.forEach((l) => { if (!casa(l)) return; if (!por.has(l.cc)) por.set(l.cc, { cc: l.cc, nome: l.cc_nome, un: new Array(12).fill(0), vgv: new Array(12).fill(0) }); const p = por.get(l.cc); l.meses.forEach((m, i) => { const n = Number(m.vendas) || 0, sg = l.distrato ? -1 : 1; p.un[i] += sg * Math.abs(n); p.vgv[i] += sg * Math.abs(n) * (Number(m.ticket) || 0); }); });
+      [...por.values()].sort((x, y) => String(x.cc).localeCompare(String(y.cc), "pt-BR", { numeric: true })).forEach((p) => {
+        corpo += `<tr class="og-grupo"><td>${this.esc(p.cc)} ${this.esc(p.nome)}</td>${p.vgv.map((v) => `<td class="is-right">${v ? f(v) : ""}</td>`).join("")}<td class="is-right">${f(p.vgv.reduce((s, v) => s + v, 0))}</td></tr>
+          <tr><td style="padding-left:18px">unidades líquidas</td>${p.un.map((v) => `<td class="is-right">${v || ""}</td>`).join("")}<td class="is-right">${p.un.reduce((s, v) => s + v, 0)}</td></tr>`;
+      });
+    } else {
+      e.grade.forEach((l, i) => {
+        if ((aba === "distratos") !== !!l.distrato || !casa(l)) return;
+        const vgv = l.meses.map((m) => (Number(m.ticket) || 0) * (Number(m.vendas) || 0));
+        const tot = vgv.reduce((s, v) => s + v, 0), un = l.meses.reduce((s, m) => s + (Number(m.vendas) || 0), 0);
+        const cel = (mi, campo, valor) => `<td class="og-cel"><input class="oo-num" data-k="${campo === "vendas" ? "v" : "t"}-${i}-${mi}"${dis(mi)} value="${valor}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, '${campo}', this.value)">${trav.indexOf(mi + 1) < 0 && mi < 11 ? `<button type="button" tabindex="-1" class="og-rep" title="Repetir nos meses seguintes" onclick="OrionOrcamentosApp.replicarVenda(${i}, ${mi}, '${campo}')">→</button>` : ""}${campo === "ticket" && trav.indexOf(mi + 1) < 0 && mi < 11 ? `<button type="button" tabindex="-1" class="og-rep" style="top:auto;bottom:-8px;transform:none" title="IPCA em cascata a partir deste mês" onclick="OrionOrcamentosApp.ipcaAbrir(${i}, ${mi})">%</button>` : ""}</td>`;
+        corpo += `<tr class="og-grupo"><td>${this.esc(l.cc)} ${this.esc(l.cc_nome)} · ${this.esc(l.plano_venda || "sem plano")}${l.distrato ? " (distrato)" : ""}
+            <button type="button" style="border:none;background:none;color:#b91c1c;cursor:pointer;float:right" title="Remover" onclick="OrionOrcamentosApp.removerVenda(${i})">✕</button></td>${vgv.map((v) => `<td class="is-right">${v ? f(v) : ""}</td>`).join("")}<td class="is-right">${f(tot)}</td></tr>
+          <tr><td style="padding-left:18px">unidades</td>${l.meses.map((m, mi) => cel(mi, "vendas", m.vendas || "")).join("")}<td class="is-right">${un}</td></tr>
+          <tr><td style="padding-left:18px">ticket médio (R$)</td>${l.meses.map((m, mi) => cel(mi, "ticket", m.ticket ? C.fmtReais(m.ticket) : "")).join("")}<td></td></tr>`;
+      });
+    }
+    const ccs = this.ccsParaEscolher();
+    const opcoes = (this.planosVenda || []).map((n) => `<option>${this.esc(n)}</option>`).join("");
+    const tab = (k, t) => `<button type="button" class="btn ${aba === k ? "btn-primary" : "btn-secondary"}" style="height:34px" onclick="OrionOrcamentosApp.setAbaVendas('${k}')">${t}</button>`;
+    const ip = e.ipca;
+    return `
+      ${e.erros.length ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${e.erros.map((x) => this.esc(x)).join("<br>")}</div>` : ""}
+      <datalist id="og-lista-cc">${ccs.map((c) => `<option value="${this.esc(c.id + " - " + c.nome)}">`).join("")}</datalist>
+      <div class="og-barra" style="display:flex;gap:8px;align-items:flex-end;margin-bottom:8px;flex-wrap:wrap">
+        <div><label class="ml-emp-filter-label">Buscar</label><input id="og-busca-v" class="idx-select" style="width:200px" placeholder="empreendimento ou plano" value="${this.esc(e.buscaVendas || "")}" oninput="OrionOrcamentosApp.setBuscaVendas(this.value)"></div>
+        <div><label class="ml-emp-filter-label">Empreendimento</label><input id="oo-nv-cc" list="og-lista-cc" class="idx-select" style="width:260px" placeholder="código ou nome"></div>
+        <div><label class="ml-emp-filter-label">Plano de venda</label><select id="oo-nv-plano" class="idx-select" style="min-width:220px"><option value="">(sem plano)</option>${opcoes}</select></div>
+        <label style="display:flex;gap:6px;align-items:center;height:40px;font-size:0.8rem"><input type="checkbox" id="oo-nv-dist" ${aba === "distratos" ? "checked" : ""}> distrato</label>
+        <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.incluirVenda()">Incluir linha</button>
+        <button type="button" class="btn ${e.excel ? "btn-primary" : "btn-secondary"}" onclick="OrionOrcamentosApp.excelAlternar()">Excel</button>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.cancelarEdicao()">Cancelar</button>
+          <button type="button" class="btn btn-primary" ${e.salvando ? "disabled" : ""} onclick="OrionOrcamentosApp.salvarEdicao()">${e.salvando ? "Salvando..." : "Salvar orçamento"}</button>
+        </div>
+      </div>
+      ${this.htmlExcel()}
+      ${e.aviso ? `<div style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;color:#105436;border-radius:8px;margin-bottom:8px;font-size:0.8rem">${this.esc(e.aviso)}</div>` : ""}
+      ${ip ? `<div style="border:1px solid #fde68a;background:#fffbeb;border-radius:8px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div style="font-size:0.8rem"><b>IPCA em cascata</b> no ticket médio de ${this.esc(e.grade[ip.i].cc)} · ${this.esc(e.grade[ip.i].plano_venda || "sem plano")}, a partir de ${C.MESES[ip.mi]}</div>
+          <div><label class="ml-emp-filter-label">Taxa</label><input id="og-ipca-v" class="idx-select" style="width:110px;height:36px" placeholder="Ex.: 4,5" value="${this.esc(ip.valor)}" oninput="OrionOrcamentosApp.ipcaSet('valor', this.value)" onkeydown="if(event.key==='Enter')OrionOrcamentosApp.ipcaAplicar()"></div>
+          <div><label class="ml-emp-filter-label">Unidade</label><select class="idx-select" style="height:36px;min-width:110px" onchange="OrionOrcamentosApp.ipcaSet('unidade', this.value)"><option ${ip.unidade === "% a.a." ? "selected" : ""}>% a.a.</option><option ${ip.unidade === "% a.m." ? "selected" : ""}>% a.m.</option></select></div>
+          <span id="og-ipca-prev" style="font-size:0.75rem;color:#92400e;padding-bottom:10px">${this.esc(this.ipcaPrevia())}</span>
+          <button type="button" class="btn btn-secondary" style="height:36px" onclick="OrionOrcamentosApp.edicao.ipca=null;OrionOrcamentosApp.render()">Cancelar</button>
+          <button type="button" class="btn btn-primary" style="height:36px" onclick="OrionOrcamentosApp.ipcaAplicar()">Aplicar</button></div>` : ""}
+      <div style="display:flex;gap:6px;margin-bottom:8px">${tab("vendas", "Orçamento de vendas")}${tab("distratos", "Orçamento de distratos")}${tab("liquidas", "Vendas líquidas")}</div>
+      <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-bottom:6px;font-size:0.72rem;color:#64748b">Meses na tela:
+        ${C.MESES.map((m, i) => `<button type="button" class="btn ${oc[i] ? "btn-secondary" : "btn-primary"}" style="height:26px;padding:0 8px;font-size:0.68rem" onclick="OrionOrcamentosApp.alternarMesGrade(${i})">${m}</button>`).join("")}
+        <button type="button" class="btn btn-secondary" style="height:26px;padding:0 8px;font-size:0.68rem" onclick="OrionOrcamentosApp.alternarMesGrade('todos')">Todos</button></div>
+      <style>${C.MESES.map((m, i) => (oc[i] ? `#og-grade-v col.og-cm${i}{visibility:collapse}` : "")).join("")}</style>
+      <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">VGV = ticket médio × unidades, como no Órion. Distrato: unidades negativas. Passe o mouse num mês: → repete o valor nos meses seguintes; % aplica IPCA em cascata no ticket.${trav.length ? ` Meses travados: ${trav.map((m) => C.MESES[m - 1]).join(", ")}.` : ""}${aba === "liquidas" ? " Vendas líquidas = vendas − distratos (só leitura)." : ""}</div>
+      <div class="cc-scroll" style="max-height:66vh"><table class="cc-table" id="og-grade-v" style="min-width:1440px">
+        <colgroup><col style="width:300px">${C.MESES.map((m, i) => `<col class="og-cm${i}" style="width:92px">`).join("")}<col style="width:120px"></colgroup>
+        <thead><tr><th>${aba === "liquidas" ? "Empreendimento" : "Empreendimento / plano de venda"}</th>${C.MESES.map((m) => `<th class="is-right">${m}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${corpo || `<tr><td colspan="14" style="text-align:center;padding:30px">${aba === "distratos" ? "Sem distratos. Marque \"distrato\" e inclua acima." : "Sem linhas. Inclua acima."}</td></tr>`}</tbody>
+      </table></div>`;
+  }
+});
+
+/* Excel também na edição de vendas: o mesmo painel escolhe o formato pelo tipo do documento. */
+(function () {
+  const A = window.OrionOrcamentosApp;
+  const modelo = A.excelModelo, exportar = A.excelExportar, importar = A.excelImportar, aplicar = A.excelAplicar;
+  const ehVendas = () => A.edicao && A.edicao.modo === "vendas";
+  A.excelModelo = function () { if (!ehVendas()) return modelo.call(this); this.excelBaixar(this.C().planilhaVendas([]), this.excelNome("modelo")); };
+  A.excelExportar = function () { if (!ehVendas()) return exportar.call(this); this.excelBaixar(this.C().planilhaVendas(this.edicao.grade), this.excelNome("orcamento")); };
+  A.excelImportar = async function (input) {
+    if (!ehVendas()) return importar.call(this, input);
+    const e = this.edicao, f = input.files && input.files[0];
+    input.value = "";
+    if (!e || !f) return;
+    try {
+      const wb = XLSX.read(await f.arrayBuffer(), { type: "array" });
+      const m = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+      const r = this.C().validarPlanilhaVendas(m, { ccs: this.excelCadastro().ccs, planosVenda: this.planosVenda || [] });
+      e.excel = { erros: r.erros, linhas: null, grade: r.erros.length ? null : r.grade, arquivo: f.name };
+    } catch (err) { e.excel = { erros: [{ linha: "", campo: "", codigo: "", mensagem: "Não consegui ler o arquivo: " + (err.message || err) }], linhas: null, grade: null, arquivo: f.name }; }
+    this.render();
+  };
+  A.excelAplicar = function () {
+    if (!ehVendas()) return aplicar.call(this);
+    const e = this.edicao; if (!e || !e.excel || !e.excel.grade) return;
+    const trav = this.mesesTravados(this.aberto.cab);
+    const atual = new Map(e.grade.map((l) => [l.cc + "|" + (l.plano_venda || ""), l]));
+    e.grade = e.excel.grade.map((l) => { const x = atual.get(l.cc + "|" + l.plano_venda); return Object.assign({}, x || {}, l, { meses: l.meses.map((m, i) => (trav.indexOf(i + 1) >= 0 ? (x ? Object.assign({}, x.meses[i]) : { vendas: 0, ticket: 0 }) : m)) }); });
+    e.aviso = `Planilha aplicada na grade: ${e.grade.length} linha(s). Confira e clique em Salvar para gravar (nada foi gravado ainda).`;
+    e.excel = null;
+    this.render();
+  };
+  const htmlExcel = A.htmlExcel;
+  A.htmlExcel = function () {
+    const e = this.edicao;
+    if (!ehVendas() || !e.excel || !e.excel.grade) return htmlExcel.call(this).replace("produto e plano por código ou nome, valores de jan a dez em reais, observação", ehVendas() ? "produto (código ou nome), plano de venda, mês (1 a 12), nº de vendas, ticket médio e VGV" : "produto e plano por código ou nome, valores de jan a dez em reais, observação");
+    const C = this.C(), g = e.excel.grade;
+    const vgv = g.reduce((s, l) => s + l.meses.reduce((s2, m) => s2 + (Number(m.vendas) || 0) * (Number(m.ticket) || 0), 0), 0);
+    const base = htmlExcel.call(Object.assign(Object.create(this), { edicao: Object.assign({}, e, { excel: Object.assign({}, e.excel, { linhas: null }) }) }));
+    return base.replace(/<\/div>\s*$/, `<div style="margin-top:8px;font-size:0.8rem;color:#105436"><b>Planilha válida:</b> ${g.length} linha(s) (empreendimento × plano), VGV ${C.fmtReais(vgv, true)}. Ao aplicar, a grade passa a ter exatamente as linhas da planilha.
+      <button type="button" class="btn btn-primary" style="height:34px;margin-left:8px" onclick="OrionOrcamentosApp.excelAplicar()">Aplicar na grade</button></div></div>`);
+  };
+})();

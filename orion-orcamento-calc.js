@@ -1068,6 +1068,87 @@
     return [COLUNAS_EXCEL_MENSAL].concat((linhas || []).map((l) => [`${l.cc} - ${l.cc_nome || ""}`, `${l.plano} - ${l.plano_nome || ""}`].concat((l.m || []).map((v) => (Number(v) || 0) / 100)).concat([l.obs || ""])));
   }
 
-  return { validarPlanilhaMensal, planilhaMensal, colunaExcel, COLUNAS_EXCEL_MENSAL, leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+
+  /* ---------- vendas: IPCA em cascata e Excel (Órion: IpcaCascataModal, excel_validator.validar_vendas) ---------- */
+  /** Taxa digitada → taxa mensal decimal (% a.a. → (1+i)^(1/12) − 1; % a.m. direto). */
+  function taxaMensalIpca(valor, unidade) {
+    const i = Number(String(valor).replace(",", ".")) / 100;
+    if (isNaN(i) || i <= -1) return null;
+    return unidade === "% a.m." ? i : Math.pow(1 + i, 1 / 12) - 1;
+  }
+  /** Ticket dos meses seguintes = ticket do mês de origem corrigido mês a mês pela taxa (centavos inteiros). Meses travados ficam como estão. */
+  function aplicarIpcaTicket(meses, mesOrigem, taxaMensal, travados) {
+    const trav = new Set((travados || []).map(Number));
+    let t = Number(meses[mesOrigem].ticket) || 0;
+    return meses.map((m, i) => {
+      if (i <= mesOrigem) return Object.assign({}, m);
+      t = t * (1 + taxaMensal);
+      return trav.has(i + 1) ? Object.assign({}, m) : Object.assign({}, m, { ticket: Math.round(t) });
+    });
+  }
+
+  const COLUNAS_EXCEL_VENDAS = ["produto", "plano_venda", "mes", "numero_vendas", "ticket_medio", "vgv"];
+  /** Grade de vendas → planilha do modelo do Órion (uma linha por empreendimento × plano × mês com valor). */
+  function planilhaVendas(grade) {
+    const out = [COLUNAS_EXCEL_VENDAS];
+    (grade || []).forEach((l) => (l.meses || []).forEach((m, i) => {
+      const n = Number(m.vendas) || 0, t = Number(m.ticket) || 0;
+      if (!n && !t) return;
+      out.push([`${l.cc} - ${l.cc_nome || ""}`, l.plano_venda || "", i + 1, n, t / 100, (t * n) / 100]);
+    }));
+    return out;
+  }
+  /**
+   * Valida a planilha de vendas (regras do Órion): V01 obrigatórios (produto, plano_venda, mês), V02 produto, V03 plano de venda,
+   * V05 mês 1–12, V06 números (distrato: plano com "distrato" no nome vira negativo), V07 produto+plano+mês duplicado. Tudo ou nada.
+   * Sem ticket e com VGV, o ticket = VGV ÷ unidades (o Integra calcula o VGV como ticket × unidades).
+   */
+  function validarPlanilhaVendas(matriz, o) {
+    const linhasM = (matriz || []).filter((r) => (r || []).some((v) => v != null && String(v).trim() !== ""));
+    if (!linhasM.length) return { erros: [{ linha: 1, campo: "", codigo: "V00", mensagem: "A planilha está vazia." }], grade: [] };
+    const cab = linhasM[0].map(colunaExcel), idx = {};
+    cab.forEach((c, i) => { if (c && idx[c] == null) idx[c] = i; });
+    const alias = { n_vendas: "numero_vendas", no_vendas: "numero_vendas", "nº_vendas": "numero_vendas", plano_de_venda: "plano_venda", ticket_medio_r$: "ticket_medio", "vgv_(r$)": "vgv", "ticket_medio_(r$)": "ticket_medio" };
+    Object.keys(alias).forEach((k) => { if (idx[k] != null && idx[alias[k]] == null) idx[alias[k]] = idx[k]; });
+    const faltam = ["produto", "plano_venda", "mes"].filter((c) => idx[c] == null);
+    if (faltam.length) return { erros: [{ linha: 1, campo: faltam.join(", "), codigo: "V00", mensagem: `Cabeçalho sem a(s) coluna(s) ${faltam.join(", ")}. Use o modelo (produto, plano_venda, mes, numero_vendas, ticket_medio, vgv).` }], grade: [] };
+    const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
+    const porId = new Map((o.ccs || []).map((x) => [dig(x.id), x]));
+    const acharCc = (raw) => { const t = String(raw).trim(), c = /^\s*(\d+)\s*(-|$)/.exec(t); if (c && porId.has(c[1])) return porId.get(c[1]); const n = (c ? t.slice(c[0].length) : t).trim().toLowerCase(); return (o.ccs || []).find((x) => String(x.nome || "").trim().toLowerCase() === n) || null; };
+    const planos = (o.planosVenda || []).map(String);
+    const acharPl = (raw) => planos.find((p) => p.trim().toLowerCase() === String(raw).trim().toLowerCase()) || null;
+    const num = (v) => { if (v == null || String(v).trim() === "") return 0; if (typeof v === "number") return isNaN(v) ? null : v; let s2 = String(v).trim().replace(/\s/g, "").replace(/^R\$/, ""); if (/,/.test(s2)) s2 = s2.replace(/\./g, "").replace(",", "."); const n = Number(s2); return isNaN(n) ? null : n; };
+    const erros = [], vistas = new Set(), grade = new Map();
+    const E = (linha, campo, codigo, mensagem) => erros.push({ linha, campo, codigo, mensagem });
+    linhasM.slice(1).forEach((r, k) => {
+      const n = k + 2;
+      const val = (c) => (idx[c] == null ? null : r[idx[c]]);
+      const pr = String(val("produto") == null ? "" : val("produto")).trim(), pl = String(val("plano_venda") == null ? "" : val("plano_venda")).trim(), mr = val("mes");
+      let ok = true;
+      [["produto", pr], ["plano_venda", pl], ["mes", mr == null ? "" : String(mr).trim()]].forEach(([c, v]) => { if (!v) { E(n, c, "V01", `Campo obrigatório '${c}' está vazio.`); ok = false; } });
+      const cc = pr ? acharCc(pr) : null, plano = pl ? acharPl(pl) : null;
+      if (pr && !cc) { E(n, "produto", "V02", `Produto '${pr}' não encontrado.`); ok = false; }
+      if (pl && !plano) { E(n, "plano_venda", "V03", `Plano de Venda '${pl}' não encontrado.`); ok = false; }
+      const mes = Number(mr);
+      if (!(Number.isInteger(mes) && mes >= 1 && mes <= 12)) { E(n, "mes", "V05", `Mês '${mr == null ? "" : mr}' inválido (esperado 1–12).`); ok = false; }
+      const distrato = !!(plano && /distrato/i.test(plano));
+      let nv = num(val("numero_vendas")); const tk = num(val("ticket_medio")); let vg = num(val("vgv"));
+      if (nv == null || !Number.isInteger(nv) || (nv < 0 && !distrato)) { E(n, "numero_vendas", "V06", `Número de vendas inválido: '${val("numero_vendas")}'.`); ok = false; } else if (distrato && nv > 0) nv = -nv;
+      if (tk == null || tk < 0) { E(n, "ticket_medio", "V06", `Ticket médio inválido: '${val("ticket_medio")}'.`); ok = false; }
+      if (vg == null || (vg < 0 && !distrato)) { E(n, "vgv", "V06", `VGV inválido: '${val("vgv")}'.`); ok = false; } else if (distrato && vg > 0) vg = -vg;
+      if (cc && plano && ok) {
+        const ch = dig(cc.id) + "|" + plano + "|" + mes;
+        if (vistas.has(ch)) { E(n, "produto/plano_venda/mes", "V07", `Combinação Produto+Plano+Mês duplicada na linha ${n}.`); ok = false; } else vistas.add(ch);
+      }
+      if (!ok) return;
+      const kg = dig(cc.id) + "|" + plano;
+      if (!grade.has(kg)) grade.set(kg, { cc: dig(cc.id), cc_nome: cc.nome || "", plano_venda: plano, distrato, obs: distrato ? "Distrato" : "", origem: "excel", meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) });
+      const t = tk ? Math.round(tk * 100) : nv ? Math.round(Math.abs(vg / nv) * 100) : 0;
+      grade.get(kg).meses[mes - 1] = { vendas: nv, ticket: t };
+    });
+    return { erros, grade: erros.length ? [] : [...grade.values()] };
+  }
+
+  return { taxaMensalIpca, aplicarIpcaTicket, planilhaVendas, validarPlanilhaVendas, COLUNAS_EXCEL_VENDAS, validarPlanilhaMensal, planilhaMensal, colunaExcel, COLUNAS_EXCEL_MENSAL, leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
