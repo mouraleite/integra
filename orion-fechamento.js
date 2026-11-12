@@ -68,6 +68,34 @@ const OrionFechamentoApp = {
     this.render();
   },
 
+  /** Fecha de uma vez todos os meses abertos de janeiro até o mês escolhido (uma gravação só). */
+  async fecharAte(mes) {
+    mes = Number(mes);
+    if (!this.podeEditar() || !this.dados || this.salvando || !(mes >= 1 && mes <= 12)) return;
+    const P = this.P();
+    const mapa = P.mapaFechados(this.dados.itens);
+    const abrir = [];
+    for (let m = 1; m <= mes; m++) if (!mapa[this.ano + "-" + String(m).padStart(2, "0")]) abrir.push(m);
+    if (!abrir.length) { this.erro = `Jan a ${this.MESES[mes - 1]}/${this.ano} já estão fechados.`; return this.render(); }
+    if (!window.confirm(`Fechar ${abrir.map((m) => this.MESES[m - 1]).join(", ")}/${this.ano}? Esses meses ficam travados nos orçamentos e forecasts.`)) return;
+    let novos = this.dados.itens;
+    const quem = window.OrionStore.usuario(), agora = new Date().toISOString();
+    abrir.forEach((m) => { novos = P.alternarMes(novos, this.ano, m, quem, agora); });
+    this.salvando = true;
+    this.erro = "";
+    this.render();
+    try {
+      this.dados.versao = await window.OrionStore.gravar("fechamento_meses", novos, this.dados.versao);
+      this.dados.itens = novos;
+    } catch (e) {
+      this.erro = e.message || String(e);
+      if (e.conflito) this.dados = null;
+    }
+    this.salvando = false;
+    if (!this.dados) return this.carregar();
+    this.render();
+  },
+
   render() {
     const root = this.root();
     if (!root) return;
@@ -102,7 +130,11 @@ const OrionFechamentoApp = {
             ${anos.map((a) => `<option ${a === this.ano ? "selected" : ""}>${a}</option>`).join("")}
           </select>
         </div>
-        <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionFechamentoApp.carregar()"><i data-lucide="refresh-cw"></i> Atualizar</button>
+        <div style="display:flex;gap:8px;align-items:flex-end;margin-left:auto">
+          ${ed && this.dados ? `<div><label class="ml-emp-filter-label">Fechar de uma vez</label><select id="ofech-ate" class="idx-select" style="height:40px">${this.MESES.map((m, i) => `<option value="${i + 1}">jan a ${m}</option>`).join("")}</select></div>
+          <button type="button" class="btn btn-secondary" style="height:40px" ${this.salvando ? "disabled" : ""} onclick="OrionFechamentoApp.fecharAte(document.getElementById('ofech-ate').value)">Fechar meses</button>` : ""}
+          <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionFechamentoApp.carregar()"><i data-lucide="refresh-cw"></i> Atualizar</button>
+        </div>
       </div>
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px;">${this.esc(this.erro)}</div>` : ""}
       ${!this.dados ? `<div style="text-align:center;padding:40px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>Carregando...</p></div>` : `
