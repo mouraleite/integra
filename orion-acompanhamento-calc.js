@@ -11,7 +11,8 @@
  *  unidades: { total, estoque: [{ area }] }   (estoque = situação D, R, C, P, G)
  *  aliquotas: { pis, cofins, irpj, csll, outros } do regime "Lucro Presumido" (opcional)
  *  terrenoManual: { valor, curva: [% por mês], inicio "AAAA-MM" } (custo de terreno informado na obra, opcional)
- *  tmaAnual (decimal; padrão 0,12), hoje "AAAA-MM" (mês corrente), regras (parceria) / multApportioned / multDefault, kpisOnly */
+ *  tmaAnual (decimal; padrão 0,12), hoje "AAAA-MM" (mês corrente), regras (parceria) / multApportioned / multDefault, kpisOnly
+ *  rateada(linha) / vendasRateadas: no Integra, a regra da parceria vem da Parametrização de Parceiro (conta a conta), no lugar das regras por grupo do Órion */
 (function (raiz) {
   const V = raiz.OrionViabilidadeCalc || (typeof require === "function" ? require("./orion-viabilidade-calc.js") : null);
   const TMA_PADRAO = 0.12;
@@ -195,7 +196,7 @@
   /** Órion: _calc_actuals_for_cc. */
   function calcularCentro(o) {
     const regras = o.regras || null, mA = o.multApportioned == null ? 1 : o.multApportioned, mD = o.multDefault == null ? 1 : o.multDefault;
-    const temRegraReceita = !!(regras && Object.keys(regras).some((k) => regras[k] && /receita|venda|entrada|recebimento/i.test(k)));
+    const temRegraReceita = o.vendasRateadas != null ? !!o.vendasRateadas : !!(regras && Object.keys(regras).some((k) => regras[k] && /receita|venda|entrada|recebimento/i.test(k)));
     const anualReal = mapa(novoAno), anualFc = mapa(novoAno);
     const cfReal = somaMes(), cfFc = somaMes(), revReal = somaMes(), revFc = somaMes();
     const t = { vgv_vendido: 0, distratos: 0, impostos: 0, recebimentos: 0, terreno: 0, projetos: 0, obras: 0, adm_obra: 0, custo_extra_obra: 0, marketing: 0, comercial: 0, administrativas: 0, despesas_extras: 0, funding: 0 };
@@ -213,7 +214,7 @@
       const cat = String(r.categoria || "").toLowerCase().trim();
       let val = Math.abs(Number(r.valor) || 0);
       if (String(r.categoria || "").trim().indexOf("(-)") === 0) val = -val;
-      if (regras) val *= linhaRateada(regras, r.tipo, cat, r.grupo) ? mA : mD;
+      if (regras) val *= (typeof o.rateada === "function" ? o.rateada(r) : linhaRateada(regras, r.tipo, cat, r.grupo)) ? mA : mD;
       if (r.tipo === "INCOME") {
         t.recebimentos += val;
         if (ano !== "N/A") anual.get(ano).Entradas += val;

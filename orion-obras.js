@@ -30,7 +30,9 @@ const OrionObrasApp = {
     if (!window.firebaseDb || !fc) { this.erro = "Banco do Integra ainda não carregou."; return this.render(); }
     this.carregando = true; this.passo = "Lendo as obras acompanhadas…"; this.render();
     try {
-      this.obras = (await window.OrionStore.ler("acompanhamento_obras", [])).itens || [];
+      const lidas = await window.OrionStore.ler("acompanhamento_obras", []);
+      this.obras = lidas.itens || []; this.obrasVersao = lidas.versao || 0;
+      this._curvas = (await window.OrionStore.ler("curvas", [])).itens || [];
       this._regimes = (await window.OrionStore.ler("regimes", [])).itens || [];
       const todos = this.obras;
       const vistos = new Map();
@@ -113,7 +115,7 @@ const OrionObrasApp = {
   },
   somar(lista) {
     const m = new Map();
-    lista.forEach((r) => { const k = [r.tipo, r.categoria, r.grupo, r.gid || "", r.mes].join("|"); if (!m.has(k)) m.set(k, Object.assign({}, r, { valor: 0 })); m.get(k).valor += r.valor; });
+    lista.forEach((r) => { const k = [r.tipo, r.categoria, r.plano || "", r.grupo, r.gid || "", r.mes].join("|"); if (!m.has(k)) m.set(k, Object.assign({}, r, { valor: 0 })); m.get(k).valor += r.valor; });
     return [...m.values()].map((r) => Object.assign(r, { valor: Math.round(r.valor * 100) / 100 }));
   },
 
@@ -150,7 +152,7 @@ const OrionObrasApp = {
     if (empresa) for (let a = anoIni; a <= ay; a++) {
       aviso(`Centro ${cc}: realizado de ${a} (caixa e bancos)…`);
       const res = await R.buscar(a, a === ay ? am : 12, [empresa]);
-      res.alocacoes.forEach((x) => { if (x.cc !== String(cc)) return; real.push({ tipo: x.valor > 0 ? "INCOME" : "OUTCOME", categoria: x.nome || x.plano, grupo: grupos[x.gid] || "", gid: x.gid || null, mes: `${a}-${String(x.mes).padStart(2, "0")}`, valor: Math.abs(x.valor) }); });
+      res.alocacoes.forEach((x) => { if (x.cc !== String(cc)) return; real.push({ tipo: x.valor > 0 ? "INCOME" : "OUTCOME", categoria: x.nome || x.plano, plano: x.plano || "", grupo: grupos[x.gid] || "", gid: x.gid || null, mes: `${a}-${String(x.mes).padStart(2, "0")}`, valor: Math.abs(x.valor) }); });
     }
     // 3. a realizar: contas a receber e a pagar em aberto (vencidas desde o primeiro ano + 15 anos à frente)
     const previsto = [];
@@ -170,7 +172,7 @@ const OrionObrasApp = {
           const f = this.fatia(tipo === "income" ? it.receiptsCategories || it.financialCategories : it.paymentsCategories || it.financialCategories, cc, tipo === "income" ? "Receita de Venda de Lotes" : "Obras");
           if (!f) return;
           const gd = this.grupoDfc(f.id, f.nome);
-          previsto.push({ tipo: tipo === "income" ? "INCOME" : "OUTCOME", categoria: f.nome, grupo: gd.nome, gid: gd.gid, mes: due.slice(0, 7), valor: v * f.ratio, vencido: due < hojeIso });
+          previsto.push({ tipo: tipo === "income" ? "INCOME" : "OUTCOME", categoria: f.nome, plano: String(f.id || "").replace(/\D/g, ""), grupo: gd.nome, gid: gd.gid, mes: due.slice(0, 7), valor: v * f.ratio, vencido: due < hojeIso });
         });
       }
     }
@@ -212,16 +214,48 @@ const OrionObrasApp = {
     const r = l.find((x) => String(x.nome || "").trim() === "Lucro Presumido" && x.ativo !== false);
     return r ? { pis: r.pis, cofins: r.cofins, irpj: r.irpj, csll: r.csll, outros: r.outros } : {};
   },
+  /** Regra da parceria do centro pela Parametrização de Parceiro do Integra: contas "não se aplica" ficam 100% do empreendedor. */
+  parceriaDoCc(cc) {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (!PP || !Array.isArray(PP.items)) return null;
+    const code = typeof PP.obraFromCc === "function" ? PP.obraFromCc(cc) : String(cc).slice(0, -2);
+    for (const p of PP.items) {
+      const obra = (p.obras || []).find((o) => String(o.code) === String(code));
+      if (!obra) continue;
+      const pct = typeof PP.pctObra === "function" ? Number(PP.pctObra(obra)) || 0 : Number(obra.defaultPartnerShare) || 0;
+      // mesma regra da tela Parametrização de Parceiro (isAccountNA), com os grupos da visão DFC que ela usa
+      const grupos = (typeof PP.dfcGroups === "function" ? PP.dfcGroups() : null) || (window.OrionRealizado && OrionRealizado.grupos && OrionRealizado.grupos()) || [];
+      const pai = {}; grupos.forEach((x) => { if (x && x.id) pai[x.id] = x.parentId || null; });
+      const ancestrais = (gid) => { const l = []; let a = gid; let n = 0; while (a && n++ < 20) { l.push(a); a = pai[a]; } return l; };
+      const grupoDaConta = (acc) => { const x = grupos.find((g) => (g.accounts || []).map(String).includes(acc)); return x ? x.id : null; };
+      const na = (r) => {
+        const acc = String(r.plano || "");
+        const gid = (acc && grupoDaConta(acc)) || r.gid || null;
+        if (gid && ancestrais(gid).some((a) => obra.naNodes && obra.naNodes[a])) return !(obra.inAccounts && acc && obra.inAccounts[acc]);
+        return !!(obra.naAccounts && acc && obra.naAccounts[acc]);
+      };
+      const vendaNo = (grupos.find((x) => /^01\.01\b/.test(String(x.name || ""))) || {}).id || null;
+      return { pct, rateada: (r) => !na(r), vendasRateadas: !(vendaNo && ancestrais(vendaNo).some((a) => obra.naNodes && obra.naNodes[a])), nome: p.name || p.nome || "" };
+    }
+    return null;
+  },
+  async garantirParcerias() {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (PP && (!Array.isArray(PP.items) || !PP.items.length) && typeof PP.loadItems === "function") { try { await PP.loadItems(); } catch (e) { /* sem parametrização */ } }
+  },
   actsDe(g, visao, kpisOnly) {
     const C = this.C(), cache = this.cache[g.chave];
     if (!cache) return null;
     const tma = this.tmaDe(g.membros.map((m) => m.cc));
     return cache.centros.map((c) => {
       const obra = (this.obras || []).find((o) => o.cc === c.cc) || {};
-      const p = (Number(obra.participacao) || 0) / 100;
-      const regras = visao === "consolidado" ? null : {}; // regras da parceria do Órion (partnership_config); sem cadastro, todas desligadas, como lá
+      const par = visao === "consolidado" ? null : this.parceriaDoCc(c.cc);
+      const p = par ? par.pct / 100 : (Number(obra.participacao) || 0) / 100;
+      // sem parametrização no Integra, o Órion usava as regras da parceria por grupo; sem regra cadastrada, todas desligadas
+      const regras = visao === "consolidado" ? null : {};
       const mult = visao === "empreendedor" ? [1 - p, 1] : visao === "parceiro" ? [p, 0] : [1, 1];
-      return C.calcularCentro(Object.assign({}, c.entrada, { aliquotas: this.aliquotas(), tmaAnual: tma, hoje: this.hoje(), regras, multApportioned: mult[0], multDefault: mult[1], terrenoManual: obra.terreno || null, kpisOnly: !!kpisOnly }));
+      return C.calcularCentro(Object.assign({}, c.entrada, { aliquotas: this.aliquotas(), tmaAnual: tma, hoje: this.hoje(), regras, multApportioned: mult[0], multDefault: mult[1], terrenoManual: obra.terreno || null, kpisOnly: !!kpisOnly },
+        par ? { rateada: par.rateada, vendasRateadas: par.vendasRateadas } : {}));
     });
   },
   linhasLista() {
@@ -236,7 +270,7 @@ const OrionObrasApp = {
   /* ---------- tela ---------- */
   abrir(id) { this.aberto = id; this.visao = "consolidado"; this.velAbertos = {}; this.render(); window.scrollTo(0, 0); },
   voltar() { this.aberto = null; this.render(); },
-  setVisao(v) { this.visao = v; this.render(); },
+  async setVisao(v) { this.visao = v; if (v !== "consolidado") await this.garantirParcerias(); this.render(); },
   setFiltro(c, v) { this[c] = v; this.render(); },
   alternarAno(a) { this.velAbertos[a] = !this.velAbertos[a]; this.render(); },
 
@@ -267,7 +301,8 @@ const OrionObrasApp = {
         <div style="min-width:280px">${filtroEmp}</div>
         <div><label class="ml-emp-filter-label">Categoria</label><select class="idx-select" style="height:40px;min-width:180px" onchange="OrionObrasApp.setFiltro('filtroCat', this.value)">${opts(todas.map((r) => r.categoria), this.filtroCat, "Todas categorias")}</select></div>
         <div><label class="ml-emp-filter-label">Status</label><select class="idx-select" style="height:40px;min-width:180px" onchange="OrionObrasApp.setFiltro('filtroStatus', this.value)">${opts(todas.map((r) => r.status), this.filtroStatus, "Todos status")}</select></div>
-        <button type="button" class="btn btn-primary" style="height:40px;margin-left:auto" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar()">Atualizar todos com o Sienge</button></div>
+        ${this.podeEditar() ? `<button type="button" class="btn btn-secondary" style="height:40px;margin-left:auto" onclick="OrionObrasApp.abrirEditor()">Obras acompanhadas</button>` : ""}
+        <button type="button" class="btn btn-primary" style="height:40px;${this.podeEditar() ? "" : "margin-left:auto"}" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar()">Atualizar todos com o Sienge</button></div>
       <div style="font-size:0.7rem;color:#64748b;margin-bottom:8px">Mesmo cálculo do Órion: realizado (caixa e bancos, visão DFC) + a realizar (contas a receber e a pagar em aberto, inclusive vencidas) + projeção do estoque. Obras = centros de custo marcados no Órion para o painel, somando os da mesma obra (ex.: obra e parceria). Viabilidades aprovadas aparecem com os números da viabilidade. Clique no nome para abrir o detalhe.</div>
       ${tab}`;
   },
@@ -313,13 +348,79 @@ const OrionObrasApp = {
         <tr class="oob-total"><td>TOTAL</td>${cols.map(([k]) => `<td class="is-right">${k === "Saldo_Acumulado" ? "" : this.R$(tot[k])}</td>`).join("")}</tr></tbody></table></div>
         <div style="font-size:0.66rem;color:#64748b">Anos com realizado somam realizado + a realizar; "(previsto)" = só a realizar (contas em aberto e projeção do estoque).</div>`;
     const cache = this.cache[item.chave];
-    return seletor + `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${this.esc(item.nome)} · ${this.esc(item.cidade)} · ${this.esc(item.status)} · centros ${item.membros.map((m) => this.esc(m.cc)).join(", ")} · lido do Sienge em ${new Date(cache.em).toLocaleString("pt-BR")}${cache.por ? " por " + this.esc(cache.por) : ""}${this.visao !== "consolidado" ? " · visão " + this.visao + " (participação da parceria cadastrada no Órion)" : ""}</div>
+    return seletor + `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${this.esc(item.nome)} · ${this.esc(item.cidade)} · ${this.esc(item.status)} · centros ${item.membros.map((m) => this.esc(m.cc)).join(", ")} · lido do Sienge em ${new Date(cache.em).toLocaleString("pt-BR")}${cache.por ? " por " + this.esc(cache.por) : ""}${this.visao !== "consolidado" ? " · visão " + this.visao + ": " + this.esc(item.membros.map((m) => { const par = this.parceriaDoCc(m.cc); return par ? `${m.cc} parceiro ${String(par.pct).replace(".", ",")}% (Parametrização de Parceiro${par.nome ? " " + par.nome : ""})` : null; }).filter(Boolean).join("; ") || "sem Parametrização de Parceiro para estes centros (usa a participação do Órion)") : ""}</div>
       ${cards}
       <div style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:14px">
         <div><div style="font-weight:700;color:#334155;margin-bottom:6px">DRE</div>${dre}</div>
         <div><div style="font-weight:700;color:#334155;margin-bottom:6px">Planos contratados</div>${planos}
           <div style="font-weight:700;color:#334155;margin:12px 0 6px">Velocidade de vendas</div>${velT}</div></div>
       <div style="font-weight:700;color:#334155;margin:14px 0 6px">Fluxo de caixa</div>${fluxo}`;
+  },
+
+  /* ---------- edição das obras acompanhadas (Órion: Apoio › Centro de Custo) ---------- */
+  podeEditar() { return typeof window.isCrmSuperAdmin === "function" && window.isCrmSuperAdmin(); },
+  abrirEditor() { this.editor = { itens: JSON.parse(JSON.stringify(this.obras || [])), busca: "", soAcomp: true, erro: "" }; this.render(); },
+  fecharEditor() { this.editor = null; this.render(); },
+  edSet(cc, campo, v) {
+    const e = this.editor; if (!e) return;
+    const it = e.itens.find((x) => x.cc === cc); if (!it) return;
+    if (campo === "acompanhar") it.acompanhar = !!v;
+    else if (campo === "fase") it.fase = v;
+    else if (campo === "participacao") it.participacao = Number(String(v).replace(",", ".")) || 0;
+    else {
+      const t = it.terreno || (it.terreno = { valor: 0, curva: null, inicio: null });
+      if (campo === "terreno_valor") t.valor = Number(String(v).replace(/\./g, "").replace(",", ".")) || 0;
+      if (campo === "terreno_inicio") t.inicio = /^\d{4}-\d{2}$/.test(v) ? v : null;
+      if (campo === "terreno_curva") { const c = (this._curvas || []).find((x) => String(x.nome) === String(v)); t.curva = c ? c.meses.map(Number) : null; t.curva_nome = c ? c.nome : ""; }
+      if (!(t.valor > 0)) it.terreno = t.valor > 0 ? t : (t.curva || t.inicio ? t : null);
+    }
+  },
+  edBusca(v) { this.editor.busca = v; this.render(); const i = document.getElementById("oob-ed-busca"); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } },
+  edIncluir() {
+    const e = this.editor, el = document.getElementById("oob-ed-novo");
+    const cc = String((el && el.value) || "").split(" - ")[0].replace(/\D/g, "");
+    if (!cc) return;
+    if (e.itens.some((x) => x.cc === cc)) { const x = e.itens.find((y) => y.cc === cc); x.acompanhar = true; return this.render(); }
+    const l = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    const c = l.find((x) => String(x.id) === cc);
+    e.itens.push({ cc, nome: c ? c.name || c.nome || "" : "", acompanhar: true, fase: "Em Andamento", cidade: "", participacao: 0, participacao_rateio: 0, parceria_orion: null, terreno: null, rateio: [] });
+    this.render();
+  },
+  async edSalvar() {
+    const e = this.editor; if (!e) return;
+    try {
+      const nova = await window.OrionStore.gravar("acompanhamento_obras", e.itens.map((x) => Object.assign({}, x, { terreno: x.terreno && (x.terreno.valor > 0) ? x.terreno : null })), this.obrasVersao);
+      this.editor = null; this.grupos = null; this.aviso = "Obras acompanhadas salvas.";
+      await this.carregarBase();
+      this.obrasVersao = typeof nova === "number" ? nova : this.obrasVersao;
+    } catch (err) { e.erro = err.conflito ? "Outra pessoa alterou as obras agora há pouco. Feche e abra de novo." : (err.message || String(err)); this.render(); }
+  },
+  htmlEditor() {
+    const e = this.editor;
+    const q = e.busca.trim().toLowerCase();
+    const lista = e.itens.filter((x) => (!e.soAcomp || x.acompanhar) && (!q || `${x.cc} ${x.nome}`.toLowerCase().indexOf(q) >= 0)).sort((a, b) => a.cc.localeCompare(b.cc, "pt-BR", { numeric: true }));
+    const curvas = (this._curvas || []).map((c) => c.nome);
+    const ccs = ((window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || []).map((c) => `<option value="${this.esc(c.id + " - " + (c.name || c.nome || ""))}">`).join("");
+    const linhas = lista.map((x) => { const t = x.terreno || {}; const k = this.esc(x.cc); return `<tr>
+        <td class="is-center"><input type="checkbox" ${x.acompanhar ? "checked" : ""} onchange="OrionObrasApp.edSet('${k}', 'acompanhar', this.checked)"></td>
+        <td><b>${k}</b> ${this.esc(x.nome)}</td>
+        <td><select class="idx-select" style="height:30px;width:100%" onchange="OrionObrasApp.edSet('${k}', 'fase', this.value)">${["Em Andamento", "Encerrado"].map((f) => `<option ${x.fase === f ? "selected" : ""}>${f}</option>`).join("")}</select></td>
+        <td><input class="idx-select" style="height:30px;width:100%;text-align:right" value="${x.participacao ? String(x.participacao).replace(".", ",") : ""}" placeholder="0" onchange="OrionObrasApp.edSet('${k}', 'participacao', this.value)"></td>
+        <td><input class="idx-select" style="height:30px;width:100%;text-align:right" value="${t.valor ? Number(t.valor).toLocaleString("pt-BR") : ""}" placeholder="0,00" onchange="OrionObrasApp.edSet('${k}', 'terreno_valor', this.value)"></td>
+        <td><select class="idx-select" style="height:30px;width:100%" onchange="OrionObrasApp.edSet('${k}', 'terreno_curva', this.value)"><option value="">À vista (sem curva)</option>${curvas.map((n) => `<option ${t.curva_nome === n ? "selected" : ""}>${this.esc(n)}</option>`).join("")}${t.curva && !t.curva_nome ? `<option selected value="">curva do Órion (${t.curva.length} meses)</option>` : ""}</select></td>
+        <td><input type="month" class="idx-select" style="height:30px;width:100%" value="${this.esc(t.inicio || "")}" onchange="OrionObrasApp.edSet('${k}', 'terreno_inicio', this.value)"></td></tr>`; }).join("");
+    return `<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
+        <div><div style="font-weight:800;color:#105436">Obras do acompanhamento</div><div style="font-size:0.72rem;color:#64748b">Como no Órion (Apoio › Centro de Custo): marque os centros de custo que entram no painel, a fase, a participação do parceiro (%) e o custo de terreno informado com a curva e o mês de início do pagamento.</div></div>
+        <div style="margin-left:auto"><label class="ml-emp-filter-label">Buscar</label><input id="oob-ed-busca" class="idx-select" style="height:40px;width:220px" value="${this.esc(e.busca)}" placeholder="código ou nome" oninput="OrionObrasApp.edBusca(this.value)"></div>
+        <label style="display:flex;gap:6px;align-items:center;height:40px;font-size:0.8rem"><input type="checkbox" ${e.soAcomp ? "checked" : ""} onchange="OrionObrasApp.editor.soAcomp=this.checked;OrionObrasApp.render()"> só os acompanhados</label>
+        <div><label class="ml-emp-filter-label">Incluir centro de custo</label><input id="oob-ed-novo" list="oob-ed-ccs" class="idx-select" style="height:40px;width:260px" placeholder="código ou nome"><datalist id="oob-ed-ccs">${ccs}</datalist></div>
+        <button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionObrasApp.edIncluir()">Incluir</button>
+        <button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionObrasApp.fecharEditor()">Cancelar</button>
+        <button type="button" class="btn btn-primary" style="height:40px" onclick="OrionObrasApp.edSalvar()">Salvar</button></div>
+      ${e.erro ? `<div style="padding:8px 12px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${this.esc(e.erro)}</div>` : ""}
+      <div class="cc-scroll" style="max-height:66vh"><table class="cc-table"><colgroup><col style="width:70px"><col><col style="width:140px"><col style="width:100px"><col style="width:140px"><col style="width:220px"><col style="width:150px"></colgroup>
+        <thead><tr><th class="is-center">No painel</th><th>Centro de custo</th><th>Fase</th><th class="is-right">Participação %</th><th class="is-right">Terreno (R$)</th><th>Curva do terreno</th><th>Início</th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="7" style="text-align:center;padding:16px">Nenhum centro de custo neste filtro.</td></tr>`}</tbody></table></div>`;
   },
 
   render() {
@@ -331,8 +432,8 @@ const OrionObrasApp = {
     root.innerHTML = `${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#105436;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:16px;color:#64748b;"><div class="spinner" style="margin:0 auto 10px;"></div>${this.esc(this.passo || "Aguarde…")}</div>` : ""}
-      ${this.grupos ? (this.aberto ? this.htmlDetalhe() : this.htmlLista()) : ""}`;
-    if (!this.aberto && this.grupos && window.MlEmpresaFilter && document.getElementById("oob-emp")) {
+      ${this.editor ? this.htmlEditor() : this.grupos ? (this.aberto ? this.htmlDetalhe() : this.htmlLista()) : ""}`;
+    if (!this.editor && !this.aberto && this.grupos && window.MlEmpresaFilter && document.getElementById("oob-emp")) {
       const nomes = [...new Set(this.linhasLista().map((r) => r.nome))];
       MlEmpresaFilter.bind("oob-emp", {
         toggleOpen: () => { this.filtroEmpAberto = !this.filtroEmpAberto; this.render(); },
