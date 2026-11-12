@@ -1055,8 +1055,16 @@
   }
 
   async function chamarPublicar(id) {
+    // Pede o token já no clique: se não houver um pronto, abre a janela da Microsoft para confirmar.
+    const auth = window.MouraAuth;
+    let pedidoToken = Promise.resolve("");
+    try {
+      if (auth && typeof auth.getIntegraTokenInterativo === "function") pedidoToken = auth.getIntegraTokenInterativo();
+      else if (auth && typeof auth.getIntegraToken === "function") pedidoToken = auth.getIntegraToken();
+    } catch (e) {}
     let token = "";
-    try { if (window.MouraAuth && typeof window.MouraAuth.getIntegraToken === "function") token = await window.MouraAuth.getIntegraToken(); } catch (e) {}
+    try { token = await pedidoToken; } catch (e) { token = ""; }
+    if (!token) return { error: "Não consegui confirmar seu login Microsoft. Se abriu uma janela da Microsoft, escolha sua conta da Moura Leite; se não abriu, libere pop-ups para este site e tente de novo." };
     const res = await fetch("/api/publicar", {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, token ? { "X-Integra-Token": token } : {}),

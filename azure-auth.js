@@ -353,6 +353,29 @@ async function getIntegraToken() {
   return novo || pronto || "";
 }
 
+// Para ações sensíveis (ex.: publicar na produção): se não houver token pronto, abre a janela da
+// Microsoft na hora. Deve ser chamada direto no clique (sem esperar nada antes), senão o navegador
+// bloqueia a janela.
+function getIntegraTokenInterativo() {
+  const pronto = getIntegraTokenSync();
+  if (pronto) return Promise.resolve(pronto);
+  if (!msalInstance || typeof msalInstance.acquireTokenPopup !== "function") return Promise.resolve("");
+  const sessao = getCurrentUser();
+  const pedido = { scopes: ["user.read"] };
+  const conta = contaMicrosoftAtual();
+  if (conta) pedido.account = conta;
+  else if (sessao && sessao.email) pedido.loginHint = sessao.email;
+  const guardar = (r) => {
+    const token = (r && r.idToken) || "";
+    if (token) tokenIntegra = { valor: token, exp: expiracaoDoToken(token) };
+    return token;
+  };
+  return msalInstance.acquireTokenPopup(pedido).then(guardar).catch((e) => {
+    console.warn("[Integra] Não foi possível confirmar o login Microsoft:", (e && (e.errorCode || e.message)) || e);
+    return "";
+  });
+}
+
 initSessionChannel();
 initializeMsal();
 
@@ -367,5 +390,6 @@ window.MouraAuth = {
   validateDomain,
   clearMsalInteractionLock,
   getIntegraToken,
-  getIntegraTokenSync
+  getIntegraTokenSync,
+  getIntegraTokenInterativo
 };

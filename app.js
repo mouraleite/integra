@@ -3758,12 +3758,9 @@ function switchTab(tabId, titleOverride, showLoader = false) {
       return;
     }
   }
-  if (tabId === 'teste' && typeof window.isCrmSuperAdmin === 'function' && !window.isCrmSuperAdmin()) {
-    const canTeste = typeof window.hasCrmPerm === 'function' && window.hasCrmPerm('mod_teste');
-    if (!canTeste) {
-      alert('Sem permissão para o módulo Teste.');
-      return;
-    }
+  if (tabId === 'teste') {
+    tabId = 'construcao-home';
+    titleOverride = 'Home';
   }
   if (tabId === 'configuracoes' && typeof window.hasFinCrAction === 'function') {
     const canCfg = window.hasFinCrAction('configuracoes', 'acessar')
@@ -4232,8 +4229,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof ConfigUsersApp !== "undefined") ConfigUsersApp.loadUsers();
   } else if (tabId === "suporte") {
     if (window.SuporteApp && typeof window.SuporteApp.renderAdmin === "function") window.SuporteApp.renderAdmin();
-  } else if (tabId === "teste") {
-    if (window.TesteApp && typeof window.TesteApp.init === "function") window.TesteApp.init();
   } else if (tabId === "plano-financeiro") {
     if (typeof PlanoFinanceiroApp !== "undefined") PlanoFinanceiroApp.init();
   } else if (tabId === "doc-padrao") {
@@ -5621,7 +5616,11 @@ window.CRM_MENU_PERMS_RETIRADAS = [
   "sub_soc_geral",
   "sub_soc_geral_estrutura_societaria_acessar",
   "sub_soc_geral_estrutura_societaria_visualizar",
-  "sub_soc_geral_estrutura_societaria_editar"
+  "sub_soc_geral_estrutura_societaria_editar",
+  "mod_teste",
+  "mod_teste_acessar",
+  "mod_teste_visualizar",
+  "mod_teste_editar"
 ];
 
 window.crmPermShrinkConfirmed = function(obj) {
