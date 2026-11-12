@@ -165,3 +165,32 @@ test("vendas: grade, VGV = ticket × unidades, distrato separado e mês fechado"
   const vazio = O.gradeParaVendas([{ cc: "9", meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) }], 2027);
   assert.deepStrictEqual(vazio.map((x) => x.mes), [1]);
 });
+
+test("semáforo igual ao do Órion", () => {
+  assert.strictEqual(O.semaforo(100, 0, "DESPESAS").titulo, "Novo");
+  assert.strictEqual(O.semaforo(10000000 + 499999, 10000000, "DESPESAS").titulo, "Imaterial");
+  assert.strictEqual(O.semaforo(9000000, 10000000, "DESPESAS").titulo, "Favorável");
+  assert.strictEqual(O.semaforo(104000000, 100000000, "DESPESAS").titulo, "Dentro da tolerância");
+  assert.strictEqual(O.semaforo(108000000, 100000000, "DESPESAS").titulo, "Atenção");
+  assert.strictEqual(O.semaforo(12000000, 10000000, "DESPESAS").titulo, "Acima do limite");
+  assert.strictEqual(O.semaforo(12000000, 10000000, "RECEITAS").titulo, "Favorável");
+  assert.strictEqual(O.semaforo(-12000000, -10000000, "RESULTADO").titulo, "Acima do limite");
+});
+
+test("DFC gerencial: totais por grupo-pai, AV, AH e geração de caixa", () => {
+  const grupos = [
+    { id: "g_01", name: "01 RECEITAS", type: "total_n1" }, { id: "g_01_01", name: "01.01 VENDA", type: "resultado", parentId: "g_01" },
+    { id: "g_03", name: "03 CUSTOS E DESPESAS", type: "formula" },
+    { id: "g_05", name: "05 DESPESAS", type: "total_n1" }, { id: "g_05_03", name: "05.03 ADM", type: "resultado", parentId: "g_05" }, { id: "g_05_04", name: "05.04 PESSOAL", type: "resultado", parentId: "g_05" }
+  ];
+  const r = O.dfcGerencial(grupos, { g_01_01: 1000000, g_05_03: -300000, g_05_04: -200000 }, { g_01_01: 800000, g_05_03: -400000 }, { g_01_01: 400000 });
+  const por = Object.fromEntries(r.linhas.map((l) => [l.id, l]));
+  assert.ok(!por.g_03);
+  assert.strictEqual(por.g_05.orcado, -500000);
+  assert.strictEqual(por.g_05.realizado, -400000);
+  assert.strictEqual(por.g_01.ah, 1);
+  assert.strictEqual(por.g_05_03.av, -0.5);
+  assert.deepStrictEqual([r.geracao.orcado, r.geracao.realizado], [500000, 400000]);
+  const og = O.orcadoPorGrupo([{ plano: "2010101", m: [100, 200, 300] }, { plano: "9", m: [5] }], (p) => (p === "2010101" ? "g_05_03" : null), -1, 2);
+  assert.deepStrictEqual(og, { g_05_03: -300 });
+});

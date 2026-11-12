@@ -572,61 +572,39 @@ const OrionOrcamentosApp = {
 
   /* ---------- orçado x realizado (realizado pela regra do Integra: caixa e bancos, visão DFC) ---------- */
 
-  ateMes(ano) {
-    const hoje = new Date();
-    if (Number(ano) < hoje.getFullYear()) return 12;
-    if (Number(ano) > hoje.getFullYear()) return 0;
-    return hoje.getMonth(); // meses completos até o mês passado
-  },
-
   async carregarRealizado() {
     const a = this.aberto;
     const C = this.C();
     if (!a) return;
-    const fluxo = window.FluxoCaixaApp;
-    const dfc = window.OrcamentoDfcApp || (typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null);
-    a.realizado = { carregando: true, erro: "", ate: this.ateMes(a.cab.ano) };
+    const R = window.OrionRealizado;
+    a.realizado = { carregando: true, erro: "" };
     this.render();
     try {
-      if (!fluxo || typeof fluxo.buscarMovimentos !== "function" || typeof fluxo.allocate !== "function" || !dfc || typeof dfc.grupoDaConta !== "function") {
-        throw new Error("A consulta de caixa e banco do Integra não está disponível nesta página.");
-      }
-      const ate = a.realizado.ate;
+      if (!R) throw new Error("Arquivo do realizado não carregou. Recarregue a página.");
+      const ate = R.ateMes(a.cab.ano);
       if (!ate) throw new Error(`O ano ${a.cab.ano} ainda não tem mês completo para comparar.`);
-      const ccs = new Set(a.itens.map((l) => String(l.cc)));
-      const catalogo = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
-      const empresas = [...new Set(catalogo.filter((c) => ccs.has(String(c.id).replace(/\D/g, ""))).map((c) => String(c.idCompany != null ? c.idCompany : c.companyId || "")).filter(Boolean))];
+      const ccs = new Set(a.itens.map((l) => String(l.cc).replace(/\D/g, "")));
+      const empresas = R.empresasDosCcs([...ccs]);
       if (!empresas.length) throw new Error("Não achei a empresa dos centros de custo deste orçamento no cadastro do Integra (Centros de Custo).");
-      if (typeof fluxo.ensureCategories === "function") await fluxo.ensureCategories();
-      const grupos = (fluxo.visao && fluxo.visao() && fluxo.visao().groups) || (dfc.visaoDfc && dfc.visaoDfc().groups) || [];
-      const byId = {};
-      grupos.forEach((g) => { if (g && g.id) byId[g.id] = g; });
-      const fim = new Date(Number(a.cab.ano), ate, 0);
-      const ini = `${a.cab.ano}-01-01`;
-      const fimIso = `${a.cab.ano}-${String(ate).padStart(2, "0")}-${String(fim.getDate()).padStart(2, "0")}`;
-      const movs = await fluxo.buscarMovimentos(ini, fimIso, empresas);
-      const aloc = [];
-      (movs || []).forEach((mov) => {
-        (fluxo.allocate(mov, 1) || []).forEach((x) => {
-          if (!x) return;
-          const gid = dfc.grupoDaConta(x.categoryId, x.categoryName);
-          const node = gid && byId[gid];
-          if (!node) return; // conta fora da visão DFC do Integra (ex.: transferência): mesma regra da DFC
-          const valor = fluxo.signedAmount(node, x.categoryId, x.categoryName, x.amount, x.reducer, x.categoryType, x.mov);
-          aloc.push({ cc: String(fluxo.ccIdOf(x.costCenterId)).replace(/\D/g, ""), plano: String(x.categoryId || "").replace(/\D/g, ""), mes: Number(String(x.month || "").slice(5, 7)), valor });
-        });
-      });
+      const res = await R.buscar(a.cab.ano, ate, empresas);
       const sinal = String(a.cab.tipo).toUpperCase() === "RECEITAS" ? 1 : -1;
       const linhas = a.itens.map((l) => Object.assign({}, l, { cc: String(l.cc).replace(/\D/g, ""), plano: String(l.plano).replace(/\D/g, "") }));
-      const r = C.orcadoRealizado(linhas, C.agregarRealizado(aloc, sinal), ate);
-      // só mostra o "fora do orçamento" dos planos e centros de custo deste departamento
+      const r = C.orcadoRealizado(linhas, C.agregarRealizado(res.alocacoes, sinal), ate);
       const planosDep = new Set(linhas.map((l) => l.plano));
       r.foraDoOrcamento = r.foraDoOrcamento.filter((x) => planosDep.has(x.plano) && ccs.has(x.cc));
-      a.realizado = Object.assign(r, { carregando: false, erro: "", ate, empresas, movimentos: (movs || []).length });
+      const tipo = String(a.cab.tipo).toUpperCase() === "RECEITAS" ? "RECEITAS" : "DESPESAS";
+      r.linhas.forEach((x) => { x.semaforo = C.semaforo(x.realizado, x.orcado, tipo); });
+      a.realizado = Object.assign(r, { carregando: false, erro: "", ate, empresas: res.empresas, movimentos: res.movimentos, tipo });
     } catch (e) {
       a.realizado = { carregando: false, erro: e.message || String(e) };
     }
     this.render();
+  },
+
+  farol(s) {
+    if (!s) return "";
+    const cores = { azul: "#0ea5e9", cinza: "#cbd5e1", verde: "#10b981", amarelo: "#fbbf24", vermelho: "#ef4444" };
+    return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${cores[s.cor] || "#cbd5e1"};display:inline-block"></span>${this.esc(s.titulo)}</span>`;
   },
 
   fecharRealizado() { if (this.aberto) this.aberto.realizado = null; this.render(); },
@@ -642,10 +620,10 @@ const OrionOrcamentosApp = {
     const pct = (v) => (v == null ? "—" : (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
     return `<div style="margin:6px 0;font-weight:800;color:#105436">Orçado x realizado — jan a ${C.MESES[r.ate - 1]}/${this.esc(this.aberto.cab.ano)}</div>
       <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">Realizado pela regra do Integra: caixa e bancos do Sienge pela data do movimento, nas contas da visão DFC, 100% de cada empresa (${r.movimentos} movimentos de ${r.empresas.length} empresa(s)).</div>
-      <div class="cc-scroll"><table class="cc-table"><colgroup><col><col><col style="width:130px"><col style="width:130px"><col style="width:130px"><col style="width:130px"><col style="width:90px"></colgroup>
-      <thead><tr><th>Centro de custo</th><th>Plano</th><th class="is-right">Orçado no ano</th><th class="is-right">Orçado no período</th><th class="is-right">Realizado</th><th class="is-right">Diferença</th><th class="is-right">% realizado</th></tr></thead>
-      <tbody>${lin.map((x) => `<tr><td>${this.esc(x.cc)} ${this.esc(x.cc_nome)}</td><td>${this.esc(x.plano)} ${this.esc(x.plano_nome)}</td><td class="is-right">${C.fmtReais(x.orcado_ano, true)}</td><td class="is-right">${C.fmtReais(x.orcado, true)}</td><td class="is-right">${C.fmtReais(x.realizado, true)}</td><td class="is-right" style="color:${x.dif > 0 ? "#b91c1c" : "#105436"}">${C.fmtReais(x.dif, true)}</td><td class="is-right">${pct(x.perc)}</td></tr>`).join("")}
-      <tr class="oo-total"><td colspan="3">Total</td><td class="is-right">${C.fmtReais(tO, true)}</td><td class="is-right">${C.fmtReais(tR, true)}</td><td class="is-right">${C.fmtReais(tR - tO, true)}</td><td class="is-right">${pct(tO ? tR / tO : null)}</td></tr></tbody></table></div>
+      <div class="cc-scroll"><table class="cc-table"><colgroup><col><col><col style="width:130px"><col style="width:130px"><col style="width:130px"><col style="width:130px"><col style="width:90px"><col style="width:150px"></colgroup>
+      <thead><tr><th>Centro de custo</th><th>Plano</th><th class="is-right">Orçado no ano</th><th class="is-right">Orçado no período</th><th class="is-right">Realizado</th><th class="is-right">Diferença</th><th class="is-right">% realizado</th><th>Semáforo</th></tr></thead>
+      <tbody>${lin.map((x) => `<tr><td>${this.esc(x.cc)} ${this.esc(x.cc_nome)}</td><td>${this.esc(x.plano)} ${this.esc(x.plano_nome)}</td><td class="is-right">${C.fmtReais(x.orcado_ano, true)}</td><td class="is-right">${C.fmtReais(x.orcado, true)}</td><td class="is-right">${C.fmtReais(x.realizado, true)}</td><td class="is-right" style="color:${x.dif > 0 ? "#b91c1c" : "#105436"}">${C.fmtReais(x.dif, true)}</td><td class="is-right">${pct(x.perc)}</td><td>${this.farol(x.semaforo)}</td></tr>`).join("")}
+      <tr class="oo-total"><td colspan="3">Total</td><td class="is-right">${C.fmtReais(tO, true)}</td><td class="is-right">${C.fmtReais(tR, true)}</td><td class="is-right">${C.fmtReais(tR - tO, true)}</td><td class="is-right">${pct(tO ? tR / tO : null)}</td><td>${this.farol(C.semaforo(tR, tO, r.tipo))}</td></tr></tbody></table></div>
       ${r.foraDoOrcamento.length ? `<div style="margin:10px 0 6px;font-weight:800;color:#92400e">Realizado sem linha no orçamento (${r.foraDoOrcamento.length})</div>
       <div class="cc-scroll" style="max-height:240px"><table class="cc-table"><colgroup><col><col><col style="width:140px"></colgroup><thead><tr><th>Centro de custo</th><th>Plano</th><th class="is-right">Realizado</th></tr></thead>
       <tbody>${r.foraDoOrcamento.sort((x, y) => y.realizado - x.realizado).map((x) => `<tr><td>${this.esc(x.cc)}</td><td>${this.esc(x.plano)}</td><td class="is-right">${C.fmtReais(x.realizado, true)}</td></tr>`).join("")}</tbody></table></div>` : ""}`;

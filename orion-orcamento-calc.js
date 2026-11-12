@@ -414,6 +414,73 @@
     return [...new Set(erros)];
   }
 
-  return { vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- semáforo do desvio (mesma régua do Órion: lib/semaforoDesvio.ts) ---------- */
+
+  const SEMAFORO_IMATERIAL = 500000; // R$ 5.000 em centavos
+  const SEMAFORO_TOLERANCIA = 0.05;
+  const SEMAFORO_LIMITE = 0.10;
+
+  function favoravel(varC, tipo) {
+    return tipo === "DESPESAS" ? varC <= 0 : varC >= 0;
+  }
+
+  /** n = realizado, ref = orçado (centavos). tipo: DESPESAS | RECEITAS | VENDAS | RESULTADO. */
+  function semaforo(n, ref, tipo) {
+    const v = n - ref;
+    if (ref === 0 && n !== 0) return { cor: "azul", titulo: "Novo" };
+    if (Math.abs(v) < SEMAFORO_IMATERIAL) return { cor: "cinza", titulo: "Imaterial" };
+    const p = ref === 0 ? 0 : Math.abs(v / Math.abs(ref));
+    const fav = favoravel(v, tipo);
+    if (fav || p <= SEMAFORO_TOLERANCIA) return { cor: "verde", titulo: fav ? "Favorável" : "Dentro da tolerância" };
+    if (p <= SEMAFORO_LIMITE) return { cor: "amarelo", titulo: "Atenção" };
+    return { cor: "vermelho", titulo: "Acima do limite" };
+  }
+
+  /* ---------- DFC gerencial na visão DFC do Integra ---------- */
+
+  /**
+   * grupos: visão DFC do Integra (id, name, type, parentId) na ordem da tela.
+   * orc / rea / n1: { gid: centavos com o sinal da DFC (entradas +, saídas -) }.
+   * Devolve linhas na ordem da visão, com totais dos grupos-pai, AH (real x real N-1), AV (sobre o total de entradas realizado),
+   * diferença e semáforo (régua do Órion, tipo RESULTADO: maior = melhor, pois os valores já têm o sinal da DFC).
+   */
+  function dfcGerencial(grupos, orc, rea, n1) {
+    const gs = (grupos || []).filter((g) => g && g.id && g.type !== "formula");
+    const filhos = {};
+    gs.forEach((g) => { if (g.parentId) (filhos[g.parentId] = filhos[g.parentId] || []).push(g.id); });
+    const val = (mapa, id) => {
+      if (filhos[id] && filhos[id].length) return filhos[id].reduce((s, f) => s + val(mapa, f), 0);
+      return Number((mapa || {})[id]) || 0;
+    };
+    const entradas = gs.filter((g) => !g.parentId && /^g_01$/.test(g.id)).reduce((s, g) => s + val(rea, g.id), 0);
+    const linhas = gs.map((g) => {
+      const o = val(orc, g.id), r = val(rea, g.id), a = val(n1, g.id);
+      return {
+        id: g.id, nome: g.name || g.nome || g.id, nivel: g.parentId ? 2 : 1,
+        orcado: o, realizado: r, n1: a, dif: r - o,
+        ah: a ? (r - a) / Math.abs(a) : null,
+        av: entradas ? r / entradas : null,
+        semaforo: semaforo(r, o, "RESULTADO")
+      };
+    });
+    const topo = gs.filter((g) => !g.parentId);
+    const total = (m) => topo.reduce((s, g) => s + val(m, g.id), 0);
+    return { linhas, geracao: { orcado: total(orc), realizado: total(rea), n1: total(n1), semaforo: semaforo(total(rea), total(orc), "RESULTADO") }, entradas };
+  }
+
+  /** Soma linhas de orçamento por grupo da DFC. grupoDe(plano) -> gid; sinal: +1 receitas, -1 despesas. */
+  function orcadoPorGrupo(linhas, grupoDe, sinal, ate) {
+    const out = {};
+    const ateN = ate == null ? 12 : Number(ate);
+    (linhas || []).forEach((l) => {
+      const g = grupoDe(l.plano);
+      if (!g) return;
+      const v = (l.m || []).slice(0, ateN).reduce((s, x) => s + (Number(x) || 0), 0) * sinal;
+      out[g] = (out[g] || 0) + v;
+    });
+    return out;
+  }
+
+  return { SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
