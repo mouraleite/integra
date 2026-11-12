@@ -3944,6 +3944,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-analise": "Análise de orçamento (Órion)",
     "orion-oxr": "Orçado × Realizado (Órion)",
     "orion-carga": "Carga do Órion",
+    "orion-carga-sharepoint": "Carga SharePoint (Órion)",
     "orion-departamentos": "Departamentos do orçamento",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
@@ -4041,6 +4042,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-analise": "list-tree",
     "orion-oxr": "scale",
     "orion-carga": "upload",
+    "orion-carga-sharepoint": "folder-open",
     "orion-departamentos": "network",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
@@ -4292,6 +4294,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionOrcamentosApp !== "undefined") OrionOrcamentosApp.init();
   } else if (tabId === "orion-dfc") {
     if (typeof OrionDfcApp !== "undefined") OrionDfcApp.init();
+  } else if (tabId === "orion-carga-sharepoint") {
+    if (typeof OrionCargaSharepointApp !== "undefined") OrionCargaSharepointApp.init();
   } else if (tabId === "orion-carga") {
     if (typeof OrionCargaApp !== "undefined") OrionCargaApp.init();
   } else if (tabId === "orion-oxr") {

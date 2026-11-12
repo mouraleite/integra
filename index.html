@@ -1218,6 +1218,9 @@
             <li data-tab="orion-carga" data-module="sub_orion_geral_carga_acessar">
               <a onclick="switchTab('orion-carga', 'Carga do Órion')">Carga do Órion</a>
             </li>
+            <li data-tab="orion-carga-sharepoint" data-module="sub_orion_geral_carga_sharepoint_acessar">
+              <a onclick="switchTab('orion-carga-sharepoint', 'Carga SharePoint (Órion)')">Carga SharePoint</a>
+            </li>
             <li data-tab="orion-orcamentos" data-module="sub_orion_geral_orcamentos_acessar">
               <a onclick="switchTab('orion-orcamentos', 'Orçamentos e forecasts (Órion)')">Orçamentos e forecasts</a>
             </li>
@@ -1822,6 +1825,11 @@
       </section>
 
       <!-- TAB: ÓRION (TRANSIÇÃO) - CARGA DO ÓRION -->
+      <!-- TAB: ÓRION (TRANSIÇÃO) - CARGA SHAREPOINT -->
+      <section id="tab-orion-carga-sharepoint" class="tab-pane" style="display: none;">
+        <div id="orion-carga-sharepoint-root" style="padding: 16px;"></div>
+      </section>
+
       <section id="tab-orion-carga" class="tab-pane" style="display: none;">
         <div id="orion-carga-root" style="padding: 16px;"></div>
       </section>
@@ -8823,6 +8831,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-viabilidade-fotos.js?v=2134o1"></script>
   <script defer src="orion-acompanhamento.js?v=2134o1"></script>
   <script defer src="orion-carga.js?v=2134o1"></script>
+  <script defer src="orion-sharepoint-calc.js?v=2134o1"></script>
+  <script defer src="orion-carga-sharepoint.js?v=2134o1"></script>
   <script defer src="orion-departamentos.js?v=2134o1"></script>
   <script defer src="orion-departamentos-ui.js?v=2134o1"></script>
   <script defer src="verificar-construcao.js?v=2134"></script>

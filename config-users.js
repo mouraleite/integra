@@ -514,6 +514,7 @@ const ConfigUsersApp = {
       name: "Órion (transição)", icon: "orbit", key: "mod_orion",
       submodules: [{ name: "Órion (transição)", key: "sub_orion_geral", actions: [
         { id: "carga", label: "Carga do Órion (só administrador grava)" },
+        { id: "carga_sharepoint", label: "Carga SharePoint (forecasts do relatório 2653; só administrador grava)" },
         { id: "orcamentos", label: "Orçamentos e forecasts" },
         { id: "aprovar_orcamentos", label: "Aprovar orçamentos e forecasts" },
         { id: "resumo_orcamento", label: "Resumo do orçamento" },
