@@ -246,3 +246,15 @@ test("analítico de gastos: visão por CC × plano e por plano", () => {
   assert.strictEqual(mat.realizado, 150000);
   assert.strictEqual(mat.r[0], 120000);
 });
+
+test("forecast: usa só uma versão (a mais recente ou a escolhida)", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const cab = (id, tipo, descricao, corte, versao) => ({ _id: id, ano: 2026, tipo, descricao, mes_corte: corte, versao: versao || 1, status: "Importado Sienge", departamento: { id: 18 } });
+  const cabs = [cab("a", "DESPESAS", "Forecast - 2+10", 3), cab("b", "RECEITAS", "Forecast - 2+10", 3), cab("c", "DESPESAS", "Forecast - 8+4", 9), cab("d", "RECEITAS", "Forecast - 8+4", 9), cab("e", "DESPESAS", "Forecast - 8+4", 9, 2), cab("v", "VENDAS", "Forecast - 9+3", 10)];
+  assert.deepStrictEqual(C.versoesForecast(cabs, 2026).map((v) => v.descricao), ["Forecast - 8+4", "Forecast - 2+10"]);
+  const r = C.documentosVigentes(cabs, { ano: 2026, base: "forecast" });
+  assert.strictEqual(r.versao, "Forecast - 8+4");
+  assert.deepStrictEqual(r.docs.map((d) => d._id).sort(), ["d", "e"]);
+  assert.deepStrictEqual(C.documentosVigentes(cabs, { ano: 2026, base: "forecast", versao: "Forecast - 2+10", tipos: ["DESPESAS"] }).docs.map((d) => d._id), ["a"]);
+  assert.strictEqual(C.documentosVigentes(cabs, { ano: 2026, base: "orcamento", dept: "99" }).docs.length, 0);
+});

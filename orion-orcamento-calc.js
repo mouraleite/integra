@@ -583,6 +583,46 @@
     return { linhas, total, meses: r.meses, comDesvio };
   }
 
-  return { analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- escolha dos documentos vigentes (orçamento ou uma versão do forecast) ---------- */
+
+  /** Versões de forecast do ano (pela descrição, ex. "Forecast - 8+4"), da mais recente (maior mês de corte) para a mais antiga. */
+  function versoesForecast(cabs, ano, tipos) {
+    const tp = (tipos || ["DESPESAS", "RECEITAS"]).map((t) => t.toUpperCase());
+    const m = new Map();
+    (cabs || []).forEach((c) => {
+      if (String(c.ano) !== String(ano) || c.status === "Substituído" || tp.indexOf(String(c.tipo).toUpperCase()) < 0) return;
+      const d = String(c.descricao || "");
+      const corte = Number(c.mes_corte) || 0;
+      if (!m.has(d) || corte > m.get(d).corte) m.set(d, { descricao: d, corte });
+    });
+    return [...m.values()].sort((a, b) => (b.corte - a.corte) || b.descricao.localeCompare(a.descricao, "pt-BR", { numeric: true }));
+  }
+
+  /**
+   * Documentos que entram nas telas de acompanhamento: do ano, dos tipos pedidos, sem substituídos, do departamento (ou todos).
+   * Forecast: só uma versão (a escolhida ou, se vazia, a mais recente); somar versões diferentes contaria o mesmo gasto várias vezes.
+   * Em cada documento (tipo × descrição × departamento × empreendimento) fica o de maior número de versão.
+   */
+  function documentosVigentes(cabs, o) {
+    const tp = (o.tipos || ["DESPESAS", "RECEITAS"]).map((t) => t.toUpperCase());
+    let versao = "";
+    if (o.base === "forecast") {
+      const vs = versoesForecast(cabs, o.ano, tp);
+      versao = o.versao && vs.some((v) => v.descricao === o.versao) ? o.versao : (vs[0] ? vs[0].descricao : "");
+    }
+    const l = (cabs || []).filter((c) => String(c.ano) === String(o.ano) && c.status !== "Substituído" &&
+      tp.indexOf(String(c.tipo).toUpperCase()) >= 0 &&
+      (!o.dept || o.dept === "TODOS" || String(c.departamento ? c.departamento.id : "") === String(o.dept)) &&
+      (o.base !== "forecast" || String(c.descricao || "") === versao));
+    const m = new Map();
+    l.forEach((c) => {
+      const k = [String(c.tipo).toUpperCase(), c.descricao, c.departamento ? c.departamento.id : "", c.produto ? c.produto.id : ""].join("|");
+      const atual = m.get(k);
+      if (!atual || (Number(c.versao) || 0) > (Number(atual.versao) || 0)) m.set(k, c);
+    });
+    return { docs: [...m.values()], versao };
+  }
+
+  return { versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

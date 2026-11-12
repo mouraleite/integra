@@ -8,6 +8,9 @@ const OrionDfcApp = {
   dept: "TODOS",
   ate: null,
   base: "orcamento",   // "orcamento" | "forecast"
+  versao: "",
+  empresas: [],
+  meses: null,
   cabs: { orcamento: null, forecast: null },
   resultado: null,
   carregando: false,
@@ -44,23 +47,15 @@ const OrionDfcApp = {
     this.render();
   },
 
-  setAno(v) { this.ano = v; this.resultado = null; this.ate = null; this.render(); },
-  setDept(v) { this.dept = v; this.resultado = null; this.render(); },
-  setAte(v) { this.ate = Number(v) || null; this.resultado = null; this.render(); },
-  setBase(v) { this.base = v; this.resultado = null; this.init(); },
+  limpar() { this.resultado = null; this.meses = null; this.render(); },
+  setAno(v) { this.ano = v; this.versao = ""; this.ate = null; this.limpar(); },
+  setDept(v) { this.dept = v; this.limpar(); },
+  setAte(v) { this.ate = Number(v) || null; this.limpar(); },
+  setBase(v) { this.base = v; this.versao = ""; this.resultado = null; this.meses = null; this.init(); },
 
-  /** Documentos vigentes do ano (despesas e receitas), sem versões substituídas; no forecast, o de maior versão por departamento. */
+  /** Documentos de despesas e receitas do ano; no forecast, só a versão escolhida (ou a mais recente). */
   vigentes() {
-    const l = (this.cabs[this.base] || []).filter((c) => String(c.ano) === String(this.ano) && c.status !== "Substituído" &&
-      ["DESPESAS", "RECEITAS"].indexOf(String(c.tipo).toUpperCase()) >= 0 &&
-      (this.dept === "TODOS" || String(c.departamento ? c.departamento.id : "") === String(this.dept)));
-    const m = new Map();
-    l.forEach((c) => {
-      const k = [String(c.tipo).toUpperCase(), c.descricao, c.departamento ? c.departamento.id : "", c.produto ? c.produto.id : ""].join("|");
-      const atual = m.get(k);
-      if (!atual || (Number(c.versao) || 0) > (Number(atual.versao) || 0)) m.set(k, c);
-    });
-    return [...m.values()];
+    return this.C().documentosVigentes(this.cabs[this.base] || [], { ano: this.ano, dept: this.dept, base: this.base, versao: this.versao }).docs;
   },
 
   async lerLinhas(cab) {
@@ -86,37 +81,20 @@ const OrionDfcApp = {
       if (!docs.length) throw new Error(`Nenhum ${this.base === "forecast" ? "forecast" : "orçamento"} de despesas ou receitas de ${this.ano} no Integra. Faça a carga do Órion em Órion (transição) › Orçamentos e forecasts.`);
       this.passo = `Lendo ${docs.length} documento(s) do ${this.base === "forecast" ? "forecast" : "orçamento"}…`;
       this.render();
-      const grupoDe = (p) => R.grupoDe(p);
-      const orcP = {}, orcA = {}, ccs = new Set();
+      const linhas = [], ccs = new Set();
       for (const cab of docs) {
-        const linhas = await this.lerLinhas(cab);
-        linhas.forEach((l) => ccs.add(String(l.cc).replace(/\D/g, "")));
         const sinal = String(cab.tipo).toUpperCase() === "RECEITAS" ? 1 : -1;
-        const p = C.orcadoPorGrupo(linhas, grupoDe, sinal, ate), a = C.orcadoPorGrupo(linhas, grupoDe, sinal, 12);
-        Object.keys(p).forEach((g) => { orcP[g] = (orcP[g] || 0) + p[g]; });
-        Object.keys(a).forEach((g) => { orcA[g] = (orcA[g] || 0) + a[g]; });
+        (await this.lerLinhas(cab)).forEach((l) => { const cc = String(l.cc).replace(/\D/g, ""); ccs.add(cc); linhas.push(Object.assign({}, l, { cc, sinal })); });
       }
       const empresas = R.empresasDosCcs([...ccs]);
       if (!empresas.length) throw new Error("Não achei as empresas dos centros de custo do orçamento no cadastro de Centros de Custo do Integra.");
-      const porGrupo = (alocs) => {
-        const out = {};
-        alocs.forEach((x) => { if (x.mes >= 1 && x.mes <= ate) out[x.gid] = (out[x.gid] || 0) + C.centavos(x.valor); });
-        return out;
-      };
       this.passo = `Lendo o realizado de ${this.ano} (${empresas.length} empresa(s))…`;
       this.render();
       const real = await R.buscar(Number(this.ano), ate, empresas);
       this.passo = `Lendo o realizado de ${Number(this.ano) - 1}…`;
       this.render();
       const realN1 = await R.buscar(Number(this.ano) - 1, ate, empresas);
-      const grupos = R.grupos();
-      const dfc = C.dfcGerencial(grupos, orcP, porGrupo(real.alocacoes), porGrupo(realN1.alocacoes));
-      const dfcAno = C.dfcGerencial(grupos, orcA, {}, {});
-      const anoPor = Object.fromEntries(dfcAno.linhas.map((l) => [l.id, l.orcado]));
-      dfc.linhas.forEach((l) => { l.orcado_ano = anoPor[l.id] || 0; });
-      dfc.geracao.orcado_ano = dfcAno.geracao.orcado;
-      const semGrupo = (real.alocacoes || []).length; // só para informação
-      this.resultado = Object.assign(dfc, { ate, empresas, docs: docs.length, movimentos: real.movimentos, movimentosN1: realN1.movimentos, semGrupo });
+      this.resultado = { bruto: true, linhas, real, realN1, ate, empresas, docs: docs.length, movimentos: real.movimentos, movimentosN1: realN1.movimentos };
     } catch (e) { this.erro = e.message || String(e); }
     this.carregando = false;
     this.passo = "";
@@ -129,9 +107,31 @@ const OrionDfcApp = {
     return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${cores[s.cor] || "#cbd5e1"};display:inline-block"></span>${this.esc(s.titulo)}</span>`;
   },
 
+  /** DFC com os filtros de empresa e meses aplicados ao que já foi lido. */
+  montar() {
+    const C = this.C(), R = this.R(), F = window.OrionFiltros;
+    const d = this.resultado;
+    const ms = new Set(F.mesesAtivos(this, d.ate));
+    const f = F.filtrarEmpresas(this, d.linhas, d.real.alocacoes), fN1 = F.filtrarEmpresas(this, [], d.realN1.alocacoes);
+    const orcP = {}, orcA = {};
+    f.linhas.forEach((l) => {
+      const g = R.grupoDe(l.plano);
+      if (!g) return;
+      (l.m || []).forEach((v, i) => { const c = (Number(v) || 0) * l.sinal; orcA[g] = (orcA[g] || 0) + c; if (ms.has(i + 1)) orcP[g] = (orcP[g] || 0) + c; });
+    });
+    const porGrupo = (alocs) => { const out = {}; alocs.forEach((x) => { if (ms.has(x.mes)) out[x.gid] = (out[x.gid] || 0) + C.centavos(x.valor); }); return out; };
+    const grupos = R.grupos();
+    const dfc = C.dfcGerencial(grupos, orcP, porGrupo(f.alocacoes), porGrupo(fN1.alocacoes));
+    const dfcAno = C.dfcGerencial(grupos, orcA, {}, {});
+    const anoPor = Object.fromEntries(dfcAno.linhas.map((l) => [l.id, l.orcado]));
+    dfc.linhas.forEach((l) => { l.orcado_ano = anoPor[l.id] || 0; });
+    dfc.geracao.orcado_ano = dfcAno.geracao.orcado;
+    return Object.assign(dfc, { ate: d.ate, meses: [...ms].sort((a, b) => a - b), empresas: this.empresas && this.empresas.length ? this.empresas : d.empresas, docs: d.docs, movimentos: d.movimentos, movimentosN1: d.movimentosN1 });
+  },
+
   htmlResultado() {
     const C = this.C();
-    const r = this.resultado;
+    const r = this.montar();
     if (!r) return "";
     const pct = (v) => (v == null ? "—" : (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
     const f = (c) => C.fmtReais(c, true);
@@ -141,7 +141,7 @@ const OrionDfcApp = {
       <td class="is-right" style="color:${l.dif < 0 ? "#b91c1c" : "#105436"}">${f(l.dif)}</td><td>${this.farol(l.semaforo)}</td>
       <td class="is-right">${f(l.n1)}</td><td class="is-right">${pct(l.ah)}</td><td class="is-right">${pct(l.av)}</td></tr>`).join("");
     const g = r.geracao;
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">Jan a ${C.MESES[r.ate - 1]}/${this.esc(this.ano)} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC, 100% das empresas: ${this.esc(r.empresas.join(", "))}) · ${r.movimentos} movimentos (${r.movimentosN1} em ${Number(this.ano) - 1}). Sinal da DFC: entradas positivas, saídas negativas. AH = realizado contra realizado do ano anterior; AV = sobre o total de entradas realizado.</div>
+    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">${r.meses.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao }).versao) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC, 100% das empresas: ${this.esc(r.empresas.join(", "))}) · ${r.movimentos} movimentos (${r.movimentosN1} em ${Number(this.ano) - 1}). Sinal da DFC: entradas positivas, saídas negativas. AH = realizado contra realizado do ano anterior; AV = sobre o total de entradas realizado.</div>
       <div class="cc-scroll"><table class="cc-table">
         <colgroup><col><col style="width:120px"><col style="width:120px"><col style="width:120px"><col style="width:120px"><col style="width:160px"><col style="width:120px"><col style="width:80px"><col style="width:80px"></colgroup>
         <thead><tr><th>Grupo da DFC</th><th class="is-right">Orçado no ano</th><th class="is-right">Orçado no período</th><th class="is-right">Realizado</th><th class="is-right">Diferença</th><th>Semáforo</th><th class="is-right">Realizado ${Number(this.ano) - 1}</th><th class="is-right">AH</th><th class="is-right">AV</th></tr></thead>
@@ -162,20 +162,11 @@ const OrionDfcApp = {
     l.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
     const ateSug = (this.R() && this.R().ateMes(this.ano)) || 12;
     const ate = this.ate || ateSug;
-    root.innerHTML = `
-      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <div style="display:flex;gap:6px">
-          <button type="button" class="btn ${this.base === "orcamento" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionDfcApp.setBase('orcamento')">Orçamento</button>
-          <button type="button" class="btn ${this.base === "forecast" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionDfcApp.setBase('forecast')">Forecast</button>
-        </div>
-        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionDfcApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Até o mês</label><select class="idx-select" style="height:40px" onchange="OrionDfcApp.setAte(this.value)">${C.MESES.map((m, i) => `<option value="${i + 1}" ${i + 1 === ate ? "selected" : ""}>${m}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionDfcApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-        <button type="button" class="btn btn-primary" style="height:40px;margin-left:auto" ${this.carregando ? "disabled" : ""} onclick="OrionDfcApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button>
-      </div>
+    root.innerHTML = `${window.OrionFiltros.html(this, "OrionDfcApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano), empresas: this.resultado ? this.resultado.empresas : [], comMeses: !!this.resultado })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
-      ${this.resultado ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos.</div>`)}`;
+      ${this.resultado ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos. Depois do cálculo dá para filtrar por empresa e por mês sem nova busca.</div>`)}`;
+    if (this.resultado) window.OrionFiltros.bind(this, "OrionDfcApp", this.resultado.empresas);
   }
 };
 

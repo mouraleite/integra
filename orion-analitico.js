@@ -8,6 +8,9 @@ const OrionAnaliticoApp = {
   dept: "TODOS",
   ate: null,
   base: "orcamento",
+  versao: "",
+  empresas: [],
+  meses: null,
   visao: "cc",
   cabs: { orcamento: null, forecast: null },
   dados: null,      // { desp, real, ate, empresas, docs }
@@ -49,13 +52,14 @@ const OrionAnaliticoApp = {
   },
 
   lerCabecalhos() { return window.OrionResumoApp.lerCabecalhos.call(this); },
-  vigentes() { return window.OrionResumoApp.vigentes.call(this).filter((c) => String(c.tipo).toUpperCase() === "DESPESAS"); },
+  vigentes() { return window.OrionResumoApp.vigentes.call(this, ["DESPESAS"]); },
   lerLinhas(cab) { return window.OrionResumoApp.lerLinhas.call(this, cab); },
 
-  setAno(v) { this.ano = v; this.dados = null; this.ate = null; this.render(); },
-  setDept(v) { this.dept = v; this.dados = null; this.render(); },
-  setAte(v) { this.ate = Number(v) || null; this.dados = null; this.render(); },
-  setBase(v) { this.base = v; this.dados = null; this.init(); },
+  limpar() { this.dados = null; this.meses = null; this.render(); },
+  setAno(v) { this.ano = v; this.versao = ""; this.ate = null; this.limpar(); },
+  setDept(v) { this.dept = v; this.limpar(); },
+  setAte(v) { this.ate = Number(v) || null; this.limpar(); },
+  setBase(v) { this.base = v; this.versao = ""; this.dados = null; this.meses = null; this.init(); },
   setVisao(v) { this.visao = v; this.abertos = {}; this.render(); },
   alternar(k) { this.abertos[k] = !this.abertos[k]; this.render(); },
 
@@ -116,7 +120,8 @@ const OrionAnaliticoApp = {
   linhasDetalhe(x, ms, colspan) {
     const C = this.C(), R = this.R();
     const set = new Set(ms);
-    const rows = R.detalhe(this.dados.real, (a) => a.cc === x.cc && a.plano === x.plano && set.has(a.mes), -1);
+    const emp = this.empresas && this.empresas.length ? new Set(this.empresas.map(String)) : null;
+    const rows = R.detalhe(this.dados.real, (a) => a.cc === x.cc && a.plano === x.plano && set.has(a.mes) && (!emp || emp.has(String(a.empresa))), -1);
     if (!rows.length) return `<tr class="oa-det"><td colspan="${colspan}" style="padding-left:30px">Nenhum pagamento no realizado deste centro de custo e plano no período.</td></tr>`;
     const fmtD = (d) => (d ? d.split("-").reverse().join("/") : "—");
     const corpo = rows.map((p) => `<tr class="oa-det"><td style="padding-left:30px">${fmtD(p.data)} · ${this.esc(p.credor || "—")}</td><td colspan="${colspan - 2}">${this.esc(p.documento)}${p.titulo ? ` · título ${this.esc(p.titulo)}` : ""}${p.parcela ? ` · parcela ${this.esc(p.parcela)}` : ""} · empresa ${this.esc(p.empresa)}</td><td class="is-right">${C.fmtReais(C.centavos(p.valor), true)}</td></tr>`).join("");
@@ -125,10 +130,10 @@ const OrionAnaliticoApp = {
 
   htmlResultado() {
     const C = this.C();
-    const d = this.dados;
-    const ms = [];
-    for (let i = 1; i <= d.ate; i++) ms.push(i);
-    const a = C.analiticoGastos(d.desp, d.real.alocacoes, ms, this.visao);
+    const d = this.dados, F = window.OrionFiltros;
+    const ms = F.mesesAtivos(this, d.ate);
+    const f = F.filtrarEmpresas(this, d.desp, d.real.alocacoes);
+    const a = C.analiticoGastos(f.linhas, f.alocacoes, ms, this.visao);
     const colspan = ms.length + 3;
     const nomeCc = (x) => `${this.esc(x.cc)} ${this.esc(x.cc_nome)}`;
     const nomePl = (x) => `${this.esc(x.plano)} ${this.esc(x.plano_nome)}${x.fora ? " <i>(sem orçado)</i>" : ""}`;
@@ -149,7 +154,7 @@ const OrionAnaliticoApp = {
     const ref = this.base === "forecast" ? "Forecast" : "Orçado";
     const tot = (arr, v) => ms.map((m) => `<td class="is-right">${C.fmtReais(arr[m - 1], true)}</td>`).join("") + `<td class="is-right">${C.fmtReais(v, true)}</td>`;
     const pctT = t.orcado ? ((t.realizado - t.orcado) / Math.abs(t.orcado) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%" : "—";
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">Jan a ${C.MESES[d.ate - 1]}/${this.esc(this.ano)} · ${d.docs} documento(s) de despesas · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(d.empresas.join(", "))}), só dos centros de custo e planos do orçamento.
+    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao, tipos: ["DESPESAS"] }).versao) : ""} · ${d.docs} documento(s) de despesas · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(d.empresas.join(", "))}), só dos centros de custo e planos do orçamento.
         Total ${ref.toLowerCase()} ${C.fmtReais(t.orcado, true)} · realizado ${C.fmtReais(t.realizado, true)} · desvio ${pctT} · ${a.comDesvio} linha(s) com atenção ou acima do limite. Saldo = ${ref.toLowerCase()} − realizado (negativo = gastou mais).</div>
       <div class="cc-scroll" style="max-height:70vh"><table class="cc-table" style="min-width:${360 + ms.length * 96 + 110}px">
         <colgroup><col style="width:260px"><col style="width:90px">${ms.map(() => '<col style="width:96px">').join("")}<col style="width:110px"></colgroup>
@@ -172,24 +177,14 @@ const OrionAnaliticoApp = {
     const depts = new Map();
     l.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
     const ate = this.ate || (this.R() && this.R().ateMes(this.ano)) || 12;
-    root.innerHTML = `
-      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <div style="display:flex;gap:6px">
-          <button type="button" class="btn ${this.base === "orcamento" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setBase('orcamento')">Orçamento</button>
-          <button type="button" class="btn ${this.base === "forecast" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setBase('forecast')">Forecast</button>
-        </div>
-        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionAnaliticoApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Até o mês</label><select class="idx-select" style="height:40px" onchange="OrionAnaliticoApp.setAte(this.value)">${C.MESES.map((m, i) => `<option value="${i + 1}" ${i + 1 === ate ? "selected" : ""}>${m}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionAnaliticoApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-        <div style="display:flex;gap:6px">
+    const visoes = `<div style="display:flex;gap:6px">
           <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('cc')">I · Centro de custo e plano</button>
-          <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button>
-        </div>
-        <button type="button" class="btn btn-primary" style="height:40px;margin-left:auto" ${this.carregando ? "disabled" : ""} onclick="OrionAnaliticoApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button>
-      </div>
+          <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button></div>`;
+    root.innerHTML = `${window.OrionFiltros.html(this, "OrionAnaliticoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano, ["DESPESAS"]), empresas: this.dados ? this.dados.empresas : [], comMeses: !!this.dados, extra: visoes })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
-      ${this.dados ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos.</div>`)}`;
+      ${this.dados ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos. Depois do cálculo dá para filtrar por empresa e por mês sem nova busca.</div>`)}`;
+    if (this.dados) window.OrionFiltros.bind(this, "OrionAnaliticoApp", this.dados.empresas);
   }
 };
 

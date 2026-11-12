@@ -7,6 +7,9 @@ const OrionResumoApp = {
   dept: "TODOS",
   ate: null,
   base: "orcamento",
+  versao: "",
+  empresas: [],
+  meses: null,
   cabs: { orcamento: null, forecast: null },
   resultado: null,
   abertos: {},
@@ -63,24 +66,16 @@ const OrionResumoApp = {
     this.render();
   },
 
-  setAno(v) { this.ano = v; this.resultado = null; this.ate = null; this.render(); },
-  setDept(v) { this.dept = v; this.resultado = null; this.render(); },
-  setAte(v) { this.ate = Number(v) || null; this.resultado = null; this.render(); },
-  setBase(v) { this.base = v; this.resultado = null; this.init(); },
+  limpar() { this.resultado = null; this.meses = null; this.render(); },
+  setAno(v) { this.ano = v; this.versao = ""; this.ate = null; this.limpar(); },
+  setDept(v) { this.dept = v; this.limpar(); },
+  setAte(v) { this.ate = Number(v) || null; this.limpar(); },
+  setBase(v) { this.base = v; this.versao = ""; this.resultado = null; this.meses = null; this.init(); },
   alternar(k) { this.abertos[k] = !this.abertos[k]; this.render(); },
 
-  /** Mesma escolha da DFC gerencial: documentos do ano sem versões substituídas; no forecast, a maior versão de cada um. */
-  vigentes() {
-    const l = (this.cabs[this.base] || []).filter((c) => String(c.ano) === String(this.ano) && c.status !== "Substituído" &&
-      ["DESPESAS", "RECEITAS"].indexOf(String(c.tipo).toUpperCase()) >= 0 &&
-      (this.dept === "TODOS" || String(c.departamento ? c.departamento.id : "") === String(this.dept)));
-    const m = new Map();
-    l.forEach((c) => {
-      const k = [String(c.tipo).toUpperCase(), c.descricao, c.departamento ? c.departamento.id : "", c.produto ? c.produto.id : ""].join("|");
-      const atual = m.get(k);
-      if (!atual || (Number(c.versao) || 0) > (Number(atual.versao) || 0)) m.set(k, c);
-    });
-    return [...m.values()];
+  /** Documentos que entram: do ano, sem substituídos; no forecast, só a versão escolhida (ou a mais recente). */
+  vigentes(tipos) {
+    return this.C().documentosVigentes(this.cabs[this.base] || [], { ano: this.ano, dept: this.dept, base: this.base, versao: this.versao, tipos }).docs;
   },
 
   async lerLinhas(cab) {
@@ -118,10 +113,7 @@ const OrionResumoApp = {
       this.passo = `Lendo o realizado de ${this.ano} (${empresas.length} empresa(s))…`;
       this.render();
       const real = await R.buscar(Number(this.ano), ate, empresas);
-      const meses = [];
-      for (let i = 1; i <= ate; i++) meses.push(i);
-      const r = C.resumoGeral(desp, rec, real.alocacoes, meses);
-      this.resultado = Object.assign(r, { ate, empresas, docs: docs.length, movimentos: real.movimentos });
+      this.resultado = { desp, rec, real, ate, empresas, docs: docs.length, movimentos: real.movimentos };
       this.abertos = {};
     } catch (e) { this.erro = e.message || String(e); }
     this.carregando = false;
@@ -136,8 +128,11 @@ const OrionResumoApp = {
   },
 
   htmlResultado() {
-    const C = this.C();
-    const r = this.resultado;
+    const C = this.C(), F = window.OrionFiltros;
+    const d = this.resultado;
+    const ms = F.mesesAtivos(this, d.ate);
+    const fd = F.filtrarEmpresas(this, d.desp, d.real.alocacoes), fr = F.filtrarEmpresas(this, d.rec, d.real.alocacoes);
+    const r = Object.assign(C.resumoGeral(fd.linhas, fr.linhas, fd.alocacoes, ms), { ate: d.ate, empresas: this.empresas && this.empresas.length ? this.empresas : d.empresas, docs: d.docs, movimentos: d.movimentos });
     const f = (c) => C.fmtReais(c, true);
     const pct = (v) => (v == null ? "—" : (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
     const ref = this.base === "forecast" ? "Forecast" : "Orçado";
@@ -164,7 +159,7 @@ const OrionResumoApp = {
       return `<tr class="or-grupo" onclick="OrionResumoApp.alternar('${this.esc(chave)}')"><td>${ab ? "▾" : "▸"} ${g.tipo === "RECEITAS" ? "Receitas" : "Despesas"} · ${nome(g)}</td>
         <td class="is-right">${f(g.orcado)}</td><td class="is-right">${f(g.realizado)}</td><td class="is-right">${f(g.dif)}</td><td>${this.farol(g.semaforo)}</td></tr>${filhos}`;
     }).join("");
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">Jan a ${C.MESES[r.ate - 1]}/${this.esc(this.ano)} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(r.empresas.join(", "))}) só dos centros de custo e planos que estão no orçamento · ${r.movimentos} movimentos. Despesas aparecem positivas; resultado = receitas − despesas.</div>
+    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(this.versaoAtual()) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(r.empresas.join(", "))}) só dos centros de custo e planos que estão no orçamento · ${r.movimentos} movimentos. Despesas aparecem positivas; resultado = receitas − despesas.</div>
       <div class="or-cards">${card("Receitas", k.receitas)}${card("Despesas", k.despesas)}${card("Resultado", k.resultado)}</div>
       <div class="or-sec">Mês a mês</div>
       <div class="cc-scroll"><table class="cc-table">
@@ -195,21 +190,14 @@ const OrionResumoApp = {
     const depts = new Map();
     l.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
     const ate = this.ate || (this.R() && this.R().ateMes(this.ano)) || 12;
-    root.innerHTML = `
-      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-        <div style="display:flex;gap:6px">
-          <button type="button" class="btn ${this.base === "orcamento" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionResumoApp.setBase('orcamento')">Orçamento</button>
-          <button type="button" class="btn ${this.base === "forecast" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionResumoApp.setBase('forecast')">Forecast</button>
-        </div>
-        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionResumoApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Até o mês</label><select class="idx-select" style="height:40px" onchange="OrionResumoApp.setAte(this.value)">${C.MESES.map((m, i) => `<option value="${i + 1}" ${i + 1 === ate ? "selected" : ""}>${m}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionResumoApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-        <button type="button" class="btn btn-primary" style="height:40px;margin-left:auto" ${this.carregando ? "disabled" : ""} onclick="OrionResumoApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button>
-      </div>
+    root.innerHTML = `${window.OrionFiltros.html(this, "OrionResumoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano), empresas: this.resultado ? this.resultado.empresas : [], comMeses: !!this.resultado })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
-      ${this.resultado ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos.</div>`)}`;
-  }
+      ${this.resultado ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos. Depois do cálculo dá para filtrar por empresa e por mês sem nova busca.</div>`)}`;
+    if (this.resultado) window.OrionFiltros.bind(this, "OrionResumoApp", this.resultado.empresas);
+  },
+
+  versaoAtual() { return this.C().documentosVigentes(this.cabs[this.base] || [], { ano: this.ano, base: this.base, versao: this.versao }).versao; }
 };
 
 window.OrionResumoApp = OrionResumoApp;
