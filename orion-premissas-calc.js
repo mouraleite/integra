@@ -253,7 +253,34 @@
     }
   }
 
-  return {
+  /** Curva padrão como no Órion (Apoio › Curvas › Gerar): Curva S, sino ou linear; percentuais com 2 casas e soma 100. */
+  function gerarCurva(modelo, n) {
+    const meses = Math.max(1, Math.min(240, Math.trunc(Number(n) || 1)));
+    const v = [];
+    for (let i = 1; i <= meses; i++) {
+      if (modelo === "s-curve") { const k = 0.3, x0 = meses / 2, e = Math.exp(-k * (i - x0)); v.push(e / Math.pow(1 + e, 2)); }
+      else if (modelo === "sino") { const media = meses / 2, dp = meses / 4; v.push((1 / (dp * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((i - media) / dp, 2))); }
+      else v.push(1);
+    }
+    const tot = v.reduce((a, b) => a + b, 0);
+    const out = v.map((x) => Math.round((x / tot) * 10000) / 100);
+    const dif = Math.round((100 - out.reduce((a, b) => a + b, 0)) * 100) / 100;
+    if (dif) out[out.length - 1] = Math.round((out[out.length - 1] + dif) * 100) / 100;
+    return out;
+  }
+
+  /** Ajusta os percentuais para somarem 100 (proporcional), acertando o arredondamento no último. */
+  function ajustarPara100(lista) {
+    const v = (lista || []).map((x) => Number(x) || 0);
+    const tot = v.reduce((a, b) => a + b, 0);
+    if (!tot) return v;
+    const out = v.map((x) => Math.round((x / tot) * 10000) / 100);
+    const dif = Math.round((100 - out.reduce((a, b) => a + b, 0)) * 100) / 100;
+    if (dif) out[out.length - 1] = Math.round((out[out.length - 1] + dif) * 100) / 100;
+    return out;
+  }
+
+  return { gerarCurva, ajustarPara100,
     DO_ORION, prepararCarga,
     TOL, TIPOS_CURVA, CLASSES_CURVA, ALIQUOTAS, TIPOS_INDICE, UNIDADES,
     num, soma, fmt, listaDeNumeros, textoDeNumeros, listaDeCondicoes, textoDeCondicoes, mesclarCondicoes,

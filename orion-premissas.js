@@ -138,13 +138,29 @@ const OrionPremissasApp = {
     const campo = partes[1];
     const it = itens[i];
     if (!it) return;
-    if (campo === "meses") it.meses = P.listaDeNumeros(valor);
+    if (campo === "mes") { it.meses = (it.meses || []).slice(); it.meses[Number(partes[2])] = P.num(valor) || 0; }
+    else if (campo === "cond") {
+      const j = Number(partes[2]), k = partes[3];
+      it.condicoes = (it.condicoes || []).map((c) => Object.assign({}, c));
+      if (it.condicoes[j]) it.condicoes[j][k] = k === "perc" ? P.num(valor) || 0 : (k === "aplica_juros" || k === "aplica_correcao") ? !!valor : String(valor);
+    }
+    else if (campo === "meses") it.meses = P.listaDeNumeros(valor);
     else if (campo === "condicoes") it.condicoes = P.mesclarCondicoes(it.condicoes, P.listaDeCondicoes(valor));
     else if (campo === "ativo") it.ativo = !!valor;
     else if (["vgv_multiplier", "construction_cost_multiplier", "sales_speed_multiplier", "pis", "cofins", "irpj", "csll", "outros", "valor"].indexOf(campo) >= 0) it[campo] = P.num(valor);
     else it[campo] = String(valor);
     this.marcar();
-    this.render();
+    this.renderMantendoFoco();
+  },
+
+  /** Redesenha depois que o cursor já foi para o próximo campo (Tab ou clique) e devolve o cursor para ele. */
+  renderMantendoFoco() {
+    setTimeout(() => {
+      const el = document.activeElement;
+      const k = el && el.getAttribute && el.getAttribute("data-k");
+      this.render();
+      if (k) { const n = document.querySelector(`#orion-premissas-root [data-k="${(window.CSS && CSS.escape) ? CSS.escape(k) : k}"]`); if (n) { n.focus(); if (n.select) n.select(); } }
+    }, 0);
   },
 
   setFunding(partes, valor) {
@@ -159,6 +175,42 @@ const OrionPremissasApp = {
     } else if (f[grupo]) {
       f[grupo][a] = P.num(valor);
     }
+    this.marcar();
+    this.renderMantendoFoco();
+  },
+
+  abertos: {},
+  alternarAberto(i) { const k = this.aba + ":" + i; this.abertos[k] = !this.abertos[k]; this.render(); },
+  estaAberto(i) { return !!this.abertos[this.aba + ":" + i]; },
+
+  /** Curvas: incluir/remover mês, gerar curva padrão (S, sino, linear) e ajustar para 100%. */
+  curvaAcao(i, acao, j) {
+    const P = this.P(), it = (this.itens() || [])[i];
+    if (!it || !this.podeEditar()) return;
+    const meses = (it.meses || []).slice();
+    if (acao === "mais") meses.push(0);
+    else if (acao === "menos") meses.splice(j, 1);
+    else if (acao === "ajustar") it.meses = P.ajustarPara100(meses);
+    else if (acao === "gerar") {
+      const modelo = (document.getElementById(`op-gm-${i}`) || {}).value || "s-curve";
+      const n = (document.getElementById(`op-gn-${i}`) || {}).value || meses.length || 12;
+      if (meses.some((x) => x) && !window.confirm("Substituir os percentuais desta curva pela curva gerada?")) return;
+      it.meses = P.gerarCurva(modelo, n);
+    }
+    if (acao === "mais" || acao === "menos") it.meses = meses;
+    this.marcar();
+    this.render();
+  },
+
+  /** Planos de pagamento: incluir/remover condição e ajustar para 100%. */
+  planoAcao(i, acao, j) {
+    const P = this.P(), it = (this.itens() || [])[i];
+    if (!it || !this.podeEditar()) return;
+    const c = (it.condicoes || []).map((x) => Object.assign({}, x));
+    if (acao === "mais") c.push({ nome: "", perc: 0, aplica_juros: true, aplica_correcao: true });
+    else if (acao === "menos") c.splice(j, 1);
+    else if (acao === "ajustar") { const v = P.ajustarPara100(c.map((x) => x.perc)); c.forEach((x, k) => { x.perc = v[k]; }); }
+    it.condicoes = c;
     this.marcar();
     this.render();
   },
@@ -356,12 +408,12 @@ const OrionPremissasApp = {
     const dis = this.podeEditar() ? "" : " disabled";
     const cls = o.num ? ' class="is-num"' : "";
     const lst = o.lista ? ` list="${o.lista}"` : "";
-    return `<input${cls}${lst} value="${this.esc(valor)}"${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">`;
+    return `<input${cls}${lst} data-k="${this.esc(caminho)}" value="${this.esc(valor)}"${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">`;
   },
 
   sel(caminho, valor, opcoes) {
     const dis = this.podeEditar() ? "" : " disabled";
-    return `<select${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">${opcoes.map((o) => `<option ${o === valor ? "selected" : ""}>${this.esc(o)}</option>`).join("")}</select>`;
+    return `<select data-k="${this.esc(caminho)}"${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">${opcoes.map((o) => `<option ${o === valor ? "selected" : ""}>${this.esc(o)}</option>`).join("")}</select>`;
   },
 
   del(i) {
@@ -395,21 +447,34 @@ const OrionPremissasApp = {
 
   htmlCurvas(itens) {
     const P = this.P();
+    const ed = this.podeEditar();
+    const dis = ed ? "" : " disabled";
     return this.tabela(
-      [{ t: "Curva" }, { t: "Tipo", w: "120px" }, { t: "Classificação", w: "120px" }, { t: "Percentual por mês (separe com ;)" }, { t: "Meses", r: 1, w: "70px" }, { t: "Soma", r: 1, w: "90px" }, { t: "", w: "34px" }],
+      [{ t: "", w: "28px" }, { t: "Curva" }, { t: "Tipo", w: "140px" }, { t: "Classificação", w: "130px" }, { t: "Meses", r: 1, w: "70px" }, { t: "Soma", r: 1, w: "90px" }, { t: "", w: "34px" }],
       itens.map((c, i) => {
         const s = P.soma(c.meses);
         const ok = Math.abs(s - 100) <= P.TOL;
+        const ab = this.estaAberto(i);
+        const grade = ab ? `<tr><td></td><td colspan="6" style="background:#f8fafc">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">${(c.meses || []).map((v, j) => `<div style="width:66px;position:relative"><div style="font-size:0.62rem;color:#64748b;text-align:center">Mês ${j + 1}</div><input class="is-num" data-k="${i}.mes.${j}" style="text-align:center" value="${this.esc(P.fmt(v, 2))}"${dis} onchange="OrionPremissasApp.set('${i}.mes.${j}', this.value)" onfocus="this.select()">${ed ? `<button type="button" tabindex="-1" title="Remover mês" style="position:absolute;top:-2px;right:-4px;border:none;background:none;color:#b91c1c;cursor:pointer;font-size:10px" onclick="OrionPremissasApp.curvaAcao(${i}, 'menos', ${j})">✕</button>` : ""}</div>`).join("")}</div>
+            ${ed ? `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:0.75rem">
+              <button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionPremissasApp.curvaAcao(${i}, 'mais')">+ mês</button>
+              <button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionPremissasApp.curvaAcao(${i}, 'ajustar')">Ajustar para 100%</button>
+              <span style="margin-left:12px">Gerar curva:</span>
+              <select id="op-gm-${i}" style="height:30px"><option value="s-curve">Curva S (obras / evolução)</option><option value="sino">Sino (lançamentos / vendas)</option><option value="linear">Linear (igual por mês)</option></select>
+              <input id="op-gn-${i}" class="is-num" style="width:60px;height:30px" value="${(c.meses || []).length || 12}" title="meses"> meses
+              <button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionPremissasApp.curvaAcao(${i}, 'gerar')">Gerar</button></div>` : ""}
+          </td></tr>` : "";
         return `<tr>
+          <td class="is-center"><button type="button" class="op-del" style="color:#105436" title="${ab ? "Fechar" : "Editar os meses"}" onclick="OrionPremissasApp.alternarAberto(${i})">${ab ? "▾" : "▸"}</button></td>
           <td>${this.inp(i + ".nome", c.nome)}</td>
           <td>${this.inp(i + ".tipo", c.tipo, { lista: "op-tipos-curva" })}</td>
           <td>${this.sel(i + ".classificacao", c.classificacao, P.CLASSES_CURVA)}</td>
-          <td>${this.inp(i + ".meses", P.textoDeNumeros(c.meses))}</td>
           <td class="is-right">${(c.meses || []).length}</td>
           <td class="is-right ${ok ? "op-ok" : "op-ruim"}">${P.fmt(s, 2)}%</td>
-          <td class="is-center">${this.del(i)}</td></tr>`;
+          <td class="is-center">${this.del(i)}</td></tr>${grade}`;
       }),
-      "Nenhuma curva cadastrada.") + `<datalist id="op-tipos-curva">${[...new Set(P.TIPOS_CURVA.concat(itens.map((c) => c.tipo).filter(Boolean)))].map((x) => `<option value="${this.esc(x)}">`).join("")}</datalist><div class="op-rodape">A soma dos meses precisa ser exatamente 100%, como no Órion. O tipo é livre (sugestões ao digitar).</div>`;
+      "Nenhuma curva cadastrada.") + `<datalist id="op-tipos-curva">${[...new Set(P.TIPOS_CURVA.concat(itens.map((c) => c.tipo).filter(Boolean)))].map((x) => `<option value="${this.esc(x)}">`).join("")}</datalist><div class="op-rodape">Clique na seta para editar os percentuais mês a mês, gerar uma curva padrão (S, sino ou linear) ou ajustar para 100%. A soma precisa ser exatamente 100%, como no Órion. O tipo é livre (sugestões ao digitar).</div>`;
   },
 
   htmlRegimes(itens) {
@@ -428,18 +493,34 @@ const OrionPremissasApp = {
 
   htmlPlanos(itens) {
     const P = this.P();
+    const ed = this.podeEditar();
+    const dis = ed ? "" : " disabled";
     return this.tabela(
-      [{ t: "Plano", w: "260px" }, { t: "Condições (nome = %; separe com ;)" }, { t: "Soma", r: 1, w: "90px" }, { t: "", w: "34px" }],
+      [{ t: "", w: "28px" }, { t: "Plano" }, { t: "Condições" }, { t: "Soma", r: 1, w: "90px" }, { t: "", w: "34px" }],
       itens.map((p, i) => {
         const s = P.soma((p.condicoes || []).map((c) => c.perc));
         const ok = Math.abs(s - 100) <= P.TOL;
+        const ab = this.estaAberto(i);
+        const resumo = (p.condicoes || []).map((c) => `${c.nome || "?"} ${P.fmt(c.perc, 2)}%`).join(" · ");
+        const det = ab ? `<tr><td></td><td colspan="4" style="background:#f8fafc">
+            <table class="cc-table" style="margin:4px 0"><colgroup><col><col style="width:110px"><col style="width:120px"><col style="width:130px"><col style="width:34px"></colgroup>
+              <thead><tr><th>Condição (ex.: A VISTA, 24, 36)</th><th class="is-right">%</th><th class="is-center">Aplica juros</th><th class="is-center">Aplica correção</th><th></th></tr></thead>
+              <tbody>${(p.condicoes || []).map((c, j) => `<tr>
+                <td><input data-k="${i}.cond.${j}.nome" value="${this.esc(c.nome)}"${dis} onchange="OrionPremissasApp.set('${i}.cond.${j}.nome', this.value)"></td>
+                <td><input class="is-num" data-k="${i}.cond.${j}.perc" value="${this.esc(P.fmt(c.perc, 2))}"${dis} onchange="OrionPremissasApp.set('${i}.cond.${j}.perc', this.value)" onfocus="this.select()"></td>
+                <td class="is-center"><input type="checkbox" data-k="${i}.cond.${j}.aplica_juros" style="width:auto;height:auto"${c.aplica_juros !== false ? " checked" : ""}${dis} onchange="OrionPremissasApp.set('${i}.cond.${j}.aplica_juros', this.checked)"></td>
+                <td class="is-center"><input type="checkbox" data-k="${i}.cond.${j}.aplica_correcao" style="width:auto;height:auto"${c.aplica_correcao !== false ? " checked" : ""}${dis} onchange="OrionPremissasApp.set('${i}.cond.${j}.aplica_correcao', this.checked)"></td>
+                <td class="is-center">${ed ? `<button type="button" class="op-del" title="Remover condição" onclick="OrionPremissasApp.planoAcao(${i}, 'menos', ${j})">✕</button>` : ""}</td></tr>`).join("")}</tbody></table>
+            ${ed ? `<div style="display:flex;gap:6px;margin-bottom:6px"><button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionPremissasApp.planoAcao(${i}, 'mais')">+ condição</button><button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionPremissasApp.planoAcao(${i}, 'ajustar')">Ajustar para 100%</button></div>` : ""}
+          </td></tr>` : "";
         return `<tr>
+          <td class="is-center"><button type="button" class="op-del" style="color:#105436" title="${ab ? "Fechar" : "Editar as condições"}" onclick="OrionPremissasApp.alternarAberto(${i})">${ab ? "▾" : "▸"}</button></td>
           <td>${this.inp(i + ".nome", p.nome)}</td>
-          <td>${this.inp(i + ".condicoes", P.textoDeCondicoes(p.condicoes))}</td>
+          <td style="white-space:normal;font-size:0.75rem;color:#334155;cursor:pointer" onclick="OrionPremissasApp.alternarAberto(${i})">${this.esc(resumo) || "<i>sem condições</i>"}</td>
           <td class="is-right ${ok ? "op-ok" : "op-ruim"}">${P.fmt(s, 2)}%</td>
-          <td class="is-center">${this.del(i)}</td></tr>`;
+          <td class="is-center">${this.del(i)}</td></tr>${det}`;
       }),
-      "Nenhum plano cadastrado.") + `<div class="op-rodape">Ex.: A VISTA = 3,8; 24 = 6,6; 36 = 12,8. A soma precisa ser exatamente 100%.</div>`;
+      "Nenhum plano cadastrado.") + `<div class="op-rodape">Clique na seta (ou nas condições) para editar: nome, %, se aplica juros e se aplica correção, como no Órion. A soma precisa ser exatamente 100%.</div>`;
   },
 
   htmlIndices(itens) {
