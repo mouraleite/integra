@@ -623,6 +623,54 @@
     return { docs: [...m.values()], versao };
   }
 
-  return { versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- novo orçamento / nova versão de forecast (regra do Órion) ---------- */
+
+  const DESCRICAO_ORCAMENTO = "Orçamento";
+
+  /** Último mês fechado em sequência desde janeiro (tela Fechamento de meses); sem fechamento no ano, usa o calendário. */
+  function corteForecast(fechamento, ano, hoje) {
+    const fechados = new Set((fechamento || []).filter((x) => Number(x.ano) === Number(ano)).map((x) => Number(x.mes)));
+    if (fechados.size) { let n = 0; while (n < 12 && fechados.has(n + 1)) n++; return n; }
+    const h = hoje || new Date();
+    if (Number(ano) === h.getFullYear()) return h.getMonth();
+    return Number(ano) < h.getFullYear() ? 12 : 0;
+  }
+  function descricaoForecast(corte) { return `Forecast - ${corte}+${12 - corte}`; }
+
+  /**
+   * Onde incluir um empreendimento: o documento do departamento para o ano, tipo e descrição (no Órion é um documento
+   * por departamento com vários empreendimentos dentro). Devolve { destino } (documento existente, ou null = criar um novo)
+   * ou { erro } se o documento existe mas está travado (em aprovação, aprovado, fechado).
+   */
+  function planejarInclusao(cabs, o) {
+    const docs = (cabs || []).filter((c) => String(c.ano) === String(o.ano) && String(c.tipo).toUpperCase() === String(o.tipo).toUpperCase() &&
+      String(c.descricao || "") === String(o.descricao) && c.status !== "Substituído" &&
+      String(c.departamento ? c.departamento.id : "") === String(o.departamentoId));
+    if (!docs.length) return { destino: null };
+    const travado = docs.find((c) => !editavel(c.status));
+    if (travado) return { erro: `O documento "${o.descricao}" de ${o.ano} deste departamento está "${travado.status}". Peça a reabertura antes de incluir empreendimentos.` };
+    const guarda = docs.find((c) => !c.produto) || docs[0];
+    return { destino: guarda };
+  }
+
+  /** Linhas de um empreendimento copiadas de um documento base (orçamento aprovado ou forecast anterior). */
+  function copiarEmpreendimento(base, cc, ano) {
+    const k = String(cc).replace(/\D/g, "");
+    const mesmo = (l) => String(l.cc || "").replace(/\D/g, "") === k;
+    return {
+      itens: ((base && base.itens) || []).filter(mesmo).map((l) => Object.assign({}, l, { m: (l.m || []).slice(), copiado: true })),
+      vendas: ((base && base.vendas) || []).filter(mesmo).map((v) => Object.assign({}, v, { ano: Number(ano) || v.ano }))
+    };
+  }
+
+  /** Empreendimentos que já estão num documento. */
+  function empreendimentosDoDoc(doc) {
+    const s = new Set();
+    ((doc && doc.itens) || []).concat((doc && doc.vendas) || []).forEach((l) => s.add(String(l.cc || "").replace(/\D/g, "")));
+    s.delete("");
+    return s;
+  }
+
+  return { DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

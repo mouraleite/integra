@@ -76,7 +76,7 @@ const OrionOrcamentosApp = {
     this.render();
   },
 
-  setTipo(t) { this.tipo = t; this.aberto = null; this.dept = "TODOS"; this.init(); },
+  setTipo(t) { this.tipo = t; this.aberto = null; this.novo = null; this.dept = "TODOS"; this.init(); },
   setAno(a) { this.ano = a; this.aberto = null; this.render(); },
   setDept(d) { this.dept = d; this.aberto = null; this.render(); },
   setSubst(v) { this.verSubstituidos = !!v; this.render(); },
@@ -727,6 +727,7 @@ const OrionOrcamentosApp = {
         <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionOrcamentosApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
         <label style="display:flex;align-items:center;gap:6px;height:40px;font-size:0.8rem"><input type="checkbox" ${this.verSubstituidos ? "checked" : ""} onchange="OrionOrcamentosApp.setSubst(this.checked)"> Mostrar versões substituídas</label>
         <div style="margin-left:auto;display:flex;gap:8px">
+          ${this.podeCriar && this.podeCriar() && !this.aberto ? `<button type="button" class="btn btn-primary" style="height:40px" onclick="OrionOrcamentosApp.abrirNovo()">${this.tipo === "forecasts" ? "Novo forecast" : "Novo orçamento"}</button>` : ""}
           ${this.ehAdmin() ? `<button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionOrcamentosApp.escolher()">Importar do Órion</button><input type="file" id="oo-arquivos" accept=".json" multiple style="display:none" onchange="OrionOrcamentosApp.lerArquivos(this.files)">` : ""}
           <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionOrcamentosApp.carregar()">Atualizar</button>
         </div>
@@ -737,6 +738,7 @@ const OrionOrcamentosApp = {
     root.innerHTML = `${barra}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.htmlCarga()}
+      ${this.htmlNovo ? this.htmlNovo() : ""}
       <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: orçamentos e forecasts trazidos do Órion. Enquanto o Órion estiver em uso, combine com a equipe em qual dos dois sistemas cada orçamento será editado, para não haver duas versões.</div>
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${corpo}`;

@@ -258,3 +258,24 @@ test("forecast: usa só uma versão (a mais recente ou a escolhida)", () => {
   assert.deepStrictEqual(C.documentosVigentes(cabs, { ano: 2026, base: "forecast", versao: "Forecast - 2+10", tipos: ["DESPESAS"] }).docs.map((d) => d._id), ["a"]);
   assert.strictEqual(C.documentosVigentes(cabs, { ano: 2026, base: "orcamento", dept: "99" }).docs.length, 0);
 });
+
+test("novo forecast: nome pela regra do fechamento e inclusão no documento do departamento", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const fech = [1, 2, 3, 5].map((mes) => ({ ano: 2026, mes }));
+  assert.strictEqual(C.corteForecast(fech, 2026), 3);               // jan, fev e mar fechados em sequência; mai não conta
+  assert.strictEqual(C.descricaoForecast(3), "Forecast - 3+9");
+  assert.strictEqual(C.corteForecast([], 2026, new Date(2026, 10, 12)), 10);
+  assert.strictEqual(C.corteForecast([], 2025, new Date(2026, 10, 12)), 12);
+  const cabs = [{ _id: "1", ano: 2026, tipo: "DESPESAS", descricao: "Forecast - 3+9", status: "Rascunho", departamento: { id: 18 } },
+    { _id: "2", ano: 2026, tipo: "DESPESAS", descricao: "Forecast - 2+10", status: "Aprovado", departamento: { id: 18 } }];
+  assert.strictEqual(C.planejarInclusao(cabs, { ano: 2026, tipo: "despesas", descricao: "Forecast - 3+9", departamentoId: 18 }).destino._id, "1");
+  assert.ok(C.planejarInclusao(cabs, { ano: 2026, tipo: "DESPESAS", descricao: "Forecast - 2+10", departamentoId: 18 }).erro);
+  assert.strictEqual(C.planejarInclusao(cabs, { ano: 2026, tipo: "DESPESAS", descricao: "Forecast - 4+8", departamentoId: 18 }).destino, null);
+  const base = { itens: [{ cc: "100", plano: "1", m: [1, 2] }, { cc: "200", plano: "1", m: [3] }], vendas: [{ cc: "100", ano: 2025, mes: 1, vendas: 2 }] };
+  const c = C.copiarEmpreendimento(base, "100", 2026);
+  assert.strictEqual(c.itens.length, 1);
+  assert.strictEqual(c.vendas[0].ano, 2026);
+  c.itens[0].m[0] = 99;
+  assert.strictEqual(base.itens[0].m[0], 1);
+  assert.deepStrictEqual([...C.empreendimentosDoDoc(base)].sort(), ["100", "200"]);
+});
