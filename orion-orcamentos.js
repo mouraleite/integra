@@ -346,8 +346,18 @@ const OrionOrcamentosApp = {
     if (!e || !e.grade || !e.grade[i]) return;
     const m = e.grade[i].meses[mes];
     if (campo === "vendas") m.vendas = Math.trunc(Number(String(valor || "0").replace(/\./g, "").replace(",", ".")) || 0);
-    else m.ticket = this.C().centavos(valor);
-    this.render();
+    else m.ticket = this.C().centavosDigitado(valor);
+    this.renderMantendoFoco();
+  },
+
+  /** Redesenha depois que o cursor já foi para o próximo campo e devolve o cursor para ele. */
+  renderMantendoFoco() {
+    setTimeout(() => {
+      const el = document.activeElement;
+      const k = el && el.getAttribute && el.getAttribute("data-k");
+      this.render();
+      if (k) { const n = document.querySelector(`[data-k="${k}"]`); if (n) { n.focus(); if (n.select) n.select(); } }
+    }, 0);
   },
 
   removerVenda(i) { if (this.edicao && this.edicao.grade) { this.edicao.grade.splice(i, 1); this.render(); } },
@@ -376,8 +386,8 @@ const OrionOrcamentosApp = {
       const tot = vgv.reduce((s, v) => s + v, 0), un = l.meses.reduce((s, m) => s + (Number(m.vendas) || 0), 0);
       return `<tr class="oo-grupo"><td>${this.esc(l.cc)} ${this.esc(l.cc_nome)} · ${this.esc(l.plano_venda || "sem plano")}${l.distrato ? " (distrato)" : ""}
           <button type="button" style="border:none;background:none;color:#b91c1c;cursor:pointer;float:right" title="Remover" onclick="OrionOrcamentosApp.removerVenda(${i})">✕</button></td>${vgv.map((v) => `<td class="is-right">${v ? C.fmtReais(v, true) : ""}</td>`).join("")}<td class="is-right">${C.fmtReais(tot, true)}</td></tr>
-        <tr><td style="padding-left:18px">unidades</td>${l.meses.map((m, mi) => `<td><input class="oo-num"${dis(mi)} value="${m.vendas || ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'vendas', this.value)"></td>`).join("")}<td class="is-right">${un}</td></tr>
-        <tr><td style="padding-left:18px">ticket médio (R$)</td>${l.meses.map((m, mi) => `<td><input class="oo-num"${dis(mi)} value="${m.ticket ? C.fmtReais(m.ticket) : ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'ticket', this.value)"></td>`).join("")}<td></td></tr>`;
+        <tr><td style="padding-left:18px">unidades</td>${l.meses.map((m, mi) => `<td><input class="oo-num" data-k="v-${i}-${mi}"${dis(mi)} value="${m.vendas || ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'vendas', this.value)"></td>`).join("")}<td class="is-right">${un}</td></tr>
+        <tr><td style="padding-left:18px">ticket médio (R$)</td>${l.meses.map((m, mi) => `<td><input class="oo-num" data-k="t-${i}-${mi}"${dis(mi)} value="${m.ticket ? C.fmtReais(m.ticket) : ""}" onchange="OrionOrcamentosApp.setVenda(${i}, ${mi}, 'ticket', this.value)"></td>`).join("")}<td></td></tr>`;
     }).join("");
     const opcoes = (this.planosVenda || []).map((n) => `<option>${this.esc(n)}</option>`).join("");
     return `

@@ -292,3 +292,12 @@ test("analítico: receitas e recortes de investimentos e receita de lotes", () =
   assert.strictEqual(a.linhas[0].semaforo.titulo, "Imaterial");
   assert.strictEqual(C.filtrarRecorte([{ plano_nome: "Aporte de capital" }, { plano_nome: "Material" }], "investimentos").length, 1);
 });
+
+test("centavos: valores colados do Excel em português", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  assert.strictEqual(C.centavosDigitado("1.234,56"), 123456);
+  assert.strictEqual(C.centavosDigitado("1.234.567"), 123456700);
+  assert.strictEqual(C.centavosDigitado("1.234"), 123400);
+  assert.strictEqual(C.centavosDigitado("1234.5"), 123450);
+  assert.strictEqual(C.centavosDigitado("-2.500,00"), -250000);
+});

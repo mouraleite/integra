@@ -31,6 +31,14 @@
     return (Number(c) || 0) / 100;
   }
 
+  /** Valor digitado ou colado do Excel em português na tela: ponto é separador de milhar ("1.234" = mil duzentos e trinta e quatro). */
+  function centavosDigitado(v) {
+    if (typeof v !== "string") return centavos(v);
+    const t = v.trim().replace(/\s/g, "").replace("R$", "");
+    if (t.indexOf(",") < 0 && ((t.match(/\./g) || []).length > 1 || /^-?\d{1,3}\.\d{3}$/.test(t))) return centavos(t.replace(/\./g, ""));
+    return centavos(t);
+  }
+
   function fmtReais(c, semCentavos) {
     const v = reais(c);
     return v.toLocaleString("pt-BR", { minimumFractionDigits: semCentavos ? 0 : 2, maximumFractionDigits: semCentavos ? 0 : 2 });
@@ -683,6 +691,6 @@
     return s;
   }
 
-  return { RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
