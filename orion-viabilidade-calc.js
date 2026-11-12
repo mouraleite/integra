@@ -615,5 +615,83 @@
       expenses: exp[p.id] || null, taxes: tax[p.id] || null, exchanges: exc[p.id] || null, funding: fun[p.id] || null }));
   }
 
-  return { calcular, montarFases, irr, npv, mirr, acelerarCurva, extrairCurva, aplicarOffset, parseCondicoes, calcularCustosFunding, cronogramaFunding, taxaMensalFunding, pyRound };
+  const STATUS = ["Em Andamento", "Em Aprovação", "Aprovado"];
+
+  /** Arquivos exportados ({tabela, linhas}) → um documento por viabilidade, com as fases e todas as abas dentro (dados agregados, sem mês a mês). */
+  function prepararViabilidades(arquivos) {
+    const t = {};
+    (arquivos || []).forEach((a) => { if (a && a.tabela && Array.isArray(a.linhas)) t[a.tabela] = a.linhas; });
+    if (!t.viabilities || !t.phases) return null;
+    const porFase = (nome) => { const m = {}; (t[nome] || []).forEach((r) => { m[r.phase_id] = r; }); return m; };
+    const extras = { physical_data: porFase("phase_physical_data"), dates: porFase("phase_dates") };
+    const fases = montarFases(t);
+    const limpa = (r) => { if (!r) return null; const o = Object.assign({}, r); delete o.id; delete o.phase_id; return o; };
+    const docs = t.viabilities.map((v) => {
+      const { id, parecer_original_ia, ...capa } = v;
+      const fs = fases.filter((f) => f.viabilidadeId === id).sort((a, b) => a.id - b.id).map((f) => ({
+        orion_id: f.id, nome: f.nome || "Fase", revenue: limpa(f.revenue), construction: limpa(f.construction), expenses: limpa(f.expenses),
+        taxes: limpa(f.taxes), exchanges: limpa(f.exchanges), funding: limpa(f.funding),
+        physical_data: limpa(extras.physical_data[f.id]), dates: limpa(extras.dates[f.id]) }));
+      return Object.assign(capa, { _id: `orion_${id}`, orion_id: id, versao_de: v.version_of_id ? `orion_${v.version_of_id}` : null, fases: fs });
+    });
+    const semFase = docs.filter((d) => !d.fases.length).map((d) => d.project_name);
+    const faltam = ["viability_revenues", "viability_constructions", "viability_expenses", "phase_taxes", "phase_exchanges", "phase_fundings"].filter((x) => !t[x]);
+    return { docs, semFase, faltam };
+  }
+
+  /** Doc gravado no Integra → fase no formato do motor. */
+  function faseDoDoc(doc, i) {
+    const f = (doc.fases || [])[i];
+    if (!f) return null;
+    return { viability: doc, revenue: f.revenue, construction: f.construction, expenses: f.expenses, taxes: f.taxes, exchanges: f.exchanges, funding: f.funding };
+  }
+
+  /** Soma o fluxo de várias fases (mesmo mês 1) e calcula TIR, VPL, exposição e payback do conjunto. */
+  function consolidar(resultados, tmaAnual) {
+    const n = Math.max(0, ...resultados.map((r) => r.monthly_cashflow.length));
+    const cf = new Array(n).fill(0);
+    resultados.forEach((r) => r.monthly_cashflow.forEach((m, i) => { cf[i] += m.Fluxo_de_Caixa; }));
+    const tma = Math.pow(1 + (tmaAnual == null ? 0.12 : tmaAnual), 1 / 12) - 1;
+    const tir = irr(cf);
+    let acc = 0, mn = 0, idx = 0;
+    const acum = cf.map((v, i) => { acc += v; if (i === 0 || acc < mn) { mn = acc; idx = i; } return acc; });
+    let payback = null;
+    for (let j = idx; j < n; j++) if (acum[j] >= 0) { payback = j + 1; break; }
+    const S = (k) => soma(resultados.map((r) => r.indicators[k] || 0));
+    const vgv = S("vgv_total"), lucro = S("lucro_liquido");
+    return { vgv_total: vgv, lucro_liquido: lucro, margem_perc: vgv > 0 ? (lucro / vgv) * 100 : 0,
+      tir_aa: tir === null || tir <= -1 ? null : (Math.pow(1 + tir, 12) - 1) * 100, vpl: npv(tma, cf),
+      exposicao_maxima: Math.min(0, mn), payback, fluxo: cf, acumulado: acum };
+  }
+
+  /** DRE do resumo do Órion (SummaryTab), a partir do fluxo mensal de uma visão. */
+  function dre(fluxo) {
+    const S = (c) => (fluxo || []).reduce((s, m) => s + (m[c] || 0), 0);
+    const rec = S("Receitas"), pis = S("Impostos_PIS"), cof = S("Impostos_COFINS"), out = S("Impostos_Outros"), ir = S("Impostos_IRPJ_CSLL");
+    const obras = S("Obras"), terreno = S("Terreno"), desp = S("Despesas");
+    const fin = S("Funding_Despesas") - S("Funding_Amortizacao");
+    const liq = rec - (pis + cof + out);
+    const mb = liq - (obras + terreno);
+    const lo = mb - (desp + fin);
+    const ll = rec - S("Impostos") - obras - terreno - desp - fin;
+    const p = (v) => (liq > 0 ? (v / liq) * 100 : 0);
+    const L = (nome, valor, nivel, extra) => Object.assign({ nome, valor, nivel }, extra || {});
+    return [
+      L("Receita bruta", rec, 1), L("Receita de vendas", S("Receitas_Vendas"), 2), L("Receita de juros e correção", S("Receitas_Juros"), 2),
+      L("Redutor da receita", -(pis + cof + out), 1), L("PIS", -pis, 2), L("COFINS", -cof, 2), L("Outros impostos", -out, 2),
+      L("Receita líquida", liq, 0),
+      L("Custo", -(obras + terreno), 1), L("Terreno / permuta financeira", -terreno, 2), L("Aquisição de área", -S("Obras_Aq"), 2),
+      L("Projetos", -S("Obras_Proj"), 2), L("Obras de infraestrutura", -S("Obras_Custo"), 2), L("Administração da obra", -S("Obras_Adm"), 2),
+      L("Custos extras de obras", -(obras - S("Obras_Custo") - S("Obras_Proj") - S("Obras_Aq") - S("Obras_Adm")), 2),
+      L("Margem bruta", mb, 0, { perc: p(mb) }),
+      L("Despesas operacionais", -desp, 1), L("Marketing", -S("Despesas_Mkt"), 2), L("Comercial", -S("Despesas_Com"), 2), L("Administrativas", -S("Despesas_Adm"), 2),
+      L("Despesas extras", -(desp - S("Despesas_Mkt") - S("Despesas_Com") - S("Despesas_Adm")), 2),
+      L("Funding (juros e estruturação)", -fin, 1),
+      L("Lucro operacional", lo, 0, { perc: p(lo) }),
+      L("IRPJ / CSLL", -ir, 1),
+      L("Lucro líquido", ll, 0, { perc: p(ll) })
+    ];
+  }
+
+  return { STATUS, prepararViabilidades, dre, faseDoDoc, consolidar, calcular, montarFases, irr, npv, mirr, acelerarCurva, extrairCurva, aplicarOffset, parseCondicoes, calcularCustosFunding, cronogramaFunding, taxaMensalFunding, pyRound };
 });

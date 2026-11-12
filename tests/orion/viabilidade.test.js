@@ -44,3 +44,22 @@ test("viabilidade: arredondamento e TIR com a mesma regra do Python", () => {
   assert.ok(Math.abs(V.irr([-100, 60, 60]) - 0.130662386) < 1e-6);
   assert.ok(path.basename(__filename).endsWith(".test.js"));
 });
+
+test("viabilidade: DRE, carga e consolidação das fases", () => {
+  const arquivos = Object.entries(entrada).map(([tabela, linhas]) => ({ tabela, linhas }));
+  const c = V.prepararViabilidades(arquivos);
+  assert.strictEqual(c.docs.length, entrada.viabilities.length);
+  assert.deepStrictEqual(c.semFase, []);
+  for (const d of c.docs) {
+    const fase = V.faseDoDoc(d, 0);
+    const g = gabarito.find((x) => x.phase_id === d.fases[0].orion_id && !x.scenario_id);
+    const r = V.calcular(fase, null, taxas);
+    assert.ok(Math.abs(r.indicators.lucro_liquido - g.indicators.lucro_liquido) < 0.005, d.project_name);
+    const ll = V.dre(r.monthly_cashflow).find((l) => l.nome === "Lucro líquido");
+    assert.ok(Math.abs(ll.valor - r.indicators.lucro_liquido) < 0.005, "DRE " + d.project_name);
+    const k = V.consolidar([r], d.taxa_desconto_vpl / 100);
+    assert.ok(Math.abs(k.vpl - r.indicators.vpl) < 0.005);
+    assert.strictEqual(k.payback, r.indicators.payback);
+    assert.ok(Math.abs(k.exposicao_maxima - r.indicators.exposicao_maxima) < 0.005);
+  }
+});

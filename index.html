@@ -1221,6 +1221,9 @@
             <li data-tab="orion-dfc" data-module="sub_orion_geral_dfc_gerencial_acessar">
               <a onclick="switchTab('orion-dfc', 'DFC gerencial (Órion)')">DFC gerencial</a>
             </li>
+            <li data-tab="orion-viabilidades" data-module="sub_orion_geral_viabilidades_acessar">
+              <a onclick="switchTab('orion-viabilidades', 'Viabilidades (Órion)')">Viabilidades</a>
+            </li>
           </ul>
         </li>
         <!-- 5 - FISCAL / CONTABIL -->
@@ -1783,6 +1786,11 @@
       <!-- TAB: ÓRION (TRANSIÇÃO) - DFC GERENCIAL -->
       <section id="tab-orion-dfc" class="tab-pane" style="display: none;">
         <div id="orion-dfc-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: ÓRION (TRANSIÇÃO) - VIABILIDADES -->
+      <section id="tab-orion-viabilidades" class="tab-pane" style="display: none;">
+        <div id="orion-viabilidades-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: DEPARTAMENTOS DO ORÇAMENTO (vindo do ML Órion) -->
@@ -8754,6 +8762,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-realizado.js?v=2124"></script>
   <script defer src="orion-orcamentos.js?v=2124"></script>
   <script defer src="orion-dfc.js?v=2124"></script>
+  <script defer src="orion-viabilidade-calc.js?v=2124"></script>
+  <script defer src="orion-viabilidades.js?v=2124"></script>
   <script defer src="orion-departamentos.js?v=2124"></script>
   <script defer src="verificar-construcao.js?v=2124"></script>
   <script defer src="financiamento.js?v=2124"></script>
