@@ -147,6 +147,7 @@ const OrionPremissasApp = {
     else if (campo === "meses") it.meses = P.listaDeNumeros(valor);
     else if (campo === "condicoes") it.condicoes = P.mesclarCondicoes(it.condicoes, P.listaDeCondicoes(valor));
     else if (campo === "ativo") it.ativo = !!valor;
+    else if (campo === "vgv_pct" || campo === "custo_pct" || campo === "velocidade_pct") it[{ vgv_pct: "vgv_multiplier", custo_pct: "construction_cost_multiplier", velocidade_pct: "sales_speed_multiplier" }[campo]] = Math.round((1 + (P.num(valor) || 0) / 100) * 10000) / 10000;
     else if (["vgv_multiplier", "construction_cost_multiplier", "sales_speed_multiplier", "pis", "cofins", "irpj", "csll", "outros", "valor"].indexOf(campo) >= 0) it[campo] = P.num(valor);
     else it[campo] = String(valor);
     this.marcar();
@@ -434,15 +435,16 @@ const OrionPremissasApp = {
 
   htmlCenarios(itens) {
     const P = this.P();
+    const pct = (m) => P.fmt(((Number(m) || 1) - 1) * 100, 2);
     return this.tabela(
-      [{ t: "Cenário" }, { t: "Multiplicador do VGV", r: 1, w: "170px" }, { t: "Multiplicador do custo de obra", r: 1, w: "210px" }, { t: "Multiplicador da velocidade de vendas", r: 1, w: "250px" }, { t: "", w: "34px" }],
+      [{ t: "Cenário" }, { t: "Variação do VGV (%)", r: 1, w: "170px" }, { t: "Variação do custo de obra (%)", r: 1, w: "210px" }, { t: "Variação da velocidade de vendas (%)", r: 1, w: "250px" }, { t: "", w: "34px" }],
       itens.map((c, i) => `<tr>
         <td>${this.inp(i + ".nome", c.nome)}</td>
-        <td>${this.inp(i + ".vgv_multiplier", P.fmt(c.vgv_multiplier, 2), { num: 1 })}</td>
-        <td>${this.inp(i + ".construction_cost_multiplier", P.fmt(c.construction_cost_multiplier, 2), { num: 1 })}</td>
-        <td>${this.inp(i + ".sales_speed_multiplier", P.fmt(c.sales_speed_multiplier, 2), { num: 1 })}</td>
+        <td>${this.inp(i + ".vgv_pct", pct(c.vgv_multiplier), { num: 1 })}</td>
+        <td>${this.inp(i + ".custo_pct", pct(c.construction_cost_multiplier), { num: 1 })}</td>
+        <td>${this.inp(i + ".velocidade_pct", pct(c.sales_speed_multiplier), { num: 1 })}</td>
         <td class="is-center">${this.del(i)}</td></tr>`),
-      "Nenhum cenário cadastrado.") + `<div class="op-rodape">1,00 = sem ajuste. Ex.: 0,90 no VGV reduz o preço de venda em 10% na viabilidade.</div>`;
+      "Nenhum cenário cadastrado.") + `<div class="op-rodape">Como no Órion: 0% = sem ajuste. Ex.: −10 no VGV reduz o preço de venda em 10%; +15 no custo de obra aumenta a obra em 15%; −25 na velocidade deixa as vendas 25% mais lentas. Todos os cenários vieram do Órion com 0% (sem ajuste).</div>`;
   },
 
   htmlCurvas(itens) {
