@@ -139,7 +139,7 @@ const OrionPremissasApp = {
     const it = itens[i];
     if (!it) return;
     if (campo === "meses") it.meses = P.listaDeNumeros(valor);
-    else if (campo === "condicoes") it.condicoes = P.listaDeCondicoes(valor);
+    else if (campo === "condicoes") it.condicoes = P.mesclarCondicoes(it.condicoes, P.listaDeCondicoes(valor));
     else if (campo === "ativo") it.ativo = !!valor;
     else if (["vgv_multiplier", "construction_cost_multiplier", "sales_speed_multiplier", "pis", "cofins", "irpj", "csll", "outros", "valor"].indexOf(campo) >= 0) it[campo] = P.num(valor);
     else it[campo] = String(valor);
@@ -355,7 +355,8 @@ const OrionPremissasApp = {
     const o = opts || {};
     const dis = this.podeEditar() ? "" : " disabled";
     const cls = o.num ? ' class="is-num"' : "";
-    return `<input${cls} value="${this.esc(valor)}"${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">`;
+    const lst = o.lista ? ` list="${o.lista}"` : "";
+    return `<input${cls}${lst} value="${this.esc(valor)}"${dis} onchange="OrionPremissasApp.set('${this.jsq(caminho)}', this.value)">`;
   },
 
   sel(caminho, valor, opcoes) {
@@ -401,14 +402,14 @@ const OrionPremissasApp = {
         const ok = Math.abs(s - 100) <= P.TOL;
         return `<tr>
           <td>${this.inp(i + ".nome", c.nome)}</td>
-          <td>${this.sel(i + ".tipo", c.tipo, P.TIPOS_CURVA)}</td>
+          <td>${this.inp(i + ".tipo", c.tipo, { lista: "op-tipos-curva" })}</td>
           <td>${this.sel(i + ".classificacao", c.classificacao, P.CLASSES_CURVA)}</td>
           <td>${this.inp(i + ".meses", P.textoDeNumeros(c.meses))}</td>
           <td class="is-right">${(c.meses || []).length}</td>
           <td class="is-right ${ok ? "op-ok" : "op-ruim"}">${P.fmt(s, 2)}%</td>
           <td class="is-center">${this.del(i)}</td></tr>`;
       }),
-      "Nenhuma curva cadastrada.") + `<div class="op-rodape">A soma dos meses precisa ser exatamente 100%, como no Órion.</div>`;
+      "Nenhuma curva cadastrada.") + `<datalist id="op-tipos-curva">${[...new Set(P.TIPOS_CURVA.concat(itens.map((c) => c.tipo).filter(Boolean)))].map((x) => `<option value="${this.esc(x)}">`).join("")}</datalist><div class="op-rodape">A soma dos meses precisa ser exatamente 100%, como no Órion. O tipo é livre (sugestões ao digitar).</div>`;
   },
 
   htmlRegimes(itens) {

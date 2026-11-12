@@ -51,6 +51,15 @@
     });
   }
 
+  /** Ao editar o texto, mantém os demais campos de cada condição (ex.: aplica_juros) pelo nome; condição nova aplica juros e correção. */
+  function mesclarCondicoes(antigas, novas) {
+    const porNome = new Map((antigas || []).map((c) => [String(c.nome || "").trim().toLowerCase(), c]));
+    return (novas || []).map((n) => {
+      const a = porNome.get(String(n.nome || "").trim().toLowerCase());
+      return Object.assign({ aplica_juros: true, aplica_correcao: true }, a || {}, { nome: n.nome, perc: n.perc });
+    });
+  }
+
   function textoDeCondicoes(lista) {
     return (lista || []).map((c) => `${c.nome} = ${fmt(num(c.perc), 2)}`).join("; ");
   }
@@ -84,13 +93,14 @@
     return [...new Set(erros)];
   }
 
-  const TIPOS_CURVA = ["vendas", "obras", "marketing"];
+  const TIPOS_CURVA = ["vendas", "obras", "marketing", "Administração", "Administração de Obras", "Aquisição de Área", "Captação Interna", "Comercial", "Obras de Infraestrutura", "Projetos"];
   const CLASSES_CURVA = ["Custo", "Despesa", "Receita"];
 
   function validarCurvas(itens) {
     const erros = validarNomesUnicos(itens, "Curva");
     (itens || []).forEach((c) => {
-      if (TIPOS_CURVA.indexOf(c.tipo) < 0) erro(erros, `Curva "${c.nome || "?"}": tipo deve ser vendas, obras ou marketing.`);
+      /* No Órion o tipo é texto livre (ex.: Comercial, Projetos, Obras de Infraestrutura); só não pode ficar vazio. */
+      if (!String(c.tipo || "").trim()) erro(erros, `Curva "${c.nome || "?"}": informe o tipo (ex.: vendas, obras, marketing).`);
       if (CLASSES_CURVA.indexOf(c.classificacao) < 0) erro(erros, `Curva "${c.nome || "?"}": classificação deve ser Custo, Despesa ou Receita.`);
       const meses = c.meses || [];
       if (!meses.length) return erro(erros, `Curva "${c.nome || "?"}": informe os percentuais dos meses.`);
@@ -203,7 +213,8 @@
     tax_regimes: { chave: "regimes", rotulo: "Regimes tributários", mapear: (r) => ({
       nome: texto(r.nome), pis: num(r.pis) || 0, cofins: num(r.cofins) || 0, irpj: num(r.irpj) || 0, csll: num(r.csll) || 0, outros: num(r.outros) || 0, ativo: r.ativo !== false, orion_id: r.id }) },
     payment_plans: { chave: "planos_pagamento", rotulo: "Planos de pagamento", mapear: (r) => ({
-      nome: texto(r.nome), condicoes: (jsonDe(r.condicoes_json, []) || []).map((c) => ({ nome: texto(c && c.nome), perc: num(c && c.perc) })), orion_id: r.id }) },
+      /* Guarda todos os campos da condição (ex.: aplica_juros, aplica_correcao), não só nome e %. */
+      nome: texto(r.nome), condicoes: (jsonDe(r.condicoes_json, []) || []).map((c) => Object.assign({}, c, { nome: texto(c && c.nome), perc: num(c && c.perc) })), orion_id: r.id }) },
     economic_indicators: { chave: "indices_projetados", rotulo: "Índices projetados", mapear: (r) => ({
       nome: texto(r.nome), index_type: texto(r.index_type), valor: num(r.valor), tipo_unidade: texto(r.tipo_unidade || "% a.a."), competencia: texto(r.competencia), orion_id: r.id }) },
     fechamento_meses: { chave: "fechamento_meses", rotulo: "Fechamento de meses", mapear: (r, ctx) => ({
@@ -245,7 +256,7 @@
   return {
     DO_ORION, prepararCarga,
     TOL, TIPOS_CURVA, CLASSES_CURVA, ALIQUOTAS, TIPOS_INDICE, UNIDADES,
-    num, soma, fmt, listaDeNumeros, textoDeNumeros, listaDeCondicoes, textoDeCondicoes,
+    num, soma, fmt, listaDeNumeros, textoDeNumeros, listaDeCondicoes, textoDeCondicoes, mesclarCondicoes,
     validarCenarios, validarCurvas, validarPlanos, validarRegimes, validarIndicesProjetados, totalRegime,
     anualParaMensal, mensalParaAnual, mapaFechados, alternarMes
   };

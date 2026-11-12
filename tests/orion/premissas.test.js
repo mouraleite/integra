@@ -89,3 +89,13 @@ test("carga inicial: linhas do Órion viram itens do Integra", () => {
   assert.strictEqual(por.taxas_funding.itens.CVM.ICVM_400, 0.0005);
   assert.ok(!por.cenarios);
 });
+
+test("plano de pagamento: campos extras do Órion (aplica_juros, aplica_correcao) não se perdem", () => {
+  const c = P.prepararCarga([{ tabela: "payment_plans", linhas: [{ id: 1, nome: "N", condicoes_json: [{ nome: "A VISTA", perc: 40, aplica_juros: false, aplica_correcao: true }, { nome: "24", perc: 60, aplica_juros: true, aplica_correcao: false }] }] }]);
+  const conds = c[0].itens[0].condicoes;
+  assert.deepStrictEqual(conds[0], { nome: "A VISTA", perc: 40, aplica_juros: false, aplica_correcao: true });
+  const editadas = P.mesclarCondicoes(conds, P.listaDeCondicoes("A VISTA = 30; 24 = 60; 36 = 10"));
+  assert.deepStrictEqual(editadas[0], { aplica_juros: false, aplica_correcao: true, nome: "A VISTA", perc: 30 });
+  assert.strictEqual(editadas[1].aplica_correcao, false);
+  assert.deepStrictEqual(editadas[2], { aplica_juros: true, aplica_correcao: true, nome: "36", perc: 10 });
+});

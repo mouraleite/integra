@@ -366,7 +366,11 @@
       if (!g.has(k)) g.set(k, { cc: String(v.cc), cc_nome: v.cc_nome || "", plano_venda: v.plano_venda || "", orion_plano_venda_id: v.orion_plano_venda_id, distrato, obs: v.obs || "", origem: v.origem || "", juros_mensal: Number(v.juros_mensal) || 0, meses: Array.from({ length: 12 }, () => ({ vendas: 0, ticket: 0 })) });
       const x = g.get(k);
       const m = Number(v.mes);
-      if (m >= 1 && m <= 12) { x.meses[m - 1].vendas += Number(v.vendas) || 0; if (v.ticket) x.meses[m - 1].ticket = Number(v.ticket) || 0; }
+      if (m >= 1 && m <= 12) {
+        x.meses[m - 1].vendas += Number(v.vendas) || 0;
+        if (v.ticket) x.meses[m - 1].ticket = Number(v.ticket) || 0;
+        if (v.juros_mensal) x.meses[m - 1].juros = Number(v.juros_mensal) || 0; // juros do mês (o Órion guarda por mês)
+      }
     });
     return [...g.values()].sort((a, b) => String(a.cc).localeCompare(String(b.cc), "pt-BR", { numeric: true }) || String(a.plano_venda).localeCompare(String(b.plano_venda), "pt-BR") || (a.distrato ? 1 : 0) - (b.distrato ? 1 : 0));
   }
@@ -390,7 +394,7 @@
         const m = l.meses[i];
         const vendas = Number(m.vendas) || 0, ticket = Number(m.ticket) || 0;
         out.push({ cc: l.cc, cc_nome: l.cc_nome, plano_venda: l.plano_venda, orion_plano_venda_id: l.orion_plano_venda_id, ano: Number(ano), mes: i + 1,
-          juros_mensal: l.juros_mensal || 0, ticket, vendas, vgv: ticket * vendas, origem: l.origem || "", obs: l.distrato && !/distrato/i.test(l.obs || "") ? ("Distrato " + (l.obs || "")).trim() : (l.obs || "") });
+          juros_mensal: m.juros != null ? m.juros : (l.juros_mensal || 0), ticket, vendas, vgv: ticket * vendas, origem: l.origem || "", obs: l.distrato && !/distrato/i.test(l.obs || "") ? ("Distrato " + (l.obs || "")).trim() : (l.obs || "") });
       });
     });
     return out;
