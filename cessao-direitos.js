@@ -1384,84 +1384,35 @@ const CessaoPopup = {
   condicaoMensal(c) {
     const id = String((c && (c.conditionTypeId || c.conditionType)) || "").trim().toUpperCase();
     const nome = String((c && (c.conditionTypeName || c.description || c.conditionType)) || "").toUpperCase();
-    return id === "PM" || /MENSAL/.test(nome);
+    return id === "PM" || /MENSAL|MENSAIS/.test(nome);
   },
 
-  intervaloCondicao(c) {
-    const id = String((c && (c.conditionTypeId || c.conditionType)) || "").trim().toUpperCase();
-    const nome = String((c && (c.conditionTypeName || c.description || c.conditionType)) || "").toUpperCase();
-    if (id === "PA" || /ANUAL/.test(nome)) return 12;
-    if (id === "PS" || /SEMEST/.test(nome)) return 6;
-    if (/TRIMESTR/.test(nome)) return 3;
-    if (/BIMESTR/.test(nome)) return 2;
-    return 1;
-  },
-
-  mesesEntre(isoA, isoB) {
-    const a = String(isoA || "").slice(0, 10);
-    const b = String(isoB || "").slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b)) return null;
-    const pa = a.split("-").map(Number);
-    const pb = b.split("-").map(Number);
-    return (pb[0] - pa[0]) * 12 + (pb[1] - pa[1]);
-  },
-
-  dataBaseJuros(c, contract) {
-    const primeiro = String((c && (c.firstPayment || c.firstDueDate || c.dueDate)) || "").slice(0, 10);
-    const cands = [
-      c && c.baseDateInterest,
-      c && c.interestBaseDate,
-      c && c.baseDateOfInterest,
-      c && c.baseDate,
-      contract && (contract.contractDate || contract.issueDate || contract.saleDate)
-    ];
-    for (let i = 0; i < cands.length; i++) {
-      const iso = String(cands[i] || "").slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
-      const meses = this.mesesEntre(iso, primeiro);
-      if (meses != null && meses > 0 && meses <= 18) return iso;
-    }
-    return "";
-  },
-
-  /** n = meses entre a data-base dos juros e o 1º vencimento, menos o intervalo da condição. n negativo não reduz a parcela. */
-  periodosJurosAntes(c, contract) {
-    const primeiro = String((c && (c.firstPayment || c.firstDueDate || c.dueDate)) || "").slice(0, 10);
-    const base = this.dataBaseJuros(c, contract);
-    const meses = this.mesesEntre(base, primeiro);
-    if (meses == null) return 0;
-    const carencia = Number(c && (c.monthsGracePeriod != null ? c.monthsGracePeriod : c.gracePeriod)) || 0;
-    const n = meses - this.intervaloCondicao(c) - (carencia > 0 ? carencia : 0);
-    return n > 0 ? n : 0;
+  prestacaoPrice(total, qtde, jurosPct) {
+    const i = Number(jurosPct) / 100;
+    if (!(i > 0) || !(qtde > 1) || !(total > 0)) return 0;
+    const pot = Math.pow(1 + i, qtde);
+    if (!(pot > 1)) return 0;
+    return Math.round((total * i * pot / (pot - 1)) * 100) / 100;
   },
 
   /**
-   * totalValue do Sienge pode ser o valor presente.
-   * Se a data-base dos juros antecede o 1º vencimento por mais de um intervalo, a parcela do contrato é a fatia trazida a valor futuro: fatia × (1+i)^n.
-   * Se a base está a um intervalo do 1º vencimento, o total é o valor presente da série e a parcela é a prestação da Tabela Price.
+   * totalValue do Sienge, na condição com juros, é o valor presente da série.
+   * A parcela do contrato é a prestação da Tabela Price, não o total dividido pela quantidade.
    */
   valorNominalCondicao(c, qtde, total, contract, jurosSerie) {
     const fatia = qtde > 0 && total > 0 ? Math.round((total / qtde) * 100) / 100 : 0;
     const explicito = Number(c.installmentValue || c.installmentAmount || c.installmentBaseValue) || 0;
-    if (explicito > 0.009 && explicito + 0.02 < total && explicito > fatia + 0.05) return explicito;
+    const mensal = this.condicaoMensal(c);
     const tipo = String(c.interestType || "").trim().toUpperCase();
     const semPrice = tipo === "S" || tipo === "N";
     let juros = this.taxaMensalPct(c.interestPercentage);
-    if (juros == null && contract) juros = this.taxaMensalPct(contract.interestPercentage);
-    if (juros == null && this.condicaoMensal(c) && Number(jurosSerie) > 0) juros = Number(jurosSerie);
-    const nAntes = tipo === "S" ? 0 : this.periodosJurosAntes(c, contract);
-    if (juros > 0 && nAntes > 0 && fatia > 0) {
-      const face = Math.round(fatia * Math.pow(1 + juros / 100, nAntes) * 100) / 100;
-      if (face > fatia + 0.001) return face;
+    if (!(juros > 0) && contract) juros = this.taxaMensalPct(contract.interestPercentage);
+    if (mensal && !(juros > 0.05) && Number(jurosSerie) > 0.05) juros = Number(jurosSerie);
+    if ((mensal || !semPrice) && juros > 0 && qtde > 1 && total > 0) {
+      const pmt = this.prestacaoPrice(total, qtde, juros);
+      if (pmt > fatia + 0.02) return pmt;
     }
-    if (!semPrice && juros > 0 && qtde > 1 && total > 0) {
-      const i = juros / 100;
-      const pot = Math.pow(1 + i, qtde);
-      if (pot > 1) {
-        const pmt = Math.round((total * i * pot / (pot - 1)) * 100) / 100;
-        if (pmt > fatia + 0.02) return pmt;
-      }
-    }
+    if (explicito > 0.009 && explicito + 0.02 < total && explicito > fatia + 0.05) return explicito;
     if (explicito > 0.009 && explicito + 0.02 >= fatia) return explicito;
     return fatia;
   },
