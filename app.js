@@ -3938,7 +3938,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-orcamentos": "Orçamentos e forecasts (Órion)",
     "orion-dfc": "DFC gerencial (Órion)",
     "orion-viabilidades": "Viabilidades (Órion)",
-    "orion-acompanhamento": "Acompanhamento de empreendimentos (Órion)",
+    "orion-acompanhamento": "Viabilidade × realizado (Órion)",
+    "orion-obras": "Acompanhamento de empreendimentos (Órion)",
     "orion-resumo": "Resumo do orçamento (Órion)",
     "orion-analitico": "Analítico de gastos (Órion)",
     "orion-analise": "Análise de orçamento (Órion)",
@@ -4037,6 +4038,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-dfc": "bar-chart-3",
     "orion-viabilidades": "building-2",
     "orion-acompanhamento": "activity",
+    "orion-obras": "layout-dashboard",
     "orion-resumo": "layout-dashboard",
     "orion-analitico": "table-2",
     "orion-analise": "list-tree",
@@ -4306,6 +4308,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionAnaliticoApp !== "undefined") OrionAnaliticoApp.init();
   } else if (tabId === "orion-resumo") {
     if (typeof OrionResumoApp !== "undefined") OrionResumoApp.init();
+  } else if (tabId === "orion-obras") {
+    if (typeof OrionObrasApp !== "undefined") OrionObrasApp.init();
   } else if (tabId === "orion-acompanhamento") {
     if (typeof OrionAcompanhamentoApp !== "undefined") OrionAcompanhamentoApp.init();
   } else if (tabId === "orion-viabilidades") {

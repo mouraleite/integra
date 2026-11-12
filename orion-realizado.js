@@ -70,7 +70,7 @@ const OrionRealizado = {
         alocacoes.push({
           cc: String(typeof fluxo.ccIdOf === "function" ? fluxo.ccIdOf(x.costCenterId) : x.costCenterId || "").replace(/\D/g, ""),
           plano: String(x.categoryId || "").replace(/\D/g, ""),
-          gid, mes: Number(String(x.month || "").slice(5, 7)), valor, empresa: String(mov.companyId || ""), i: n
+          gid, mes: Number(String(x.month || "").slice(5, 7)), valor, empresa: String(mov.companyId || ""), i: n, nome: String(x.categoryName || "")
         });
       });
       if (n && n % 250 === 0) await new Promise((r) => setTimeout(r, 0));

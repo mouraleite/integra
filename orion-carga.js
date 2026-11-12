@@ -5,6 +5,7 @@
  *   2. Departamentos do orçamento (OrionDepartamentosApp)
  *   3. Orçamentos e forecasts, com vendas e histórico (OrionOrcamentosApp)
  *   4. Viabilidades, com fases, dados físicos e datas (OrionViabilidadesApp)
+ *   5. Obras do Acompanhamento de empreendimentos (centros de custo acompanhados, fase, parceria e terreno informado)
  * Só administrador. O que já existe no Integra só é substituído se marcar "substituir". */
 const OrionCargaApp = {
   etapa: "inicio",   // inicio | lendo | previa | gravando | fim
@@ -50,12 +51,34 @@ const OrionCargaApp = {
       this.depto = { temDados: !!(atual.versao > 0 && atual.itens && (atual.itens.departamentos || []).length), versao: atual.versao, substituir: false, resultado: "" };
       await O.lerArquivos(files);
       await V.lerArquivos(files);
+      await this.lerObras(files);
       this.etapa = "previa";
     } catch (e) {
       this.erro = e.message || String(e);
       this.etapa = "inicio";
     }
     this.render();
+  },
+
+  /** Centros de custo do Órion que o Acompanhamento de empreendimentos usa (cost_centers.json + curva do terreno em standard_curves.json). */
+  async lerObras(files) {
+    this.obras = null;
+    const ler = async (nome) => { const f = [...(files || [])].find((x) => x.name === nome); if (!f) return null; const j = JSON.parse(await f.text()); return Array.isArray(j) ? j : (j && j.linhas) || []; };
+    const ccs = await ler("cost_centers.json");
+    if (!ccs) return;
+    const curvas = {};
+    ((await ler("standard_curves.json")) || []).forEach((c) => { let v = c.valores_meses_json; if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { v = null; } } if (v && Array.isArray(v.meses)) curvas[c.id] = v.meses.map(Number); });
+    const pct = (x) => { const n = Number(String(x == null ? "" : x).replace("%", "").replace(",", ".")); return isNaN(n) ? 0 : n; };
+    const itens = ccs.filter((c) => c && String(c.id_sienge || "").trim()).map((c) => {
+      let cd = c.custom_data; if (typeof cd === "string") { try { cd = JSON.parse(cd); } catch (e) { cd = {}; } } cd = cd || {};
+      let ar = c.apportionment_rules; if (typeof ar === "string") { try { ar = JSON.parse(ar); } catch (e) { ar = []; } }
+      return { cc: String(c.id_sienge).replace(/\D/g, ""), nome: String(c.nome || ""), acompanhar: !!c.track_in_dashboard, fase: String(c.project_phase || ""),
+        cidade: String(cd.__cidade_sienge || ""), participacao: pct(cd["Participação"]), participacao_rateio: pct(cd["Participação Rateio"]), parceria_orion: cd.partnership_config_id || c.partnership_config_id || null,
+        terreno: Number(c.manual_land_cost) > 0 ? { valor: Number(c.manual_land_cost), curva: curvas[cd.land_payment_curve_id] || null, inicio: cd.land_payment_start_date || null } : null,
+        rateio: Array.isArray(ar) ? ar : [] };
+    });
+    const atual = await window.OrionStore.ler("acompanhamento_obras", []);
+    this.obras = { itens, versao: atual.versao || 0, acompanhadas: itens.filter((x) => x.acompanhar).length, resultado: "" };
   },
 
   marcarDepto(v) { if (this.depto) this.depto.substituir = !!v; },
@@ -84,6 +107,11 @@ const OrionCargaApp = {
     });
     if (O.carga) await passo("Orçamentos e forecasts", async () => { await O.confirmarCarga(); return O.carga.itens.map((c) => `${c.tipo}: ${c.resultado}`).join(" · "); });
     if (V.carga) await passo("Viabilidades", async () => { await V.confirmarCarga(); return V.carga.resultado; });
+    if (this.obras) await passo("Obras do Acompanhamento de empreendimentos", async () => {
+      const atual = await window.OrionStore.ler("acompanhamento_obras", []);
+      await window.OrionStore.gravar("acompanhamento_obras", this.obras.itens, atual.versao);
+      return `importado: ${this.obras.itens.length} centros de custo, ${this.obras.acompanhadas} acompanhados no painel`;
+    });
     clearInterval(this.timer);
     this.timer = null;
     // o resultado fica nesta tela; as outras telas voltam ao normal (sem a prévia da carga aberta)
@@ -108,7 +136,8 @@ const OrionCargaApp = {
     return bloco("1. Premissas da viabilidade e fechamento de meses", P) +
       bloco("2. Departamentos do orçamento", D, dep) +
       bloco("3. Orçamentos e forecasts", O) +
-      bloco("4. Viabilidades", V);
+      bloco("4. Viabilidades", V) +
+      `<div class="oc-bloco"><h4>5. Obras do Acompanhamento de empreendimentos</h4>${this.obras ? `<div style="font-size:0.8rem">${this.obras.itens.length} centros de custo do Órion, ${this.obras.acompanhadas} marcados para o painel de acompanhamento (com fase, participação da parceria e terreno informado).</div>` : `<div style="font-size:0.78rem;color:#b91c1c">Sem cost_centers.json na seleção.</div>`}</div>`;
   },
 
   render() {
