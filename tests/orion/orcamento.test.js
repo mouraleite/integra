@@ -194,3 +194,32 @@ test("DFC gerencial: totais por grupo-pai, AV, AH e geração de caixa", () => {
   const og = O.orcadoPorGrupo([{ plano: "2010101", m: [100, 200, 300] }, { plano: "9", m: [5] }], (p) => (p === "2010101" ? "g_05_03" : null), -1, 2);
   assert.deepStrictEqual(og, { g_05_03: -300 });
 });
+
+test("resumo geral: KPIs, mensal, ranking e realizado só dos CCs e planos do orçamento", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const desp = [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(100000) }];
+  const rec = [{ cc: "100", cc_nome: "Obra A", plano: "1001", plano_nome: "Venda", m: m(300000) }];
+  const aloc = [
+    { cc: "100", plano: "2001", mes: 1, valor: -1500 },      // despesa (saída) de R$ 1.500
+    { cc: "100", plano: "1001", mes: 1, valor: 2500 },       // receita de R$ 2.500
+    { cc: "100", plano: "2999", mes: 1, valor: -99999 },     // plano fora do orçamento: não entra
+    { cc: "200", plano: "2001", mes: 1, valor: -99999 },     // CC fora do orçamento: não entra
+    { cc: "100", plano: "2001", mes: 2, valor: -700 }
+  ];
+  const r = C.resumoGeral(desp, rec, aloc, [1]);
+  assert.strictEqual(r.kpis.despesas.orcado, 100000);
+  assert.strictEqual(r.kpis.despesas.realizado, 150000);
+  assert.strictEqual(r.kpis.receitas.realizado, 250000);
+  assert.strictEqual(r.kpis.resultado.orcado, 200000);
+  assert.strictEqual(r.kpis.resultado.realizado, 100000);
+  assert.strictEqual(r.mensal[1].desp_realizado, 70000);
+  assert.strictEqual(r.mensal[1].usado, false);
+  assert.strictEqual(Math.abs(r.ranking[0].dif), 50000);
+  assert.strictEqual(r.ranking.length, 2);
+  assert.strictEqual(r.grupos[0].tipo, "RECEITAS");
+  assert.strictEqual(r.kpis.despesas.semaforo.cor, "cinza"); // R$ 500 de desvio: abaixo dos R$ 5.000 do Órion
+  const todos = C.resumoGeral(desp, rec, aloc);
+  assert.strictEqual(todos.kpis.despesas.orcado, 1200000);
+  assert.strictEqual(todos.kpis.despesas.realizado, 220000);
+});

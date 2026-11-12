@@ -485,6 +485,65 @@
     return out;
   }
 
-  return { SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /* ---------- Resumo geral (Dashboard de Orçamento do Órion) ---------- */
+
+  /**
+   * desp / rec: linhas do orçamento (ou forecast) {cc, cc_nome, plano, plano_nome, m[12] em centavos}, com cc e plano só dígitos.
+   * alocacoes: realizado de OrionRealizado.buscar (sinal da DFC: entradas +, saídas -).
+   * meses: lista de 1..12 a considerar (padrão: todos).
+   * Realizado de cada tipo = centros de custo e planos que aparecem nas linhas daquele tipo (mesma regra da tela do orçamento),
+   * despesas com sinal invertido (saída vira positivo). Devolve KPIs, série mensal, ranking dos 10 maiores desvios e detalhe por CC › plano.
+   */
+  function resumoGeral(desp, rec, alocacoes, meses) {
+    const ms = (meses && meses.length ? meses : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]).map(Number).filter((m) => m >= 1 && m <= 12);
+    const usa = new Array(12).fill(false);
+    ms.forEach((m) => { usa[m - 1] = true; });
+    const lado = (linhas, sinal, tipo) => {
+      const ccs = new Set(), planos = new Set(), orc = new Map();
+      (linhas || []).forEach((l) => {
+        ccs.add(l.cc); planos.add(l.plano);
+        const k = l.cc + "|" + l.plano;
+        if (!orc.has(k)) orc.set(k, { cc: l.cc, cc_nome: l.cc_nome || "", plano: l.plano, plano_nome: l.plano_nome || "", tipo, o: new Array(12).fill(0), r: new Array(12).fill(0) });
+        const x = orc.get(k);
+        (l.m || []).forEach((v, i) => { x.o[i] += Number(v) || 0; });
+      });
+      (alocacoes || []).forEach((a) => {
+        const cc = String(a.cc || ""), pl = String(a.plano || ""), mes = Number(a.mes);
+        if (!ccs.has(cc) || !planos.has(pl) || !(mes >= 1 && mes <= 12)) return;
+        const k = cc + "|" + pl;
+        if (!orc.has(k)) orc.set(k, { cc, cc_nome: "", plano: pl, plano_nome: "", tipo, o: new Array(12).fill(0), r: new Array(12).fill(0), fora: true });
+        orc.get(k).r[mes - 1] += centavos(Number(a.valor) * sinal);
+      });
+      return [...orc.values()];
+    };
+    const itens = lado(desp, -1, "DESPESAS").concat(lado(rec, 1, "RECEITAS"));
+    const tot = (x, campo) => x[campo].reduce((s, v, i) => s + (usa[i] ? v : 0), 0);
+    itens.forEach((x) => { x.orcado = tot(x, "o"); x.realizado = tot(x, "r"); x.dif = x.realizado - x.orcado; x.semaforo = semaforo(x.realizado, x.orcado, x.tipo); });
+    const somaTipo = (t, campo) => itens.filter((x) => x.tipo === t).reduce((s, x) => s + x[campo], 0);
+    const mensal = [];
+    for (let i = 0; i < 12; i++) {
+      const s = (t, c) => itens.filter((x) => x.tipo === t).reduce((a, x) => a + x[c][i], 0);
+      const dO = s("DESPESAS", "o"), dR = s("DESPESAS", "r"), rO = s("RECEITAS", "o"), rR = s("RECEITAS", "r");
+      mensal.push({ mes: i + 1, usado: usa[i], desp_orcado: dO, desp_realizado: dR, rec_orcado: rO, rec_realizado: rR, res_orcado: rO - dO, res_realizado: rR - dR });
+    }
+    const kpi = (o, r, tipo) => ({ orcado: o, realizado: r, saldo: r - o, perc: o ? (r - o) / Math.abs(o) : null, semaforo: semaforo(r, o, tipo) });
+    const dO = somaTipo("DESPESAS", "orcado"), dR = somaTipo("DESPESAS", "realizado"), rO = somaTipo("RECEITAS", "orcado"), rR = somaTipo("RECEITAS", "realizado");
+    const kpis = { despesas: kpi(dO, dR, "DESPESAS"), receitas: kpi(rO, rR, "RECEITAS"), resultado: kpi(rO - dO, rR - dR, "RESULTADO") };
+    const ranking = itens.filter((x) => x.dif).slice().sort((a, b) => Math.abs(b.dif) - Math.abs(a.dif)).slice(0, 10);
+    const porCc = new Map();
+    itens.forEach((x) => {
+      const k = x.tipo + "|" + x.cc;
+      if (!porCc.has(k)) porCc.set(k, { tipo: x.tipo, cc: x.cc, cc_nome: x.cc_nome, orcado: 0, realizado: 0, planos: [] });
+      const g = porCc.get(k);
+      if (!g.cc_nome && x.cc_nome) g.cc_nome = x.cc_nome;
+      g.orcado += x.orcado; g.realizado += x.realizado; g.planos.push(x);
+    });
+    const grupos = [...porCc.values()].map((g) => Object.assign(g, { dif: g.realizado - g.orcado, semaforo: semaforo(g.realizado, g.orcado, g.tipo),
+      planos: g.planos.sort((a, b) => String(a.plano).localeCompare(String(b.plano), "pt-BR", { numeric: true })) }))
+      .sort((a, b) => (a.tipo === b.tipo ? String(a.cc).localeCompare(String(b.cc), "pt-BR", { numeric: true }) : a.tipo === "RECEITAS" ? -1 : 1));
+    return { kpis, mensal, ranking, grupos, meses: ms };
+  }
+
+  return { resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });
