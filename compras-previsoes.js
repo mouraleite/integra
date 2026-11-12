@@ -764,6 +764,15 @@ const ComprasPrevisoesApp = {
     return found;
   },
 
+  mesmoContrato(a, b) {
+    const sa = String(a || "").trim();
+    const sb = String(b || "").trim();
+    if (!sa || !sb) return false;
+    if (sa === sb) return true;
+    const ka = this.pedidoKey(sa);
+    return !!(ka && ka === this.pedidoKey(sb));
+  },
+
   numeroContratoBill(bill) {
     if (!bill) return "";
     const raw = bill.contractNumber != null
@@ -786,6 +795,7 @@ const ComprasPrevisoesApp = {
   async medicoesContrato(companyId, contract) {
     const docs = ["CT", "PCT"];
     let negado = false;
+    let viuLista = false;
     for (let i = 0; i < docs.length; i++) {
       try {
         const med = await window.siengeFetchWithRetry(
@@ -795,12 +805,13 @@ const ComprasPrevisoesApp = {
           1
         );
         const results = (med && med.results) || [];
+        viuLista = true;
         if (results.length) return results;
       } catch (e) {
         if (/403/.test(String((e && e.message) || e || ""))) negado = true;
       }
     }
-    if (negado) {
+    if (negado && !viuLista) {
       const err = new Error("403");
       throw err;
     }
