@@ -72,3 +72,20 @@ test("fechamento de meses: fecha e reabre", () => {
   l = P.alternarMes(l, 2027, 3, "a@b");
   assert.deepStrictEqual(l.map((r) => r.mes), [1]);
 });
+
+test("carga inicial: linhas do Órion viram itens do Integra", () => {
+  const c = P.prepararCarga([
+    { tabela: "payment_plans", linhas: [{ id: 7, nome: "Neutro - ABERTO", condicoes_json: [{ nome: "A VISTA", perc: 3.8 }, { nome: "180", perc: 96.3 }] }] },
+    { tabela: "standard_curves", linhas: [{ id: 2, nome: "Obra 4m", tipo: "obras", classificacao: "Custo", valores_meses_json: { meses: ["10.00", "20", "30", "40"] } }] },
+    { tabela: "fechamento_meses", linhas: [{ id: 1, ano: 2026, mes: 9, fechado_por_id: 5, data_fechamento: "2026-10-05T12:00:00" }, { id: 2, ano: 2026, mes: 13 }] },
+    { tabela: "users", linhas: [{ id: 5, email: "marcelo@x" }] },
+    { tabela: "system_settings", linhas: [{ key: "funding_rates", value: { CVM: { ICVM_400: 0.0005 } } }, { key: "outra", value: 1 }] }
+  ]);
+  const por = Object.fromEntries(c.map((x) => [x.chave, x]));
+  assert.deepStrictEqual(por.curvas.itens[0].meses, [10, 20, 30, 40]);
+  assert.deepStrictEqual(por.curvas.avisos, []);
+  assert.match(por.planos_pagamento.avisos[0], /100,10%/);
+  assert.deepStrictEqual(por.fechamento_meses.itens, [{ ano: 2026, mes: 9, por: "marcelo@x", em: "2026-10-05T12:00:00", orion_id: 1 }]);
+  assert.strictEqual(por.taxas_funding.itens.CVM.ICVM_400, 0.0005);
+  assert.ok(!por.cenarios);
+});

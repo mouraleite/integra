@@ -9,6 +9,7 @@ const OrionPremissasApp = {
   salvando: false,
   erros: [],
   aviso: "",
+  carga: null,     // pré-visualização da importação do Órion
 
   P() { return window.OrionPremissasCalc; },
 
@@ -253,6 +254,101 @@ const OrionPremissasApp = {
     this.carregar(this.aba, true);
   },
 
+  /* ---------- carga inicial do Órion (só administrador) ---------- */
+
+  ehAdmin() {
+    return typeof window.isCrmSuperAdmin === "function" && window.isCrmSuperAdmin();
+  },
+
+  escolherArquivos() {
+    const inp = document.getElementById("op-arquivos");
+    if (inp) inp.click();
+  },
+
+  async lerArquivos(lista) {
+    const arquivos = [];
+    for (const f of Array.from(lista || [])) {
+      try { arquivos.push(JSON.parse(await f.text())); } catch (e) { this.erros = [`Arquivo ${f.name} não é um JSON válido.`]; }
+    }
+    const cadastros = this.P().prepararCarga(arquivos);
+    if (!cadastros.length) {
+      this.erros = ["Nenhum arquivo reconhecido. Escolha os arquivos .json da pasta .carga_orion (ex.: payment_plans.json, scenarios.json, fechamento_meses.json, system_settings.json e users.json)."];
+      return this.render();
+    }
+    for (const c of cadastros) {
+      try {
+        const atual = await window.OrionStore.ler(c.chave, null);
+        c.versaoAtual = atual.versao;
+        c.temDados = atual.versao > 0 && (Array.isArray(atual.itens) ? atual.itens.length > 0 : !!atual.itens);
+      } catch (e) {
+        c.erro = e.message || String(e);
+      }
+      c.substituir = false;
+      c.resultado = "";
+    }
+    this.carga = cadastros;
+    this.erros = [];
+    this.render();
+  },
+
+  marcarSubstituir(i, v) {
+    if (this.carga && this.carga[i]) this.carga[i].substituir = !!v;
+  },
+
+  async confirmarCarga() {
+    if (!this.ehAdmin() || !this.carga) return;
+    this.salvando = true;
+    this.render();
+    for (const c of this.carga) {
+      if (c.erro) { c.resultado = "não importado: " + c.erro; continue; }
+      if (c.temDados && !c.substituir) { c.resultado = "mantido (já tinha dados no Integra)"; continue; }
+      try {
+        await window.OrionStore.gravar(c.chave, c.itens, c.versaoAtual);
+        const n = Array.isArray(c.itens) ? c.itens.length : Object.keys(c.itens || {}).length;
+        c.resultado = `importado (${n} ${Array.isArray(c.itens) ? "itens" : "grupos"})`;
+        delete this.estado[c.chave];
+      } catch (e) {
+        c.resultado = "não importado: " + (e.message || String(e));
+      }
+    }
+    this.salvando = false;
+    this.render();
+    if (!this.estado[this.aba]) this.carregar(this.aba);
+  },
+
+  fecharCarga() {
+    this.carga = null;
+    this.render();
+  },
+
+  htmlCarga() {
+    if (!this.carga) return "";
+    const feito = this.carga.some((c) => c.resultado);
+    const linhas = this.carga.map((c, i) => {
+      const n = Array.isArray(c.itens) ? c.itens.length : Object.keys(c.itens || {}).length;
+      return `<tr>
+        <td>${this.esc(c.rotulo)}</td>
+        <td class="is-right">${n}</td>
+        <td style="white-space:normal">${c.avisos && c.avisos.length ? `<span class="op-ruim">${c.avisos.length} aviso(s)</span>: ${this.esc(c.avisos[0])}${c.avisos.length > 1 ? " …" : ""}` : "ok"}</td>
+        <td style="white-space:normal">${c.erro ? this.esc(c.erro) : c.temDados ? `já tem dados <label style="white-space:nowrap"><input type="checkbox" style="width:auto;height:auto" ${c.substituir ? "checked" : ""} ${feito ? "disabled" : ""} onchange="OrionPremissasApp.marcarSubstituir(${i}, this.checked)"> substituir</label>` : "vazio"}</td>
+        <td style="white-space:normal">${this.esc(c.resultado || "")}</td>
+      </tr>`;
+    }).join("");
+    return `
+      <div class="op-msg is-ok" style="color:#1c2e24">
+        <b>Importar do Órion</b> — confira antes de gravar. Cadastros que já têm dados no Integra só são substituídos se você marcar. Avisos não impedem a importação; os itens com aviso ficam para ajustar na tela.
+        <div class="cc-scroll" style="margin-top:8px">
+          <table class="cc-table"><colgroup><col style="width:160px"><col style="width:60px"><col><col style="width:170px"><col style="width:190px"></colgroup>
+            <thead><tr><th>Cadastro</th><th class="is-right">Itens</th><th>Conferência</th><th>No Integra</th><th>Resultado</th></tr></thead>
+            <tbody>${linhas}</tbody></table>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          ${feito ? "" : `<button type="button" class="btn btn-primary" ${this.salvando ? "disabled" : ""} onclick="OrionPremissasApp.confirmarCarga()">${this.salvando ? "Importando..." : "Confirmar importação"}</button>`}
+          <button type="button" class="btn btn-secondary" onclick="OrionPremissasApp.fecharCarga()">${feito ? "Fechar" : "Cancelar"}</button>
+        </div>
+      </div>`;
+  },
+
   /* ---------- tela ---------- */
 
   inp(caminho, valor, opts) {
@@ -434,12 +530,14 @@ const OrionPremissasApp = {
     if (ed && s && this.aba !== "taxas_funding") acoes.push(`<button type="button" class="btn btn-secondary" onclick="OrionPremissasApp.adicionar()"><i data-lucide="plus"></i> Incluir</button>`);
     if (ed && s && s.alterado) acoes.push(`<button type="button" class="btn btn-secondary" onclick="OrionPremissasApp.descartar()">Descartar</button>`);
     if (ed && s) acoes.push(`<button type="button" class="btn btn-primary" ${this.salvando || !s.alterado ? "disabled" : ""} onclick="OrionPremissasApp.salvar()"><i data-lucide="save"></i> ${this.salvando ? "Salvando..." : "Salvar"}</button>`);
+    if (this.ehAdmin()) acoes.push(`<button type="button" class="btn btn-secondary" title="Carga inicial: escolha os arquivos .json exportados do Órion" onclick="OrionPremissasApp.escolherArquivos()"><i data-lucide="upload"></i> Importar do Órion</button><input type="file" id="op-arquivos" accept=".json,application/json" multiple style="display:none" onchange="OrionPremissasApp.lerArquivos(this.files)">`);
     acoes.push(`<button type="button" class="btn btn-primary cc-atualizar" ${this.carregando ? "disabled" : ""} onclick="OrionPremissasApp.carregar('${this.aba}', true)"><i data-lucide="refresh-cw"></i> Atualizar</button>`);
 
     root.innerHTML = `
       <div class="op-barra"><div class="op-abas">${abas}</div><div class="op-acoes">${acoes.join("")}</div></div>
       ${this.erros.length ? `<div class="op-msg is-erro">Não foi possível salvar:<ul>${this.erros.map((e) => `<li>${this.esc(e)}</li>`).join("")}</ul></div>` : ""}
       ${this.aviso ? `<div class="op-msg is-ok">${this.esc(this.aviso)}</div>` : ""}
+      ${this.htmlCarga()}
       ${corpo}`;
     if (window.lucide) window.lucide.createIcons();
   }

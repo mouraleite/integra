@@ -182,7 +182,68 @@
       .sort((a, b) => (a.ano - b.ano) || (a.mes - b.mes));
   }
 
+  /* ---------- carga inicial: linhas exportadas do Órion (exportar_orion_para_integra.py) -> itens do Integra ---------- */
+
+  function texto(v) { return v == null ? "" : String(v); }
+
+  function jsonDe(v, padrao) {
+    if (v == null) return padrao;
+    if (typeof v === "string") { try { return JSON.parse(v); } catch (e) { return padrao; } }
+    return v;
+  }
+
+  const DO_ORION = {
+    scenarios: { chave: "cenarios", rotulo: "Cenários", mapear: (r) => ({
+      nome: texto(r.nome), vgv_multiplier: num(r.vgv_multiplier), construction_cost_multiplier: num(r.construction_cost_multiplier), sales_speed_multiplier: num(r.sales_speed_multiplier), orion_id: r.id }) },
+    standard_curves: { chave: "curvas", rotulo: "Curvas padrão", mapear: (r) => {
+      const j = jsonDe(r.valores_meses_json, {});
+      const meses = Array.isArray(j) ? j : (j && j.meses) || [];
+      return { nome: texto(r.nome), tipo: texto(r.tipo), classificacao: texto(r.classificacao || "Custo"), meses: meses.map(num), orion_id: r.id };
+    } },
+    tax_regimes: { chave: "regimes", rotulo: "Regimes tributários", mapear: (r) => ({
+      nome: texto(r.nome), pis: num(r.pis) || 0, cofins: num(r.cofins) || 0, irpj: num(r.irpj) || 0, csll: num(r.csll) || 0, outros: num(r.outros) || 0, ativo: r.ativo !== false, orion_id: r.id }) },
+    payment_plans: { chave: "planos_pagamento", rotulo: "Planos de pagamento", mapear: (r) => ({
+      nome: texto(r.nome), condicoes: (jsonDe(r.condicoes_json, []) || []).map((c) => ({ nome: texto(c && c.nome), perc: num(c && c.perc) })), orion_id: r.id }) },
+    economic_indicators: { chave: "indices_projetados", rotulo: "Índices projetados", mapear: (r) => ({
+      nome: texto(r.nome), index_type: texto(r.index_type), valor: num(r.valor), tipo_unidade: texto(r.tipo_unidade || "% a.a."), competencia: texto(r.competencia), orion_id: r.id }) },
+    fechamento_meses: { chave: "fechamento_meses", rotulo: "Fechamento de meses", mapear: (r, ctx) => ({
+      ano: Number(r.ano), mes: Number(r.mes), por: (ctx && ctx.emailDoUsuario && ctx.emailDoUsuario[r.fechado_por_id]) || "", em: texto(r.data_fechamento), orion_id: r.id }) }
+  };
+
+  /** Recebe os arquivos JSON exportados ({tabela, linhas}) e devolve o que vai para cada cadastro do Integra. */
+  function prepararCarga(arquivos) {
+    const porTabela = {};
+    (arquivos || []).forEach((a) => { if (a && a.tabela && Array.isArray(a.linhas)) porTabela[a.tabela] = a.linhas; });
+    const ctx = { emailDoUsuario: {} };
+    (porTabela.users || []).forEach((u) => { if (u && u.id != null) ctx.emailDoUsuario[u.id] = texto(u.email || u.nome || u.name); });
+    const cadastros = [];
+    Object.keys(DO_ORION).forEach((tab) => {
+      if (!porTabela[tab]) return;
+      const d = DO_ORION[tab];
+      let itens = porTabela[tab].map((r) => d.mapear(r, ctx));
+      if (d.chave === "fechamento_meses") itens = itens.filter((x) => x.ano && x.mes >= 1 && x.mes <= 12).sort((a, b) => (a.ano - b.ano) || (a.mes - b.mes));
+      cadastros.push({ chave: d.chave, rotulo: d.rotulo, tabela: tab, itens });
+    });
+    const ss = porTabela.system_settings || [];
+    const funding = ss.find((r) => r && r.key === "funding_rates");
+    if (funding) cadastros.push({ chave: "taxas_funding", rotulo: "Taxas de funding", tabela: "system_settings", itens: jsonDe(funding.value, {}) });
+    cadastros.forEach((c) => { c.avisos = avisosDe(c); });
+    return cadastros;
+  }
+
+  function avisosDe(c) {
+    switch (c.chave) {
+      case "cenarios": return validarCenarios(c.itens);
+      case "curvas": return validarCurvas(c.itens);
+      case "regimes": return validarRegimes(c.itens);
+      case "planos_pagamento": return validarPlanos(c.itens);
+      case "indices_projetados": return validarIndicesProjetados(c.itens);
+      default: return [];
+    }
+  }
+
   return {
+    DO_ORION, prepararCarga,
     TOL, TIPOS_CURVA, CLASSES_CURVA, ALIQUOTAS, TIPOS_INDICE, UNIDADES,
     num, soma, fmt, listaDeNumeros, textoDeNumeros, listaDeCondicoes, textoDeCondicoes,
     validarCenarios, validarCurvas, validarPlanos, validarRegimes, validarIndicesProjetados, totalRegime,
