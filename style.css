@@ -12352,3 +12352,13 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .anexos-juridico-load .loading-progress-bar,
 .anexos-ficha-bar { width: 8%; animation: anexos-jur-carga 8s ease-out forwards; }
 @keyframes anexos-jur-carga { from { width: 8%; } to { width: 92%; } }
+
+/* Usuários e Perfis: lista do navegador aparece na hora e fica travada enquanto a nuvem responde */
+#config-users-root.cfg-sincronizando { position: relative; }
+#config-users-root.cfg-sincronizando > * { pointer-events: none; opacity: .72; }
+#config-users-root.cfg-sincronizando::before {
+  content: attr(data-sync-msg);
+  position: sticky; top: 8px; z-index: 5; display: block; width: max-content; max-width: 100%;
+  margin: 0 auto 8px; padding: 6px 14px; border-radius: 99px;
+  background: #e7f6ee; border: 1px solid #86efac; color: #105436; font-size: .8rem; font-weight: 700;
+}

@@ -6213,6 +6213,19 @@ window.incluirCacoNaLista = function(raw) {
   return JSON.stringify(list);
 };
 
+// Leitura de config/global (quase 1 MB) reaproveitada por alguns segundos: a tela Usuários e Perfis
+// pedia o mesmo documento duas vezes seguidas. Toda gravação nele descarta a leitura guardada.
+window.crmLerConfigGlobal = function() {
+  const fc = window.firebaseCollections;
+  const agora = Date.now();
+  const g = window._crmGlobalLeitura;
+  if (g && agora - g.at < 5000) return g.p;
+  const p = fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+  window._crmGlobalLeitura = { at: agora, p: p };
+  p.catch(() => { window._crmGlobalLeitura = null; });
+  return p;
+};
+
 window.syncCrmUsersFromFirebase = async function() {
   if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
   const fc = window.firebaseCollections;
@@ -6232,7 +6245,7 @@ window.syncCrmUsersFromFirebase = async function() {
     }
     if (Array.isArray(nuvem)) window._crmUsersNuvem = nuvem;
   }
-  const gSnap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+  const gSnap = await window.crmLerConfigGlobal();
   if (window.crmUsersDocExists(gSnap)) {
     const gData = gSnap.data() || {};
     globalUsers = gData.crm_users || "[]";
@@ -6266,7 +6279,7 @@ window.syncCrmUsersFromFirebase = async function() {
 window.syncCrmProfilesFromFirebase = async function() {
   if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
   const fc = window.firebaseCollections;
-  const gSnap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+  const gSnap = await window.crmLerConfigGlobal();
   const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
   if (typeof window.absorbCrmProfileTombstones === "function") {
     window.absorbCrmProfileTombstones(gData.crm_moura_profiles_removed);
@@ -6325,6 +6338,7 @@ window.ensureCrmStorageRoom = function() {
 };
 
 window.persistCrmProfilesNow = async function(profiles) {
+  window._crmGlobalLeitura = null;
   const fc = window.firebaseCollections;
   if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
     throw new Error("Firebase não inicializado. Abra o sistema de novo e crie o perfil outra vez.");
@@ -6372,6 +6386,7 @@ window.persistCrmProfilesNow = async function(profiles) {
 };
 
 window.persistCrmProfilePermsNow = async function(profileId, perms) {
+  window._crmGlobalLeitura = null;
   const id = String(profileId || "").trim();
   if (!id) throw new Error("Perfil sem identificador.");
   const fc = window.firebaseCollections;
@@ -6421,6 +6436,7 @@ window.persistCrmUsersToFirebase = function(users) {
 };
 
 window._writeCrmUsersNow = async function(mem) {
+  window._crmGlobalLeitura = null;
   if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.setDoc) {
     throw new Error("Firebase não inicializado. Abra o sistema de novo e salve o usuário outra vez.");
   }
