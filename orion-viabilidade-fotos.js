@@ -8,17 +8,70 @@
   if (!A) return;
   const detalheAnterior = A.htmlDetalhe.bind(A);
 
+  /* Linhas do Resumo do Órion (SummaryTab): identificação, dados físicos, datas, DRE completa e indicadores.
+   * ctx = { ind (indicadores da visão), dre (nome → { valor, perc }), ph (dados físicos), dt (datas), doc } */
+  const D = (ctx, n) => (ctx.dre && ctx.dre[n] ? ctx.dre[n].valor : null);
+  const Dp = (ctx, n) => (ctx.dre && ctx.dre[n] ? ctx.dre[n].perc : null);
+  const num = (v) => (v == null || v === "" || isNaN(Number(v)) ? null : Number(v));
+  const lotes = (ph) => (Number(ph.qtde_lotes_residenciais) || 0) + (Number(ph.qtde_lotes_comerciais) || 0) + (Number(ph.qtde_lotes_mistos) || 0);
   const LINHAS = [
-    ["VGV líquido", (i) => i.vgv_total, "R$"], ["Impostos", (i) => -i.impostos, "R$"], ["Terreno / permuta", (i) => -i.valor_terreno, "R$"],
-    ["Obras (total)", (i) => -i.custo_obras, "R$"], ["Despesas (marketing, comercial, adm.)", (i) => -((i.dre_despesas_marketing || 0) + (i.dre_despesas_comercial || 0) + (i.dre_despesas_adm || 0) + (i.dre_despesas_extras || 0)), "R$"],
-    ["Custo financeiro do funding", (i) => -i.custo_financeiro_funding, "R$"], ["Lucro líquido", (i) => i.lucro_liquido, "R$"], ["Margem", (i) => i.margem_perc, "%"],
-    ["TIR a.a.", (i) => i.tir_aa, "%"], ["MTIR a.a.", (i) => i.mtir_aa, "%"], ["VPL", (i) => i.vpl, "R$"], ["Exposição máxima", (i) => i.exposicao_maxima, "R$"],
-    ["Exposição / VGV", (i) => i.expo_vgv, "%"], ["Payback (mês)", (i) => i.payback, "n"], ["Vida (meses)", (i) => i.vida, "n"]
+    ["Projeto", null, "sec"],
+    ["Empreendimento", (c) => c.doc.project_name || "", "txt"], ["Cidade", (c) => c.doc.city || "", "txt"],
+    ["Número de lotes", (c) => lotes(c.ph), "n"], ["Área total (m²)", (c) => num(c.ph.area_total), "m2"],
+    ["· Lotes residenciais (m²)", (c) => num(c.ph.area_lotes_residenciais), "m2"], ["· Lotes comerciais (m²)", (c) => num(c.ph.area_lotes_comerciais), "m2"], ["· Lotes mistos (m²)", (c) => num(c.ph.area_lotes_mistos), "m2"],
+    ["· Sistema viário (m²)", (c) => num(c.ph.area_sistema_viario), "m2"], ["· Área institucional (m²)", (c) => num(c.ph.area_institucional), "m2"], ["· Área verde / APP (m²)", (c) => num(c.ph.area_verde), "m2"],
+    ["· Sistema de lazer (m²)", (c) => num(c.ph.sistema_lazer), "m2"], ["· Associação / não vendável (m²)", (c) => num(c.ph.area_associacao), "m2"],
+    ["VGV líquido projetado", (c) => c.ind.vgv_total, "R$"], ["Ticket médio projetado", (c) => (lotes(c.ph) ? c.ind.vgv_total / lotes(c.ph) : null), "R$"],
+    ["Registro (RI)", (c) => c.dt.data_registro || "", "data"], ["Lançamento", (c) => c.dt.data_lancamento || "", "data"], ["Início de obras", (c) => c.dt.data_inicio_obras || "", "data"],
+    ["DRE", null, "sec"],
+    ["Receita bruta", (c) => D(c, "Receita bruta"), "R$", 1], ["· Receita de vendas", (c) => D(c, "Receita de vendas"), "R$"], ["· Receita de juros e CM", (c) => D(c, "Receita de juros e correção"), "R$"],
+    ["Redutor da receita", (c) => D(c, "Redutor da receita"), "R$", 1], ["· PIS", (c) => D(c, "PIS"), "R$"], ["· COFINS", (c) => D(c, "COFINS"), "R$"], ["· Outros impostos (redutor)", (c) => D(c, "Outros impostos"), "R$"],
+    ["Receita líquida", (c) => D(c, "Receita líquida"), "R$", 2],
+    ["Custo", (c) => D(c, "Custo"), "R$", 1], ["· Terreno / permuta financeira", (c) => D(c, "Terreno / permuta financeira"), "R$"], ["· Aquisição de área (CAPEX)", (c) => D(c, "Aquisição de área"), "R$"],
+    ["· Projetos", (c) => D(c, "Projetos"), "R$"], ["· Obras de infraestrutura", (c) => D(c, "Obras de infraestrutura"), "R$"], ["· Administração da obra", (c) => D(c, "Administração da obra"), "R$"], ["· Custos extras de obras", (c) => D(c, "Custos extras de obras"), "R$"],
+    ["Margem bruta", (c) => D(c, "Margem bruta"), "R$", 2], ["Margem bruta (%)", (c) => Dp(c, "Margem bruta"), "%"],
+    ["Despesas", (c) => (D(c, "Despesas operacionais") == null ? null : D(c, "Despesas operacionais") + (D(c, "Funding (juros e estruturação)") || 0)), "R$", 1],
+    ["· Marketing", (c) => D(c, "Marketing"), "R$"], ["· Comercial", (c) => D(c, "Comercial"), "R$"], ["· Administrativas", (c) => D(c, "Administrativas"), "R$"], ["· Despesas extras", (c) => D(c, "Despesas extras"), "R$"],
+    ["· Funding (juros / estruturação)", (c) => D(c, "Funding (juros e estruturação)"), "R$"],
+    ["Lucro operacional", (c) => D(c, "Lucro operacional"), "R$", 2], ["Lucro operacional (%)", (c) => Dp(c, "Lucro operacional"), "%"],
+    ["IRPJ / CSLL", (c) => D(c, "IRPJ / CSLL"), "R$", 1],
+    ["Lucro líquido", (c) => (c.ind.lucro_liquido != null ? c.ind.lucro_liquido : D(c, "Lucro líquido")), "R$", 2], ["Lucro líquido (%)", (c) => (c.ind.margem_perc != null ? c.ind.margem_perc : Dp(c, "Lucro líquido")), "%"],
+    ["Indicadores", null, "sec"],
+    ["MTIR mensal", (c) => c.ind.mtir_am, "%"], ["MTIR anual", (c) => c.ind.mtir_aa, "%"], ["TIR mensal", (c) => c.ind.tir_am, "%"], ["TIR anual", (c) => c.ind.tir_aa, "%"],
+    ["VPL", (c) => c.ind.vpl, "R$"], ["Exposição máxima de caixa", (c) => c.ind.exposicao_maxima, "R$"], ["· Exposição / investimento", (c) => c.ind.expo_inv, "%"], ["· Exposição / VGV", (c) => c.ind.expo_vgv, "%"],
+    ["Mês da exposição máxima", (c) => c.ind.periodo_exposicao, "n"], ["Payback (mês)", (c) => c.ind.payback, "n"], ["Vida (meses)", (c) => c.ind.vida, "n"], ["· Vida (anos)", (c) => (c.ind.vida ? c.ind.vida / 12 : null), "anos"]
   ];
-  const resumo = (ind) => { const o = {}; LINHAS.forEach(([n, f]) => { const v = f(ind || {}); o[n] = v == null || isNaN(v) ? null : v; }); return o; };
+  // nomes usados nas fotos antigas (antes desta tela): continuam aparecendo nas linhas equivalentes
+  const ANTIGOS = { "VGV líquido projetado": "VGV líquido", "Lucro líquido": "Lucro líquido", "Lucro líquido (%)": "Margem", "TIR anual": "TIR a.a.", "MTIR anual": "MTIR a.a.", "VPL": "VPL", "Exposição máxima de caixa": "Exposição máxima", "· Exposição / VGV": "Exposição / VGV", "Payback (mês)": "Payback (mês)", "Vida (meses)": "Vida (meses)" };
+  const resumo = (ctx) => {
+    const o = {};
+    LINHAS.forEach(([n, f, t]) => { if (t === "sec") return; let v; try { v = f(ctx); } catch (e) { v = null; } o[n] = v == null || (typeof v === "number" && isNaN(v)) ? null : v; });
+    return o;
+  };
 
   Object.assign(A, {
-    fmtLinha(v, t) { if (v == null) return "—"; if (t === "%") return this.P(v); if (t === "n") return String(Math.round(v)); return this.R0(v); },
+    fmtLinha(v, t) {
+      if (v == null || v === "") return "—";
+      if (t === "txt") return this.esc(v);
+      if (t === "data") return this.D ? this.D(v) : this.esc(v);
+      if (t === "%") return this.P(v);
+      if (t === "n") return String(Math.round(v));
+      if (t === "m2") return Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+      if (t === "anos") return Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 2 });
+      return this.R0(v);
+    },
+    /** Contexto de uma fase calculada, na visão escolhida (projeto, empreendedor ou parceiro), para as linhas do Resumo. */
+    ctxFase(doc, fx) {
+      const V = window.OrionViabilidadeCalc, visao = (this.aberto && this.aberto.visao) || "Global", r = fx.r;
+      const ind = visao === "Empreendedor" && r.indicators_empreendedor ? r.indicators_empreendedor : r.indicators_parceiros && r.indicators_parceiros[visao] ? r.indicators_parceiros[visao] : r.indicators;
+      const fl = visao === "Empreendedor" && r.monthly_cashflow_empreendedor ? r.monthly_cashflow_empreendedor : r.monthly_cashflow_parceiros && r.monthly_cashflow_parceiros[visao] ? r.monthly_cashflow_parceiros[visao] : r.monthly_cashflow;
+      const dre = {};
+      (V && V.dre ? V.dre(fl || []) : []).forEach((l) => { dre[l.nome] = l; });
+      const fase = (this.fasesDe(doc) || [])[Math.min(this.aberto.fase || 0, (this.fasesDe(doc) || []).length - 1)] || {};
+      return { ind: ind || {}, dre, ph: fase.physical_data || {}, dt: fase.dates || {}, doc };
+    },
+    alternarComparar() { this.aberto.comparar = !this.aberto.comparar; this.render(); },
+    alternarColuna(id) { const a = this.aberto; a.ocultas = a.ocultas || {}; a.ocultas[id] = !a.ocultas[id]; this.render(); },
 
     async gravarFotos(fn) {
       const fc = this.fc();
@@ -45,7 +98,7 @@
       const quem = window.OrionStore ? window.OrionStore.usuario() : "";
       const cen = this.cenarioAtual();
       try {
-        await this.gravarFotos((l) => l.concat([{ id: Date.now().toString(36), nome, em: new Date().toISOString(), por: quem, fase: f.nome, cenario: cen ? cen.nome : "Base", oficial: !l.length, valores: resumo(f.r.indicators) }]));
+        await this.gravarFotos((l) => l.concat([{ id: Date.now().toString(36), nome, em: new Date().toISOString(), por: quem, fase: f.nome, cenario: cen ? cen.nome : "Base", oficial: !l.length, valores: resumo(this.ctxFase(this.aberto.doc, f)), visao: (this.aberto && this.aberto.visao) || "Global" }]));
         this.aviso = `Foto "${nome}" guardada.`;
       } catch (e) { this.erro = e.message || String(e); }
       this.render();
@@ -67,32 +120,42 @@
     },
 
     htmlComparativo() {
-      const d = this.aberto.doc;
+      const d = this.aberto.doc, a = this.aberto;
       const r = this.resultados(d);
-      const f = r.fases[this.aberto.fase];
+      const f = r.fases[a.fase];
       if (!f) return "";
-      const cols = [{ titulo: "Atual", sub: this.cenarioAtual() ? this.cenarioAtual().nome : "cenário base", v: resumo(f.r.indicators), atual: true }];
+      const todas = [{ id: "atual", titulo: "Cenário atual", sub: this.cenarioAtual() ? this.cenarioAtual().nome : "cenário base", v: resumo(this.ctxFase(d, f)), atual: true }];
       this.familia(d).forEach((x) => {
         const rx = this.resultados(x);
-        const fx = rx.fases[Math.min(this.aberto.fase, rx.fases.length - 1)];
-        if (fx) cols.push({ titulo: x.project_name, sub: `versão · ${x.status}`, v: resumo(fx.r.indicators), abrir: x._id });
+        const fx = rx.fases[Math.min(a.fase, rx.fases.length - 1)];
+        if (fx) todas.push({ id: "f_" + x._id, titulo: x.project_name, sub: `versão · ${x.status}`, v: resumo(this.ctxFase(x, fx)), abrir: x._id, familia: true });
       });
-      (d.fotos || []).forEach((x) => cols.push({ titulo: x.nome + (x.oficial ? " ★" : ""), sub: `${new Date(x.em).toLocaleDateString("pt-BR")} · ${x.por || ""} · ${x.cenario || ""}`, v: x.valores || {}, foto: x }));
+      (d.fotos || []).forEach((x, k) => todas.push({ id: "s_" + x.id, titulo: `Foto ${k + 1}${x.oficial ? " (oficial)" : ""}`, sub: `${x.nome} · ${new Date(x.em).toLocaleDateString("pt-BR")} · ${x.por || ""} · ${x.cenario || ""}${x.visao && x.visao !== "Global" ? " · " + x.visao : ""}`, v: x.valores || {}, foto: x }));
+      const comparar = a.comparar !== false;
+      const cols = comparar ? todas.filter((c) => c.atual || !(a.ocultas || {})[c.id]) : [todas[0]];
       const ed = this.podeEditar() && !this.ed;
       const base = cols.find((c) => c.foto && c.foto.oficial);
-      const cab = cols.map((c) => `<th class="is-right" style="min-width:150px;${c.atual ? "background:#e7f6ee" : ""}">${this.esc(c.titulo)}<div style="font-weight:400;font-size:0.65rem">${this.esc(c.sub)}</div>
+      const val = (c, n) => (c.v[n] !== undefined ? c.v[n] : ANTIGOS[n] !== undefined && c.v[ANTIGOS[n]] !== undefined ? c.v[ANTIGOS[n]] : null);
+      const cab = cols.map((c) => `<th class="is-right" style="min-width:160px;white-space:normal;${c.atual || c.familia ? "background:#14532d" : ""}">${this.esc(c.titulo)}<div style="font-weight:400;font-size:0.65rem">${this.esc(c.sub)}</div>
         ${c.abrir ? `<button type="button" class="btn btn-secondary" style="height:22px;padding:0 6px;font-size:0.65rem" onclick="OrionViabilidadesApp.abrir('${this.esc(c.abrir)}')">abrir</button>` : ""}
-        ${c.foto && ed ? `${c.foto.oficial ? "" : `<button type="button" class="btn btn-secondary" style="height:22px;padding:0 6px;font-size:0.65rem" onclick="OrionViabilidadesApp.marcarOficial('${c.foto.id}')">oficial</button>`}<button type="button" class="btn btn-secondary" style="height:22px;padding:0 6px;font-size:0.65rem;color:#b91c1c" onclick="OrionViabilidadesApp.excluirFoto('${c.foto.id}')">✕</button>` : ""}</th>`).join("");
-      const corpo = LINHAS.map(([n, , t]) => `<tr><td>${n}</td>${cols.map((c) => {
-        const v = c.v[n];
-        const dif = base && c.atual && t !== "n" && v != null && base.v[n] != null ? v - base.v[n] : null;
-        return `<td class="is-right" style="${c.atual ? "background:#f0fdf4;font-weight:600" : ""}">${this.fmtLinha(v, t)}${dif != null && Math.abs(dif) > 0.005 ? `<div style="font-size:0.62rem;color:${dif < 0 ? "#b91c1c" : "#105436"}">${dif > 0 ? "+" : ""}${this.fmtLinha(dif, t)} vs oficial</div>` : ""}</td>`;
-      }).join("")}</tr>`).join("");
-      return `<div class="ov-sec" style="display:flex;align-items:center;gap:8px">Comparativo (atual, versões e fotos)
-          ${ed ? `<button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionViabilidadesApp.tirarFoto()">Tirar foto</button>` : ""}
-          <button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionViabilidadesApp.relatorio()">Relatório (imprimir / PDF)</button></div>
-        <div class="cc-scroll"><table class="cc-table"><colgroup><col style="width:240px"></colgroup><thead><tr><th>Indicador</th>${cab}</tr></thead><tbody>${corpo}</tbody></table></div>
-        <div style="font-size:0.7rem;color:#64748b;margin-top:4px">Foto = os números do momento, que ficam guardados mesmo que a viabilidade mude depois. ★ = oficial (baseline): a coluna atual mostra a diferença contra ela. As versões (clones) são recalculadas na hora.</div>`;
+        ${c.foto && ed ? `${c.foto.oficial ? "" : `<button type="button" class="btn btn-secondary" style="height:22px;padding:0 6px;font-size:0.65rem" onclick="OrionViabilidadesApp.marcarOficial('${c.foto.id}')">oficial</button>`}<button type="button" class="btn btn-secondary" style="height:22px;padding:0 6px;font-size:0.65rem;color:#b91c1c" onclick="OrionViabilidadesApp.excluirFoto('${c.foto.id}')">excluir</button>` : ""}</th>`).join("");
+      const corpo = LINHAS.map(([n, , t, peso]) => {
+        if (t === "sec") return `<tr><td colspan="${cols.length + 1}" style="background:#e7f6ee;color:#105436;font-weight:800;text-transform:uppercase;font-size:0.7rem">${n}</td></tr>`;
+        const sub = n.indexOf("· ") === 0;
+        return `<tr><td style="${sub ? "padding-left:22px;color:#475569" : peso === 2 ? "font-weight:800" : peso === 1 ? "font-weight:700" : ""}">${this.esc(sub ? n.slice(2) : n)}</td>${cols.map((c) => {
+          const v = val(c, n);
+          const dif = base && c.atual && ["R$", "%"].indexOf(t) >= 0 && typeof v === "number" && typeof val(base, n) === "number" ? v - val(base, n) : null;
+          return `<td class="is-right" style="${c.atual ? "background:#f0fdf4;" : ""}${peso === 2 ? "font-weight:800;" : ""}${typeof v === "number" && v < 0 && t === "R$" ? "color:#b91c1c;" : ""}">${this.fmtLinha(v, t)}${dif != null && Math.abs(dif) > 0.005 ? `<div style="font-size:0.62rem;color:${dif < 0 ? "#b91c1c" : "#105436"}">${dif > 0 ? "+" : ""}${this.fmtLinha(dif, t)} vs oficial</div>` : ""}</td>`;
+        }).join("")}</tr>`;
+      }).join("");
+      const seletor = comparar && todas.length > 1 ? `<div style="display:flex;gap:10px;flex-wrap:wrap;font-size:0.72rem;margin:6px 0">Colunas: ${todas.slice(1).map((c) => `<label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" ${(a.ocultas || {})[c.id] ? "" : "checked"} onchange="OrionViabilidadesApp.alternarColuna('${this.esc(c.id)}')">${this.esc(c.titulo)}</label>`).join("")}</div>` : "";
+      return `<div class="ov-sec" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">Resumo: comparativo de cenários, DRE e indicadores
+          <button type="button" class="btn ${comparar ? "btn-primary" : "btn-secondary"}" style="height:30px" onclick="OrionViabilidadesApp.alternarComparar()">${comparar ? "Ocultar comparações" : "Comparar cenários"}</button>
+          ${ed ? `<button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionViabilidadesApp.tirarFoto()">Fixar no comparativo (foto)</button>` : ""}
+          <button type="button" class="btn btn-secondary" style="height:30px" onclick="OrionViabilidadesApp.relatorio()">Gerar relatório (imprimir / PDF)</button></div>
+        ${seletor}
+        <div class="cc-scroll" style="max-height:75vh"><table class="cc-table or-larga"><thead><tr><th style="min-width:260px">${this.esc(a.visao && a.visao !== "Global" ? "Visão: " + a.visao : "Visão: projeto (100%)")}</th>${cab}</tr></thead><tbody>${corpo}</tbody></table></div>
+        <div style="font-size:0.7rem;color:#64748b;margin-top:4px">Foto = os números do momento, que ficam guardados mesmo que a viabilidade mude depois (fotos antigas mostram só os indicadores que guardavam). Oficial (baseline): a coluna atual mostra a diferença contra ela. As versões (clones) são recalculadas na hora, na mesma visão.</div>`;
     },
 
     relatorio() {
