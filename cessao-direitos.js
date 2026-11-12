@@ -1387,6 +1387,23 @@ const CessaoPopup = {
     return id === "PM" || /MENSAL|MENSAIS/.test(nome);
   },
 
+  // Meses de calendário entre a data-base dos juros (data-base da condição ou data da venda)
+  // e o 1º vencimento da condição. 0 quando faltar alguma data.
+  mesesAteVencimento(c, contract) {
+    const iso = (v) => {
+      const s = String(v || "").slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+    };
+    const venc = iso(c && (c.firstPayment || c.firstDueDate || c.dueDate));
+    const baseCond = iso(c && c.baseDate);
+    const base = (baseCond && baseCond !== venc ? baseCond : "")
+      || iso(contract && (contract.contractDate || contract.issueDate || contract.saleDate));
+    if (!venc || !base || base >= venc) return 0;
+    const [ay, am] = base.split("-").map(Number);
+    const [by, bm] = venc.split("-").map(Number);
+    return (by - ay) * 12 + (bm - am);
+  },
+
   prestacaoPrice(total, qtde, jurosPct) {
     const i = Number(jurosPct) / 100;
     if (!(i > 0) || !(qtde > 1) || !(total > 0)) return 0;
@@ -1409,7 +1426,14 @@ const CessaoPopup = {
     if (!(juros > 0) && contract) juros = this.taxaMensalPct(contract.interestPercentage);
     if (mensal && !(juros > 0.05) && Number(jurosSerie) > 0.05) juros = Number(jurosSerie);
     if ((mensal || !semPrice) && juros > 0 && qtde > 1 && total > 0) {
-      const pmt = this.prestacaoPrice(total, qtde, juros);
+      let pmt = this.prestacaoPrice(total, qtde, juros);
+      // A Price supõe a 1ª parcela 1 mês depois da data-base. Quando ela vence mais tarde
+      // (ex.: venda 07/11/2023, 1ª mensal 25/02/2024 = 3 meses), os juros dos meses a mais
+      // entram na parcela: 550,71 × 1,008² = 559,56, como no contrato.
+      const meses = this.mesesAteVencimento(c, contract);
+      if (pmt > 0 && meses > 1 && meses <= 36) {
+        pmt = Math.round(pmt * Math.pow(1 + juros / 100, meses - 1) * 100) / 100;
+      }
       if (pmt > fatia + 0.02) return pmt;
     }
     if (explicito > 0.009 && explicito + 0.02 < total && explicito > fatia + 0.05) return explicito;
