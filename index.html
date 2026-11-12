@@ -6688,6 +6688,27 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                         </div>
                         
                         <textarea id="jud-note-text" class="form-control" placeholder="Descreva os detalhes do andamento ou contato com o cliente..." style="font-size: 0.85rem; padding: 10px; border-radius: 4px; border: 1px solid #ccc; width: 100%; flex: 1; resize: none; min-height: 100px;"></textarea>
+                        <div class="form-group" id="jud-agreement-file-row" style="display: none; margin: 8px 0 0;">
+                          <label for="jud-agreement-file" style="font-size: 0.75rem; font-weight: 700; color: var(--color-text-muted); margin-bottom: 5px; display: block;">
+                            Anexar acordo judicial (PDF) <span style="color: var(--color-danger);">*</span>
+                          </label>
+                          <input type="file" id="jud-agreement-file" class="form-control" accept=".pdf,application/pdf" style="font-size: 0.8rem; padding: 7px; border-radius: 4px; border: 1px solid #ccc; width: 100%;">
+                          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 8px;">
+                            <div>
+                              <label for="jud-agreement-date" style="font-size: 0.72rem; font-weight: 700; color: var(--color-text-muted); margin-bottom: 4px; display: block;">
+                                Data do acordo <span style="color: var(--color-danger);">*</span>
+                              </label>
+                              <input type="date" id="jud-agreement-date" class="form-control" required style="font-size: 0.8rem; padding: 7px; border-radius: 4px; border: 1px solid #ccc; width: 100%;">
+                            </div>
+                            <div>
+                              <label for="jud-agreement-tag" style="font-size: 0.72rem; font-weight: 700; color: var(--color-text-muted); margin-bottom: 4px; display: block;">
+                                Tag no Sienge <span style="color: var(--color-danger);">*</span>
+                              </label>
+                              <input type="text" id="jud-agreement-tag" class="form-control" value="ACORDO JUDICIAL" maxlength="100" required style="font-size: 0.8rem; padding: 7px; border-radius: 4px; border: 1px solid #ccc; width: 100%;">
+                            </div>
+                          </div>
+                          <small style="display: block; margin-top: 4px; color: var(--color-text-muted);">O arquivo será enviado à unidade no Sienge com a data e a tag informadas.</small>
+                        </div>
                         <p id="jud-sem-alteracao-hint" style="display:none; margin:8px 0 0; font-size:0.75rem; line-height:1.4; color:#105436; font-weight:600;"></p>
                       </div>
                       

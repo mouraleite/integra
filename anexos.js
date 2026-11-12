@@ -5269,6 +5269,7 @@ window.anexosUploadUnitAttachment = async function(opts) {
   const file = o.file;
   if (!file) throw new Error("Arquivo não informado.");
   const tag = String(o.tagLabel || "DOC").replace(/[\\/]+/g, " ").trim();
+  const dateIso = String(o.dateIso || "").trim();
   let cc = String(o.costCenterId || "").trim();
   let unitName = String(o.unitName || "").replace(/^Quadra-Lote:\s*/i, "").trim();
   const sale = o.sale || {};
@@ -5278,11 +5279,24 @@ window.anexosUploadUnitAttachment = async function(opts) {
   }
   if (!cc) throw new Error("Centro de custo da unidade não identificado.");
   if (!unitName) throw new Error("Nome da unidade não identificado.");
+  let documentDate = new Date();
+  if (dateIso) {
+    const dateMatch = dateIso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!dateMatch) throw new Error("Data do documento inválida.");
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    documentDate = new Date(0);
+    documentDate.setHours(12, 0, 0, 0);
+    documentDate.setFullYear(year, month - 1, day);
+    if (documentDate.getFullYear() !== year || documentDate.getMonth() !== month - 1 || documentDate.getDate() !== day) {
+      throw new Error("Data do documento inválida.");
+    }
+  }
   const siengeUnitId = await anexosFindSiengeUnitId(sale, cc, unitName);
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
+  const y = documentDate.getFullYear();
+  const m = String(documentDate.getMonth() + 1).padStart(2, "0");
+  const d = String(documentDate.getDate()).padStart(2, "0");
   const dataIsoDot = `${y}.${m}.${d}`;
   const dataSuffix = ` ${d}.${m}.${y}`;
   const extRaw = (file.name && file.name.includes(".")) ? file.name.split(".").pop() : (file.type === "application/pdf" ? "pdf" : "pdf");
@@ -5347,7 +5361,7 @@ window.anexosUploadUnitAttachment = async function(opts) {
       sentBy: (window.AppState && AppState.user && (AppState.user.email || AppState.user.name)) || ""
     });
   }
-  return { ok: true, fileName: nomeFinalArquivo, description: descricaoSienge, unitId: siengeUnitId, tag: tag };
+  return { ok: true, fileName: nomeFinalArquivo, description: descricaoSienge, unitId: siengeUnitId, tag: tag, dateIso: `${y}-${m}-${d}` };
 };
 
 // Travar saida da página se tiver uploads pendentes
