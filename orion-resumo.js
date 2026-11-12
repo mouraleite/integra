@@ -108,12 +108,19 @@ const OrionResumoApp = {
         linhas.forEach((l) => ccs.add(l.cc));
         (String(cab.tipo).toUpperCase() === "RECEITAS" ? rec : desp).push(...linhas);
       }
+      // VGV orçado (documentos de vendas da mesma base e versão), para os indicadores
+      const vendas = [];
+      for (const cab of this.vigentes(["VENDAS"])) {
+        const fc = this.fc(), blocos = [];
+        for (let b = 0; b < (cab.blocos || 1); b++) { const sn = await fc.getDoc(fc.doc(window.firebaseDb, this.COL[this.base].itens, `${cab._id}_${b}`)); if (sn.exists()) blocos.push(sn.data()); }
+        vendas.push(...this.C().juntarBlocos(blocos).vendas.map((v) => Object.assign({}, v, { cc: dig(v.cc) })));
+      }
       const empresas = R.empresasDosCcs([...ccs]);
       if (!empresas.length) throw new Error("Não achei as empresas dos centros de custo do orçamento no cadastro de Centros de Custo do Integra.");
       this.passo = `Lendo o realizado de ${this.ano} (${empresas.length} empresa(s))…`;
       this.render();
       const real = await R.buscar(Number(this.ano), ate, empresas);
-      this.resultado = { desp, rec, real, ate, empresas, docs: docs.length, movimentos: real.movimentos };
+      this.resultado = { desp, rec, vendas, real, ate, empresas, docs: docs.length, movimentos: real.movimentos };
       this.abertos = {};
     } catch (e) { this.erro = e.message || String(e); }
     this.carregando = false;
@@ -160,7 +167,9 @@ const OrionResumoApp = {
         <td class="is-right">${f(g.orcado)}</td><td class="is-right">${f(g.realizado)}</td><td class="is-right">${f(g.dif)}</td><td>${this.farol(g.semaforo)}</td></tr>${filhos}`;
     }).join("");
     return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(this.versaoAtual()) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(r.empresas.join(", "))}) só dos centros de custo e planos que estão no orçamento · ${r.movimentos} movimentos. Despesas aparecem positivas; resultado = receitas − despesas.</div>
-      <div class="or-cards">${card("Receitas", k.receitas)}${card("Despesas", k.despesas)}${card("Resultado", k.resultado)}</div>
+      <div class="or-cards">${card("Receitas", k.receitas)}${card("Despesas", k.despesas)}${card("Resultado", k.resultado)}${this.cardVendas(ms)}</div>
+      <div class="or-sec">Geração de caixa (receitas − despesas por mês)</div>
+      ${this.grafico(r.mensal.filter((m) => m.usado), ref)}
       <div class="or-sec">Mês a mês</div>
       <div class="cc-scroll"><table class="cc-table">
         <colgroup><col style="width:70px"><col span="6" style="width:140px"></colgroup>
@@ -177,6 +186,49 @@ const OrionResumoApp = {
         <colgroup><col><col style="width:140px"><col style="width:140px"><col style="width:140px"><col style="width:170px"></colgroup>
         <thead><tr><th>Centro de custo / plano</th><th class="is-right">${ref}</th><th class="is-right">Realizado</th><th class="is-right">Diferença</th><th>Semáforo</th></tr></thead>
         <tbody>${det}</tbody></table></div>`;
+  },
+
+  /** VGV, unidades e ticket médio orçados no período (documentos de vendas). O realizado de vendas ainda não tem fonte no Integra. */
+  cardVendas(ms) {
+    const C = this.C(), F = window.OrionFiltros;
+    const d = this.resultado;
+    const set = new Set(ms);
+    let vs = (d.vendas || []).filter((v) => set.has(Number(v.mes)));
+    if (this.empresas && this.empresas.length) { const mapa = F.mapaCcEmpresa(), emp = new Set(this.empresas.map(String)); vs = vs.filter((v) => emp.has(mapa[v.cc] || "")); }
+    if (!vs.length) return "";
+    const vgv = vs.reduce((s2, v) => s2 + (Number(v.vgv) || 0), 0), un = vs.reduce((s2, v) => s2 + (Number(v.vendas) || 0), 0);
+    const ref = this.base === "forecast" ? "Forecast" : "Orçado";
+    return `<div class="or-card"><h4>Vendas (${ref.toLowerCase()})</h4>
+      <div class="l"><span>VGV</span><b>${C.fmtReais(vgv, true)}</b></div>
+      <div class="l"><span>Unidades</span><b>${un.toLocaleString("pt-BR")}</b></div>
+      <div class="l"><span>Ticket médio</span><b>${un ? C.fmtReais(Math.round(vgv / un), true) : "—"}</b></div>
+      <div class="l" style="color:#64748b"><span>Realizado</span><span>ainda sem fonte no Integra</span></div></div>`;
+  },
+
+  /** Gráfico simples (SVG) da geração de caixa: barras orçado × realizado por mês e linha do acumulado realizado. */
+  grafico(mensal, ref) {
+    const C = this.C();
+    if (!mensal.length) return "";
+    const W = Math.max(520, mensal.length * 80), H = 220, pad = 36, base = H - 28;
+    let acc = 0;
+    const acum = mensal.map((m) => (acc += m.res_realizado));
+    const vals = mensal.flatMap((m) => [m.res_orcado, m.res_realizado]).concat(acum, [0]);
+    const max = Math.max(...vals), min = Math.min(...vals);
+    const esc = (v) => (max === min ? 0 : (v - min) / (max - min));
+    const y = (v) => pad / 2 + (1 - esc(v)) * (base - pad / 2);
+    const passo = (W - pad) / mensal.length, bw = Math.min(22, passo / 3);
+    const barras = mensal.map((m, i) => {
+      const x0 = pad + i * passo + passo / 2;
+      const b = (v, x, cor, tit) => `<rect x="${x}" y="${Math.min(y(v), y(0))}" width="${bw}" height="${Math.max(1, Math.abs(y(v) - y(0)))}" fill="${cor}"><title>${tit}: ${C.fmtReais(v, true)}</title></rect>`;
+      return b(m.res_orcado, x0 - bw - 1, "#94a3b8", `${C.MESES[m.mes - 1]} ${ref.toLowerCase()}`) + b(m.res_realizado, x0 + 1, m.res_realizado < 0 ? "#ef4444" : "#1b8253", `${C.MESES[m.mes - 1]} realizado`) +
+        `<text x="${x0}" y="${H - 10}" font-size="11" text-anchor="middle" fill="#475569">${C.MESES[m.mes - 1]}</text>`;
+    }).join("");
+    const linha = acum.map((v, i) => `${pad + i * passo + passo / 2},${y(v)}`).join(" ");
+    return `<div class="cc-scroll" style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;padding:6px 6px 0"><svg width="${W}" height="${H}" role="img" aria-label="Geração de caixa por mês">
+        <line x1="${pad}" x2="${W}" y1="${y(0)}" y2="${y(0)}" stroke="#cbd5e1"/>
+        <text x="4" y="${y(max) + 4}" font-size="10" fill="#64748b">${C.fmtReais(max, true)}</text><text x="4" y="${y(min) + 4}" font-size="10" fill="#64748b">${C.fmtReais(min, true)}</text>
+        ${barras}<polyline points="${linha}" fill="none" stroke="#f59e0b" stroke-width="2"/>${acum.map((v, i) => `<circle cx="${pad + i * passo + passo / 2}" cy="${y(v)}" r="3" fill="#f59e0b"><title>Acumulado realizado: ${C.fmtReais(v, true)}</title></circle>`).join("")}
+      </svg><div style="font-size:0.7rem;color:#64748b;padding:2px 4px 6px"><span style="color:#94a3b8">■</span> ${ref} · <span style="color:#1b8253">■</span> Realizado · <span style="color:#f59e0b">●</span> Acumulado realizado · passe o mouse para ver os valores</div></div>`;
   },
 
   render() {

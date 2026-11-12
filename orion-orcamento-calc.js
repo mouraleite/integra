@@ -572,7 +572,18 @@
     const itens = [];
     r.grupos.forEach((g) => g.planos.forEach((p) => itens.push(Object.assign({}, p, { cc_nome: p.cc_nome || g.cc_nome }))));
     let linhas;
-    if (visao === "plano") {
+    if (visao === "grupo") {
+      const m = new Map();
+      itens.forEach((x) => {
+        const gk = grupoRecebimento(x.plano_nome);
+        if (!m.has(gk)) m.set(gk, { chave: "g" + gk, plano: "", plano_nome: gk, grupo: gk, o: new Array(12).fill(0), r: new Array(12).fill(0), filhos: [] });
+        const g = m.get(gk);
+        x.o.forEach((v, i) => { g.o[i] += v; });
+        x.r.forEach((v, i) => { g.r[i] += v; });
+        g.filhos.push(fecha(Object.assign({}, x, { chave: "g" + gk + "|" + x.cc + "|" + x.plano })));
+      });
+      linhas = [...m.values()].map(fecha).sort((a, b) => a.grupo.localeCompare(b.grupo, "pt-BR"));
+    } else if (visao === "plano") {
       const m = new Map();
       itens.forEach((x) => {
         if (!m.has(x.plano)) m.set(x.plano, { chave: "p" + x.plano, plano: x.plano, plano_nome: "", o: new Array(12).fill(0), r: new Array(12).fill(0), filhos: [] });
@@ -590,6 +601,16 @@
     const total = fecha({ o: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.o[i], 0)), r: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.r[i], 0)) });
     const comDesvio = linhas.filter((x) => x.semaforo.cor === "amarelo" || x.semaforo.cor === "vermelho").length;
     return { linhas, total, meses: r.meses, comDesvio };
+  }
+
+  /** Grupo de recebimento pelo nome do plano (mesma regra do Órion: Recebimento por Grupo). */
+  function grupoRecebimento(nome) {
+    const n = String(nome || "").toUpperCase();
+    if (/A VISTA|À VISTA|AVISTA/.test(n)) return "À vista";
+    if (/SINAL|ENTRADA|ANTECIP/.test(n)) return "Sinal / antecipação";
+    if (/PARCEL|FINANCI|BANCO|FGTS|CREDITO|CRÉDITO/.test(n)) return "Parcelado / financiamento";
+    if (/MENSAL|ANUAL|RECORREN/.test(n)) return "Recorrente";
+    return "Outros";
   }
 
   /** Recortes por nome do plano, iguais aos do Órion (Investimentos e Receita de Lotes). */
@@ -691,6 +712,6 @@
     return s;
   }
 
-  return { centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

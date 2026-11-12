@@ -301,3 +301,16 @@ test("centavos: valores colados do Excel em português", () => {
   assert.strictEqual(C.centavosDigitado("1234.5"), 123450);
   assert.strictEqual(C.centavosDigitado("-2.500,00"), -250000);
 });
+
+test("recebimento por grupo (regra do nome do plano do Órion)", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  assert.strictEqual(C.grupoRecebimento("Recebimento à vista"), "À vista");
+  assert.strictEqual(C.grupoRecebimento("Sinal de venda"), "Sinal / antecipação");
+  assert.strictEqual(C.grupoRecebimento("Parcelas de financiamento"), "Parcelado / financiamento");
+  assert.strictEqual(C.grupoRecebimento("Taxa mensal"), "Recorrente");
+  assert.strictEqual(C.grupoRecebimento("Aluguel"), "Outros");
+  const m = (v) => new Array(12).fill(v);
+  const rec = [{ cc: "1", plano: "11", plano_nome: "Venda à vista", m: m(100) }, { cc: "2", plano: "12", plano_nome: "Parcelas", m: m(50) }, { cc: "3", plano: "11", plano_nome: "Venda à vista", m: m(10) }];
+  const a = C.analiticoGastos(rec, [], [1], "grupo", "RECEITAS");
+  assert.deepStrictEqual(a.linhas.map((x) => [x.grupo, x.orcado, x.filhos.length]), [["À vista", 110, 2], ["Parcelado / financiamento", 50, 1]]);
+});

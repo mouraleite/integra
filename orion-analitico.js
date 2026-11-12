@@ -55,7 +55,7 @@ const OrionAnaliticoApp = {
   lerCabecalhos() { return window.OrionResumoApp.lerCabecalhos.call(this); },
   tipoAtual() { const r = this.C().RECORTES[this.conteudo]; return r ? r.tipo : (this.conteudo === "receitas" ? "RECEITAS" : "DESPESAS"); },
   vigentes() { return window.OrionResumoApp.vigentes.call(this, [this.tipoAtual()]); },
-  setConteudo(v) { this.conteudo = v; this.versao = ""; this.abertos = {}; this.limpar(); },
+  setConteudo(v) { this.conteudo = v; this.versao = ""; this.abertos = {}; if (this.visao === "grupo" && this.tipoAtual() !== "RECEITAS") this.visao = "cc"; this.limpar(); },
   lerLinhas(cab) { return window.OrionResumoApp.lerLinhas.call(this, cab); },
 
   limpar() { this.dados = null; this.meses = null; this.render(); },
@@ -144,7 +144,13 @@ const OrionAnaliticoApp = {
     const nomePl = (x) => `${this.esc(x.plano)} ${this.esc(x.plano_nome)}${x.fora ? " <i>(sem orçado)</i>" : ""}`;
     let corpo = "";
     a.linhas.forEach((x) => {
-      if (this.visao === "plano") {
+      if (this.visao === "grupo") {
+        corpo += this.linhasItem(x, ms, `<b>${this.esc(x.grupo)}</b>`, 1, true);
+        if (this.abertos[x.chave]) x.filhos.forEach((y) => {
+          corpo += this.linhasItem(y, ms, `${nomeCc(y)}<br>${nomePl(y)}`, 2, false);
+          if (this.abertos[y.chave]) corpo += this.linhasDetalhe(y, ms, colspan);
+        });
+      } else if (this.visao === "plano") {
         corpo += this.linhasItem(x, ms, `<b>${nomePl(x)}</b>`, 1, true);
         if (this.abertos[x.chave]) x.filhos.forEach((y) => {
           corpo += this.linhasItem(y, ms, nomeCc(y), 2, false);
@@ -163,7 +169,7 @@ const OrionAnaliticoApp = {
         Total ${ref.toLowerCase()} ${C.fmtReais(t.orcado, true)} · realizado ${C.fmtReais(t.realizado, true)} · desvio ${pctT} · ${a.comDesvio} linha(s) com atenção ou acima do limite. ${ehRec ? `Saldo = realizado − ${ref.toLowerCase()} (negativo = recebeu menos).` : `Saldo = ${ref.toLowerCase()} − realizado (negativo = gastou mais).`}</div>
       <div class="cc-scroll" style="max-height:70vh"><table class="cc-table" style="min-width:${360 + ms.length * 96 + 110}px">
         <colgroup><col style="width:260px"><col style="width:90px">${ms.map(() => '<col style="width:96px">').join("")}<col style="width:110px"></colgroup>
-        <thead><tr><th>${this.visao === "plano" ? "Plano / centro de custo" : "Centro de custo / plano"}</th><th>Métrica</th>${ms.map((m) => `<th class="is-right">${C.MESES[m - 1]}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <thead><tr><th>${this.visao === "grupo" ? "Grupo de recebimento / centro de custo e plano" : this.visao === "plano" ? "Plano / centro de custo" : "Centro de custo / plano"}</th><th>Métrica</th>${ms.map((m) => `<th class="is-right">${C.MESES[m - 1]}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
         <tbody>${corpo || `<tr><td colspan="${colspan}" style="text-align:center;padding:30px">Nenhuma linha${C.RECORTES[this.conteudo] ? " com plano de " + C.RECORTES[this.conteudo].rotulo.toLowerCase() : ""}.</td></tr>`}
           <tr class="oa-total"><td>Total</td><td>${ref}</td>${tot(t.o, t.orcado)}</tr>
           <tr class="oa-total"><td></td><td>Realizado</td>${tot(t.r, t.realizado)}</tr>
@@ -186,7 +192,8 @@ const OrionAnaliticoApp = {
     const visoes = `<div><label class="ml-emp-filter-label">Conteúdo</label><select class="idx-select" style="height:40px" onchange="OrionAnaliticoApp.setConteudo(this.value)">${conteudos.map(([v, t]) => `<option value="${v}" ${v === this.conteudo ? "selected" : ""}>${t}</option>`).join("")}</select></div>
       <div style="display:flex;gap:6px">
           <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('cc')">I · Centro de custo e plano</button>
-          <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button></div>`;
+          <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button>
+          ${this.tipoAtual() === "RECEITAS" ? `<button type="button" class="btn ${this.visao === "grupo" ? "btn-primary" : "btn-secondary"}" style="height:40px" title="Recebimento por grupo (como no Órion): à vista, sinal, parcelado, recorrente, outros" onclick="OrionAnaliticoApp.setVisao('grupo')">III · Por grupo de recebimento</button>` : ""}</div>`;
     root.innerHTML = `${window.OrionFiltros.html(this, "OrionAnaliticoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano, [this.tipoAtual()]), empresas: this.dados ? this.dados.empresas : [], comMeses: !!this.dados, extra: visoes })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
