@@ -1387,17 +1387,17 @@ const CessaoPopup = {
     return id === "PM" || /MENSAL|MENSAIS/.test(nome);
   },
 
-  // Meses de calendário entre a data-base dos juros (data-base da condição ou data da venda)
+  // Meses de calendário entre a data do contrato (os juros correm "a partir da data do Contrato")
   // e o 1º vencimento da condição. 0 quando faltar alguma data.
+  // Não usa o baseDate da condição: no Sienge ele vem antes da venda (data da tabela) e
+  // inflava a parcela (título 13276: dava 568,55 em vez de 559,56).
   mesesAteVencimento(c, contract) {
     const iso = (v) => {
       const s = String(v || "").slice(0, 10);
       return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
     };
     const venc = iso(c && (c.firstPayment || c.firstDueDate || c.dueDate));
-    const baseCond = iso(c && c.baseDate);
-    const base = (baseCond && baseCond !== venc ? baseCond : "")
-      || iso(contract && (contract.contractDate || contract.issueDate || contract.saleDate));
+    const base = iso(contract && (contract.contractDate || contract.issueDate || contract.saleDate));
     if (!venc || !base || base >= venc) return 0;
     const [ay, am] = base.split("-").map(Number);
     const [by, bm] = venc.split("-").map(Number);
