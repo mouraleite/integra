@@ -1382,6 +1382,12 @@
             <li data-tab="indices-mercado" data-module="sub_cfg_apoio_indices_mercado_acessar">
               <a onclick="switchTab('indices-mercado', 'Índices de mercado')">Índices de mercado</a>
             </li>
+            <li data-tab="orion-premissas" data-module="sub_cfg_apoio_premissas_viabilidade_acessar">
+              <a onclick="switchTab('orion-premissas', 'Premissas da viabilidade')">Premissas da viabilidade</a>
+            </li>
+            <li data-tab="orion-fechamento" data-module="sub_cfg_apoio_fechamento_meses_acessar">
+              <a onclick="switchTab('orion-fechamento', 'Fechamento de meses')">Fechamento de meses</a>
+            </li>
             <li data-tab="motivos-cancelamento" data-module="sub_cfg_apoio_motivos_cancelamento_acessar">
               <a onclick="switchTab('motivos-cancelamento', 'Motivos de cancelamento')">Motivos de cancelamento</a>
             </li>
@@ -1738,6 +1744,16 @@
       <!-- TAB: ÍNDICES DE MERCADO (vindo do ML Órion) -->
       <section id="tab-indices-mercado" class="tab-pane" style="display: none;">
         <div id="indices-mercado-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: PREMISSAS DA VIABILIDADE (vindo do ML Órion) -->
+      <section id="tab-orion-premissas" class="tab-pane" style="display: none;">
+        <div id="orion-premissas-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: FECHAMENTO DE MESES (vindo do ML Órion) -->
+      <section id="tab-orion-fechamento" class="tab-pane" style="display: none;">
+        <div id="orion-fechamento-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: CONFIGURAÇÕES - TAGS -->
@@ -8696,6 +8712,10 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="indexadores.js?v=2124"></script>
   <script defer src="indices-mercado-calc.js?v=2124"></script>
   <script defer src="indices-mercado.js?v=2124"></script>
+  <script defer src="orion-store.js?v=2124"></script>
+  <script defer src="orion-premissas-calc.js?v=2124"></script>
+  <script defer src="orion-premissas.js?v=2124"></script>
+  <script defer src="orion-fechamento.js?v=2124"></script>
   <script defer src="verificar-construcao.js?v=2124"></script>
   <script defer src="financiamento.js?v=2124"></script>
   <script src="repactuacoes.js?v=2124"></script>

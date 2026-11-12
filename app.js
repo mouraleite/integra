@@ -3929,6 +3929,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "plano-financeiro": "Plano Financeiro e Visões",
     "indexadores": "Indexadores Financeiros",
     "indices-mercado": "Índices de mercado",
+    "orion-premissas": "Premissas da viabilidade",
+    "orion-fechamento": "Fechamento de meses",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
     "compromissario_associacoes": "Compromissário (Associações)",
@@ -4014,6 +4016,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "plano-financeiro": "layout-list",
     "indexadores": "trending-up",
     "indices-mercado": "line-chart",
+    "orion-premissas": "sliders-horizontal",
+    "orion-fechamento": "calendar-check",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
     "compromissario_associacoes": "users-round",
@@ -4256,6 +4260,10 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof MutuoApp !== "undefined") MutuoApp.init();
   } else if (tabId === "indices-mercado") {
     if (typeof IndicesMercadoApp !== "undefined") IndicesMercadoApp.init();
+  } else if (tabId === "orion-premissas") {
+    if (typeof OrionPremissasApp !== "undefined") OrionPremissasApp.init();
+  } else if (tabId === "orion-fechamento") {
+    if (typeof OrionFechamentoApp !== "undefined") OrionFechamentoApp.init();
   } else if (tabId === "resultado-caixa") {
     if (typeof ResultadoCaixaApp !== "undefined") ResultadoCaixaApp.init();
   } else if (tabId === "investimento") {

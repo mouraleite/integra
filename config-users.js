@@ -586,6 +586,8 @@ const ConfigUsersApp = {
             { id: "empresas", label: "Empresas" },
             { id: "indexadores", label: "Indexadores" },
             { id: "indices_mercado", label: "Índices de mercado" },
+            { id: "premissas_viabilidade", label: "Premissas da viabilidade" },
+            { id: "fechamento_meses", label: "Fechamento de meses" },
             { id: "motivos_cancelamento", label: "Motivos de cancelamento" },
             { id: "plano_financeiro", label: "Plano Financeiro e Visões" },
             { id: "preambulos", label: "Preâmbulos" },
