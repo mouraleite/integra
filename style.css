@@ -10873,10 +10873,10 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .cc-table.ctb-eq-lista .is-neg { color: #b91c1c; }
 .cc-table tbody tr.cc-row-salvo { animation: ccRowSalvo 2.4s ease-out; }
 @keyframes ccRowSalvo { 0%, 40% { background-color: #bbf7d0; } 100% { background-color: transparent; } }
-.cc-table.aobra-table { min-width: 1280px; }
-.cc-table.aobra-table col.aobra-id { width: 240px; }
+.cc-table.aobra-table { table-layout: auto; width: 100%; min-width: 1100px; }
+.cc-table.aobra-table col.aobra-id { width: 1%; }
 .cc-table.aobra-table col.aobra-acao { width: 76px; }
-.cc-table.aobra-table td.aobra-emp { white-space: normal; line-height: 1.3; }
+.cc-table.aobra-table td.aobra-emp { white-space: nowrap; overflow: visible; text-overflow: clip; width: 1%; }
 .cc-table.aobra-table td.aobra-acoes { overflow: visible; white-space: nowrap; text-align: right; }
 .aobra-help { flex: 1 1 320px; margin: 0; color: #64748b; font-size: 0.82rem; line-height: 1.35; }
 .aobra-form { display: flex; flex-direction: column; gap: 18px; }
@@ -10898,16 +10898,31 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .aobra-marco:not(:last-child)::before { content: ""; position: absolute; top: 10px; left: calc(50% + 16px); right: calc(-50% + 2px); height: 2px; background: #86b59a; z-index: 0; }
 .aobra-marco-n { position: relative; z-index: 1; width: 22px; height: 22px; border-radius: 50%; background: #105436; color: #fff; font-size: 0.72rem; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 4px #fff; }
 .aobra-marco-nome { font-size: 0.68rem; font-weight: 700; color: #475569; text-align: center; line-height: 1.25; min-height: 3.8em; }
+.aobra-bloco-agora { background: #e7f6ee; border: 1px solid #b7e0c8; border-radius: 10px; padding: 12px 12px 14px; }
+.aobra-bloco-topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.aobra-selo { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.02em; text-transform: uppercase; }
+.aobra-selo-agora { background: #105436; color: #fff; }
+.aobra-quando { margin: 0; font-size: 0.75rem; font-weight: 600; color: #475569; }
+.aobra-passado { display: flex; flex-direction: column; gap: 8px; }
+.aobra-hist { display: flex; flex-direction: column; gap: 10px; max-height: 280px; overflow: auto; padding-right: 4px; }
+.aobra-hist-item { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px 12px; background: #f8fafc; }
+.aobra-hist-vazio { margin: 0; color: #64748b; font-size: 0.8rem; }
+.aobra-marco-data { font-size: 0.82rem; font-weight: 700; color: #1c2e24; min-height: 38px; display: flex; align-items: center; }
+.aobra-bloco-agora .aobra-marco-n { box-shadow: 0 0 0 4px #e7f6ee; }
+.aobra-hist-item .aobra-marco-n { box-shadow: 0 0 0 4px #f8fafc; }
+.aobra-tempo-leitura .aobra-marco:not(:last-child)::before { background: #cbd5e1; }
+.aobra-tempo-leitura .aobra-marco-n { background: #64748b; }
 #aobra-overlay.modal-overlay { overflow: hidden; align-items: flex-start; padding: 20px 16px; }
 #aobra-overlay .modal-box.aobra-modal {
   width: min(1480px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
-  min-height: min(900px, calc(100vh - 40px));
-  max-height: none;
-  overflow: visible;
+  min-height: 0;
+  max-height: calc(100vh - 40px);
+  overflow-x: hidden;
+  overflow-y: auto;
   margin-top: 8px;
 }
-.aobra-modal { width: min(1080px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: visible; }
+.aobra-modal { width: min(1080px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; }
 @media (max-width: 900px) {
   .cc-toolbar-actions { margin-left: 0; }
   .cc-page .ml-emp-filter { max-width: none; }
@@ -12337,3 +12352,13 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .anexos-juridico-load .loading-progress-bar,
 .anexos-ficha-bar { width: 8%; animation: anexos-jur-carga 8s ease-out forwards; }
 @keyframes anexos-jur-carga { from { width: 8%; } to { width: 92%; } }
+
+/* Usuários e Perfis: lista do navegador aparece na hora e fica travada enquanto a nuvem responde */
+#config-users-root.cfg-sincronizando { position: relative; }
+#config-users-root.cfg-sincronizando > * { pointer-events: none; opacity: .72; }
+#config-users-root.cfg-sincronizando::before {
+  content: attr(data-sync-msg);
+  position: sticky; top: 8px; z-index: 5; display: block; width: max-content; max-width: 100%;
+  margin: 0 auto 8px; padding: 6px 14px; border-radius: 99px;
+  background: #e7f6ee; border: 1px solid #86efac; color: #105436; font-size: .8rem; font-weight: 700;
+}

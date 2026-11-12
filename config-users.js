@@ -604,7 +604,38 @@ const ConfigUsersApp = {
   modView: { module: "", sub: "", action: "" },
   userFilters: { nome: "", perfil: "", perfilIds: [], perfilOpen: false, perfilQuery: "", email: "", status: "todos" },
 
+  // Mostra na hora a lista que já está no navegador, travada para edição, enquanto a nuvem responde.
+  // O documento config/global tem quase 1 MB e a sincronização abaixo leva alguns segundos.
+  mostrarCacheEnquantoCarrega() {
+    const root = document.getElementById('config-users-root');
+    if (!root) return;
+    try {
+      if (!Array.isArray(this.users) || !this.users.length) {
+        const u = JSON.parse(localStorage.getItem('crm_users') || '[]');
+        if (Array.isArray(u) && u.length) this.users = u;
+      }
+      if (!Array.isArray(this.profiles) || !this.profiles.length) {
+        const p = JSON.parse(localStorage.getItem('crm_moura_profiles') || '[]');
+        if (Array.isArray(p) && p.length) this.profiles = p;
+      }
+    } catch (e) { return; }
+    if (!Array.isArray(this.users) || !this.users.length || !Array.isArray(this.profiles) || !this.profiles.length) return;
+    try { this.render(); } catch (e) { return; }
+    root.classList.add('cfg-sincronizando');
+    root.setAttribute('aria-busy', 'true');
+    root.setAttribute('data-sync-msg', 'Atualizando com a nuvem… aguarde para editar.');
+  },
+
+  fimCarregamento() {
+    const root = document.getElementById('config-users-root');
+    if (!root) return;
+    root.classList.remove('cfg-sincronizando');
+    root.removeAttribute('aria-busy');
+    root.removeAttribute('data-sync-msg');
+  },
+
   async loadUsers() {
+    this.mostrarCacheEnquantoCarrega();
     try {
     let gotCloudUsers = false;
     if (typeof window.syncCrmUsersFromFirebase === "function") {
@@ -688,7 +719,7 @@ const ConfigUsersApp = {
     }
     
     // Aqui no futuro poderia fazer um fetch para a API de usuários
-    this.render();
+    try { this.render(); } finally { this.fimCarregamento(); }
     if (typeof window.applyMenuPermissions === "function") window.applyMenuPermissions();
     if (typeof window.crmPintarTesteConta === "function") window.crmPintarTesteConta();
   },

@@ -58,6 +58,72 @@
       return m ? m[3] + "/" + m[2] + "/" + m[1] : "—";
     },
 
+    quando(ms) {
+      const n = Number(ms);
+      if (!n) return "";
+      const d = new Date(n);
+      if (Number.isNaN(d.getTime())) return "";
+      const p = (x) => String(x).padStart(2, "0");
+      return p(d.getDate()) + "/" + p(d.getMonth() + 1) + "/" + d.getFullYear() + " às " + p(d.getHours()) + ":" + p(d.getMinutes());
+    },
+
+    textoInserido(ms) {
+      const t = this.quando(ms);
+      return t ? "Inserido em " + t : "Inserido em data não registrada";
+    },
+
+    foto(linha) {
+      const f = { em: Number(linha && linha.inseridoEm) || 0 };
+      DATAS.forEach((c) => { f[c.key] = String((linha && linha[c.key]) || ""); });
+      return f;
+    },
+
+    datasIguais(a, b) {
+      return DATAS.every((c) => String((a && a[c.key]) || "") === String((b && b[c.key]) || ""));
+    },
+
+    aplicarVersao(anterior, linha, agora) {
+      const agoraMs = agora || Date.now();
+      const proxima = { id: String(linha.id), nome: linha.nome || "", inseridoEm: agoraMs, historico: [] };
+      DATAS.forEach((c) => { proxima[c.key] = String(linha[c.key] || ""); });
+      if (!anterior) return proxima;
+      const historico = Array.isArray(anterior.historico) ? anterior.historico.map((h) => Object.assign({}, h)) : [];
+      if (this.datasIguais(anterior, proxima)) proxima.inseridoEm = Number(anterior.inseridoEm) || 0;
+      else {
+        historico.push(this.foto(anterior));
+        proxima.inseridoEm = agoraMs;
+      }
+      proxima.historico = historico;
+      return proxima;
+    },
+
+    marcosLeitura(fonte) {
+      return DATAS.map((c, i) => `
+        <div class="aobra-marco" title="${this.esc(c.label)}">
+          <span class="aobra-marco-n">${i + 1}</span>
+          <span class="aobra-marco-nome">${this.esc(c.label)}</span>
+          <span class="aobra-marco-data">${this.esc(this.dataBr(fonte && fonte[c.key]))}</span>
+        </div>`).join("");
+    },
+
+    htmlHistorico(linha) {
+      const lista = (linha && Array.isArray(linha.historico) ? linha.historico : []).slice().reverse();
+      const itens = lista.length
+        ? lista.map((h) => `
+          <article class="aobra-hist-item">
+            <p class="aobra-quando">${this.esc(this.textoInserido(h.em))}</p>
+            <div class="aobra-tempo aobra-tempo-leitura" aria-label="Linha do tempo anterior">${this.marcosLeitura(h)}</div>
+          </article>`).join("")
+        : `<p class="aobra-hist-vazio">Nenhuma linha do tempo anterior.</p>`;
+      return `
+        <section class="aobra-passado" aria-label="Linhas do tempo anteriores">
+          <div class="aobra-bloco-topo">
+            <span class="aobra-selo">Anteriores</span>
+          </div>
+          <div class="aobra-hist">${itens}</div>
+        </section>`;
+    },
+
     nomeExibicao(e) {
       const bruto = e && (e.name || e.description || e.costCenterName || "");
       return String(bruto).trim().toLocaleUpperCase("pt-BR");
@@ -194,6 +260,13 @@
       if (!document.getElementById("aobra-busca")) this.render();
     },
 
+    cmpId(a, b) {
+      const na = Number(a && a.id);
+      const nb = Number(b && b.id);
+      if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+      return String((a && a.id) || "").localeCompare(String((b && b.id) || ""), "pt-BR", { numeric: true });
+    },
+
     ordenar(campo) {
       if (this.ordem === campo) this.direcao = this.direcao === "asc" ? "desc" : "asc";
       else {
@@ -204,15 +277,18 @@
     },
 
     linhasOrdenadas() {
-      const campo = this.ordem;
+      const campo = this.ordem || "id";
       const dir = this.direcao === "desc" ? -1 : 1;
       return this.linhas.slice().sort((a, b) => {
-        if (campo === "id") return (Number(a.id) - Number(b.id)) * dir;
-        return String(a[campo] || "").localeCompare(String(b[campo] || "")) * dir;
+        if (campo === "id") return this.cmpId(a, b) * dir;
+        const cmp = String(a[campo] || "").localeCompare(String(b[campo] || ""), "pt-BR");
+        return cmp * dir || this.cmpId(a, b);
       });
     },
 
     init() {
+      this.ordem = "id";
+      this.direcao = "asc";
       this.carregar();
       this.render();
       this.listaEmpreendimentos().then(() => {
@@ -288,6 +364,17 @@
           <span class="aobra-marco-nome">${this.esc(c.label)}</span>
           <input type="date" id="aobra-${c.key}" value="${this.esc(atual ? atual[c.key] : "")}">
         </label>`).join("");
+      const blocoAgora = atual
+        ? `<section class="aobra-bloco-agora" aria-label="Linha do tempo que está valendo">
+            <div class="aobra-bloco-topo">
+              <span class="aobra-selo aobra-selo-agora">Valendo agora</span>
+              <span class="aobra-quando">${this.esc(this.textoInserido(atual.inseridoEm))}</span>
+            </div>
+            <div class="aobra-tempo" aria-label="Linha do tempo das previsões">${marcos}</div>
+          </section>
+          ${this.htmlHistorico(atual)}`
+        : `<p class="aobra-quando">A data de inserção fica registrada ao salvar.</p>
+          <div class="aobra-tempo" aria-label="Linha do tempo das previsões">${marcos}</div>`;
       ov.innerHTML = `
         <div class="modal-box aobra-modal" onclick="event.stopPropagation()">
           <div class="modal-header">
@@ -305,9 +392,7 @@
                 <div id="aobra-sugestoes" class="aobra-sugestoes" style="display:none;"></div>
               </div>
             </label>
-            <div class="aobra-tempo" aria-label="Linha do tempo das previsões">
-              ${marcos}
-            </div>
+            ${blocoAgora}
           </div>
           <div style="display:flex;justify-content:flex-end;margin-top:16px;">
             <button type="button" class="btn btn-primary" onclick="AcompanhamentoObraApp.salvar()">Salvar</button>
@@ -474,13 +559,15 @@
         alert("Este empreendimento já está na tabela.");
         return;
       }
-      const linha = { id: id, nome: this.nomeDe(id) };
-      DATAS.forEach((c) => { linha[c.key] = ler(c.key); });
+      const rascunho = { id: id, nome: this.nomeDe(id) };
+      DATAS.forEach((c) => { rascunho[c.key] = ler(c.key); });
       if (this.editando) {
         const idx = this.linhas.findIndex((r) => String(r.id) === String(this.editando));
+        const anterior = idx >= 0 ? this.linhas[idx] : null;
+        const linha = this.aplicarVersao(anterior, rascunho);
         if (idx >= 0) this.linhas[idx] = linha;
         else this.linhas.push(linha);
-      } else this.linhas.push(linha);
+      } else this.linhas.push(this.aplicarVersao(null, rascunho));
       this.gravar();
       this.fechar();
       this.render();
