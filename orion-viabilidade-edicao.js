@@ -9,7 +9,7 @@
   if (!A) return;
   const detalheOriginal = A.htmlDetalhe.bind(A);
 
-  const ABAS = [["resultado", "Resultado"], ["geral", "Geral"], ["receitas", "Receitas"], ["obras", "Obras"], ["despesas", "Despesas"], ["impostos", "Impostos"], ["permuta", "Permuta e parceiros"], ["funding", "Funding"], ["fisico", "Dados físicos"], ["datas", "Datas"]];
+  const ABAS = [["resultado", "Resultado"], ["geral", "Geral"], ["receitas", "Receitas"], ["obras", "Obras"], ["despesas", "Despesas"], ["impostos", "Impostos"], ["permuta", "Permuta e parceiros"], ["funding", "Funding"], ["fisico", "Dados físicos"], ["datas", "Datas"], ["documentos", "Documentos"]];
   const NUM = (v) => { if (typeof v === "number") return v; const t = String(v == null ? "" : v).trim().replace(/\s/g, "").replace("%", "").replace("R$", ""); if (!t) return 0; const n = Number(t.indexOf(",") >= 0 ? t.replace(/\./g, "").replace(",", ".") : ((t.match(/\./g) || []).length > 1 || /^-?\d{1,3}\.\d{3}$/.test(t) ? t.replace(/\./g, "") : t)); return Number.isFinite(n) ? n : 0; };
   const FASE_VAZIA = () => ({
     nome: "Fase Única",
@@ -403,6 +403,7 @@
               <button type="button" class="btn btn-secondary" style="height:32px" onclick="OrionViabilidadesApp.clonar()">Clonar (nova versão)</button>`}
           </div>${ed && this.ed.erros.length ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:8px">${this.ed.erros.map((x) => this.esc(x)).join("<br>")}</div>` : ""}` : "";
         if (a.aba === "resultado") html = barraEd + abas + detalheOriginal();
+        else if (a.aba === "documentos") html = barraEd + abas + (typeof this.htmlDocumentos === "function" ? this.htmlDocumentos() : "");
         else if (!ed) html = barraEd + abas + `<div style="font-size:0.85rem;color:#64748b;padding:14px">Clique em <b>Editar premissas</b> para alterar esta aba.</div>` + this.htmlAbaSoLeitura();
         else {
           const r = this.resultados(this.aberto.doc);
