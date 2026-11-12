@@ -624,6 +624,9 @@
     if (!t.viabilities || !t.phases) return null;
     const porFase = (nome) => { const m = {}; (t[nome] || []).forEach((r) => { m[r.phase_id] = r; }); return m; };
     const extras = { physical_data: porFase("phase_physical_data"), dates: porFase("phase_dates") };
+    /* centro de custo da obra: o Órion guarda o id interno; no Integra vale o código do Sienge */
+    const ccSienge = {};
+    (t.cost_centers || []).forEach((c) => { if (c && c.id != null) ccSienge[c.id] = { id: String(c.id_sienge || "").trim(), nome: String(c.nome || "") }; });
     const fases = montarFases(t);
     const limpa = (r) => { if (!r) return null; const o = Object.assign({}, r); delete o.id; delete o.phase_id; return o; };
     const docs = t.viabilities.map((v) => {
@@ -632,7 +635,8 @@
         orion_id: f.id, nome: f.nome || "Fase", revenue: limpa(f.revenue), construction: limpa(f.construction), expenses: limpa(f.expenses),
         taxes: limpa(f.taxes), exchanges: limpa(f.exchanges), funding: limpa(f.funding),
         physical_data: limpa(extras.physical_data[f.id]), dates: limpa(extras.dates[f.id]) }));
-      return Object.assign(capa, { _id: `orion_${id}`, orion_id: id, versao_de: v.version_of_id ? `orion_${v.version_of_id}` : null, fases: fs });
+      const cc = v.obra_cost_center_id != null ? ccSienge[v.obra_cost_center_id] : null;
+      return Object.assign(capa, { _id: `orion_${id}`, orion_id: id, versao_de: v.version_of_id ? `orion_${v.version_of_id}` : null, obra_cc: cc ? cc.id : "", obra_cc_nome: cc ? cc.nome : "", fases: fs });
     });
     const semFase = docs.filter((d) => !d.fases.length).map((d) => d.project_name);
     const faltam = ["viability_revenues", "viability_constructions", "viability_expenses", "phase_taxes", "phase_exchanges", "phase_fundings"].filter((x) => !t[x]);
