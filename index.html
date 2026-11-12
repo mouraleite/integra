@@ -1207,6 +1207,19 @@
             </li>
           </ul>
         </li>
+        <!-- ÓRION (TRANSIÇÃO): telas vindas do ML Órion até irem para o menu definitivo -->
+        <li class="nav-item nav-group" data-module="mod_orion">
+          <a onclick="toggleNavMenu(event, 'submenu-orion')" title="Órion (transição)">
+            <i data-lucide="orbit"></i>
+            <span>Órion (transição)</span>
+            <i data-lucide="chevron-down" class="nav-chevron"></i>
+          </a>
+          <ul class="nav-submenu" id="submenu-orion" style="display: none;">
+            <li data-tab="orion-orcamentos" data-module="sub_orion_geral_orcamentos_acessar">
+              <a onclick="switchTab('orion-orcamentos', 'Orçamentos e forecasts (Órion)')">Orçamentos e forecasts</a>
+            </li>
+          </ul>
+        </li>
         <!-- 5 - FISCAL / CONTABIL -->
         <li class="nav-item nav-group" data-module="mod_fiscal">
           <a onclick="toggleNavMenu(event, 'submenu-fiscal')" title="Fiscal">
@@ -1754,6 +1767,11 @@
       <!-- TAB: FECHAMENTO DE MESES (vindo do ML Órion) -->
       <section id="tab-orion-fechamento" class="tab-pane" style="display: none;">
         <div id="orion-fechamento-root" style="padding: 16px;"></div>
+      </section>
+
+      <!-- TAB: ÓRION (TRANSIÇÃO) - ORÇAMENTOS E FORECASTS -->
+      <section id="tab-orion-orcamentos" class="tab-pane" style="display: none;">
+        <div id="orion-orcamentos-root" style="padding: 16px;"></div>
       </section>
 
       <!-- TAB: CONFIGURAÇÕES - TAGS -->
@@ -8716,6 +8734,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-premissas-calc.js?v=2124"></script>
   <script defer src="orion-premissas.js?v=2124"></script>
   <script defer src="orion-fechamento.js?v=2124"></script>
+  <script defer src="orion-orcamento-calc.js?v=2124"></script>
+  <script defer src="orion-orcamentos.js?v=2124"></script>
   <script defer src="verificar-construcao.js?v=2124"></script>
   <script defer src="financiamento.js?v=2124"></script>
   <script src="repactuacoes.js?v=2124"></script>

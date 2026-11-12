@@ -1,0 +1,76 @@
+/* Orçamentos/forecasts do Órion -> Integra (centavos, mapeamento, blocos). Rodar: node --test tests/orion/*.test.js */
+const test = require("node:test");
+const assert = require("node:assert");
+const path = require("path");
+const O = require(path.join(__dirname, "..", "..", "orion-orcamento-calc.js"));
+
+test("centavos exatos", () => {
+  assert.strictEqual(O.centavos(0.1 + 0.2), 30);
+  assert.strictEqual(O.centavos("1234.56"), 123456);
+  assert.strictEqual(O.centavos("1.234,56"), 123456);
+  assert.strictEqual(O.centavos("-10.005"), -1001);
+  assert.strictEqual(O.centavos("10.005"), 1001);
+  assert.strictEqual(O.centavos(null), 0);
+  assert.strictEqual(O.centavos(19999999.99), 1999999999);
+});
+
+const base = [
+  { tabela: "cost_centers", linhas: [{ id: 1, id_sienge: "10100", nome: "CERQUEIRA CÉSAR" }, { id: 2, id_sienge: "99999", nome: "ADM" }] },
+  { tabela: "planos_financeiros", linhas: [{ id: 10, db_id: "2010101", name: "SALÁRIOS", tp_conta: "T", fl_redutora: "N" }, { id: 11, db_id: "1010101", name: "VENDAS", tp_conta: "R", fl_redutora: "N" }] },
+  { tabela: "departamentos", linhas: [{ id: 3, nome: "Financeiro" }] },
+  { tabela: "users", linhas: [{ id: 5, email: "marcelo@x" }] },
+  { tabela: "orcamentos", linhas: [
+    { id: 100, descricao: "Orçamento Despesas 2027", ano: 2027, tipo: "DESPESAS", status: "Aprovado", versao_numero: 2, versao_base_id: 99, departamento_id: 3, usuario_criador_id: 5 },
+    { id: 99, descricao: "Orçamento Despesas 2027", ano: 2027, tipo: "DESPESAS", status: "Substituído", versao_numero: 1, departamento_id: 3 }
+  ] },
+  { tabela: "orcamento_itens", linhas: [
+    { id: 1, orcamento_id: 100, produto_id: 1, plano_financeiro_id: 10, jan: 1000.1, fev: 0.2, mar: 0, abr: 0, mai: 0, jun: 0, jul: 0, ago: 0, set: 0, out: 0, nov: 0, dez: 99.7, total_anual: 1100 },
+    { id: 2, orcamento_id: 100, produto_id: 2, plano_financeiro_id: 10, jan: 50, total_anual: 50 },
+    { id: 3, orcamento_id: 99, produto_id: 1, plano_financeiro_id: 10, jan: 900, total_anual: 900 }
+  ] },
+  { tabela: "orcamento_historico", linhas: [{ id: 1, orcamento_id: 100, usuario_id: 5, status_anterior: "Em aprovação", status_novo: "Aprovado", data_hora: "2026-10-01T10:00:00" }] }
+];
+
+test("orçamento: cabeçalho, linhas em centavos e conferência com o total do Órion", () => {
+  const r = O.prepararDocumentos(base, "orcamentos");
+  assert.strictEqual(r.cabecalhos.length, 2);
+  const c = r.cabecalhos.find((x) => x._id === "100");
+  assert.strictEqual(c.departamento.nome, "Financeiro");
+  assert.strictEqual(c.versao_base, "99");
+  assert.strictEqual(c.criado_por, "marcelo@x");
+  assert.strictEqual(c.historico[0].para, "Aprovado");
+  assert.strictEqual(c.totais.total, 115000);
+  assert.strictEqual(c.total_orion, 115000);
+  const bl = r.blocos.find((b) => b._id === "100_0");
+  assert.deepStrictEqual(bl.itens[0].m.slice(0, 2), [100010, 20]);
+  assert.strictEqual(bl.itens[0].cc, "10100");
+  assert.strictEqual(bl.itens[0].plano, "2010101");
+  assert.deepStrictEqual(r.semMapa, []);
+});
+
+test("diferença entre versões e agrupamento", () => {
+  const r = O.prepararDocumentos(base, "orcamentos");
+  const at = O.juntarBlocos(r.blocos.filter((b) => b.orcamento === "100")).itens;
+  const bs = O.juntarBlocos(r.blocos.filter((b) => b.orcamento === "99")).itens;
+  const d = O.diferencaVersoes(at, bs);
+  assert.deepStrictEqual(d.map((x) => [x.cc, x.dif]), [["10100", 20000], ["99999", 5000]]);
+  const g = O.agrupar(at, "cc", "cc_nome");
+  assert.deepStrictEqual(g.map((x) => [x.chave, x.total]), [["10100", 110000], ["99999", 5000]]);
+});
+
+test("muitas linhas são divididas em blocos de até 400", () => {
+  const itens = [];
+  for (let i = 0; i < 950; i++) itens.push({ id: i, orcamento_id: 100, produto_id: 1, plano_financeiro_id: 10, jan: 1 });
+  const arq = base.map((a) => (a.tabela === "orcamento_itens" ? { tabela: a.tabela, linhas: itens } : a));
+  const r = O.prepararDocumentos(arq, "orcamentos");
+  const bl = r.blocos.filter((b) => b.orcamento === "100");
+  assert.deepStrictEqual(bl.map((b) => b.itens.length), [400, 400, 150]);
+  assert.strictEqual(r.cabecalhos.find((x) => x._id === "100").blocos, 3);
+  assert.strictEqual(O.juntarBlocos(bl).itens.length, 950);
+});
+
+test("plano ou centro de custo sem correspondência aparece na conferência", () => {
+  const arq = base.map((a) => (a.tabela === "orcamento_itens" ? { tabela: a.tabela, linhas: [{ id: 9, orcamento_id: 100, produto_id: 77, plano_financeiro_id: 10, jan: 1 }] } : a));
+  const r = O.prepararDocumentos(arq, "orcamentos");
+  assert.strictEqual(r.semMapa.length, 1);
+});

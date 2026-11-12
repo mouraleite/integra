@@ -511,6 +511,12 @@ const ConfigUsersApp = {
       ] }]
     },
     {
+      name: "Órion (transição)", icon: "orbit", key: "mod_orion",
+      submodules: [{ name: "Órion (transição)", key: "sub_orion_geral", actions: [
+        { id: "orcamentos", label: "Orçamentos e forecasts" }
+      ] }]
+    },
+    {
       name: "Fiscal", icon: "receipt", key: "mod_fiscal",
       submodules: [
         { name: "Calcular impostos", key: "sub_fiscal_pis", actions: [{ id: "fiscal", label: "Calcular impostos", permBase: "sub_fiscal_geral_fiscal" }] },
