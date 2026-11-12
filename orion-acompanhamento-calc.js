@@ -87,6 +87,21 @@
     return out;
   }
 
+  /* Grupos da visão DFC: no Integra o nome vem com o código e sem acento ("04.05 AQUISICAO DE NOVAS AREAS");
+   * o Órion usa a descrição do Sienge ("AQUISIÇÃO DE NOVAS ÁREAS"). Pelo código, volta para o nome do Órion. */
+  const GRUPO_ORION = { "01": "RECEITAS", "01.01": "VENDA DE IMÓVEIS", "01.02": "RECEITA DE SERVIÇOS", "01.03": "RECEITAS NÃO OPERACIONAIS", "01.04": "CANCELAMENTOS DE VENDAS",
+    "02": "IMPOSTOS", "02.01": "IMPOSTOS SOBRE VENDAS", "02.02": "IMPOSTOS TRIMESTRAIS", "04": "CUSTOS", "04.01": "REPASSES TERRENISTAS", "04.02": "PROJETOS E APROVAÇÕES", "04.03": "OBRAS",
+    "04.04": "CUSTO ADM DE EMPREENDIMENTOS", "04.05": "AQUISIÇÃO DE NOVAS ÁREAS", "05": "DESPESAS", "05.01": "DESPESAS COMERCIAIS", "05.02": "MARKETING", "05.03": "ADMINISTRATIVAS", "05.04": "PESSOAL",
+    "05.05": "DESPESAS COM ESTOQUE", "05.06": "DESPESAS NAO OPERACIONAIS", "05.07": "DONATIVOS E CONTRIBUIÇÕES", "05.08": "ADIANTAMENTO A FORNECEDORES", "05.09": "RETENÇÕES", "05.10": "OUTROS MOVIMENTOS",
+    "05.11": "DESPESAS COM MANUTENÇÃO DE EMPREENDIMENTO", "07": "CAPEX", "09": "RESULTADO FINANCEIRO", "09.01": "RECEITAS FINANCEIRAS", "09.02": "DESPESAS FINANCEIRAS", "09.03": "FUNDO DE INVESTIMENTO",
+    "09.05": "AMORTIZAÇÕES", "11": "DIVIDENDOS E APORTES", "11.01": "(-) DIVIDENDOS", "11.02": "(+) DIVIDENDOS", "11.03": "APORTES" };
+  function codigoGrupo(nome) { const m = /^\s*(\d{2}(?:\.\d{2})*)\s+/.exec(String(nome || "")); return m ? m[1] : ""; }
+  function grupoOrion(nome) {
+    const c = codigoGrupo(nome);
+    if (c && GRUPO_ORION[c]) return GRUPO_ORION[c];
+    return String(nome || "").replace(/^\s*\d{2}(?:\.\d{2})*\s+/, "").trim().toUpperCase();
+  }
+
   /** Classificação das saídas (contas a pagar) nos grupos da DRE e do fluxo — mesma ordem de testes do Órion. */
   function classificarSaida(grupoRaw, catRaw) {
     const grupo = String(grupoRaw || "").toUpperCase(), cat = String(catRaw || "").toLowerCase().trim();
@@ -403,7 +418,74 @@
     return b === a || b.indexOf(a + " - ") === 0 || b.indexOf(a + " (") === 0;
   }
 
-  const api = { calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, ESTOQUE, TMA_PADRAO };
+
+  /**
+   * DFC da vida do empreendimento (Órion: tracking_dfc.montar_dfc_vida): realizado + a realizar de todos os centros da obra
+   * na visão DFC, por grupo e por plano, mês a mês; pais somam os filhos pelo código e as linhas de fórmula do Órion
+   * (03 = 04 + 05, 06 = 01 + 02 + 03, 08 = 06 + 07, 10 = 08 + 09, 12 = 10 + 11). Conferência: lucro da DFC (sem cancelamentos)
+   * contra o lucro líquido operacional da lista.
+   * o: { centros: [{ entrada: { real, previsto }, terreno }], grupos: [{ id, name }], hoje, lucroLista }
+   */
+  function dfcVida(o) {
+    const nos = (o.grupos || []).map((g) => ({ id: g.id, codigo: codigoGrupo(g.name || g.nome), descricao: String(g.name || g.nome || "").replace(/^\s*\d{2}(?:\.\d{2})*\s+/, "").trim() }))
+      .filter((n) => n.codigo).sort((a, b) => (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0));
+    const porCod = (c) => (nos.find((n) => n.codigo === c) || {}).id || null;
+    const porPref = (p) => (nos.find((n) => n.codigo.indexOf(p) === 0) || {}).id || null;
+    const venda = porCod("01.01") || porPref("01."), admin = porCod("05.03") || porPref("05."), cancel = porCod("01.04"), terrenoNo = porCod("04.01") || porCod("04.05") || porPref("04.");
+    const ids = new Set(nos.map((n) => n.id));
+    const folha = {}, planos = {};
+    let lucro = 0;
+    const lancar = (nid, plano, mes, v) => {
+      (folha[nid] = folha[nid] || {})[mes] = (folha[nid][mes] || 0) + v;
+      const k = nid + "|" + plano;
+      const p = planos[k] || (planos[k] = { nid, descricao: plano, valores_mes: {} });
+      p.valores_mes[mes] = (p.valores_mes[mes] || 0) + v;
+    };
+    const acumular = (r) => {
+      const mes = r.mes;
+      if (!/^\d{4}-\d{2}$/.test(String(mes || ""))) return;
+      const g = String(r.grupo || "").toUpperCase(), cat = String(r.categoria || "").toLowerCase();
+      let nid = r.gid && ids.has(r.gid) ? r.gid : null;
+      if (!nid) nid = r.tipo === "INCOME" ? venda : (g.indexOf("DISTRATO") >= 0 || g.indexOf("CANCELAMENTO") >= 0 || cat.indexOf("distrat") >= 0) ? cancel : admin;
+      if (!nid) return;
+      const val = Math.abs(Number(r.valor) || 0);
+      const v = r.tipo === "INCOME" || String(r.categoria || "").trim().indexOf("(-)") === 0 ? val : -val;
+      lancar(nid, String(r.categoria || "").trim() || "Sem plano", mes, v);
+      if (nid !== cancel) lucro += v;
+    };
+    (o.centros || []).forEach((c) => { ((c.entrada && c.entrada.real) || []).forEach(acumular); ((c.entrada && c.entrada.previsto) || []).forEach(acumular); });
+    (o.centros || []).forEach((c) => {
+      const mlc = c.terreno ? Number(c.terreno.valor) || 0 : 0;
+      if (mlc <= 0 || !terrenoNo) return;
+      const ms = [...new Set(((c.entrada && c.entrada.real) || []).map((r) => r.mes).filter((m) => /^\d{4}-\d{2}$/.test(String(m || ""))))].sort();
+      const pm = ms[0] || String(o.hoje || "");
+      lancar(terrenoNo, "Terreno (custo manual)", pm, -mlc);
+      lucro -= mlc;
+    });
+    const valores = (vm) => { const anos = {}; Object.entries(vm).forEach(([m, v]) => { anos[m.slice(0, 4)] = (anos[m.slice(0, 4)] || 0) + v; }); return { valores: anos, valores_mes: vm, total: Object.values(vm).reduce((a, b) => a + b, 0) }; };
+    const linhas = nos.map((n) => Object.assign({ kind: "categoria", id: n.id, codigo: n.codigo, descricao: n.descricao, nivel: (n.codigo.match(/\./g) || []).length,
+      planos: Object.values(planos).filter((p) => p.nid === n.id).map((p) => Object.assign({ kind: "plano", descricao: p.descricao }, valores(p.valores_mes))).sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR")) }, valores(Object.assign({}, folha[n.id] || {}))));
+    linhas.slice().sort((a, b) => b.nivel - a.nivel).forEach((filho) => {
+      let pai = null, best = -1;
+      linhas.forEach((c) => { if (c.codigo && c.codigo !== filho.codigo && filho.codigo.indexOf(c.codigo + ".") === 0 && c.codigo.length > best) { pai = c; best = c.codigo.length; } });
+      if (!pai) return;
+      Object.entries(filho.valores_mes).forEach(([m, v]) => { pai.valores_mes[m] = (pai.valores_mes[m] || 0) + v; });
+      Object.assign(pai, valores(pai.valores_mes));
+    });
+    [["03", ["04", "05"]], ["06", ["01", "02", "03"]], ["08", ["06", "07"]], ["10", ["08", "09"]], ["12", ["10", "11"]]].forEach(([d, orig]) => {
+      const dest = linhas.find((l) => l.codigo === d);
+      if (!dest) return;
+      const vm = Object.assign({}, dest.valores_mes);
+      orig.forEach((c) => { const src = linhas.find((l) => l.codigo === c); if (src) Object.entries(src.valores_mes).forEach(([m, v]) => { vm[m] = (vm[m] || 0) + v; }); });
+      Object.assign(dest, valores(vm));
+    });
+    const anos = [...new Set([].concat(...linhas.map((l) => Object.keys(l.valores).filter((a) => Math.abs(l.valores[a]) > 0.005))))].sort();
+    const meses = [...new Set([].concat(...linhas.map((l) => Object.keys(l.valores_mes).filter((m) => Math.abs(l.valores_mes[m]) > 0.005))))].sort();
+    const ll = Number(o.lucroLista) || 0;
+    return { anos, meses, linhas, conferencia: { lucro_dfc: lucro, lucro_lista: ll, desvio: lucro - ll, ok: Math.abs(lucro - ll) < 1 } };
+  }
+
+  const api = { dfcVida, grupoOrion, codigoGrupo, GRUPO_ORION, calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, ESTOQUE, TMA_PADRAO };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   raiz.OrionAcompanhamentoCalc = api;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -42,3 +42,24 @@ test("acompanhamento: nome da obra, mesma obra e faixas de parcelas como no Óri
   assert.ok(!A.mesmaObra("LIVIA I", "LIVIA II"));
   assert.deepStrictEqual([1, 6, 7, 48, 49, 180, 240].map(A.faixaParcelas), ["Até 6X", "Até 6X", "Até 12x", "Até 48x", "Até 60x", "Até 180x", "Até 180x"]);
 });
+
+test("DFC de empreendimentos: grupos da visão, pais, fórmulas do Órion e conferência do lucro", () => {
+  const grupos = [["g_01", "01 RECEITAS"], ["g_01_01", "01.01 VENDA DE IMOVEIS"], ["g_01_04", "01.04 CANCELAMENTOS DE VENDAS"], ["g_02", "02 IMPOSTOS"], ["g_02_01", "02.01 IMPOSTOS SOBRE VENDAS"],
+    ["g_03", "03 CUSTOS E DESPESAS"], ["g_04", "04 CUSTOS"], ["g_04_01", "04.01 REPASSES TERRENISTAS"], ["g_04_03", "04.03 OBRAS"], ["g_05", "05 DESPESAS"], ["g_05_03", "05.03 ADMINISTRATIVAS"],
+    ["g_06", "06 GCO - GERACAO DE CAIXA OPERACIONAL"]].map(([id, name]) => ({ id, name }));
+  const entrada = { real: [{ tipo: "INCOME", categoria: "Venda", gid: "g_01_01", mes: "2025-01", valor: 1000 }, { tipo: "OUTCOME", categoria: "Obras", gid: "g_04_03", mes: "2025-01", valor: 300 },
+    { tipo: "OUTCOME", categoria: "Devolução distrato", gid: "g_01_04", mes: "2025-02", valor: 50 }, { tipo: "OUTCOME", categoria: "Sem grupo", gid: null, grupo: "", mes: "2025-02", valor: 20 }],
+    previsto: [{ tipo: "OUTCOME", categoria: "PIS", gid: "g_02_01", mes: "2027-03", valor: 10 }] };
+  const A = require("../../orion-acompanhamento-calc.js");
+  const r = A.dfcVida({ centros: [{ entrada, terreno: { valor: 100 } }], grupos, hoje: "2026-11", lucroLista: 570 });
+  const L = (c) => r.linhas.find((l) => l.codigo === c);
+  assert.strictEqual(L("01").total, 950);
+  assert.strictEqual(L("04").total, -400);
+  assert.strictEqual(L("05.03").total, -20);
+  assert.strictEqual(L("03").total, -420);
+  assert.strictEqual(L("06").total, 950 - 10 - 420);
+  assert.deepStrictEqual(r.anos, ["2025", "2027"]);
+  assert.strictEqual(r.conferencia.lucro_dfc, 1000 - 300 - 20 - 10 - 100);
+  assert.ok(r.conferencia.ok);
+  assert.deepStrictEqual(L("04.01").planos.map((p) => [p.descricao, p.total]), [["Terreno (custo manual)", -100]]);
+});

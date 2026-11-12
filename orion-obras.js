@@ -108,12 +108,12 @@ const OrionObrasApp = {
     try {
       const R = window.OrionRealizado, gid = R.grupoDe(id) || (window.OrcamentoDfcApp && OrcamentoDfcApp.grupoDaConta ? OrcamentoDfcApp.grupoDaConta(String(id || ""), nome || "") : null);
       const g = (R.grupos() || []).find((x) => x && x.id === gid);
-      return g ? String(g.name || g.nome || "").toUpperCase() : "";
-    } catch (e) { return ""; }
+      return g ? { gid, nome: this.C().grupoOrion(g.name || g.nome || "") } : { gid: null, nome: "" };
+    } catch (e) { return { gid: null, nome: "" }; }
   },
   somar(lista) {
     const m = new Map();
-    lista.forEach((r) => { const k = [r.tipo, r.categoria, r.grupo, r.mes].join("|"); if (!m.has(k)) m.set(k, Object.assign({}, r, { valor: 0 })); m.get(k).valor += r.valor; });
+    lista.forEach((r) => { const k = [r.tipo, r.categoria, r.grupo, r.gid || "", r.mes].join("|"); if (!m.has(k)) m.set(k, Object.assign({}, r, { valor: 0 })); m.get(k).valor += r.valor; });
     return [...m.values()].map((r) => Object.assign(r, { valor: Math.round(r.valor * 100) / 100 }));
   },
 
@@ -145,12 +145,12 @@ const OrionObrasApp = {
     // 2. realizado (caixa), do primeiro ano com venda até hoje
     const empresa = this.empresaDoCc(cc);
     const anoIni = Math.min(ay - 1, ...vendas.map((v) => Number(v.mes.slice(0, 4))).filter((a) => a > 1990));
-    const grupos = {}; ((R && R.grupos()) || []).forEach((g) => { if (g && g.id) grupos[g.id] = String(g.name || g.nome || "").toUpperCase(); });
+    const grupos = {}; ((R && R.grupos()) || []).forEach((g) => { if (g && g.id) grupos[g.id] = C.grupoOrion(g.name || g.nome || ""); });
     const real = [];
     if (empresa) for (let a = anoIni; a <= ay; a++) {
       aviso(`Centro ${cc}: realizado de ${a} (caixa e bancos)…`);
       const res = await R.buscar(a, a === ay ? am : 12, [empresa]);
-      res.alocacoes.forEach((x) => { if (x.cc !== String(cc)) return; real.push({ tipo: x.valor > 0 ? "INCOME" : "OUTCOME", categoria: x.nome || x.plano, grupo: grupos[x.gid] || "", mes: `${a}-${String(x.mes).padStart(2, "0")}`, valor: Math.abs(x.valor) }); });
+      res.alocacoes.forEach((x) => { if (x.cc !== String(cc)) return; real.push({ tipo: x.valor > 0 ? "INCOME" : "OUTCOME", categoria: x.nome || x.plano, grupo: grupos[x.gid] || "", gid: x.gid || null, mes: `${a}-${String(x.mes).padStart(2, "0")}`, valor: Math.abs(x.valor) }); });
     }
     // 3. a realizar: contas a receber e a pagar em aberto (vencidas desde o primeiro ano + 15 anos à frente)
     const previsto = [];
@@ -169,7 +169,8 @@ const OrionObrasApp = {
           if (!(v > 0)) return;
           const f = this.fatia(tipo === "income" ? it.receiptsCategories || it.financialCategories : it.paymentsCategories || it.financialCategories, cc, tipo === "income" ? "Receita de Venda de Lotes" : "Obras");
           if (!f) return;
-          previsto.push({ tipo: tipo === "income" ? "INCOME" : "OUTCOME", categoria: f.nome, grupo: this.grupoDfc(f.id, f.nome), mes: due.slice(0, 7), valor: v * f.ratio, vencido: due < hojeIso });
+          const gd = this.grupoDfc(f.id, f.nome);
+          previsto.push({ tipo: tipo === "income" ? "INCOME" : "OUTCOME", categoria: f.nome, grupo: gd.nome, gid: gd.gid, mes: due.slice(0, 7), valor: v * f.ratio, vencido: due < hojeIso });
         });
       }
     }
@@ -322,6 +323,7 @@ const OrionObrasApp = {
   },
 
   render() {
+    if (window.OrionObrasDfcApp && document.getElementById("orion-obras-dfc-root") && document.getElementById("orion-obras-dfc-root").offsetParent) { try { OrionObrasDfcApp.render(); } catch (e) { /* tela da DFC */ } }
     const root = this.root();
     if (!root) return;
     if (!this.C()) { root.innerHTML = `<div style="padding:12px;color:#991b1b">Arquivo de cálculo não carregou. Recarregue a página.</div>`; return; }
