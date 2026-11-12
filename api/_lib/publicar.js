@@ -166,12 +166,27 @@ module.exports = async function handler(req, res) {
   }
 
   const quem = String(sol.solicitante && (sol.solicitante.nome || sol.solicitante.email) || "desenvolvedor");
+  const mensagem = "Junta " + branch + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")";
   // 1) junta na main
-  const merge = await github("POST", "/merges", {
-    base: "main",
-    head: sha,
-    commit_message: "Junta " + branch + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")"
-  });
+  let merge = await github("POST", "/merges", { base: "main", head: sha, commit_message: mensagem });
+  // Conflito com a produção: se depois do pedido a branch só recebeu atualizações com a produção
+  // (commits de "merge", nenhuma alteração nova do desenvolvedor), usa a branch já atualizada.
+  if (merge.status === 409 && cmp.json.status === "ahead") {
+    // Alterações do desenvolvedor (commits que não são "merge") que ainda não estão na produção:
+    // precisam ser exatamente as mesmas no pedido e na ponta da branch.
+    const proprios = async (ref) => {
+      const r = await github("GET", "/compare/main..." + encodeURIComponent(ref));
+      if (r.status !== 200 || !r.json || !Array.isArray(r.json.commits)) return null;
+      return r.json.commits.filter((c) => !(Array.isArray(c.parents) && c.parents.length > 1)).map((c) => c.sha).sort().join(",");
+    };
+    const depois = Array.isArray(cmp.json.commits) ? cmp.json.commits : [];
+    const ponta = depois.length ? depois[depois.length - 1].sha : "";
+    const doPedido = await proprios(sha);
+    const daPonta = /^[0-9a-f]{40}$/.test(ponta) ? await proprios(ponta) : null;
+    if (doPedido && daPonta !== null && doPedido === daPonta) {
+      merge = await github("POST", "/merges", { base: "main", head: ponta, commit_message: mensagem });
+    }
+  }
   if (merge.status === 409) {
     return responder(res, 409, { error: "As alterações de " + branch + " batem de frente com o que já está na produção. Peça ao Claude: \"juntar " + branch + " na main\" e rode o deploy.bat.", conflito: true });
   }
