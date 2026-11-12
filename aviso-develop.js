@@ -208,6 +208,10 @@
   function pintarAlternador() {
     const barra = document.querySelector(".topbar-actions.topbar-support-wrap") || document.querySelector(".topbar-actions");
     let alt = document.getElementById("avdev-alt");
+    if (barra && !ehAdmin() && ambientesDoDev().length) {
+      pintarAlternadorDev(barra);
+      return;
+    }
     if (!barra || !ehAdmin()) {
       if (alt) alt.remove();
       menuAberto = false;
@@ -238,6 +242,74 @@
         if (acao === "resumo") { menuAberto = false; pintarAlternador(); abrirResumo(b.getAttribute("data-amb")); }
       };
     });
+    if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(alt);
+    else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+  }
+
+  // ===== Alternador para os desenvolvedores (não administradores) =====
+  // Quem entra numa bolha fica registrado em Firestore (ambientes_dev/<e-mail>). Assim, na produção,
+  // essa pessoa também vê a bolha "Produção | Teste X" para ir e voltar na mesma tela.
+  const DEV_COLECAO = "ambientes_dev";
+  let meusAmbientes = null; // lista de chaves; null = ainda não consultado
+  let registrouDev = false;
+
+  function emailReal() {
+    const u = window.AppState && window.AppState.currentUser;
+    return String((u && u.email) || "").trim().toLowerCase();
+  }
+
+  function ambientesDoDev() {
+    const chaves = new Set(meusAmbientes || []);
+    const atual = ambienteAtual();
+    if (atual) chaves.add(atual.chave);
+    return AMBIENTES.filter((a) => chaves.has(a.chave));
+  }
+
+  async function sincronizarDev() {
+    const email = emailReal();
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!email || !fx || !db) return;
+    const atual = ambienteAtual();
+    if (atual && !registrouDev && typeof fx.setDoc === "function") {
+      registrouDev = true;
+      try {
+        await fx.setDoc(fx.doc(db, DEV_COLECAO, email), { email, ambientes: { [atual.chave]: Date.now() } }, { merge: true });
+      } catch (e) {
+        console.warn("[Ambientes de teste] Não foi possível registrar o acesso à bolha:", e);
+      }
+    }
+    if (meusAmbientes !== null || typeof fx.getDoc !== "function") return;
+    const cache = ler("integra_meus_ambientes", sessionStorage);
+    if (cache) {
+      try { meusAmbientes = JSON.parse(cache); return; } catch (e) {}
+    }
+    try {
+      const snap = await fx.getDoc(fx.doc(db, DEV_COLECAO, email));
+      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
+      const d = existe ? snap.data() : null;
+      meusAmbientes = Object.keys((d && d.ambientes) || {}).filter((k) => AMBIENTES.some((a) => a.chave === k));
+      gravar("integra_meus_ambientes", JSON.stringify(meusAmbientes), sessionStorage);
+    } catch (e) {
+      meusAmbientes = [];
+    }
+  }
+
+  function pintarAlternadorDev(barra) {
+    let alt = document.getElementById("avdev-alt");
+    if (!alt) {
+      alt = document.createElement("div");
+      alt.id = "avdev-alt";
+      alt.className = "avdev-alt";
+      barra.insertBefore(alt, barra.firstChild);
+    }
+    const atual = ambienteAtual();
+    const naProd = !atual;
+    alt.innerHTML = `<a class="prod${naProd ? " on" : ""}" ${naProd ? "" : `href="${URL_PRODUCAO + esc(caminhoAtual())}"`} title="${naProd ? "Você está na produção" : "Abrir esta tela na produção"}"><i data-lucide="globe" style="width:13px;height:13px;"></i>Produção</a>`
+      + ambientesDoDev().map((a) => {
+        const aqui = atual && atual.chave === a.chave;
+        return `<a class="${aqui ? "on" : ""}" style="${aqui ? "background:" + a.cor + ";cursor:default;" : ""}" ${aqui ? "" : `href="${esc(a.url + caminhoAtual())}"`} title="${aqui ? "Você está no " + esc(a.nome) : "Abrir esta tela no " + esc(a.nome)}"><i data-lucide="flask-conical" style="width:13px;height:13px;"></i>${esc(a.nome)}</a>`;
+      }).join("");
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(alt);
     else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
   }
@@ -765,6 +837,7 @@
       if (ambienteAtual()) await carregarMinha();
       ouvirPendentes();
     } catch (e) {}
+    try { await sincronizarDev(); } catch (e) {}
     pintar();
   }
 
