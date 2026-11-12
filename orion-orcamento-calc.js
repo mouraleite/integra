@@ -544,6 +544,45 @@
     return { kpis, mensal, ranking, grupos, meses: ms };
   }
 
-  return { resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  /**
+   * Analítico de gastos (Órion I e II): só despesas, com orçado e realizado mês a mês.
+   * visao "cc" = uma linha por centro de custo × plano (Analítico I); "plano" = uma linha por plano, com os centros de custo dentro (Analítico II).
+   */
+  function analiticoGastos(desp, alocacoes, meses, visao) {
+    const r = resumoGeral(desp, [], alocacoes, meses);
+    const usa = new Array(12).fill(false);
+    r.meses.forEach((m) => { usa[m - 1] = true; });
+    const fecha = (x) => {
+      x.orcado = x.o.reduce((s, v, i) => s + (usa[i] ? v : 0), 0);
+      x.realizado = x.r.reduce((s, v, i) => s + (usa[i] ? v : 0), 0);
+      x.saldo = x.orcado - x.realizado;
+      x.perc = x.orcado ? (x.realizado - x.orcado) / Math.abs(x.orcado) : null;
+      x.semaforo = semaforo(x.realizado, x.orcado, "DESPESAS");
+      return x;
+    };
+    const itens = [];
+    r.grupos.forEach((g) => g.planos.forEach((p) => itens.push(Object.assign({}, p, { cc_nome: p.cc_nome || g.cc_nome }))));
+    let linhas;
+    if (visao === "plano") {
+      const m = new Map();
+      itens.forEach((x) => {
+        if (!m.has(x.plano)) m.set(x.plano, { chave: "p" + x.plano, plano: x.plano, plano_nome: "", o: new Array(12).fill(0), r: new Array(12).fill(0), filhos: [] });
+        const g = m.get(x.plano);
+        if (!g.plano_nome && x.plano_nome) g.plano_nome = x.plano_nome;
+        x.o.forEach((v, i) => { g.o[i] += v; });
+        x.r.forEach((v, i) => { g.r[i] += v; });
+        g.filhos.push(fecha(Object.assign({}, x, { chave: "p" + x.plano + "|" + x.cc })));
+      });
+      linhas = [...m.values()].map(fecha).sort((a, b) => String(a.plano).localeCompare(String(b.plano), "pt-BR", { numeric: true }));
+      linhas.forEach((g) => g.filhos.sort((a, b) => String(a.cc).localeCompare(String(b.cc), "pt-BR", { numeric: true })));
+    } else {
+      linhas = itens.map((x) => fecha(Object.assign({}, x, { chave: x.cc + "|" + x.plano })));
+    }
+    const total = fecha({ o: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.o[i], 0)), r: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.r[i], 0)) });
+    const comDesvio = linhas.filter((x) => x.semaforo.cor === "amarelo" || x.semaforo.cor === "vermelho").length;
+    return { linhas, total, meses: r.meses, comDesvio };
+  }
+
+  return { analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

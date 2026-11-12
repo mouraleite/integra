@@ -70,15 +70,32 @@ const OrionRealizado = {
         alocacoes.push({
           cc: String(typeof fluxo.ccIdOf === "function" ? fluxo.ccIdOf(x.costCenterId) : x.costCenterId || "").replace(/\D/g, ""),
           plano: String(x.categoryId || "").replace(/\D/g, ""),
-          gid, mes: Number(String(x.month || "").slice(5, 7)), valor, empresa: String(mov.companyId || "")
+          gid, mes: Number(String(x.month || "").slice(5, 7)), valor, empresa: String(mov.companyId || ""), i: n
         });
       });
       if (n && n % 250 === 0) await new Promise((r) => setTimeout(r, 0));
     }
-    const out = { alocacoes, movimentos: (movs || []).length, empresas: emp, ate };
+    const out = { alocacoes, movimentos: (movs || []).length, empresas: emp, ate, lista: movs || [] };
     this._cache[chave] = out;
     return out;
   }
 };
 
+/** Linhas do realizado (pagamentos e recebimentos do caixa) de um resultado de buscar(), para o detalhe das telas.
+ * filtro(alocacao) escolhe as alocações; sinal -1 mostra saídas como positivas. Só lê o que já está em memória. */
+OrionRealizado.detalhe = function (res, filtro, sinal) {
+  const s = sinal == null ? 1 : sinal;
+  const lista = (res && res.lista) || [];
+  return ((res && res.alocacoes) || []).filter(filtro).map((a) => {
+    const m = lista[a.i] || {};
+    return {
+      data: String(m.bankMovementDate || m.paymentDate || m.date || "").slice(0, 10),
+      credor: m.creditorName || (m.creditor && m.creditor.name) || m.customerName || "",
+      documento: [m.documentIdentificationId || m.documentId, m.documentIdentificationNumber || m.documentNumber].filter(Boolean).join(" "),
+      titulo: m.billId || "",
+      parcela: m.installmentNumber || m.installmentId || "",
+      empresa: a.empresa, cc: a.cc, plano: a.plano, mes: a.mes, valor: a.valor * s
+    };
+  }).sort((x, y) => (x.data < y.data ? -1 : x.data > y.data ? 1 : 0));
+};
 window.OrionRealizado = OrionRealizado;

@@ -3935,6 +3935,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-dfc": "DFC gerencial (Órion)",
     "orion-viabilidades": "Viabilidades (Órion)",
     "orion-resumo": "Resumo do orçamento (Órion)",
+    "orion-analitico": "Analítico de gastos (Órion)",
     "orion-departamentos": "Departamentos do orçamento",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
@@ -4027,6 +4028,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-dfc": "bar-chart-3",
     "orion-viabilidades": "building-2",
     "orion-resumo": "layout-dashboard",
+    "orion-analitico": "table-2",
     "orion-departamentos": "network",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
@@ -4278,6 +4280,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionOrcamentosApp !== "undefined") OrionOrcamentosApp.init();
   } else if (tabId === "orion-dfc") {
     if (typeof OrionDfcApp !== "undefined") OrionDfcApp.init();
+  } else if (tabId === "orion-analitico") {
+    if (typeof OrionAnaliticoApp !== "undefined") OrionAnaliticoApp.init();
   } else if (tabId === "orion-resumo") {
     if (typeof OrionResumoApp !== "undefined") OrionResumoApp.init();
   } else if (tabId === "orion-viabilidades") {

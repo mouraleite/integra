@@ -223,3 +223,26 @@ test("resumo geral: KPIs, mensal, ranking e realizado só dos CCs e planos do or
   assert.strictEqual(todos.kpis.despesas.orcado, 1200000);
   assert.strictEqual(todos.kpis.despesas.realizado, 220000);
 });
+
+test("analítico de gastos: visão por CC × plano e por plano", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const desp = [
+    { cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(100000) },
+    { cc: "200", cc_nome: "Obra B", plano: "2001", plano_nome: "Material", m: m(50000) },
+    { cc: "100", cc_nome: "Obra A", plano: "2002", plano_nome: "Serviços", m: m(20000) }
+  ];
+  const aloc = [{ cc: "100", plano: "2001", mes: 1, valor: -1200 }, { cc: "200", plano: "2001", mes: 2, valor: -300 }];
+  const a = C.analiticoGastos(desp, aloc, [1, 2], "cc");
+  assert.strictEqual(a.linhas.length, 3);
+  assert.strictEqual(a.total.orcado, 340000);
+  assert.strictEqual(a.total.realizado, 150000);
+  assert.strictEqual(a.total.saldo, 190000);
+  const p = C.analiticoGastos(desp, aloc, [1, 2], "plano");
+  assert.strictEqual(p.linhas.length, 2);
+  const mat = p.linhas.find((x) => x.plano === "2001");
+  assert.strictEqual(mat.filhos.length, 2);
+  assert.strictEqual(mat.orcado, 300000);
+  assert.strictEqual(mat.realizado, 150000);
+  assert.strictEqual(mat.r[0], 120000);
+});

@@ -516,6 +516,7 @@ const ConfigUsersApp = {
         { id: "orcamentos", label: "Orçamentos e forecasts" },
         { id: "aprovar_orcamentos", label: "Aprovar orçamentos e forecasts" },
         { id: "resumo_orcamento", label: "Resumo do orçamento" },
+        { id: "analitico_gastos", label: "Analítico de gastos" },
         { id: "dfc_gerencial", label: "DFC gerencial" },
         { id: "viabilidades", label: "Viabilidades" }
       ] }]
