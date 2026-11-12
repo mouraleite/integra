@@ -548,16 +548,17 @@
    * Analítico de gastos (Órion I e II): só despesas, com orçado e realizado mês a mês.
    * visao "cc" = uma linha por centro de custo × plano (Analítico I); "plano" = uma linha por plano, com os centros de custo dentro (Analítico II).
    */
-  function analiticoGastos(desp, alocacoes, meses, visao) {
-    const r = resumoGeral(desp, [], alocacoes, meses);
+  function analiticoGastos(desp, alocacoes, meses, visao, tipo) {
+    const ehRec = String(tipo || "").toUpperCase() === "RECEITAS";
+    const r = ehRec ? resumoGeral([], desp, alocacoes, meses) : resumoGeral(desp, [], alocacoes, meses);
     const usa = new Array(12).fill(false);
     r.meses.forEach((m) => { usa[m - 1] = true; });
     const fecha = (x) => {
       x.orcado = x.o.reduce((s, v, i) => s + (usa[i] ? v : 0), 0);
       x.realizado = x.r.reduce((s, v, i) => s + (usa[i] ? v : 0), 0);
-      x.saldo = x.orcado - x.realizado;
+      x.saldo = ehRec ? x.realizado - x.orcado : x.orcado - x.realizado;
       x.perc = x.orcado ? (x.realizado - x.orcado) / Math.abs(x.orcado) : null;
-      x.semaforo = semaforo(x.realizado, x.orcado, "DESPESAS");
+      x.semaforo = semaforo(x.realizado, x.orcado, ehRec ? "RECEITAS" : "DESPESAS");
       return x;
     };
     const itens = [];
@@ -581,6 +582,17 @@
     const total = fecha({ o: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.o[i], 0)), r: new Array(12).fill(0).map((_, i) => linhas.reduce((s, x) => s + x.r[i], 0)) });
     const comDesvio = linhas.filter((x) => x.semaforo.cor === "amarelo" || x.semaforo.cor === "vermelho").length;
     return { linhas, total, meses: r.meses, comDesvio };
+  }
+
+  /** Recortes por nome do plano, iguais aos do Órion (Investimentos e Receita de Lotes). */
+  const RECORTES = {
+    investimentos: { rotulo: "Investimentos e participações", tipo: "DESPESAS", re: /investimento|participaç|participac|aporte|divid/i },
+    lotes: { rotulo: "Receita de lotes", tipo: "RECEITAS", re: /loteamento|venda de lote|receita de venda de lote/i }
+  };
+  function filtrarRecorte(linhas, recorte) {
+    const r = RECORTES[recorte];
+    if (!r) return linhas || [];
+    return (linhas || []).filter((l) => r.re.test(String(l.plano_nome || "")));
   }
 
   /* ---------- escolha dos documentos vigentes (orçamento ou uma versão do forecast) ---------- */
@@ -671,6 +683,6 @@
     return s;
   }
 
-  return { DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

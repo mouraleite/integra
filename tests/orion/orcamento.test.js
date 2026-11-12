@@ -279,3 +279,16 @@ test("novo forecast: nome pela regra do fechamento e inclusão no documento do d
   assert.strictEqual(base.itens[0].m[0], 1);
   assert.deepStrictEqual([...C.empreendimentosDoDoc(base)].sort(), ["100", "200"]);
 });
+
+test("analítico: receitas e recortes de investimentos e receita de lotes", () => {
+  const C = require("../../orion-orcamento-calc.js");
+  const m = (v) => new Array(12).fill(v);
+  const rec = [{ cc: "100", plano: "1001", plano_nome: "Receita de venda de lote", m: m(100000) }, { cc: "100", plano: "1002", plano_nome: "Aluguel", m: m(5000) }];
+  const lotes = C.filtrarRecorte(rec, "lotes");
+  assert.strictEqual(lotes.length, 1);
+  const a = C.analiticoGastos(lotes, [{ cc: "100", plano: "1001", mes: 1, valor: 1500 }, { cc: "100", plano: "1002", mes: 1, valor: 999 }], [1], "cc", "RECEITAS");
+  assert.strictEqual(a.total.realizado, 150000);
+  assert.strictEqual(a.total.saldo, 50000);
+  assert.strictEqual(a.linhas[0].semaforo.titulo, "Imaterial");
+  assert.strictEqual(C.filtrarRecorte([{ plano_nome: "Aporte de capital" }, { plano_nome: "Material" }], "investimentos").length, 1);
+});
