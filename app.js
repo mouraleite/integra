@@ -14937,7 +14937,7 @@ function syncJudicialOccurrenceFormLock(saleObj) {
   const lockIds = [
     "jud-fase", "jud-note-text", "jud-prazo-date", "jud-pin-checkbox",
     "jud-reneg-sinal-type", "jud-reneg-sinal-value", "jud-reneg-installments", "jud-reneg-first-date",
-    "jud-agreement-file"
+    "jud-agreement-file", "jud-agreement-date", "jud-agreement-tag"
   ];
 
   if (banner) banner.style.display = canInsert ? "none" : "flex";
@@ -52446,6 +52446,10 @@ window.saveJudicialOccurrence = async function() {
   const isPinned = pinEl ? pinEl.checked : false;
   const agreementFileInput = document.getElementById("jud-agreement-file");
   const agreementFile = agreementFileInput && agreementFileInput.files ? agreementFileInput.files[0] : null;
+  const agreementDateInput = document.getElementById("jud-agreement-date");
+  const agreementTagInput = document.getElementById("jud-agreement-tag");
+  const agreementDate = agreementDateInput ? agreementDateInput.value.trim() : "";
+  const agreementTag = agreementTagInput ? agreementTagInput.value.trim() : "";
 
   if (!fase) {
     alert("Selecione o Andamento/Fase Processual.");
@@ -52458,6 +52462,14 @@ window.saveJudicialOccurrence = async function() {
   
   if (isAgreement && !agreementFile) {
     alert("Anexe o acordo judicial para registrá-lo.");
+    return;
+  }
+  if (isAgreement && !agreementDate) {
+    alert("Informe a data em que o acordo foi realizado.");
+    return;
+  }
+  if (isAgreement && !agreementTag) {
+    alert("Informe a tag do anexo no Sienge.");
     return;
   }
   if (isAgreement && agreementFile
@@ -52490,7 +52502,8 @@ window.saveJudicialOccurrence = async function() {
       const unitContext = getJudicialAgreementUnitContext();
       const uploaded = await window.anexosUploadUnitAttachment({
         file: agreementFile,
-        tagLabel: "ACORDO JUDICIAL",
+        tagLabel: agreementTag,
+        dateIso: agreementDate,
         context: "acordo-realizado",
         sale: unitContext.sale,
         costCenterId: unitContext.costCenterId,
@@ -52501,7 +52514,8 @@ window.saveJudicialOccurrence = async function() {
         fileName: uploaded.fileName,
         description: uploaded.description,
         unitId: uploaded.unitId,
-        tag: uploaded.tag
+        tag: uploaded.tag,
+        dateIso: uploaded.dateIso
       };
     } catch (uploadError) {
       if (saveButton) {
@@ -52568,6 +52582,8 @@ window.saveJudicialOccurrence = async function() {
     window._judSemAlteracao = null;
     if(faseEl) faseEl.value = "";
     if (agreementFileInput) agreementFileInput.value = "";
+    if (agreementDateInput) agreementDateInput.value = "";
+    if (agreementTagInput) agreementTagInput.value = "ACORDO JUDICIAL";
     if(noteEl) {
       noteEl.value = "";
       noteEl.placeholder = "Descreva os detalhes do andamento ou contato com o cliente...";
@@ -52854,10 +52870,16 @@ window.renderJudicialTimeline = function() {
     if (isCancelled) {
       mainText = `<del style="color: var(--color-text-muted);">${mainText}</del>`;
     }
+    const agreementAttachmentDate = occ.agreementAttachment && occ.agreementAttachment.dateIso
+      ? String(occ.agreementAttachment.dateIso).split("-").reverse().join("/")
+      : "";
+    const agreementAttachmentTag = occ.agreementAttachment && occ.agreementAttachment.tag
+      ? occ.agreementAttachment.tag
+      : "ACORDO JUDICIAL";
     const agreementAttachmentHtml = occ.agreementAttachment
       ? `<div style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:6px;padding:5px 8px;font-size:0.72rem;color:#166534;">
           <i data-lucide="paperclip" style="width:13px;height:13px;flex-shrink:0;"></i>
-          Acordo anexado à unidade do Sienge (tag: ${window.occurrenceAnexoEsc ? window.occurrenceAnexoEsc(occ.agreementAttachment.tag || "ACORDO JUDICIAL") : "ACORDO JUDICIAL"}):
+          Acordo${agreementAttachmentDate ? " de " + agreementAttachmentDate : ""} anexado à unidade do Sienge (tag: ${window.occurrenceAnexoEsc ? window.occurrenceAnexoEsc(agreementAttachmentTag) : "ACORDO JUDICIAL"}):
           ${window.occurrenceAnexoEsc ? window.occurrenceAnexoEsc(occ.agreementAttachment.name || occ.agreementAttachment.fileName || "Arquivo") : "Arquivo"}
         </div>`
       : "";
