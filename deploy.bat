@@ -17,12 +17,12 @@ echo.
 
 REM --- 1) INCREMENTA VERSAO NO INDEX.HTML ---
 echo [1/5] Incrementando versao no index.html...
-for /f "tokens=*" %%v in ('powershell -NoProfile -ExecutionPolicy Bypass -File "_version_bump.ps1"') do set NEW_VER=%%v
+for /f "tokens=*" %%v in ('powershell -NoProfile -ExecutionPolicy Bypass -File "ferramentas\_version_bump.ps1"') do set NEW_VER=%%v
 
 if "!NEW_VER!"=="" (
     echo.
     echo [ERRO] Nao foi possivel ler a versao do index.html.
-    echo        Verifique se _version_bump.ps1 esta na mesma pasta.
+    echo        Verifique se ferramentas\_version_bump.ps1 existe.
     pause
     exit /b 1
 )

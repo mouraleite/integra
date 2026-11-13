@@ -1,6 +1,6 @@
 const https = require('https');
 const db = require('./db');
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.env') });
 
 const SIENGE_CONFIG = {
   user: process.env.SIENGE_API_USER || "",

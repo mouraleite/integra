@@ -642,7 +642,7 @@ const EscalaHomeOffice = {
     pop.id = "eho-pop";
     pop.innerHTML = `
       <div class="eho-pop-card" role="dialog" aria-modal="true" aria-labelledby="eho-pop-titulo">
-        <img src="Banner/home-office.png" alt="">
+        <img src="assets/marca/home-office.png" alt="">
         <div class="eho-pop-corpo">
           <p id="eho-pop-titulo">Amanhã, ${this.esc(this.diaBr(dia.data))} ${this.esc(this.dataBr(dia.data))}, você fica em home office.</p>
           <p>O almoço é das <strong>${this.esc(this.ALMOCO_HO)}</strong>.</p>

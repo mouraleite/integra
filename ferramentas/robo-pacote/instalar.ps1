@@ -14,7 +14,7 @@ $arquivos = @(
 )
 Write-Host 'Baixando o robô do Sienge…'
 foreach ($nome in $arquivos) {
-  $url = $origem + '/robo-pacote/' + $nome
+  $url = $origem + '/ferramentas/robo-pacote/' + $nome
   Invoke-WebRequest -Uri $url -OutFile (Join-Path $dest $nome) -UseBasicParsing
 }
 

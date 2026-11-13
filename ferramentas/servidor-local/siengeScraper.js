@@ -4,7 +4,7 @@ const path = require('path');
 
 // Diretório onde o Puppeteer salvará os cookies e sessão do Edge/Chrome
 // Assim o operador faz o login com a Microsoft uma vez e fica salvo.
-const USER_DATA_DIR = path.join(__dirname, 'sienge-browser-data');
+const USER_DATA_DIR = path.join(__dirname, '..', '..', 'sienge-browser-data');
 
 let browserInstance = null;
 

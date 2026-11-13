@@ -3389,7 +3389,7 @@ const GerarPagamentoApp = {
       "@echo off",
       "chcp 65001 >nul",
       "echo Instalando o robô do Sienge neste computador...",
-      "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-WebRequest -Uri '" + origem + "/robo-pacote/instalar.ps1' -OutFile $env:TEMP\\moura-robo-instalar.ps1 -UseBasicParsing; $env:MOURA_ROBO_ORIGEM='" + origem + "'; & $env:TEMP\\moura-robo-instalar.ps1\"",
+      "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Invoke-WebRequest -Uri '" + origem + "/ferramentas/robo-pacote/instalar.ps1' -OutFile $env:TEMP\\moura-robo-instalar.ps1 -UseBasicParsing; $env:MOURA_ROBO_ORIGEM='" + origem + "'; & $env:TEMP\\moura-robo-instalar.ps1\"",
       "echo.",
       "echo Quando terminar, volte ao Integra e clique em Ligar robô.",
       "pause"

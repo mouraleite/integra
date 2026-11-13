@@ -2,12 +2,22 @@
   "functions": {
     "api/gateway.js": {
       "maxDuration": 60,
-      "includeFiles": "estoque-comercial.js"
+      "includeFiles": "js/comercial/estoque-comercial.js"
     }
   },
+  "redirects": [
+    { "source": "/lib/:path*", "destination": "/", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/gateway?path=:path*" },
-    { "source": "/proxy-storage/:path*", "destination": "https://firebasestorage.googleapis.com/v0/b/crm-gestao-mldu.firebasestorage.app/o/:path*" }
+    { "source": "/proxy-storage/:path*", "destination": "https://firebasestorage.googleapis.com/v0/b/crm-gestao-mldu.firebasestorage.app/o/:path*" },
+    { "source": "/Banner/:path*", "destination": "/assets/marca/:path*" },
+    { "source": "/i.ntegr.a/:path*", "destination": "/assets/integra/:path*" },
+    { "source": "/selo/:path*", "destination": "/assets/selo/:path*" },
+    { "source": "/modelos/:path*", "destination": "/assets/modelos/:path*" },
+    { "source": "/assinaturas-rydoo/:path*", "destination": "/assets/assinaturas-rydoo/:path*" },
+    { "source": "/robo-pacote/:path*", "destination": "/ferramentas/robo-pacote/:path*" },
+    { "source": "/engenharia-caucao.js", "destination": "/js/engenharia/engenharia-caucao.js" }
   ],
   "crons": [
     {

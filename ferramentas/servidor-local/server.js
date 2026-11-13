@@ -16,8 +16,9 @@ const {
   takeSiengeSlot,
   sendSiengeQueueBusy,
   writeSiengePreflight
-} = require('./lib/api-request-queue');
-require('dotenv').config();
+} = require('../../lib/api-request-queue');
+const RAIZ = path.resolve(__dirname, '..', '..');
+require('dotenv').config({ path: path.join(RAIZ, '.env') });
 
 // Se o DB falhar ao inicializar, podemos ignorar erro para não travar o proxy original
 let db;
@@ -31,7 +32,7 @@ function smtpEnabled() {
   if (String(process.env.SMTP_ENABLED || '').toLowerCase() === 'false') return false;
   return !!(process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_PASS !== 'COLOQUE_SUA_SENHA_AQUI');
 }
-const graphMail = require('./lib/graph-mail');
+const graphMail = require('../../lib/graph-mail');
 function mailEnabled() {
   return graphMail.graphMailConfigured() || smtpEnabled();
 }
@@ -464,7 +465,7 @@ const server = http.createServer(async (req, res) => {
         try {
           // Salvar o arquivo físico para a funcionalidade NetworkLink do Google Earth
           if (kmz_base64) {
-            const uploadDir = path.join(__dirname, 'uploads', 'kmz');
+            const uploadDir = path.join(RAIZ, 'uploads', 'kmz');
             if (!fs.existsSync(uploadDir)) {
               fs.mkdirSync(uploadDir, { recursive: true });
             }
@@ -503,7 +504,7 @@ const server = http.createServer(async (req, res) => {
         }
         
         try {
-          const uploadDir = path.join(__dirname, 'uploads', 'maps');
+          const uploadDir = path.join(RAIZ, 'uploads', 'maps');
           if (!fs.existsSync(uploadDir)) {
             fs.mkdirSync(uploadDir, { recursive: true });
           }
@@ -518,7 +519,7 @@ const server = http.createServer(async (req, res) => {
       
       if (pathRoute.startsWith('/api/map-check/') && req.method === 'GET') {
         const empId = pathRoute.split('/').pop();
-        const mapPath = path.join(__dirname, 'uploads', 'maps', `${empId}.pdf`);
+        const mapPath = path.join(RAIZ, 'uploads', 'maps', `${empId}.pdf`);
         if (fs.existsSync(mapPath)) {
           return sendJson(res, 200, { exists: true, url: `/uploads/maps/${empId}.pdf` });
         } else {
@@ -528,7 +529,7 @@ const server = http.createServer(async (req, res) => {
 
       if (pathRoute === '/api/map-list' && req.method === 'GET') {
         try {
-          const uploadDir = path.join(__dirname, 'uploads', 'maps');
+          const uploadDir = path.join(RAIZ, 'uploads', 'maps');
           if (!fs.existsSync(uploadDir)) return sendJson(res, 200, []);
           const files = fs.readdirSync(uploadDir);
           const maps = files.filter(f => f.endsWith('.pdf')).map(f => {
@@ -543,7 +544,7 @@ const server = http.createServer(async (req, res) => {
       if (pathRoute.startsWith('/api/map-delete/') && req.method === 'DELETE') {
         const empId = pathRoute.split('/').pop();
         try {
-          const filePath = path.join(__dirname, 'uploads', 'maps', `${empId}.pdf`);
+          const filePath = path.join(RAIZ, 'uploads', 'maps', `${empId}.pdf`);
           if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
           }
@@ -558,7 +559,7 @@ const server = http.createServer(async (req, res) => {
         try {
           db.prepare(`DELETE FROM kmz_coordinates WHERE empreendimento_id = ?`).run(empId);
           // Opcionalmente apagar o arquivo fisico se quiser
-          const kmzPath = path.join(__dirname, 'uploads', 'kmz', `${empId}.kmz`);
+          const kmzPath = path.join(RAIZ, 'uploads', 'kmz', `${empId}.kmz`);
           if (fs.existsSync(kmzPath)) fs.unlinkSync(kmzPath);
           return sendJson(res, 200, { success: true });
         } catch(e) {
@@ -576,7 +577,7 @@ const server = http.createServer(async (req, res) => {
         const empId = pathRoute.split('/').pop();
         try {
           db.prepare(`DELETE FROM kmz_coordinates WHERE empreendimento_id = ?`).run(empId);
-          const kmzPath = path.join(__dirname, 'uploads', 'kmz', `${empId}.kmz`);
+          const kmzPath = path.join(RAIZ, 'uploads', 'kmz', `${empId}.kmz`);
           if (fs.existsSync(kmzPath)) {
             fs.unlinkSync(kmzPath);
           }
@@ -587,7 +588,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (pathRoute === '/api/kmz-list' && req.method === 'GET') {
-        const uploadDir = path.join(__dirname, 'uploads', 'kmz');
+        const uploadDir = path.join(RAIZ, 'uploads', 'kmz');
         let kmzList = [];
         if (fs.existsSync(uploadDir)) {
           const files = fs.readdirSync(uploadDir);
@@ -912,22 +913,22 @@ Sua resposta deve conter APENAS o nome da tag, sem pontuação, aspas ou texto e
       // Rota para baixar/visualizar PDF do Sienge com nome customizado
       // --- PARTICIPAÇÕES / PRESTAÇÃO ELLENCO ---
       if (pathRoute === '/api/participacoes/companies' && req.method === 'GET') {
-        const part = require('./api/_lib/participacoes-fs');
-        const data = part.listCompanyFolders(__dirname);
+        const part = require('../../api/_lib/participacoes-fs');
+        const data = part.listCompanyFolders(RAIZ);
         return sendJson(res, 200, data);
       }
       if (pathRoute === '/api/participacoes/files' && req.method === 'GET') {
-        const part = require('./api/_lib/participacoes-fs');
+        const part = require('../../api/_lib/participacoes-fs');
         const u = new URL(req.url, 'http://localhost');
         const companyId = u.searchParams.get('companyId');
         if (!companyId) return sendJson(res, 400, { error: 'companyId obrigatório' });
-        return sendJson(res, 200, part.listPdfFiles(__dirname, companyId));
+        return sendJson(res, 200, part.listPdfFiles(RAIZ, companyId));
       }
       if (pathRoute === '/api/participacoes/file' && req.method === 'GET') {
-        const part = require('./api/_lib/participacoes-fs');
+        const part = require('../../api/_lib/participacoes-fs');
         const u = new URL(req.url, 'http://localhost');
         try {
-          const { full } = part.filePath(__dirname, u.searchParams.get('companyId'), u.searchParams.get('file'));
+          const { full } = part.filePath(RAIZ, u.searchParams.get('companyId'), u.searchParams.get('file'));
           const stat = fs.statSync(full);
           res.writeHead(200, {
             'Content-Type': 'application/pdf',
@@ -942,14 +943,14 @@ Sua resposta deve conter APENAS o nome da tag, sem pontuação, aspas ou texto e
         return;
       }
       if (pathRoute === '/api/participacoes/upload' && req.method === 'POST') {
-        const part = require('./api/_lib/participacoes-fs');
+        const part = require('../../api/_lib/participacoes-fs');
         try {
           const mp = await part.parseMultipart(req);
           const companyId = (mp.fields && mp.fields.companyId) || '';
           const companyLabel = (mp.fields && (mp.fields.companyLabel || mp.fields.companyName)) || '';
           const list = (mp.files && mp.files.length) ? mp.files : (mp.file ? [mp.file] : []);
           if (!list.length) return sendJson(res, 400, { error: 'Arquivo PDF obrigatório' });
-          const saved = list.map((f) => part.saveUpload(__dirname, companyId, f.filename, f.buffer, companyLabel));
+          const saved = list.map((f) => part.saveUpload(RAIZ, companyId, f.filename, f.buffer, companyLabel));
           return sendJson(res, 200, { saved, name: saved[0] && saved[0].name, company: saved[0] && saved[0].company });
         } catch (e) {
           return sendJson(res, 400, { error: e.message });
@@ -957,22 +958,22 @@ Sua resposta deve conter APENAS o nome da tag, sem pontuação, aspas ou texto e
       }
 
       if (pathRoute === '/api/bcb-sgs' && req.method === 'GET') {
-        const handler = require('./api/_lib/bcb-sgs');
+        const handler = require('../../api/_lib/bcb-sgs');
         return handler(req, res);
       }
 
       if (pathRoute === '/api/controle-comissao' && req.method === 'GET') {
-        const handler = require('./api/_lib/controle-comissao');
+        const handler = require('../../api/_lib/controle-comissao');
         return handler(req, res);
       }
 
       if (pathRoute.startsWith('/api/cvcrm-proxy')) {
-        const handler = require('./api/_lib/cvcrm-proxy');
+        const handler = require('../../api/_lib/cvcrm-proxy');
         return handler(req, res);
       }
 
       if (pathRoute.startsWith('/api/scod-proxy')) {
-        const handler = require('./api/_lib/scod-proxy');
+        const handler = require('../../api/_lib/scod-proxy');
         return handler(req, res);
       }
 
@@ -1026,12 +1027,12 @@ Sua resposta deve conter APENAS o nome da tag, sem pontuação, aspas ou texto e
 
   // 2. SERVIDOR DE ARQUIVOS ESTÁTICOS
   const pathname = req.url.split('?')[0].split('#')[0];
-  let filePath = path.join(__dirname, pathname === '/' ? 'index.html' : pathname);
+  let filePath = path.join(RAIZ, pathname === '/' ? 'index.html' : pathname);
   const ext = path.extname(filePath);
   let contentType = MIME_TYPES[ext] || 'text/plain';
 
   // Impedir navegação para fora do diretório do projeto
-  if (!filePath.startsWith(__dirname)) {
+  if (!filePath.startsWith(RAIZ)) {
     res.writeHead(403);
     res.end('Acesso proibido');
     return;

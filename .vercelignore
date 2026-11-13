@@ -11,3 +11,13 @@ antigravity.db
 .env
 .env*
 .vercel
+
+# Só para uso local / do repositório: não vai para o site
+docs
+*.md
+*.bat
+.claude
+.github
+ferramentas/servidor-local
+ferramentas/scripts
+ferramentas/_version_bump.ps1

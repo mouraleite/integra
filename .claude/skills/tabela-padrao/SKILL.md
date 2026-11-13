@@ -5,7 +5,7 @@ description: Padrão visual obrigatório para qualquer tabela nova (ou refeita) 
 
 # Tabela padrão do CRM (layout da tela Centros de Custo)
 
-Toda tabela nova do CRM segue o layout da tabela de **Centros de Custo** (`centros-custo.js`). O CSS já existe e é global em `style.css` (classes `.cc-scroll` e `.cc-table`, perto da linha 10797). **Reutilize essas classes — não recrie cores nem estilos próprios.**
+Toda tabela nova do CRM segue o layout da tabela de **Centros de Custo** (`js/financeiro/centros-custo.js`). O CSS já existe e é global em `css/style.css` (classes `.cc-scroll` e `.cc-table`, perto da linha 10797). **Reutilize essas classes — não recrie cores nem estilos próprios.**
 
 ## Estrutura
 

@@ -1408,7 +1408,7 @@ const RydooApp = {
   async logoJpeg() {
     if (this._logoJpeg) return this._logoJpeg;
     const img = new Image();
-    img.src = "Banner/logo moura leite loteamentos.png";
+    img.src = "assets/marca/logo moura leite loteamentos.png";
     await img.decode();
     const maxW = 400;
     const scale = Math.min(1, maxW / img.width);
