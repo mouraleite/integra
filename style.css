@@ -10758,7 +10758,7 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .alog-tab { overflow: auto; max-height: 520px; }
 .alog-tab-alta { max-height: 420px; }
 .alog-tab table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-.alog-tab th { position: sticky; top: 0; background: #f8fafc; color: var(--color-primary, #105436); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; text-align: left; padding: 8px 10px; vertical-align: bottom; line-height: 1.25; }
+.alog-tab th { position: sticky; top: 0; z-index: 3; background: #f8fafc; color: var(--color-primary, #105436); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em; text-align: left; padding: 8px 10px; vertical-align: bottom; line-height: 1.25; }
 .alog-tab th.num { text-align: right; }
 .alog-tab td { padding: 8px 10px; border-top: 1px solid #eef2f6; color: #334155; vertical-align: middle; }
 .alog-tab .num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -10782,6 +10782,13 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .alog-ocio.is-alto .alog-ocio-tag { background: #fef2f2; color: #b91c1c; }
 .alog-ocio.is-alto .alog-ocio-bar i { background: #dc2626; }
 .alog-tab tr.is-causa td:first-child { box-shadow: inset 3px 0 0 #f37021; }
+.alog-quem small { display: block; font-size: 0.72rem; color: #475569 !important; font-weight: 600; }
+.alog-quem small.alog-sem { color: #94a3b8 !important; font-weight: 500; font-style: italic; }
+.alog-perfil { display: inline-block; margin-top: 2px; font-size: 0.64rem; font-weight: 700; color: #105436; background: #e7f6ee; border-radius: 999px; padding: 0 7px; }
+.alog-tab tr.alog-grupo td { background: #e7f6ee; color: #105436; border-top: 2px solid #c6e9d5; padding: 7px 10px; }
+.alog-tab tr.alog-grupo td span { font-size: 0.76rem; color: #334155; margin-left: 6px; }
+.alog-grupo strong.is-ok { color: #105436; }
+.alog-grupo strong.is-alto { color: #b91c1c; }
 .alog-forte { font-weight: 800; color: #c2410c !important; }
 .alog-cinza { color: #94a3b8; }
 .alog-chip { display: inline-flex; align-items: baseline; gap: 4px; background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; border-radius: 999px; padding: 1px 9px; margin: 1px 2px; font-size: 0.76rem; font-weight: 700; white-space: nowrap; }
