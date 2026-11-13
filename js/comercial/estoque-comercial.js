@@ -625,6 +625,7 @@ const EstoqueComercialApp = {
     this.state.batimentoDone = !!data.batimentoDone;
     if (!this.state.complete && this.inventarioCarregado()) this.state.complete = true;
     this.sealInferredFinance();
+    this.retirarTitulosTeste();
   },
 
   /** Estoque já gravado e batimento do dia fechado. O campo complete fica false porque a carga grava o meta a cada empreendimento, antes de marcar o fim. */
@@ -2641,6 +2642,9 @@ const EstoqueComercialApp = {
 
   applyContractInfo(u, info) {
     if (!info) return u;
+    if (this.tituloTesteExcluido(info.receivableBillId)) {
+      return this.unidadeSemVendaNoSienge(u, String(info.receivableBillId).replace(/^B-/i, "").split("-")[0], new Date().toISOString());
+    }
     const bal = info.outstandingBalance;
     const value = info.contractValue != null ? Number(info.contractValue) : (u.contractValue != null ? Number(u.contractValue) : null);
     const sit = String(info.situation || u.situation || "").toLowerCase();
@@ -3746,6 +3750,16 @@ const EstoqueComercialApp = {
     };
   },
 
+  /** Título de teste apagado no Sienge. A lista fica em NEX_TESTE_TITULOS; 18357 é o fallback. */
+  tituloTesteExcluido(v) {
+    const id = String(v || "").replace(/^B-/i, "").split("-")[0];
+    if (!id) return false;
+    const lista = (typeof window !== "undefined" && Array.isArray(window.NEX_TESTE_TITULOS) && window.NEX_TESTE_TITULOS.length)
+      ? window.NEX_TESTE_TITULOS
+      : ["18357"];
+    return lista.map(String).indexOf(id) >= 0;
+  },
+
   /** Venda gravada no Integra que não existe no Sienge (título apagado ou de outra unidade): tira saldo e vínculo. */
   unidadeSemVendaNoSienge(u, titulo, agora) {
     return {
@@ -3770,11 +3784,115 @@ const EstoqueComercialApp = {
     };
   },
 
+  /** Tira da posição e da conferência gravada o saldo de título de teste já apagado no Sienge. */
+  retirarTitulosTeste() {
+    const agora = new Date().toISOString();
+    const ccs = new Set();
+    let n = 0;
+    this.state.units = (this.state.units || []).map((u) => {
+      if (!u || !this.tituloTesteExcluido(u.receivableBillId)) return u;
+      n += 1;
+      if (u.enterpriseId) ccs.add(String(u.enterpriseId));
+      const titulo = String(u.receivableBillId).replace(/^B-/i, "").split("-")[0];
+      return this.unidadeSemVendaNoSienge(u, titulo, agora);
+    });
+    const confMudou = this.retirarTituloTesteDaConferencia();
+    if (!n && !confMudou) return 0;
+    this.saveCache();
+    ccs.forEach((id) => this._ccsTituloTeste.add(id));
+    this._confTituloTesteSuja = this._confTituloTesteSuja || confMudou;
+    this.persistirTitulosTeste();
+    return n;
+  },
+
+  _ccsTituloTeste: new Set(),
+  _confTituloTesteSuja: false,
+  _persistTituloTeste: null,
+
+  ajustarConferenciaSemTituloTeste(c) {
+    if (!c || !c.integra) return false;
+    const campoLista = Array.isArray(c.unidadesSemTitulo) ? "unidadesSemTitulo" : (Array.isArray(c.semTitulo) ? "semTitulo" : "");
+    if (!campoLista) return false;
+    const lista = c[campoLista];
+    const fora = lista.filter((item) => this.tituloTesteExcluido(item && item.titulo));
+    if (!fora.length) return false;
+    let saldo = 0;
+    let atraso = 0;
+    fora.forEach((item) => {
+      saldo += Number(item.saldo) || 0;
+      atraso += Number(item.atraso) || 0;
+    });
+    c.integra.aReceber = Math.max(0, (Number(c.integra.aReceber) || 0) - saldo);
+    if (atraso > 0.009 && c.integra.atraso != null) c.integra.atraso = Math.max(0, (Number(c.integra.atraso) || 0) - atraso);
+    if (c.integra.semSaldo != null) c.integra.semSaldo = (Number(c.integra.semSaldo) || 0) + fora.length;
+    c.titulosInexistentes = (c.titulosInexistentes || []).concat(fora.map((item) => ({
+      unidade: item.unidade || "",
+      titulo: String(item.titulo).replace(/^B-/i, "").split("-")[0],
+      cliente: item.cliente || "",
+      saldo: Number(item.saldo) || 0
+    })));
+    const fica = lista.filter((item) => !this.tituloTesteExcluido(item && item.titulo));
+    if (campoLista === "unidadesSemTitulo") {
+      c.unidadesSemTitulo = fica;
+      c.semTitulo = fica.length;
+    } else {
+      c.semTitulo = fica;
+    }
+    return true;
+  },
+
+  retirarTituloTesteDaConferencia() {
+    let mudou = false;
+    const g = this.loadConferenciaGeral();
+    if (g && Array.isArray(g.ccs)) {
+      g.ccs.forEach((c) => {
+        if (this.ajustarConferenciaSemTituloTeste(c)) mudou = true;
+      });
+      if (mudou) {
+        g.at = new Date().toISOString();
+        this.state.conferenciaGeral = g;
+        try { localStorage.setItem(this.CONF_GERAL_KEY, JSON.stringify(g)); } catch (e) {}
+      }
+    }
+    if (this.ajustarConferenciaSemTituloTeste(this.state.conferencia)) mudou = true;
+    Object.keys(this.state.conferencias || {}).forEach((id) => {
+      if (this.ajustarConferenciaSemTituloTeste(this.state.conferencias[id])) mudou = true;
+    });
+    return mudou;
+  },
+
+  persistirTitulosTeste() {
+    if (this._persistTituloTeste) return this._persistTituloTeste;
+    this._persistTituloTeste = (async () => {
+      try {
+        if (!this.fbReady() && typeof this.waitFirebase === "function") await this.waitFirebase(8000);
+        if (!this.fbReady()) return;
+        const ccs = [...this._ccsTituloTeste];
+        this._ccsTituloTeste = new Set();
+        for (const cc of ccs) {
+          try { await this.saveFirebaseCc(cc); } catch (e) { console.warn("[Estoque] título de teste", cc, e); }
+        }
+        if (this._confTituloTesteSuja && this.state.conferenciaGeral) {
+          const { doc, setDoc } = window.firebaseCollections;
+          await setDoc(doc(window.firebaseDb, this.FB_COL, "_conferencia_geral"), this.fbClean(this.state.conferenciaGeral));
+          this._confTituloTesteSuja = false;
+        }
+      } catch (e) {
+        console.warn("[Estoque] não gravou a retirada do título de teste", e);
+      } finally {
+        this._persistTituloTeste = null;
+        if (this._ccsTituloTeste.size || this._confTituloTesteSuja) this.persistirTitulosTeste();
+      }
+    })();
+    return this._persistTituloTeste;
+  },
+
   /**
    * Título que sumiu do extrato aberto. O extrato do centro não pede parcelas revogadas,
    * então um distrato deixa de vir e o saldo antigo ficava gravado na unidade.
    */
   async lerTituloForaDoExtrato(billId) {
+    if (this.tituloTesteExcluido(billId)) return { tipo: "ausente" };
     let bill = null;
     try {
       bill = await window.siengeFetchWithRetry("/accounts-receivable/receivable-bills/" + encodeURIComponent(billId), 1);
@@ -3877,6 +3995,13 @@ const EstoqueComercialApp = {
     this.state.units = this.state.units.map((u) => {
       if (String(u.enterpriseId) !== String(ccId)) return u;
       const rb = String(u.receivableBillId || "").replace(/^B-/, "").split("-")[0];
+      if (this.tituloTesteExcluido(rb)) {
+        const outro = daUnidade(vivos, u, "").some((b) => b.aberto > 0.009 && !this.tituloTesteExcluido(b.id));
+        if (!outro) {
+          titulosInexistentes.push({ unidade: u.name, titulo: rb, cliente: u.customerName || "", saldo: Number(this.unitBalance(u)) || 0 });
+          return this.unidadeSemVendaNoSienge(u, rb, agora);
+        }
+      }
       const ligada = daUnidade(vivos, u, rb).some((b) => b.aberto > 0.009);
       const soPeloTitulo = !!u.carteiraCt && !this.isFinanceUnit({ ...u, carteiraCt: false });
       if (!ligada && soPeloTitulo) {
