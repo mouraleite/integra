@@ -1774,6 +1774,13 @@ function renderAnexosModule(opts) {
 
 // --- LOGICA DE NEGOCIO ---
 
+function anexosHasFileContent(file) {
+  return !!(file && (
+    (file.file instanceof Blob && file.file.size > 0)
+    || (file.base64 && /^data:/i.test(String(file.base64)))
+  ));
+}
+
 const AnexosDB = {
   dbName: 'CRM_AnexosDB',
   storeName: 'customerAttachments',
@@ -1831,7 +1838,7 @@ const AnexosDB = {
   },
 
   async fileBlob(file) {
-    if (file.file instanceof Blob) return file.file;
+    if (file.file instanceof Blob && anexosHasFileContent(file)) return file.file;
     if (file.base64 && /^data:/i.test(String(file.base64))) {
       const response = await fetch(file.base64);
       if (!response.ok) throw new Error(`Não foi possível preparar o arquivo ${file.originalName || ''}.`);
@@ -4697,6 +4704,7 @@ const AnexosApp = {
     });
 
     const needsTagConfirm = !isModal && AnexosState.files.some(anexosFileNeedsTagConfirm);
+    const hasMissingLegalFileContent = isModal && AnexosState.files.some((f) => !anexosHasFileContent(f));
 
     if (!tcdPendente) anexosAplicarRotulosTcd(AnexosState.files);
 
@@ -4708,8 +4716,9 @@ const AnexosApp = {
                     !hasTcdNaUnidade &&
                     !hasMissingTarget &&
                     !needsTagConfirm &&
+                    !hasMissingLegalFileContent &&
                     AnexosState.files.every(f => {
-                      if (isModal) return true; // Permite salvar localmente em qualquer estado
+                      if (isModal) return true;
                       const hasDate = f.dateOverride || AnexosState.dataDocumento;
                       const isReady = f.status === 'Pronto' || (f.status === 'Enviado' && f.sentOk);
                       return hasDate && isReady;
@@ -4726,7 +4735,9 @@ const AnexosApp = {
       
       const missingDates = AnexosState.files.some(f => !(f.dateOverride || AnexosState.dataDocumento));
       if (hint && AnexosState.files.length > 0) {
-        if (missingDates && !isModal) {
+        if (hasMissingLegalFileContent) {
+          hint.innerText = 'Aguarde o download dos arquivos antes de enviar para o Jurídico.';
+        } else if (missingDates && !isModal) {
           hint.innerText = 'Preencha a data em todos os arquivos para enviar';
         } else if (hasMissingTarget) {
           hint.innerText = 'Selecione ao menos um cliente alvo para os documentos de Pessoa/Cliente';
@@ -4763,6 +4774,10 @@ const AnexosApp = {
     const isModal = window.anexosTargetId === 'anexos-cliente-root';
     const filesToSend = isModal ? AnexosState.files : [...AnexosState.files.filter(f => f.status === 'Pronto' && !f.sentOk)];
     if (filesToSend.length === 0) return;
+    if (isModal && filesToSend.some((f) => !anexosHasFileContent(f))) {
+      alert('Aguarde o download dos arquivos antes de enviar para o Jurídico.');
+      return;
+    }
     if (!isModal && AnexosState.files.some(anexosFileNeedsTagConfirm)) {
       alert('Confirme se a tag automática está correta antes de enviar para o Sienge.');
       return;
