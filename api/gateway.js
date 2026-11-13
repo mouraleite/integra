@@ -20,6 +20,7 @@ const rotas = {
   "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
+  "orion-parecer": require("./_lib/orion-parecer"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
   "publicar": require("./_lib/publicar")
 };
@@ -31,7 +32,7 @@ const { conferirAcesso, modoBloqueio } = require("../lib/integra-auth");
 const ROTAS_COM_LOGIN = new Set([
   "sienge-proxy", "sienge-builder-proxy", "sync-customers", "sync-creditors",
   "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
-  "controle-comissao", "participacoes", "rydoo-email"
+  "controle-comissao", "participacoes", "rydoo-email", "orion-parecer"
 ]);
 
 module.exports.config = {
