@@ -81,10 +81,31 @@
         return d && String(d.diretoria || "") === this.diretoria;
       });
     },
+    /** Documentos do seletor, com o nome que o Órion mostra: no orçamento, o vigente de cada departamento (e os que ainda podem
+     * ser editados); no forecast, uma opção por versão (Forecast - N+M), a mais recente primeiro. */
+    docsSeletor() {
+      const C = this.C(), docs = this.docsModo(), fc = this.tipo === "forecasts";
+      const dep = (c) => (c.departamento ? String(c.departamento.id) : "");
+      let lista;
+      if (fc) {
+        const m = new Map();
+        docs.forEach((c) => { const k = String(c.descricao || "") + "|" + dep(c), x = m.get(k); if (!x || (Number(c.versao) || 0) > (Number(x.versao) || 0)) m.set(k, c); });
+        const rol = (c) => { const r = String(c.descricao || "").match(/(\d+)\s*\+/); return r ? Number(r[1]) : 0; };
+        lista = [...m.values()].sort((a, b) => rol(b) - rol(a) || (Number(b.mes_corte) || 0) - (Number(a.mes_corte) || 0));
+      } else {
+        const vig = C.documentosVigentes(docs, { ano: this.ano, dept: "TODOS", base: "orcamento", tipos: [this.modoTipo] }).docs;
+        lista = vig.concat(docs.filter((c) => vig.indexOf(c) < 0 && TRAVADOS.indexOf(c.status) < 0));
+      }
+      const nDep = new Set(lista.map(dep)).size;
+      const rot = (c) => C.rotuloVersao(c.descricao, fc ? "forecast" : "orcamento") + (nDep > 1 && c.departamento ? " · " + c.departamento.nome : "");
+      const vezes = {};
+      lista.forEach((c) => { vezes[rot(c)] = (vezes[rot(c)] || 0) + 1; });
+      return lista.map((c) => ({ c, rot: rot(c) + (vezes[rot(c)] > 1 ? " · " + c.status : "") }));
+    },
     setDiretoria(v) { this.diretoria = v; this.docSel = null; this.aberto = null; this.edicao = null; this.render(); },
     setDocSel(id) { if (this.edicao && !window.confirm("Trocar de documento sem salvar as alterações?")) return this.render(); this.docSel = id; this.aberto = null; this.edicao = null; this.render(); },
     garantirDoc() {
-      const docs = this.docsModo();
+      const docs = this.docsSeletor().map((x) => x.c);
       if (!docs.length || this._abrindo) return;
       if (this.aberto && this.aberto.cab && docs.some((c) => c._id === this.aberto.cab._id)) this.docSel = this.aberto.cab._id;
       const alvo = docs.find((c) => c._id === this.docSel) || docs.find((c) => TRAVADOS.indexOf(c.status) < 0) || docs[0];
@@ -170,7 +191,7 @@
       return `<div class="ooo-card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid #cfe0d6">
         <div style="display:flex;align-items:center;gap:14px"><div style="width:40px;height:40px;border-radius:999px;background:#e7f6ee;color:#105436;display:flex;align-items:center;justify-content:center;font-weight:800">⟜</div>
           <div><div style="font-size:1.1rem;font-weight:800;color:#1c2e24">${this.tipo === "forecasts" ? "Forecast" : "Orçamento"} de ${t} ${this.esc(cab.ano)} <span class="ooo-st" style="background:${cores[cab.status] || cores.Rascunho}">${this.esc(cab.status)}</span></div>
-            <div style="font-size:0.75rem;color:#6b8474;display:flex;gap:14px;flex-wrap:wrap;margin-top:2px"><span>🗎 v${this.esc(cab.versao || 1)}</span><span>🕒 ${quando ? new Date(quando).toLocaleDateString("pt-BR") : "N/A"}</span><span>${this.esc(cab.descricao || "")}${cab.departamento ? " · " + this.esc(cab.departamento.nome) : ""}${cab.mes_corte ? " · corte em " + C.MESES[cab.mes_corte - 1] : ""}</span>${cab.versao_base ? `<span style="background:#eef4f0;border-radius:4px;padding:0 6px">Baseada na v${Math.max(1, (Number(cab.versao) || 1) - 1)}</span>` : ""}</div></div></div>
+            <div style="font-size:0.75rem;color:#6b8474;display:flex;gap:14px;flex-wrap:wrap;margin-top:2px"><span>🗎 v${this.esc(cab.versao || 1)}</span><span>🕒 ${quando ? new Date(quando).toLocaleDateString("pt-BR") : "N/A"}</span><span>${this.esc(C.rotuloVersao(cab.descricao, this.tipo === "forecasts" ? "forecast" : "orcamento"))}${cab.departamento ? " · " + this.esc(cab.departamento.nome) : ""}${cab.mes_corte ? " · corte em " + C.MESES[cab.mes_corte - 1] : ""}</span>${cab.versao_base ? `<span style="background:#eef4f0;border-radius:4px;padding:0 6px">Baseada na v${Math.max(1, (Number(cab.versao) || 1) - 1)}</span>` : ""}</div></div></div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">${this.htmlAcoes()}</div></div>
         ${cab.motivo_reabertura ? `<div style="font-size:0.75rem;color:#92400e;margin:-6px 0 10px">Motivo da reabertura: ${this.esc(cab.motivo_reabertura)}</div>` : ""}`;
     },
@@ -254,7 +275,7 @@
       const dirs = [...new Set(((this.cadDep || {}).departamentos || []).map((d) => d.diretoria).filter(Boolean))].sort();
       const depts = new Map();
       lista.filter((c) => String(c.ano) === String(this.ano) && String(c.tipo || "").toUpperCase() === this.modoTipo && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
-      const docs = this.docsModo();
+      const docs = this.docsModo(), sel = this.docsSeletor();
       const ed = !!this.edicao;
       const pode = this.podeCriar && this.podeCriar();
       const barra = `<div class="ooo-cab"><div><h2 class="ooo-tit">${tit}</h2><p class="ooo-sub">${sub}</p></div>
@@ -262,7 +283,7 @@
           ${dirs.length ? `<div><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" style="height:40px;min-width:160px" onchange="OrionOrcamentosApp.setDiretoria(this.value)"><option value="TODAS">Todas</option>${dirs.map((d) => `<option ${d === this.diretoria ? "selected" : ""}>${this.esc(d)}</option>`).join("")}</select></div>` : ""}
           <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:200px" onchange="OrionOrcamentosApp.docSel=null;OrionOrcamentosApp.edicao=null;OrionOrcamentosApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
           <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px;min-width:100px" onchange="OrionOrcamentosApp.docSel=null;OrionOrcamentosApp.edicao=null;OrionOrcamentosApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-          ${docs.length > 1 ? `<div><label class="ml-emp-filter-label">${this.tipo === "forecasts" ? "Versão" : "Documento"}</label><select class="idx-select" style="height:40px;min-width:240px" onchange="OrionOrcamentosApp.setDocSel(this.value)">${docs.map((c) => `<option value="${this.esc(c._id)}" ${c._id === this.docSel ? "selected" : ""}>${this.esc((c.departamento ? c.departamento.nome + " · " : "") + (c.descricao || "") + " · v" + (c.versao || 1) + " · " + c.status)}</option>`).join("")}</select></div>` : ""}
+          ${sel.length > 1 ? `<div><label class="ml-emp-filter-label">${this.tipo === "forecasts" ? "Versão" : "Documento"}</label><select class="idx-select" style="height:40px;min-width:180px" onchange="OrionOrcamentosApp.setDocSel(this.value)">${sel.map((x) => `<option value="${this.esc(x.c._id)}" ${x.c._id === this.docSel ? "selected" : ""}>${this.esc(x.rot)}</option>`).join("")}</select></div>` : ""}
           ${pode ? `<button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionOrcamentosApp.abrirNovo()">＋ Criar ${this.tipo === "forecasts" ? "Forecast" : "Orçamento"}</button>` : ""}
           ${this.aberto ? `<button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionOrcamentosApp.excelOrion()">Excel</button>` : ""}
           ${ed ? `<button type="button" class="btn btn-primary" style="height:40px" ${this.edicao.salvando ? "disabled" : ""} onclick="OrionOrcamentosApp.salvarEdicao()">💾 ${this.edicao.salvando ? "Salvando..." : "Salvar " + (this.tipo === "forecasts" ? "Forecast" : "Orçamento")}</button>` : ""}</div></div>`;

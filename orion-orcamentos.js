@@ -237,7 +237,7 @@ const OrionOrcamentosApp = {
       <td>${this.esc(c.produto ? c.produto.id + " - " + c.produto.nome : "")}</td>
       <td>${this.esc(c.tipo)}</td>
       ${fc ? `<td class="is-center">${c.mes_corte ? C.MESES[c.mes_corte - 1] : ""}</td>` : ""}
-      <td class="is-center">V${c.versao}</td>
+      <td class="is-center">${this.esc(C.rotuloVersao ? C.rotuloVersao(c.descricao, fc ? "forecast" : "orcamento") : "V" + c.versao)}</td>
       <td>${this.esc(c.status)}</td>
       <td class="is-right">${c.linhas}</td>
       <td class="is-right">${C.fmtReais(c.totais ? c.totais.total : 0)}</td>
@@ -245,7 +245,7 @@ const OrionOrcamentosApp = {
       <td>${this.esc(c.criado_por)}</td></tr>`);
     const tot = lista.filter((c) => c.status !== "Substituído").reduce((s, c) => s + (c.totais ? c.totais.total : 0), 0);
     return `<div class="cc-scroll"><table class="cc-table">
-      <colgroup><col style="width:180px"><col><col style="width:90px">${fc ? '<col style="width:70px">' : ""}<col style="width:60px"><col style="width:110px"><col style="width:70px"><col style="width:140px"><col style="width:130px"><col style="width:180px"></colgroup>
+      <colgroup><col style="width:180px"><col><col style="width:90px">${fc ? '<col style="width:70px">' : ""}<col style="width:120px"><col style="width:110px"><col style="width:70px"><col style="width:140px"><col style="width:130px"><col style="width:180px"></colgroup>
       <thead><tr><th>Departamento</th><th>Empreendimento</th><th>Tipo</th>${fc ? '<th class="is-center">Corte</th>' : ""}<th class="is-center">Versão</th><th>Status</th><th class="is-right">Linhas</th><th class="is-right">Total (R$)</th><th class="is-right">VGV (R$)</th><th>Criado por</th></tr></thead>
       <tbody>${linhas.length ? linhas.join("") : `<tr><td colspan="${fc ? 10 : 9}" style="text-align:center;padding:30px;">Nenhum ${fc ? "forecast" : "orçamento"} para exibir.${(this.cab[this.tipo] || []).length ? "" : " A carga do Órion ainda não foi feita."}</td></tr>`}
       ${linhas.length ? `<tr class="oo-total"><td colspan="${fc ? 7 : 6}">Total (sem versões substituídas)</td><td class="is-right">${C.fmtReais(tot)}</td><td colspan="2"></td></tr>` : ""}</tbody>
@@ -694,7 +694,7 @@ const OrionOrcamentosApp = {
       <tbody>${cab.historico.map((h) => `<tr><td>${this.esc(h.em ? new Date(h.em).toLocaleString("pt-BR") : "")}</td><td>${this.esc(h.de)}</td><td>${this.esc(h.para)}</td><td>${this.esc(h.por)}</td><td style="white-space:normal">${this.esc(h.motivo)}</td></tr>`).join("")}</tbody></table></div>` : "";
     return `
       <div class="ppcc-head idx-head">
-        <div><div class="ppcc-titulo">${this.esc(cab.descricao)} · V${cab.versao} · ${this.esc(cab.status)}</div>
+        <div><div class="ppcc-titulo">${this.esc(C.rotuloVersao ? C.rotuloVersao(cab.descricao, this.tipo === "forecasts" ? "forecast" : "orcamento") : cab.descricao)} · ${this.esc(cab.status)}</div>
         <div class="ppcc-sub">${this.esc(cab.departamento ? cab.departamento.nome : "")}${cab.produto ? " · " + this.esc(cab.produto.id + " " + cab.produto.nome) : ""}${cab.mes_corte ? " · corte em " + C.MESES[cab.mes_corte - 1] : ""} · ${a.itens.length} linhas</div></div>
         <div class="ppcc-kpis">
           <div class="ppcc-kpi"><span class="ppcc-kpi-rot">Total do ano (R$)</span><span class="ppcc-kpi-val">${C.fmtReais(tot.total)}</span></div>

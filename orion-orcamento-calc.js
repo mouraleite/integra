@@ -917,6 +917,23 @@
     return { docs, versao };
   }
 
+  /**
+   * Nome da versão como o Órion mostra (format_visualizacao_versao_label): orçamento vira "Orçamento" (carga inicial do Sienge,
+   * "1ª versão" e "Orçamento base" também); forecast vira "Forecast - N+M". base: "orcamento" | "forecast".
+   */
+  function rotuloVersao(descricao, base) {
+    const t = String(descricao || "").trim(), low = t.toLowerCase();
+    if (base === "orcamento" || base === "orcamentos") {
+      if (!t || /1\s*[ªºo°]?\s*vers/i.test(t) || ["orçamento", "orcamento", "orçamento base", "orcamento base"].indexOf(low) >= 0 || low.indexOf("orçamento vendas") >= 0 || low.indexOf("orcamento vendas") >= 0 || low.indexOf("carga inicial sienge") >= 0) return "Orçamento";
+      if (low.startsWith("orçamento") || low.startsWith("orcamento")) return t;
+      return "Orçamento — " + t;
+    }
+    const m = t.match(/(\d+)\s*\+\s*(\d+)/);
+    if (!t) return "Forecast";
+    if (m) return `Forecast - ${Number(m[1])}+${Number(m[2])}`;
+    return low.startsWith("forecast") ? t : "Forecast — " + t;
+  }
+
   /* ---------- novo orçamento / nova versão de forecast (regra do Órion) ---------- */
 
   const DESCRICAO_ORCAMENTO = "Orçamento";
@@ -1149,6 +1166,6 @@
     return { erros, grade: erros.length ? [] : [...grade.values()] };
   }
 
-  return { taxaMensalIpca, aplicarIpcaTicket, planilhaVendas, validarPlanilhaVendas, COLUNAS_EXCEL_VENDAS, validarPlanilhaMensal, planilhaMensal, colunaExcel, COLUNAS_EXCEL_MENSAL, leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
+  return { rotuloVersao, taxaMensalIpca, aplicarIpcaTicket, planilhaVendas, validarPlanilhaVendas, COLUNAS_EXCEL_VENDAS, validarPlanilhaMensal, planilhaMensal, colunaExcel, COLUNAS_EXCEL_MENSAL, leituraExecutiva, destaqueLinha, insightsBloco, dfcGerencialMensal, analiseOrcamentoAnual, analiseOrcamento, grupoRecebimento, centavosDigitado, RECORTES, filtrarRecorte, DESCRICAO_ORCAMENTO, corteForecast, descricaoForecast, planejarInclusao, copiarEmpreendimento, empreendimentosDoDoc, versoesForecast, documentosVigentes, analiticoGastos, resumoGeral, SEMAFORO_IMATERIAL, semaforo, dfcGerencial, orcadoPorGrupo, vendasParaGrade, gradeParaVendas, validarVendas, agregarRealizado, orcadoRealizado, STATUS_BLOQUEADO, ACOES_GESTOR, resolverTransicao, acoesDoStatus, editavel, mesesFechados, mesFechadoAlterado, validarLinhas, emBlocos,
     prepararDepartamentos, lancamentoPermitido, MESES, ITENS_POR_DOC, centavos, reais, fmtReais, somaMeses, somarLinhas, mapas, prepararDocumentos, juntarBlocos, agrupar, diferencaVersoes };
 });

@@ -36,19 +36,8 @@
     return (suf ? p.slice(1, -1) : p.slice(1)).join(" -");
   }
   /** Rótulos de versão do Órion (format_visualizacao_versao_label). */
-  function rotuloOrc(d) {
-    const t = String(d || "").trim(), low = t.toLowerCase();
-    if (!t) return "Orçamento";
-    if (/1\s*[ªºo°]?\s*vers/i.test(t) || ["orçamento", "orcamento", "orçamento base", "orcamento base"].indexOf(low) >= 0 || low.indexOf("orçamento vendas") >= 0 || low.indexOf("orcamento vendas") >= 0 || low.indexOf("carga inicial sienge") >= 0) return "Orçamento";
-    if (low.startsWith("orçamento") || low.startsWith("orcamento")) return t;
-    return "Orçamento — " + t;
-  }
-  function rotuloFc(d) {
-    const t = String(d || "").trim(), m = t.match(/(\d+)\s*\+\s*(\d+)/);
-    if (!t) return "Forecast";
-    if (m) return `Forecast - ${Number(m[1])}+${Number(m[2])}`;
-    return t.toLowerCase().startsWith("forecast") ? t : "Forecast — " + t;
-  }
+  const rotuloOrc = (d) => window.OrionOrcamentoCalc.rotuloVersao(d, "orcamento");
+  const rotuloFc = (d) => window.OrionOrcamentoCalc.rotuloVersao(d, "forecast");
   const rolling = (d) => { const m = String(d || "").match(/(\d+)\s*\+\s*\d+/); return m ? Number(m[1]) : 99; };
 
   const favor = (v, inverted) => (v === 0 ? true : inverted ? v < 0 : v > 0);
@@ -553,7 +542,7 @@
       const t = this.tabs[aba];
       const vs = this.versoesFc(aba === "vendas" ? ["VENDAS"] : ["DESPESAS", "RECEITAS"]), ver = this.versaoAba(aba);
       return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px"><span class="oxr-lbl">Comparar com</span>${this.seg([["orcado", "Orçado"], ["forecast", "Forecast"]], t.modo, `${N}.setT('${aba}','modo','$')`)}
-        ${t.modo === "forecast" && vs.length ? `<span class="oxr-lbl">Versão</span><select class="idx-select" style="height:32px;font-size:0.8rem" onchange="${N}.setT('${aba}','versao',this.value)">${vs.map((v) => `<option ${v === ver ? "selected" : ""}>${this.esc(v)}</option>`).join("")}</select>` : ""}
+        ${t.modo === "forecast" && vs.length ? `<span class="oxr-lbl">Versão</span><select class="idx-select" style="height:32px;font-size:0.8rem" onchange="${N}.setT('${aba}','versao',this.value)">${vs.map((v) => `<option value="${this.esc(v)}" ${v === ver ? "selected" : ""}>${this.esc(rotuloFc(v))}</option>`).join("")}</select>` : ""}
         <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${extra || ""}<button type="button" class="btn btn-secondary" style="height:32px;padding:0 10px" title="Ler de novo" onclick="${N}.calcular()">⟳</button></span></div>`;
     },
 
