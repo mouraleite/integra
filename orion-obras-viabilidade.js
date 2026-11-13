@@ -90,6 +90,27 @@
       else this.render();
       setTimeout(() => { const el = document.getElementById("oob-vv"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
     },
+    /** Tira o vínculo: apaga o centro de custo da obra na viabilidade (obra_cc e obra_cc_nome ficam vazios, como "Nenhuma" na tela Viabilidades). */
+    async vvDesvincular(id) {
+      const doc = this.vvLista().find((d) => d._id === id);
+      if (!doc || !this.vvPodeVincular()) return;
+      if (!window.confirm(`Tirar o vínculo da viabilidade ${doc.project_name} com o centro ${doc.obra_cc}? A comparação deixa de aparecer nesta obra até vincular de novo.`)) return;
+      const fx = window.firebaseCollections;
+      this.vvGravando = true; this.render();
+      try {
+        const ref = fx.doc(window.firebaseDb, "orion_viabilidades", doc._id);
+        await fx.runTransaction(window.firebaseDb, async (tx) => {
+          const s2 = await tx.get(ref);
+          if (!s2.exists()) throw new Error("Viabilidade não encontrada.");
+          const atual = s2.data();
+          tx.set(ref, Object.assign({}, atual, { obra_cc: "", obra_cc_nome: "", versao: (Number(atual.versao) || 0) + 1, atualizado_por: window.OrionStore ? window.OrionStore.usuario() : "", atualizado_em: new Date().toISOString() }));
+        });
+        const cc = doc.obra_cc;
+        doc.obra_cc = ""; doc.obra_cc_nome = "";
+        this.vvEscolha = ""; this.vvMsg = `Vínculo da viabilidade ${doc.project_name} com o centro ${cc} retirado.`;
+      } catch (e) { this.vvMsg = "Não consegui gravar: " + (e.message || e); }
+      this.vvGravando = false; this.render();
+    },
     async vvVincular(item) {
       const id = this.vvEscolha;
       const doc = this.vvLista().find((d) => d._id === id);
@@ -131,7 +152,7 @@
       }
       const prev = this.vvPrevisto(doc);
       const ac = this.vvAcomp(item);
-      if (!ac) return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px">${titulo}<div style="padding:16px;color:#64748b;font-size:0.82rem">Viabilidade ligada: <b>${this.esc(doc.project_name)}</b>. Clique em <b>Atualizar com o Sienge</b> para ler o caixa da obra e montar a comparação.</div></div>`;
+      if (!ac) return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px">${titulo}<div style="padding:16px;color:#64748b;font-size:0.82rem">Viabilidade ligada: <b>${this.esc(doc.project_name)}</b>. Clique em <b>Atualizar com o Sienge</b> para ler o caixa da obra e montar a comparação.${this.vvPodeVincular() ? ` <button type="button" class="btn oac-out" style="height:30px;padding:0 10px;margin-left:8px" onclick="OrionObrasApp.vvDesvincular('${this.esc(doc._id)}')">✕ Desvincular</button>` : ""}</div></div>`;
       if (!prev || !ac) return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px;scroll-margin-top:16px">${titulo}<div style="padding:20px;text-align:center;color:#64748b"><div class="spinner" style="margin:0 auto 8px"></div>Calculando a viabilidade…</div></div>`;
       const R = (v) => this.R$(Math.abs(v || 0) < 0.5 ? 0 : v);
       const N0 = (v) => (Math.abs(v || 0) < 0.5 ? "—" : Math.round(v).toLocaleString("pt-BR"));
@@ -165,7 +186,9 @@
       const P = (v) => (v == null || isNaN(v) ? "n/d" : this.P(v));
       const kp = (t, v, a) => `<div style="border:1px solid #dfe9e3;border-radius:8px;padding:8px 10px;background:#fff"><div style="font-size:0.64rem;color:#64748b;font-weight:700;text-transform:uppercase">${t}</div><div style="font-size:0.85rem;font-weight:800;color:#1c2e24">${v} <span style="color:#94a3b8;font-weight:600">→</span> ${a}</div><div style="font-size:0.64rem;color:#64748b">viabilidade → acompanhamento</div></div>`;
       return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px;scroll-margin-top:16px">${titulo}
-        <div style="padding:0 16px 6px;font-size:0.72rem;color:#6b8474">Viabilidade <b>${this.esc(doc.project_name)}</b> (aprovada${doc.versao_de ? ", cenário" : ""}) · ${this.vvFases(doc).length} fase(s) · mês 1 = ${ini ? this.esc(ini.split("-").reverse().join("/")) : "sem data (o por ano fica vazio)"} · ligada ao centro ${this.esc(doc.obra_cc)}. Acompanhamento na visão consolidada, com a projeção do estoque. Semáforo: custo acima do previsto ou receita/lucro abaixo ficam em vermelho.</div>
+        <div style="display:flex;gap:12px;align-items:flex-start;padding:0 16px 6px">        <div style="flex:1;font-size:0.72rem;color:#6b8474">Viabilidade <b>${this.esc(doc.project_name)}</b> (aprovada${doc.versao_de ? ", cenário" : ""}) · ${this.vvFases(doc).length} fase(s) · mês 1 = ${ini ? this.esc(ini.split("-").reverse().join("/")) : "sem data (o por ano fica vazio)"} · ligada ao centro ${this.esc(doc.obra_cc)}. Acompanhamento na visão consolidada, com a projeção do estoque. Semáforo: custo acima do previsto ou receita/lucro abaixo ficam em vermelho.</div>
+          ${this.vvPodeVincular() ? `<button type="button" class="btn oac-out oac-nao-imprime" style="height:32px;padding:0 12px;white-space:nowrap;flex-shrink:0" ${this.vvGravando ? "disabled" : ""} title="Tira o centro de custo da obra desta viabilidade" onclick="OrionObrasApp.vvDesvincular('${this.esc(doc._id)}')">${this.vvGravando ? "Gravando…" : "✕ Desvincular"}</button>` : ""}</div>
+        ${this.vvMsg ? `<div style="padding:0 16px 6px;font-size:0.75rem;color:#105436">${this.esc(this.vvMsg)}</div>` : ""}
         <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:6px 16px 10px">
           ${kp("Lucro", R(prev.cat.lucro), R(ac.cat.lucro))}${kp("TIR (a.a.)", P(ind.tir_aa), P(d.tir_anual))}${kp("Exposição máxima", R(ind.exposicao_maxima), R(d.exposicao_maxima))}${kp("Payback", (ind.payback || "—") + "º mês", (d.payback || "—") + "º mês")}</div>
         <div style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;padding:0 16px 14px;align-items:start">
