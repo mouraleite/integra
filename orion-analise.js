@@ -157,10 +157,20 @@ const OrionAnaliseApp = {
     return C.analiseOrcamentoAnual({
       n_fc: nfc, ref: refL, n_real: al, corte: d.corte, sinal: d.tipo === "RECEITAS" ? 1 : -1, manterGrupo,
       grupoDe: (p) => { const gid = R.grupoDe(p); if (!gid) return null; const g = grupos[gid] || {}; return { id: gid, nome: g.name || g.nome || gid, codigo: g.code || g.codigo || "" }; },
+      nomeCc: (cc) => this.nomeCc(cc),
       empresaDe: (cc) => { const id = mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; }
     });
   },
 
+  /** Nome do centro de custo: cadastro de Departamentos do Órion ou cadastro de Centros de Custo do Integra. */
+  nomeCc(cc) {
+    const k = String(cc || "").replace(/\D/g, "");
+    const cad = (this.cadDep && this.cadDep.nomesCc) || {};
+    if (cad[k]) return cad[k];
+    const l = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    const c = l.find((x) => String(x.id).replace(/\D/g, "") === k);
+    return c ? c.name || c.description || "" : "";
+  },
   farol(n, ref) {
     const s = this.C().semaforo(n, ref, (this.dados && this.dados.tipo) || this.tipo);
     const cores = { azul: "#0ea5e9", cinza: "#cbd5e1", verde: "#10b981", amarelo: "#fbbf24", vermelho: "#ef4444" };

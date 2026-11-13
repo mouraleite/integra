@@ -728,7 +728,7 @@
           const ps = fs.sort((a, b) => cmp(a.plano, b.plano))
             .map((f) => no("plano", e.id + "|" + g.id + "|" + cc + "|" + f.plano, f.plano_nome || f.plano, f.plano, [], serie(f, Number(e.fator) || 0)))
             .filter((x) => !vazio(x));
-          if (ps.length) cs.push(no("centro", e.id + "|" + g.id + "|" + cc, fs[0].cc_nome || cc, cc, ps));
+          if (ps.length) cs.push(no("centro", e.id + "|" + g.id + "|" + cc, (fs.find((f) => f.cc_nome) || {}).cc_nome || (o.nomeCc && o.nomeCc(cc)) || cc, cc, ps));
         });
         if (cs.length) gs.push(no("grupo", e.id + "|" + g.id, g.nome, g.codigo || "", cs));
       });
@@ -737,8 +737,9 @@
     // mesma informação na ordem empreendimento › grupo › plano (segunda tabela da tela)
     const porCc = new Map();
     arv.forEach(({ e, grupos }) => grupos.forEach(({ g, ccs: cm }) => cm.forEach((fs, cc) => {
-      if (!porCc.has(cc)) porCc.set(cc, { cc, e, nome: (fs[0] && fs[0].cc_nome) || cc, grupos: new Map() });
+      if (!porCc.has(cc)) porCc.set(cc, { cc, e, nome: "", grupos: new Map() });
       const x = porCc.get(cc);
+      if (!x.nome) x.nome = (fs.find((f) => f.cc_nome) || {}).cc_nome || "";
       if (!x.grupos.has(g.id)) x.grupos.set(g.id, { g, fs: [] });
       x.grupos.get(g.id).fs.push(...fs);
     })));
@@ -751,7 +752,8 @@
           .filter((x) => !vazio(x));
         if (ps.length) gs.push(no("grupo", "E|" + cc + "|" + g.id, g.nome, g.codigo || "", ps));
       });
-      if (gs.length) empreendimentos.push(no("centro", "E|" + cc, nome, cc, gs));
+      // nome do centro: o das linhas; sem ele (linha só do realizado), o cadastro de centros de custo (o.nomeCc)
+      if (gs.length) empreendimentos.push(no("centro", "E|" + cc, nome || (o.nomeCc && o.nomeCc(cc)) || cc, cc, gs));
     });
     return { empresas, empreendimentos, total: no("total", "total", "Total", "", empresas), corte, semGrupo };
   }
