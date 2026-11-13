@@ -264,7 +264,7 @@ const OrionAnaliseApp = {
       <div style="font-size:0.8rem;color:#475569;margin-bottom:10px">YTD real ${this.esc(this.ano)}, YTG forecast, FY contra ${this.base === "forecast" ? "forecast" : "orçado"} ${Number(this.ano) + 1}. Cheio e MLDU lado a lado. ${nomeT} positiva.</div>
       <div class="oan-filtros">
         <div class="oan-sec">O que analisar</div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Tipo</label><div class="oan-seg">${seg("tipo", "DESPESAS", "Despesas", this.tipo)}${seg("tipo", "RECEITAS", "Receitas", this.tipo)}</div></div>
+        <div class="oan-f"><label class="ml-emp-filter-label">Tipo</label><select class="idx-select" onchange="OrionAnaliseApp.set('tipo', this.value)">${op("DESPESAS", "Despesas", this.tipo)}${op("RECEITAS", "Receitas", this.tipo)}</select></div>
         <div class="oan-f"><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" onchange="OrionAnaliseApp.set('diretoria', this.value)">${op("", "Todas", this.diretoria)}${diretorias.map((x) => op(x, x, this.diretoria)).join("")}</select></div>
         <div class="oan-f"><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" onchange="OrionAnaliseApp.set('dept', this.value)">${op("TODOS", "Todos", this.dept)}${deps.map((d) => op(d.id, d.nome, this.dept)).join("")}</select></div>
         <div class="oan-f" id="oan-emp">${empSlot || `<label class="ml-emp-filter-label">Empresa</label><div class="oan-fake" title="A lista de empresas aparece depois de calcular">Todas · calcule para filtrar</div>`}</div>
