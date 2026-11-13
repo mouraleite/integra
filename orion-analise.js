@@ -231,7 +231,7 @@ const OrionAnaliseApp = {
       return out;
     };
     const btnS = (k, t) => `<button type="button" class="btn ${S[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.alternarSerie('${k}')">${t}</button>`;
-    const nav = `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0"><b>Navegação</b><span style="font-size:0.7rem;color:#64748b">VISÃO DFC</span>
+    const nav = `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0"><b>Por empresa</b><span style="font-size:0.7rem;color:#64748b">EMPRESA › GRUPO › EMPREENDIMENTO › PLANO</span>
         <span style="margin-left:auto;font-size:0.7rem;color:#64748b">COLUNAS</span><button type="button" class="btn ${this.colunas === "mensal" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'mensal')">Mês a mês</button><button type="button" class="btn ${this.colunas === "acumulado" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'acumulado')">YTD · YTG · FY</button>
         <span style="margin-left:10px;font-size:0.7rem;color:#64748b">SÉRIES</span>${btnS("n", this.ano + " cheio")}${btnS("ref", refT + " cheio")}${btnS("n_mldu", this.ano + " MLDU")}${btnS("ref_mldu", refT + " MLDU")}
         <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false)">Recolher</button></div>`;
