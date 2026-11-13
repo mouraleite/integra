@@ -38,6 +38,10 @@ const OrionCargaSharepointApp = {
         snap.forEach((x) => (x.data().itens || []).forEach((l) => { const k = String(l.plano || "").replace(/\D/g, ""); if (k && !planos.has(k)) planos.set(k, { id: k, nome: l.plano_nome || "" }); }));
       }
       ((this.cadDep && this.cadDep.nomesPlano) ? Object.entries(this.cadDep.nomesPlano) : []).forEach(([k, n]) => { const id = String(k).replace(/\D/g, ""); if (id && !planos.has(id)) planos.set(id, { id, nome: n }); });
+      // plano financeiro completo do Sienge (o mesmo cadastro que o Integra usa): contas novas, ainda sem orçamento, também aparecem
+      this.passo = "Lendo o plano financeiro do Sienge…"; this.render();
+      try { (await this.planosSienge()).forEach((p) => { const atual = planos.get(p.id); if (!atual) planos.set(p.id, p); else if (!atual.nome) atual.nome = p.nome; }); }
+      catch (e) { console.warn("Plano financeiro do Sienge:", e); this.avisoPlanos = "Não consegui ler o plano financeiro do Sienge agora; a lista mostra só as contas que já têm orçamento ou forecast."; }
       this.catalogo = { planos: [...planos.values()].sort((a, b) => a.id.localeCompare(b.id, "pt-BR", { numeric: true })) };
       await this.lerCabs();
     } catch (e) { this.erro = e.message || String(e); }
@@ -116,16 +120,51 @@ const OrionCargaSharepointApp = {
   setAno(v) { this.ano = v; this.remapear(); this.render(); },
   setBusca(v) { this.busca = v; this.render(); setTimeout(() => { const e = document.getElementById("ocs-busca"); if (e) { e.focus(); e.setSelectionRange(v.length, v.length); } }, 0); },
   marcar(desc, v) { this.marcadas[desc] = !!v; this.render(); },
-  escolher(k, v) { this.escolha[k] = String(v || "").trim(); },
+  escolher(k, v) {
+    this.escolha[k] = String(v || "").trim();
+    const nSel = Object.values(this.escolha).filter(Boolean).length;
+    const b = document.getElementById("ocs-salvar-depara");
+    if (b) { b.disabled = !nSel; b.textContent = `Salvar vínculos do de-para (${nSel})`; }
+  },
+
+  /** Plano financeiro do Sienge (via proxy), em páginas de 200: [{ id: só dígitos, nome }]. */
+  async planosSienge() {
+    if (this._planosSienge) return this._planosSienge;
+    if (typeof window.siengeFetchWithRetry !== "function") throw new Error("Sienge indisponível");
+    const lista = new Map();
+    let offset = 0, total = null, guarda = 0;
+    do {
+      const res = await window.siengeFetchWithRetry("/payment-categories?limit=200&offset=" + offset);
+      const itens = (res && res.results) || (Array.isArray(res) ? res : []);
+      if (total == null) total = (res && res.resultSetMetadata && res.resultSetMetadata.count) || itens.length;
+      itens.forEach((c) => { const id = String(c && c.id != null ? c.id : "").replace(/\D/g, ""); const nome = String((c && (c.name || c.description)) || "").trim(); if (id && nome && !lista.has(id)) lista.set(id, { id, nome }); });
+      if (!itens.length) break;
+      offset += itens.length; guarda += 1;
+    } while (offset < total && guarda < 30);
+    if (!lista.size) throw new Error("O plano financeiro do Sienge veio vazio.");
+    this._planosSienge = [...lista.values()];
+    return this._planosSienge;
+  },
+
+  /** Código do item escolhido: aceita "código - nome", só o código ou só o nome (igual ao cadastro). */
+  codigoEscolhido(tipo, v) {
+    const s = String(v || "").trim();
+    const cod = s.split(" ")[0].replace(/\D/g, "");
+    if (cod && /^[\d.]+$/.test(s.split(" ")[0])) return cod;
+    const nome = s.replace(/^[\d.]+\s*-\s*/, "").trim().toLowerCase();
+    if (!nome) return "";
+    const lista = tipo === "CENTRO_CUSTO" ? this.ccs() : ((this.catalogo && this.catalogo.planos) || []);
+    const achados = lista.filter((x) => String(x.nome || "").trim().toLowerCase() === nome);
+    return achados.length === 1 ? String(achados[0].id).replace(/\D/g, "") : "";
+  },
 
   async salvarDepara() {
     const novos = Object.entries(this.escolha).filter(([, v]) => v);
     if (!novos.length) { this.erro = "Escolha ao menos um vínculo."; return this.render(); }
-    const dig = (v) => String(v).split(" ")[0].replace(/\D/g, "");
     const d = { cc: Object.assign({}, this.depara.cc), plano: Object.assign({}, this.depara.plano) };
     const ruins = [];
-    novos.forEach(([k, v]) => { const [tipo, ...o] = k.split("|"); const origem = o.join("|"); const id = dig(v); if (!id) { ruins.push(origem); return; } (tipo === "CENTRO_CUSTO" ? d.cc : d.plano)[origem] = id; });
-    if (ruins.length) { this.erro = `Vínculo sem código: ${ruins.join(", ")}. Escolha um item da lista (código - nome).`; return this.render(); }
+    novos.forEach(([k, v]) => { const [tipo, ...o] = k.split("|"); const origem = o.join("|"); const id = this.codigoEscolhido(tipo, v); if (!id) { ruins.push(origem); return; } (tipo === "CENTRO_CUSTO" ? d.cc : d.plano)[origem] = id; });
+    if (ruins.length) { this.erro = `Vínculo sem código: ${ruins.join(", ")}. Escolha um item da lista (código - nome); se o nome se repete no cadastro, use o código.`; return this.render(); }
     try {
       const r = await window.OrionStore.gravar("depara_sharepoint", d, this.deparaVersao);
       this.depara = d; this.deparaVersao = typeof r === "number" ? r : this.deparaVersao + 1; this.escolha = {};
@@ -253,6 +292,7 @@ const OrionCargaSharepointApp = {
         </div></div>
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#105436;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
+      ${this.avisoPlanos ? `<div style="padding:10px 14px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px">${this.esc(this.avisoPlanos)}</div>` : ""}
       ${this.lendo || this.gravando || this.passo ? `<div style="text-align:center;padding:16px;color:#64748b;"><div class="spinner" style="margin:0 auto 10px;"></div>${this.esc(this.passo || "Aguarde…")}</div>` : ""}
       ${!this.ehAdmin() ? `<div style="font-size:0.75rem;color:#92400e;margin-bottom:8px">Você pode conferir as planilhas e o de-para; só administrador grava a carga.</div>` : ""}
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px">
@@ -265,7 +305,7 @@ const OrionCargaSharepointApp = {
           <tbody>${linhasPastas}</tbody></table></div>${this.fora.length ? `<div style="font-size:0.7rem;color:#64748b;margin-top:4px">${this.fora.length} arquivo(s) fora de pastas "Forecast - N+M" ignorado(s).</div>` : ""}` : ""}
       ${this.pastas ? `<div style="display:flex;align-items:center;gap:10px;margin:16px 0 6px"><div style="font-weight:700;color:#105436">Pendências de mapeamento (de-para)</div>
           ${pend.length ? `<input id="ocs-busca" class="idx-select" style="height:34px;width:260px" placeholder="Buscar por nome ou tipo…" value="${this.esc(this.busca)}" oninput="OrionCargaSharepointApp.setBusca(this.value)">` : ""}
-          ${pend.length ? `<button type="button" class="btn btn-primary" style="height:34px;margin-left:auto" ${nSel ? "" : "disabled"} onclick="OrionCargaSharepointApp.salvarDepara()">Salvar vínculos do de-para (${nSel})</button>` : ""}</div>
+          ${pend.length ? `<button type="button" id="ocs-salvar-depara" class="btn btn-primary" style="height:34px;margin-left:auto" ${nSel ? "" : "disabled"} onclick="OrionCargaSharepointApp.salvarDepara()">Salvar vínculos do de-para (${nSel})</button>` : ""}</div>
         ${pend.length ? `<div class="cc-scroll" style="max-height:420px"><table class="cc-table"><colgroup><col style="width:130px"><col><col style="width:420px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome na planilha</th><th>Vincular com o Integra</th></tr></thead><tbody>${linhasPend || `<tr><td colspan="3" style="text-align:center;padding:14px">Nenhuma pendência para a busca.</td></tr>`}</tbody></table></div>
           <datalist id="ocs-l-cc">${optsCc}</datalist><datalist id="ocs-l-pl">${optsPl}</datalist>`
