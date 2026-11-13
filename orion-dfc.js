@@ -1,221 +1,171 @@
-/* Órion (transição) › DFC gerencial — vindo do ML Órion (Orçamento › DFC gerencial), na visão DFC do Integra.
- * Linhas: grupos da visão DFC Padrão do Integra (Configurações gerais › Plano Financeiro e Visões).
- * Colunas: orçado no período e no ano (orçamentos de despesas e receitas trazidos do Órion, versão vigente),
- * realizado (regra do Integra, orion-realizado.js), diferença, semáforo (régua do Órion), realizado N-1, AH e AV.
- * Última linha: geração de caixa (soma de todos os grupos). Só leitura. */
-const OrionDfcApp = {
-  ano: String(new Date().getFullYear()),
-  dept: "TODOS",
-  ate: null,
-  base: "orcamento",   // "orcamento" | "forecast"
-  versao: "",
-  empresas: [],
-  meses: null,
-  cabs: { orcamento: null, forecast: null },
-  resultado: null,
-  carregando: false,
-  erro: "",
-  passo: "",
+/* Órion (transição) › DFC gerencial — a tela do ML Órion (Orçamento › DFC gerencial) com a identidade do Integra.
+ * Mesmos números do DFC (motor comum em orion-dfc-visao.js), por empresa, visão, plano e centro de custo; Cheio e MLDU lado a lado.
+ * Topo: Diretoria, Departamento, ID da empresa, Empresa, Meses, Ano, Comparar com Orçado / Forecast (com a versão) e Calcular.
+ * Cartões Entradas, Saídas, Líquido e Geração de caixa, cada um com Cheio e MLDU (ano × LY e variação, semáforo).
+ * Tabela: Agrupar Empresa → Visão (empresa › grupos da visão DFC › planos › centros de custo) ou Empresa → CC (empresa ›
+ * centro de custo › grupos › planos); séries Real cheio (sempre), Real MLDU, LY, LY MLDU, Orçado (ou Forecast) cheio e MLDU;
+ * AH/AV mensal, Total do ano, AH %, AV %, Expandir, Recolher e Excel. MLDU = % de consolidação da empresa (cadastro de
+ * Empresas). Saídas negativas. Só leitura. */
+(function () {
+  const B = window.OrionDfcBase;
+  if (!B) return;
+  const MES = B.MES;
+  const SER = [["real", "Real cheio", "Real"], ["real_mldu", "Real MLDU", "MLDU"], ["n1", "LY", "LY"], ["n1_mldu", "LY MLDU", "LY MLDU"], ["ref", "Orçado cheio", "Orç"], ["ref_mldu", "Orçado MLDU", "Orç MLDU"]];
 
-  C() { return window.OrionOrcamentoCalc; },
-  R() { return window.OrionRealizado; },
-  root() { return document.getElementById("orion-dfc-root"); },
-  fc() { return window.firebaseCollections; },
-  esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); },
+  const App = Object.assign(B.criar("OrionDfcApp", "orion-dfc-root"), {
+    modo: "orcado", agrupar: "visao",
+    series: { real_mldu: true, n1: true, n1_mldu: true, ref: true, ref_mldu: true },
 
-  COL: {
-    orcamento: { cab: "orion_orcamentos", itens: "orion_orcamento_itens" },
-    forecast: { cab: "orion_forecasts", itens: "orion_forecast_itens" }
-  },
-
-  init() {
-    this.render();
-    if (!this.cabs[this.base]) this.lerCabecalhos();
-  },
-
-  async lerCabecalhos() {
-    const fc = this.fc();
-    if (!window.firebaseDb || !fc) { this.erro = "Banco do Integra ainda não carregou."; return this.render(); }
-    try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.COL[this.base].cab));
-      const l = [];
-      snap.forEach((d) => l.push(d.data()));
-      this.cabs[this.base] = l;
-      const anos = [...new Set(l.map((c) => c.ano))].sort((a, b) => b - a);
-      if (anos.length && anos.indexOf(Number(this.ano)) < 0) this.ano = String(anos[0]);
-    } catch (e) { this.erro = e.message || String(e); }
-    this.render();
-  },
-
-  limpar() { this.resultado = null; this.meses = null; this.render(); },
-  setAno(v) { this.ano = v; this.versao = ""; this.ate = null; this.limpar(); },
-  setDept(v) { this.dept = v; this.limpar(); },
-  setAte(v) { this.ate = Number(v) || null; this.limpar(); },
-  setBase(v) { this.base = v; this.versao = ""; this.resultado = null; this.meses = null; this.init(); },
-
-  /** Documentos de despesas e receitas do ano; no forecast, só a versão escolhida (ou a mais recente). */
-  vigentes() {
-    return this.C().documentosVigentes(this.cabs[this.base] || [], { ano: this.ano, dept: this.dept, base: this.base, versao: this.versao }).docs;
-  },
-
-  async lerLinhas(cab) {
-    const fc = this.fc();
-    const blocos = [];
-    for (let b = 0; b < (cab.blocos || 1); b++) {
-      const s = await fc.getDoc(fc.doc(window.firebaseDb, this.COL[this.base].itens, `${cab._id}_${b}`));
-      if (s.exists()) blocos.push(s.data());
-    }
-    return this.C().juntarBlocos(blocos).itens;
-  },
-
-  async calcular() {
-    const C = this.C(), R = this.R();
-    this.carregando = true;
-    this.erro = "";
-    this.resultado = null;
-    this.render();
-    try {
-      if (!R) throw new Error("Arquivo do realizado não carregou. Recarregue a página.");
-      const ate = this.ate || R.ateMes(this.ano) || 12;
-      const docs = this.vigentes();
-      if (!docs.length) throw new Error(`Nenhum ${this.base === "forecast" ? "forecast" : "orçamento"} de despesas ou receitas de ${this.ano} no Integra. Faça a carga do Órion em Órion (transição) › Orçamentos e forecasts.`);
-      this.passo = `Lendo ${docs.length} documento(s) do ${this.base === "forecast" ? "forecast" : "orçamento"}…`;
+    rotSerie(k) {
+      const fc = this.modo === "forecast";
+      if (k === "ref") return fc ? ["Forecast cheio", "FCST"] : ["Orçado cheio", "Orç"];
+      if (k === "ref_mldu") return fc ? ["Forecast MLDU", "FCST MLDU"] : ["Orçado MLDU", "Orç MLDU"];
+      const s = SER.find((x) => x[0] === k);
+      return [s[1], s[2]];
+    },
+    ativas() { return SER.map((s) => s[0]).filter((k) => k === "real" || this.series[k]); },
+    /** valor de uma série (mês i ou total quando i == null) de uma linha */
+    val(x, k, i) {
+      const base = k.replace("_mldu", ""), src = base === "ref" ? (this.modo === "forecast" ? "fc" : "orc") : base;
+      const v = i == null ? x.t[src] : x[src][i];
+      return k.indexOf("_mldu") > 0 ? Math.round(v * (x.fator || 0)) : v;
+    },
+    setModo(m) {
+      this.modo = m;
+      if (m === "forecast" && this.calc && !this.fcLinhas[this.versaoAtual()]) { this.passo = "Lendo o forecast…"; this.render(); this.garantirFc(this.versaoAtual()).then(() => { this.passo = ""; this.render(); }); return; }
       this.render();
-      const linhas = [], ccs = new Set();
-      for (const cab of docs) {
-        const sinal = String(cab.tipo).toUpperCase() === "RECEITAS" ? 1 : -1;
-        (await this.lerLinhas(cab)).forEach((l) => { const cc = String(l.cc).replace(/\D/g, ""); ccs.add(cc); linhas.push(Object.assign({}, l, { cc, sinal })); });
-      }
-      const empresas = R.empresasDosCcs([...ccs]);
-      if (!empresas.length) throw new Error("Não achei as empresas dos centros de custo do orçamento no cadastro de Centros de Custo do Integra.");
-      this.passo = `Lendo o realizado de ${this.ano} (${empresas.length} empresa(s))…`;
+    },
+    setAgrupar(v) { this.agrupar = v; this.abertos = this.abertosIniciais(); this.render(); },
+    alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
+
+    /** Árvore gerencial (regra do Órion: montar_dfc_gerencial). */
+    montar() {
+      const fol = this.folhas(this.modo === "forecast");
+      const porEmp = new Map();
+      fol.forEach((f) => { if (!porEmp.has(f.emp)) porEmp.set(f.emp, []); porEmp.get(f.emp).push(f); });
+      const empresas = [...porEmp.entries()].map(([emp, fs]) => {
+        const fator = this.fatorMldu(emp), nome = emp === "_sem" ? "SEM EMPRESA NO CADASTRO" : (this.nomeEmpresa(emp) || "Empresa " + emp).toUpperCase();
+        const marca = (x) => { x.fator = fator; (x.filhos || []).forEach(marca); return x; };
+        let filhos;
+        if (this.agrupar === "centro") {
+          const porCc = new Map();
+          fs.forEach((f) => { if (!porCc.has(f.cc)) porCc.set(f.cc, []); porCc.get(f.cc).push(f); });
+          filhos = [...porCc.entries()].map(([cc, l]) => {
+            const A = this.arvoreVisao(l, "e|" + emp + "|c|" + cc, false);
+            const cats = A.lista.filter((c) => c.t && (c.planos.length || c.sub.length)).filter((c) => this.temValor(c));
+            const x = Object.assign({ kind: "centro", id: "e|" + emp + "|c|" + cc, codigo: cc, nome: l[0].ccNome || ((this.ccInfo(cc) || {}).name) || "CC " + cc, filhos: cats }, this.somar(A.topo));
+            return this.tot(x);
+          }).sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR"));
+        } else {
+          const A = this.arvoreVisao(fs, "e|" + emp, true);
+          filhos = A.lista;
+          filhos.forEach((c) => { c.filhos = c.planos; });
+          const x = Object.assign({ kind: "empresa", id: "e|" + emp, codigo: emp === "_sem" ? "" : emp, nome, filhos }, this.somar(A.topo));
+          return marca(this.tot(x));
+        }
+        const x = Object.assign({ kind: "empresa", id: "e|" + emp, codigo: emp === "_sem" ? "" : emp, nome, filhos }, this.somar(filhos));
+        return marca(this.tot(x));
+      }).sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR") || String(a.codigo).localeCompare(String(b.codigo)));
+      const ms = this.ms(), entM = this.entradasMes(fol);
+      return { empresas, fol, entM, ent: ms.reduce((s, i) => s + entM[i], 0),
+        cheio: this.cartoes(fol), mldu: this.cartoes(fol, (f) => this.fatorMldu(f.emp)) };
+    },
+    temValor(c) { return ["real", "n1", "orc", "fc"].some((k) => c[k].some((v) => v)); },
+    abertosIniciais() {
+      const a = {};
+      if (this.calc) { try { this.montar().empresas.forEach((e) => { a[e.id] = true; }); } catch (e) { /* nada */ } }
+      return a;
+    },
+    expandir(on) {
+      const M = this.calc && this.montar();
+      this.abertos = {};
+      if (!M) return this.render();
+      const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; if (on) marca(x.filhos); } });
+      if (on) marca(M.empresas); else M.empresas.forEach((e) => { this.abertos[e.id] = true; });
       this.render();
-      const real = await R.buscar(Number(this.ano), ate, empresas);
-      this.passo = `Lendo o realizado de ${Number(this.ano) - 1}…`;
-      this.render();
-      const realN1 = await R.buscar(Number(this.ano) - 1, ate, empresas);
-      this.resultado = { bruto: true, linhas, real, realN1, ate, empresas, docs: docs.length, movimentos: real.movimentos, movimentosN1: realN1.movimentos };
-    } catch (e) { this.erro = e.message || String(e); }
-    this.carregando = false;
-    this.passo = "";
-    this.render();
-  },
-
-  farol(s) {
-    if (!s) return "";
-    const cores = { azul: "#0ea5e9", cinza: "#cbd5e1", verde: "#10b981", amarelo: "#fbbf24", vermelho: "#ef4444" };
-    return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:${cores[s.cor] || "#cbd5e1"};display:inline-block"></span>${this.esc(s.titulo)}</span>`;
-  },
-
-  agrupar: "visao",
-  series: { real_mldu: true, n1: true, n1_mldu: true, ref: true, ref_mldu: true },
-  ahavMensal: false,
-  abertos: {},
-  setAgrupar(v) { this.agrupar = v; this.abertos = {}; this.render(); },
-  alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
-  alternarAhAv() { this.ahavMensal = !this.ahavMensal; this.render(); },
-  alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
-  expandir(abrir) {
-    this.abertos = {};
-    if (abrir && this.resultado) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); marca(this.montar().empresas); }
-    this.render();
-  },
-
-  fatorMldu(empresaId) {
-    const fx = window.FluxoCaixaApp;
-    const lista = fx && typeof fx.allCompanies === "function" ? fx.allCompanies() : [];
-    const c = lista.find((x) => String(x.id) === String(empresaId));
-    return c && c.consolidacao ? (Number(c.pct) || 0) / 100 : 0;
-  },
-
-  /** DFC gerencial mês a mês (formato atual do Órion), com os filtros de empresa e meses aplicados ao que já foi lido. */
-  montar() {
-    const C = this.C(), R = this.R(), F = window.OrionFiltros;
-    const d = this.resultado;
-    const ms = new Set(F.mesesAtivos(this, 12));
-    const fl = (l) => l.filter((a) => ms.has(Number(a.mes)));
-    const f = F.filtrarEmpresas(this, d.linhas, d.real.alocacoes), fN1 = F.filtrarEmpresas(this, [], d.realN1.alocacoes);
-    const ref = f.linhas.map((l) => Object.assign({}, l, { m: (l.m || []).map((v, i) => (ms.has(i + 1) ? v : 0)) }));
-    const mapa = F.mapaCcEmpresa();
-    const cad = (window.OrionDepartamentosApp && window.OrionDepartamentosApp.dados && window.OrionDepartamentosApp.dados.itens) || {};
-    const nomesCc = Object.assign({}, cad.nomesCc || {}), nomesPl = Object.assign({}, cad.nomesPlano || {});
-    d.linhas.forEach((l) => { if (l.cc_nome) nomesCc[l.cc] = l.cc_nome; if (l.plano_nome) nomesPl[String(l.plano).replace(/\D/g, "")] = l.plano_nome; });
-    return C.dfcGerencialMensal({
-      real: fl(f.alocacoes), n1: fl(fN1.alocacoes), ref, grupos: R.grupos(), agrupar: this.agrupar,
-      grupoDe: (p) => R.grupoDe(p),
-      empresaDe: (cc, emp) => { const id = emp || mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; },
-      nomeCc: (cc) => nomesCc[cc] || cc, nomePlano: (p) => nomesPl[p] || p
-    });
-  },
-
-  htmlResultado() {
-    const C = this.C();
-    const d = this.resultado;
-    const r = this.montar();
-    const ano = Number(this.ano);
-    const refT = this.base === "forecast" ? "FC" : "Orç";
-    const SER = [["real", "Real", true], ["real_mldu", "MLDU"], ["n1", String(ano - 1)], ["n1_mldu", `${ano - 1} MLDU`], ["ref", refT], ["ref_mldu", `${refT} MLDU`]];
-    const ativas = SER.filter(([k, , lock]) => lock || this.series[k]);
-    const nCol = ativas.length + (this.ahavMensal ? 2 : 0);
-    const v = (c) => { const x = C.reais(c); return Math.abs(x) < 0.5 ? "–" : `${x < 0 ? "-" : ""}${Math.abs(x).toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`; };
-    const pct = (x) => (x == null ? "–" : (x * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
-    const entMes = new Array(12).fill(0);
-    r.empresas.forEach((e) => e.filhos.forEach((g) => g.real.forEach((y, i) => { if (y > 0) entMes[i] += y; })));
-    const cel = (x) => {
-      let h = "";
-      for (let i = 0; i < 12; i++) {
-        ativas.forEach(([k], j) => { h += `<td class="is-right${j === 0 ? " odf-ini" : ""}${x[k][i] < 0 ? " odf-neg" : ""}">${v(x[k][i])}</td>`; });
-        if (this.ahavMensal) h += `<td class="is-right">${pct(x.ah_m ? x.ah_m[i] : null)}</td><td class="is-right">${pct(entMes[i] && x.real[i] ? x.real[i] / entMes[i] : null)}</td>`;
-      }
-      ativas.forEach(([k], j) => { h += `<td class="is-right${j === 0 ? " odf-ini" : ""}${x.total[k] < 0 ? " odf-neg" : ""}"><b>${v(x.total[k])}</b></td>`; });
-      h += `<td class="is-right">${pct(x.ah)}</td><td class="is-right">${pct(x.av)}</td>`;
-      return h;
-    };
-    const linha = (x, nivel) => {
-      const tem = x.filhos && x.filhos.length;
-      const ab = !!this.abertos[x.id];
-      let out = `<tr class="odf-${x.tipo}" ${tem ? `onclick="OrionDfcApp.alternar('${this.esc(x.id)}')"` : ""}><td style="position:sticky;left:0;background:inherit;z-index:1;padding-left:${8 + nivel * 16}px">${tem ? (ab ? "▾ " : "▸ ") : ""}<span class="odf-cod">${this.esc(x.codigo)}</span>${this.esc(x.nome)}</td>${cel(x)}</tr>`;
-      if (tem && ab) x.filhos.forEach((y) => { out += linha(y, nivel + 1); });
+    },
+    /** Linhas visíveis (empresa, categoria/centro, plano, centro) com a profundidade. */
+    plano(lista, todas) {
+      const out = [];
+      const vai = (l, nivel) => l.forEach((x) => {
+        const tem = !!(x.filhos && x.filhos.length);
+        out.push({ x, nivel: nivel + (x.kind === "categoria" ? x.nivel || 0 : 0), tem });
+        if (tem && (todas || this.abertos[x.id])) vai(x.filhos, nivel + 1);
+      });
+      vai(lista, 0);
       return out;
-    };
-    const sub = ativas.map(([, t]) => `<th class="is-right">${this.esc(t)}</th>`).join("") + (this.ahavMensal ? '<th class="is-right">AH</th><th class="is-right">AV</th>' : "");
-    const cab1 = C.MESES.map((m) => `<th class="odf-mes" colspan="${nCol}">${m}</th>`).join("") + `<th class="odf-mes" colspan="${ativas.length + 2}">Total ${ano}</th>`;
-    const cab2 = new Array(12).fill(sub).join("") + ativas.map(([, t]) => `<th class="is-right">${this.esc(t)}</th>`).join("") + '<th class="is-right">AH %</th><th class="is-right">AV %</th>';
-    const btn = (k, t, lock) => `<button type="button" class="btn ${lock || this.series[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" ${lock ? "disabled" : `onclick="OrionDfcApp.alternarSerie('${k}')"`}>${this.esc(t)}</button>`;
-    return `<style>.odf-tab td,.odf-tab th{white-space:nowrap;font-size:0.7rem;padding:4px 6px !important}.odf-tab tr.odf-empresa td{background:#e2e8f0 !important;font-weight:800;cursor:pointer}.odf-tab tr.odf-categoria td{background:#f1f5f9 !important;font-weight:700;cursor:pointer}.odf-tab tr.odf-total td{background:#105436 !important;color:#fff !important;font-weight:800}.odf-tab th.odf-mes{text-align:center;border-left:2px solid #cbd5e1}.odf-tab td.odf-ini{border-left:2px solid #e2e8f0}.odf-cod{color:#64748b;font-family:monospace;margin-right:6px}.odf-neg{color:#b91c1c}</style>
-      <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px">${this.base === "forecast" ? "Forecast " + this.esc(C.documentosVigentes(this.cabs.forecast || [], { ano: this.ano, base: "forecast", versao: this.versao }).versao) : "Orçado"} ${this.esc(this.ano)} · ${d.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC, empresas ${this.esc(d.empresas.join(", "))}) até ${C.MESES[d.ate - 1]} · ${d.movimentos} movimentos (${d.movimentosN1} em ${ano - 1}). MLDU = % de consolidação da empresa (cadastro de Empresas). Sinal da DFC: entradas +, saídas −.</div>
-      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-        <span style="font-size:0.68rem;color:#64748b">AGRUPAR</span>
-        <button type="button" class="btn ${this.agrupar === "visao" ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.setAgrupar('visao')">Visão DFC <small>padrão</small></button>
-        <button type="button" class="btn ${this.agrupar === "centro" ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.setAgrupar('centro')">Centro de custo</button>
-        <span style="font-size:0.68rem;color:#64748b;margin-left:10px">SÉRIES</span>${SER.map(([k, t, lock]) => btn(k, t === "Real" ? "Real cheio" : t, lock)).join("")}
-        <button type="button" class="btn ${this.ahavMensal ? "btn-primary" : "btn-secondary"}" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.alternarAhAv()">AH/AV mensal</button>
-        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem;margin-left:auto" onclick="OrionDfcApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionDfcApp.expandir(false)">Recolher</button>
-      </div>
-      <div class="cc-scroll" style="max-height:70vh"><table class="cc-table odf-tab or-larga">
-        <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:280px">EMPRESA / GRUPO / ${this.agrupar === "centro" ? "CENTRO DE CUSTO" : "PLANO"}</th>${cab1}</tr><tr>${cab2}</tr></thead>
-        <tbody>${r.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem movimento.</td></tr>`}
-          <tr class="odf-total"><td style="position:sticky;left:0;background:#105436">Geração de caixa</td>${cel(r.total)}</tr></tbody></table></div>`;
-  },
-
-  render() {
-    const root = this.root();
-    if (!root) return;
-    if (!this.C()) { root.innerHTML = `<div style="padding:12px;color:#991b1b">Arquivo de cálculo não carregou. Recarregue a página.</div>`; return; }
-    const C = this.C();
-    const l = this.cabs[this.base] || [];
-    const anos = [...new Set(l.map((c) => c.ano))].sort((a, b) => b - a);
-    if (!anos.length) anos.push(Number(this.ano));
-    const depts = new Map();
-    l.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
-    const ateSug = (this.R() && this.R().ateMes(this.ano)) || 12;
-    const ate = this.ate || ateSug;
-    root.innerHTML = `${window.OrionFiltros.html(this, "OrionDfcApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano), empresas: this.resultado ? this.resultado.empresas : [], comMeses: !!this.resultado })}
-      ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
-      ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
-      ${this.resultado ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos. Depois do cálculo dá para filtrar por empresa e por mês sem nova busca.</div>`)}`;
-    if (this.resultado) window.OrionFiltros.bind(this, "OrionDfcApp", this.resultado.empresas);
-  }
-};
-
-window.OrionDfcApp = OrionDfcApp;
+    },
+    excel() {
+      const M = this.calc && this.montar();
+      if (!M) return;
+      const at = this.ativas(), r = (v) => Math.round(Number(v) || 0) / 100, p = (x) => (x == null ? "" : x * 100);
+      const cab = ["Nível", "Código", "Descrição"];
+      MES.forEach((m) => { at.forEach((k) => cab.push(`${m} ${this.rotSerie(k)[1]}`)); if (this.ahavMensal) cab.push(`${m} AH %`, `${m} AV %`); });
+      at.forEach((k) => cab.push(`Total ${this.ano} ${this.rotSerie(k)[1]}`)); cab.push("AH %", "AV %");
+      const nomes = { empresa: "Empresa", categoria: "Visão", plano: "Plano", centro: "Centro de custo" };
+      const rows = this.plano(M.empresas, true).map(({ x }) => {
+        const l = [nomes[x.kind] || "", x.codigo || "", x.nome || ""];
+        for (let i = 0; i < 12; i++) { at.forEach((k) => l.push(r(this.val(x, k, i)))); if (this.ahavMensal) l.push(p(this.ah(x.real[i], x.n1[i])), p(M.entM[i] ? x.real[i] / M.entM[i] : null)); }
+        at.forEach((k) => l.push(r(this.val(x, k)))); l.push(p(this.ah(x.t.real, x.t.n1)), p(M.ent ? x.t.real / M.ent : null));
+        return l;
+      });
+      this.baixar(cab, rows, `DFC_gerencial_${this.ano}.xlsx`, "DFC gerencial");
+    },
+    htmlTabela(M) {
+      const N = this.N, at = this.ativas();
+      const nCol = at.length + (this.ahavMensal ? 2 : 0);
+      const cels = (x) => {
+        let h = "";
+        for (let i = 0; i < 12; i++) {
+          at.forEach((k, j) => { h += `<td class="is-right${j === 0 ? " odv-ini" : ""}" style="${k === "real" ? "font-weight:600" : ""}">${this.num(this.val(x, k, i))}</td>`; });
+          if (this.ahavMensal) h += `<td class="is-right">${this.per(this.ah(x.real[i], x.n1[i]))}</td><td class="is-right">${this.per(M.entM[i] ? x.real[i] / M.entM[i] : null)}</td>`;
+        }
+        at.forEach((k, j) => { h += `<td class="is-right odv-tot${j === 0 ? " odv-ini" : ""}">${this.num(this.val(x, k))}</td>`; });
+        return h + `<td class="is-right odv-ini">${this.per(this.ah(x.t.real, x.t.n1))}</td><td class="is-right">${this.per(M.ent ? x.t.real / M.ent : null)}</td>`;
+      };
+      const cls = { empresa: "odv-emp", centro: "odv-cc", categoria: "odv-cat", plano: "odv-pl" };
+      const corpo = this.plano(M.empresas, false).map(({ x, nivel, tem }) => {
+        const ab = !!this.abertos[x.id];
+        const c = x.kind === "centro" && nivel > 2 ? "odv-ce" : cls[x.kind] || "odv-pl";
+        const forte = x.kind === "empresa" || x.kind === "categoria" || (x.kind === "centro" && this.agrupar === "centro");
+        return `<tr class="${c}"><td class="odv-nome" style="padding-left:${8 + nivel * 16}px;${tem ? "cursor:pointer" : ""}" ${tem ? `onclick="${N}.alternar('${this.esc(x.id)}')"` : ""}><span style="display:inline-block;width:14px;color:#94a3b8">${tem ? (ab ? "▾" : "▸") : ""}</span><span class="odv-cod">${this.esc(x.codigo)}</span>${forte ? `<b>${this.esc(x.nome)}</b>` : this.esc(x.nome || x.codigo)}</td>${cels(x)}</tr>`;
+      }).join("");
+      const h1 = MES.map((m) => `<th colspan="${nCol}" class="is-center odv-ini">${m}</th>`).join("") + `<th colspan="${at.length}" class="is-center odv-ini" style="background:#105436">Total ${this.esc(this.ano)}</th><th rowspan="2" class="is-right odv-ini">AH %</th><th rowspan="2" class="is-right">AV %</th>`;
+      const sub = at.map((k, j) => `<th class="is-right${j === 0 ? " odv-ini" : ""}">${this.rotSerie(k)[1]}</th>`).join("") + (this.ahavMensal ? `<th class="is-right">AH %</th><th class="is-right">AV %</th>` : "");
+      const h2 = new Array(12).fill(sub).join("") + at.map((k, j) => `<th class="is-right${j === 0 ? " odv-ini" : ""}">${this.rotSerie(k)[1]}</th>`).join("");
+      const largura = 340 + (12 * nCol + at.length) * 105 + 170;
+      const cols = `<col style="width:340px">${new Array(12 * nCol + at.length).fill(`<col style="width:105px">`).join("")}<col style="width:85px"><col style="width:85px">`;
+      return `<div class="cc-scroll" style="max-height:66vh"><table class="cc-table odv-tab" style="min-width:${largura}px"><colgroup>${cols}</colgroup><thead><tr><th rowspan="2" class="odv-nome">${this.agrupar === "centro" ? "Empresa / CC / Visão" : "Empresa / Visão / Plano"}</th>${h1}</tr><tr>${h2}</tr></thead><tbody>${corpo || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem movimento.</td></tr>`}</tbody></table></div>`;
+    },
+    render() {
+      const root = this.root();
+      if (!root) return;
+      if (!this.C()) { root.innerHTML = `<div style="padding:12px;color:#991b1b">Arquivo de cálculo não carregou. Recarregue a página.</div>`; return; }
+      this.estilos();
+      root.classList.add("odv");
+      const N = this.N, vs = this.versoesFc();
+      const extra = `<div><label class="ml-emp-filter-label">Comparar com</label><div class="odv-seg alto"><button type="button" class="${this.modo === "orcado" ? "on" : ""}" onclick="${N}.setModo('orcado')">Orçado</button><button type="button" class="${this.modo === "forecast" ? "on" : ""}" onclick="${N}.setModo('forecast')">Forecast</button></div></div>
+        ${this.modo === "forecast" && vs.length ? `<div><label class="ml-emp-filter-label">Versão</label><select class="idx-select" style="height:40px;min-width:150px" onchange="${N}.setVersao(this.value)">${vs.map((v) => `<option value="${this.esc(v)}" ${v === this.versaoAtual() ? "selected" : ""}>${this.esc(this.C().rotuloVersao(v, "forecast"))}</option>`).join("")}</select></div>` : ""}`;
+      const topo = `<div style="margin-bottom:12px"><h2 style="font-size:1.4rem;font-weight:800;color:var(--color-primary);margin:0">DFC gerencial</h2>
+          <p style="font-size:0.8rem;color:#6b8474;margin:2px 0 0">Mesmos números do DFC, por empresa, visão, plano e centro de custo. Cheio e MLDU lado a lado. Saídas negativas.</p></div>` + this.htmlFiltros(extra);
+      const corpo = this.corpoPadrao(() => {
+        const M = this.montar(), leg = this.legendaMeses(), K = M.cheio, Km = M.mldu;
+        const lgG = `YTD até ${K.corte ? MES[K.corte - 1].toLowerCase() : "—"} + YTG orçado`;
+        const cards = `<div class="odv-kpis">${this.kpi("Entradas", leg, K.entradas, Km.entradas)}${this.kpi("Saídas", leg, K.saidas, Km.saidas)}${this.kpi("Líquido", leg, K.liquido, Km.liquido)}${this.kpi("Geração de caixa", lgG, K.geracao, Km.geracao)}</div>` + this.legendaSemaforo();
+        const barra = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px"><div style="font-weight:800;color:#1c2e24">Visão DFC <span class="odv-lbl" style="margin-left:6px">padrão</span></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="odv-lbl">Agrupar</span>
+            <button type="button" class="odv-chip ${this.agrupar === "visao" ? "esc" : ""}" onclick="${N}.setAgrupar('visao')">Empresa → Visão</button><button type="button" class="odv-chip ${this.agrupar === "centro" ? "esc" : ""}" onclick="${N}.setAgrupar('centro')">Empresa → CC</button>
+            <span class="odv-lbl" style="margin-left:6px">Séries</span>
+            ${SER.map(([k]) => `<button type="button" class="odv-chip ${k === "real" || this.series[k] ? "on" : ""}" ${k === "real" ? "disabled" : `onclick="${N}.alternarSerie('${k}')"`}>${this.rotSerie(k)[0]}</button>`).join("")}
+            <button type="button" class="odv-chip ${this.ahavMensal ? "on" : ""}" onclick="${N}.ahavMensal=!${N}.ahavMensal;${N}.render()">AH/AV mensal</button>
+            <button type="button" class="odv-link" style="margin-left:6px" onclick="${N}.expandir(true)">Expandir</button><button type="button" class="odv-link" style="color:#6b8474" onclick="${N}.expandir(false)">Recolher</button>
+            <button type="button" class="btn btn-excel" style="height:32px" onclick="${N}.excel()">⬇ Excel</button></div></div>`;
+        return cards + `<div class="odv-card">${barra}${this.passo ? `<div style="font-size:0.75rem;color:#166534;margin-bottom:6px">⟳ ${this.esc(this.passo)}</div>` : ""}${this.htmlTabela(M)}</div>
+          <div style="font-size:0.7rem;color:#94a3b8">Fonte: mesmos números do DFC (Orçado × Realizado pela Visão DFC padrão do Integra). Planos fora da visão não entram. Cheio = 100%; MLDU = % de consolidação da empresa (cadastro de Empresas). LY é só o realizado do ano anterior. <button type="button" class="odv-link" style="font-size:0.7rem" onclick="switchTab('orion-dfcv', 'DFC (Órion)')">Conferência com o DFC</button>.</div>`;
+      });
+      root.innerHTML = topo + (this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : "") + corpo;
+      this.ligarFiltros();
+    }
+  });
+  window.OrionDfcApp = App;
+})();
