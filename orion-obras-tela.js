@@ -170,12 +170,14 @@
           `<div class="ofg-f ofg-span2">${sel}</div>`,
           window.OrionFiltros.campo("Visão de parceria", `<select class="idx-select" ${ehObra ? "" : "disabled title=\"Viabilidade sem obra: só a visão consolidada\""} onchange="OrionObrasApp.setVisao(this.value)">${[["consolidado", "Consolidada"], ["empreendedor", "Empreendedor"], ["parceiro", "Parceiro"]].map(([k, t]) => `<option value="${k}" ${this.visao === k ? "selected" : ""}>${t}</option>`).join("")}</select>`)] }],
           `<button type="button" class="btn oac-out" onclick="OrionObrasApp.comoLemos=true;OrionObrasApp.render()">Como lemos estes números</button>
+            ${ehObra ? `<button type="button" class="btn oac-out" onclick="OrionObrasApp.irViab()">Viabilidade × realizado ↓</button>` : ""}
             ${ehObra ? `<button type="button" class="btn oac-out" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar('${this.esc(item.id)}')">⟳ Atualizar com o Sienge</button>` : ""}
-            <button type="button" class="btn btn-primary" onclick="window.print()">⬇ Exportar</button>`, { acaoCls: "ofg-acao3" })}</div>`;
+            <button type="button" class="btn btn-primary" onclick="window.print()">⬇ Exportar</button>`, { acaoCls: ehObra ? "ofg-acao-linha" : "ofg-acao3" })}</div>`;
       let d;
       if (ehObra) {
         const acts = this.actsDe(item, this.visao, false);
-        if (!acts) return barra + `<div class="oac-card" style="padding:28px;text-align:center;color:#64748b">Este empreendimento ainda não foi lido do Sienge. Clique em <b>Atualizar com o Sienge</b> (lê vendas, realizado e contas em aberto de ${item.membros.map((m) => m.cc).join(", ")}).</div>`;
+        if (!acts) return barra + `<div class="oac-card" style="padding:28px;text-align:center;color:#64748b">Este empreendimento ainda não foi lido do Sienge. Clique em <b>Atualizar com o Sienge</b> (lê vendas, realizado e contas em aberto de ${item.membros.map((m) => m.cc).join(", ")}).</div>`
+          + (typeof this.htmlViabRealizado === "function" ? this.htmlViabRealizado(item) : "");
         d = C.detalheGrupo(acts, this.tmaDe(item.membros.map((m) => m.cc)));
       } else d = this.detalheViab(item);
       if (!d) return barra + `<div class="oac-card" style="padding:28px;text-align:center;color:#64748b">Não encontrei a viabilidade deste item. Abra Órion (transição) › Viabilidades e clique em Atualizar.</div>`;
@@ -260,7 +262,7 @@
     this.estilosTela();
     if (!document.getElementById("oob-estilos")) { const st = document.createElement("style"); st.id = "oob-estilos"; st.textContent = ".cc-table tr.oob-total td { background:#105436 !important; color:#fff !important; font-weight:800; }"; document.head.appendChild(st); }
     const cab = this.editor ? "" : `<div class="oac-cab"><h2 class="oac-titulo">Acompanhamento de empreendimentos</h2>${this.aberto ? "" : `<button type="button" class="btn oac-out oac-nao-imprime" style="height:40px" onclick="OrionObrasApp.comoLemos=true;OrionObrasApp.render()">Como lemos estes números</button>`}</div>
-      <div class="oac-abas oac-nao-imprime"><button type="button" class="oac-aba ${this.aberto ? "" : "on"}" onclick="OrionObrasApp.voltar()">Visão Geral</button><button type="button" class="oac-aba ${this.aberto ? "on" : ""}" onclick="OrionObrasApp.irEmpreendimentos()">Empreendimentos</button></div>`;
+      <div class="oac-abas oac-nao-imprime"><button type="button" class="oac-aba ${this.aberto ? "" : "on"}" onclick="OrionObrasApp.voltar()">Visão Geral</button><button type="button" class="oac-aba ${this.aberto ? "on" : ""}" onclick="OrionObrasApp.irEmpreendimentos()">Empreendimentos</button><button type="button" class="oac-aba" title="Abre o empreendimento e vai direto ao bloco Viabilidade × realizado" onclick="OrionObrasApp.irViab()">Viabilidade × realizado</button></div>`;
     root.innerHTML = `${cab}${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#105436;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:16px;color:#64748b;"><div class="spinner" style="margin:0 auto 10px;"></div>${this.esc(this.passo || "Aguarde…")}</div>` : ""}
