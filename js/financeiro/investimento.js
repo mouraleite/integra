@@ -1964,7 +1964,7 @@ const InvestimentoApp = {
   async logoDataUrl() {
     const urls = [
       "https://yt3.googleusercontent.com/rx0DOaXFXLF0HHeZtC_xI7vR23Y7Jxmm7gA6o_emTX6qFNIDo3J91z11ASXDNypT57crV1EPOQ=s900-c-k-c0x00ffffff-no-rj",
-      "Banner/logo comemorativa.png"
+      "assets/marca/logo comemorativa.png"
     ];
     for (let i = 0; i < urls.length; i++) {
       try {

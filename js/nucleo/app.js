@@ -3702,7 +3702,7 @@ window.bootEngenhariaCaucao = function () {
   if (!document.getElementById("engenharia-caucao-script")) {
     var s = document.createElement("script");
     s.id = "engenharia-caucao-script";
-    s.src = "engenharia-caucao.js?v=960";
+    s.src = "js/engenharia/engenharia-caucao.js?v=960";
     s.onload = function () { start(); };
     s.onerror = function () {
       if (root) {
@@ -3718,10 +3718,106 @@ window.bootEngenhariaCaucao = function () {
   }, 200);
 };
 
+/* Carga sob demanda: telas grandes, usadas por poucas pessoas, só baixam o código quando abertas.
+   Os arquivos ficam declarados no index.html como <script type="text/x-sob-demanda" data-grupo="..." data-src="...">,
+   na mesma ordem de antes e com a versão de cada um. Um arquivo nunca roda duas vezes. */
+(function () {
+  var ABA_GRUPO = {
+    "orcamento": "orcamento", "orcamento-novo": "orcamento", "orcamento-forecast": "orcamento",
+    "orcamento-acompanhamento": "orcamento", "resultado-caixa": "orcamento", "tabelas-vigentes": "orcamento",
+    "marketing-eventos": "marketing", "construcao-marketing": "marketing", "marketing-budget": "marketing",
+    "marketing-config": "marketing", "prestacao-contas": "marketing",
+    "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
+    "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
+    "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
+    // Órion (transição): usa a Visão DFC e a base 2027 do Orçamento (realizado, DFC, análise, orçamento do Integra)
+    "orion-carga": "orcamento", "orion-carga-sharepoint": "orcamento", "orion-orcamentos": "orcamento", "orion-resumo": "orcamento",
+    "orion-oxr": "orcamento", "orion-analise": "orcamento", "orion-dfcv": "orcamento", "orion-dfc": "orcamento",
+    "orion-viabilidades": "orcamento", "orion-obras": "orcamento", "orion-obras-dfc": "orcamento", "orion-acompanhamento": "orcamento",
+    "orion-premissas": "orcamento", "orion-fechamento": "orcamento", "orion-departamentos": "orcamento"
+  };
+  var grupoPronto = {};
+  var grupoEmCurso = {};
+  var arquivoRodou = {};
+  function arquivosDoGrupo(g) {
+    return Array.prototype.slice.call(document.querySelectorAll('script[type="text/x-sob-demanda"]'))
+      .filter(function (s) { return s.getAttribute("data-grupo") === g; })
+      .map(function (s) { return s.getAttribute("data-src"); });
+  }
+  function carregarGrupo(g) {
+    if (grupoEmCurso[g]) return grupoEmCurso[g];
+    var lista = arquivosDoGrupo(g).filter(function (src) { return !arquivoRodou[src]; });
+    grupoEmCurso[g] = new Promise(function (resolve, reject) {
+      var faltam = lista.length;
+      var falhou = false;
+      if (!faltam) return resolve();
+      lista.forEach(function (src) {
+        var s = document.createElement("script");
+        s.src = src;
+        s.async = false; // baixa em paralelo, executa na ordem do index.html
+        s.onload = function () {
+          arquivoRodou[src] = true;
+          faltam -= 1;
+          if (!faltam && !falhou) resolve();
+        };
+        s.onerror = function () {
+          if (falhou) return;
+          falhou = true;
+          reject(new Error("Não foi possível baixar " + src));
+        };
+        document.body.appendChild(s);
+      });
+    }).then(function () {
+      grupoPronto[g] = true;
+    }, function (err) {
+      delete grupoEmCurso[g];
+      throw err;
+    });
+    return grupoEmCurso[g];
+  }
+  function aviso(mostrar) {
+    var el = document.getElementById("crm-carregando-tela");
+    if (!mostrar) { if (el) el.style.display = "none"; return; }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "crm-carregando-tela";
+      el.setAttribute("role", "status");
+      el.style.cssText = "position:fixed;right:18px;bottom:18px;z-index:2147483000;background:#105436;color:#fff;padding:9px 14px;border-radius:8px;font-size:0.85rem;font-weight:600;box-shadow:0 6px 18px rgba(15,23,42,.25);";
+      el.textContent = "Carregando a tela…";
+      document.body.appendChild(el);
+    }
+    el.style.display = "block";
+  }
+  window.crmGrupoSobDemandaPendente = function (tabId) {
+    var g = ABA_GRUPO[tabId];
+    return g && !grupoPronto[g] ? g : null;
+  };
+  window.crmAbrirTelaSobDemanda = function (g, tabId, args) {
+    aviso(true);
+    carregarGrupo(g).then(function () {
+      aviso(false);
+      if (window._crmAbaPedida === tabId && typeof window.switchTab === "function") window.switchTab.apply(window, args);
+    }, function (err) {
+      aviso(false);
+      console.error("[Integra] Carga sob demanda:", err);
+      alert("Não foi possível abrir esta tela agora: o código dela não baixou. Verifique a internet e tente de novo.");
+    });
+  };
+  window.crmCarregarGrupoSobDemanda = carregarGrupo;
+})();
+
 function switchTab(tabId, titleOverride, showLoader = false) {
   if (window._crmAcessoSoHome && tabId !== "construcao-home") {
     tabId = "construcao-home";
     titleOverride = "Home";
+  }
+  window._crmAbaPedida = tabId;
+  if (typeof window.crmGrupoSobDemandaPendente === "function") {
+    const grupoSobDemanda = window.crmGrupoSobDemandaPendente(tabId);
+    if (grupoSobDemanda) {
+      window.crmAbrirTelaSobDemanda(grupoSobDemanda, tabId, [tabId, titleOverride, showLoader]);
+      return;
+    }
   }
   if (String(tabId || "").indexOf("relacionamento") === 0 && typeof window.isCrmSuperAdmin === "function" && !window.isCrmSuperAdmin()) {
     let relPerms = {};
@@ -3917,6 +4013,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "Fluxo de caixa diário",
     mutuo: "Mútuo",
     "relatorios-cr": "Relatórios",
+    "importar-acionamentos": "Importar acionamentos",
     "resultado-caixa": "Resultado de caixa",
     "orcamento-novo": "Novo orçamento",
     "orcamento-forecast": "Novo forecast",
@@ -7085,15 +7182,22 @@ window.applyPermissions = function(profileName) {
   }
 
   if (window.isCrmAdminProfileName(profileName)) {
+    if (typeof window.crmGarantirImportarAcionamentos === "function") {
+      const atuais = typeof window.readCrmProfilePerms === "function" ? window.readCrmProfilePerms(profileName) : {};
+      window.crmGarantirImportarAcionamentos(profileName, atuais);
+    }
     window._crmAcessoSoHome = false;
     document.querySelectorAll("li[data-module]").forEach((item) => { item.style.display = ""; });
     document.querySelectorAll(".nav-group").forEach((group) => { group.style.display = ""; });
     return;
   }
 
-  const perms = typeof window.readCrmProfilePerms === "function"
+  let perms = typeof window.readCrmProfilePerms === "function"
     ? window.readCrmProfilePerms(profileName)
     : {};
+  if (typeof window.crmGarantirImportarAcionamentos === "function") {
+    perms = window.crmGarantirImportarAcionamentos(profileName, perms) || perms;
+  }
   const hasAny = !!(perms && Object.keys(perms).some((k) => String(k).startsWith("mod_") && perms[k] === true));
   
   if (hasAny) {
@@ -24745,7 +24849,7 @@ function renegLinhasLargura(pdf, texto, largura) {
 
 async function renegLogoTermo() {
   try {
-    const res = await fetch("Banner/logo moura leite loteamentos.png");
+    const res = await fetch("assets/marca/logo moura leite loteamentos.png");
     if (!res.ok) return "";
     const buf = await res.arrayBuffer();
     const bytes = new Uint8Array(buf);
@@ -29534,7 +29638,7 @@ window.centerSimpleDocSignature = function(html) {
   return (before ? before + "\n" : "") + centered + (afterRest ? "\n" + afterRest : "");
 };
 
-window.QUITACAO_RUBRICA_SRC = "Banner/rubrica-quitacao.png";
+window.QUITACAO_RUBRICA_SRC = "assets/marca/rubrica-quitacao.png";
 
 window.quitacaoCanaisHtml = function() {
   const red = "color:#e00000;font-weight:700;";
@@ -33622,7 +33726,7 @@ window.fireConfetti = function() {
                     <span style="font-size: 1.15rem;">Parabéns! Você finalizou a agenda de hoje! 🎉</span>
                 </div>
                 ${window.htmlMaisAgendamentos ? window.htmlMaisAgendamentos() : ""}
-                <img src="selo/seu-barriga.jpg" alt="Selo de Qualidade Seu Barriga" style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; animation: seloPulse 2s infinite ease-in-out; border: 4px solid #166534;">
+                <img src="assets/selo/seu-barriga.jpg" alt="Selo de Qualidade Seu Barriga" style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; animation: seloPulse 2s infinite ease-in-out; border: 4px solid #166534;">
             </div>
           `;
           table.parentNode.insertBefore(successDiv, table);
@@ -45924,7 +46028,7 @@ async function previewDocPadrao(tipo) {
     const formal = String(await fillLegalPreview(corpo)).replace(/\{\{\s*CANAIS_ATENDIMENTO\s*\}\}/g, '');
     const aviso = window.applyQuitacaoRubrica(window.centerSimpleDocSignature(
       String(await fillLegalPreview(corpo)).replace(/\{\{\s*CANAIS_ATENDIMENTO\s*\}\}/g, window.quitacaoCanaisHtml())
-    )).replace(/src="Banner\//, `src="${location.origin}/Banner/`);
+    )).replace(/src="assets\/marca\//, `src="${location.origin}/assets/marca/`);
     const bloco = (rotulo, html) => `<h3 style="color:#64748b;font-size:13px;text-transform:uppercase;margin:24px 0 8px;">${rotulo}</h3><h2 style="text-align:center;">${title}</h2><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${html}</div>`;
     content = bloco('Com rubrica digital', aviso)
       + '<hr style="margin:32px 0;border-top:2px dashed #94a3b8;">'
@@ -57927,7 +58031,7 @@ window.testarZerarFila = function() {
               <i data-lucide="party-popper" style="width: 24px; height: 24px; color: #166534;"></i> 
               <span style="font-size: 1.15rem;">Parabéns! Você finalizou sua fila de cobrança de hoje! 🎉 (MODO TESTE)</span>
           </div>
-          <img src="selo/seu-barriga.jpg" alt="Selo de Qualidade Seu Barriga" style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; animation: seloPulseTest 2s infinite ease-in-out; border: 4px solid #166534;">
+          <img src="assets/selo/seu-barriga.jpg" alt="Selo de Qualidade Seu Barriga" style="width: 200px; height: 200px; object-fit: cover; border-radius: 50%; animation: seloPulseTest 2s infinite ease-in-out; border: 4px solid #166534;">
       </div>
     `;
     table.parentNode.insertBefore(successDiv, table);

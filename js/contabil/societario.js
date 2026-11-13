@@ -2130,7 +2130,7 @@ const SocietarioApp = {
     return `<div style="width:${frameW + 32}px;background:#fff;padding:16px;font-family:Arial,Helvetica,sans-serif;">
       <div style="position:relative;width:${frameW}px;height:${frameH}px;border:2px solid #1f6b45;border-radius:10px;box-sizing:border-box;overflow:hidden;background:#fff;">
         <div style="position:absolute;left:18px;top:14px;display:flex;align-items:center;gap:10px;">
-          <img src="i.ntegr.a/logo-moura-leite.svg" alt="Moura Leite" style="height:42px;width:auto;">
+          <img src="assets/integra/logo-moura-leite.svg" alt="Moura Leite" style="height:42px;width:auto;">
         </div>
         <div style="position:absolute;left:0;right:0;top:16px;text-align:center;font-size:18px;font-weight:700;letter-spacing:0.08em;color:#1f6b45;">ESTRUTURA SOCIETÁRIA</div>
         <div style="position:absolute;left:18px;right:18px;top:54px;border-top:1px solid #d6e4da;"></div>

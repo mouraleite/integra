@@ -16,7 +16,7 @@ O código novo precisa já ter sido enviado ao `main`. O workflow não vê arqui
 - Faz push para GitHub → Vercel atualiza automaticamente
 - Também grava no commit o que ainda não tinha sido enviado
 
-### `upload_config.bat` — Use quando mudar configurações de regras
+### `ferramentas/servidor-local/upload_config.bat` — Use quando mudar configurações de regras
 - Sobe configurações do sistema para o Firebase
 - Não é deploy de código — é configuração de dados
 
@@ -35,6 +35,8 @@ deploy.bat
   ├─ Lê a versão atual do badge no index.html (ex: v1.0.108)
   ├─ Incrementa o patch: v1.0.109
   ├─ Atualiza o badge na tela lateral do CRM
+  ├─ Atualiza o ?v= de cada arquivo com um código do conteúdo dele
+  │   (arquivo que não mudou não é baixado de novo pelos usuários)
   ├─ git commit -m "v1.0.109 - DD/MM/AAAA"
   ├─ git tag v1.0.109   ← snapshot de toda a pasta
   ├─ git push           ← GitHub recebe → Vercel atualiza
@@ -43,7 +45,7 @@ deploy.bat
 
 ## 📁 Versões no GitHub
 
-Acesse: **github.com/seu-usuario/CRM-gestao → Tags**
+Acesse: **github.com/mouraleite/integra → Tags**
 
 Cada tag é uma "foto" completa da pasta. Você pode:
 - Navegar o código de qualquer versão anterior
@@ -59,7 +61,7 @@ git checkout main        ← volta ao atual
 ---
 
 ## Publicação na Vercel
-O deploy usa só o que está na raiz, em `api/` e em `lib/`. A pasta `arquivo/` guarda cópia antiga, script avulso e imagem de referência. Ela não entra na publicação.
+O site publica `index.html`, `vistoria.html`, `js/`, `css/`, `assets/`, `api/`, `lib/` e `ferramentas/robo-pacote/`. Não entram na publicação (ver `.vercelignore`): `arquivo/`, `docs/`, `ferramentas/servidor-local/`, os `.bat` e os `.md`.
 
 Para publicar, rode **Publicar versão** no GitHub. O `deploy.bat` na raiz continua fazendo o mesmo fluxo na máquina. O envio de emergência continua em `deploy_emergencia.bat`.
 

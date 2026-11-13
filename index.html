@@ -5,11 +5,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IntegrA Moura Leite</title>
-  <link rel="icon" type="image/png" href="i.ntegr.a/arvore.png">
-  <link rel="apple-touch-icon" href="i.ntegr.a/arvore.png">
+  <link rel="icon" type="image/png" href="assets/integra/arvore.png">
+  <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="style.css?v=2143">
+  <link rel="stylesheet" href="css/style.css?v=971a460be7">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -891,7 +891,7 @@
 
     <div class="login-pane-brand">
       <div class="login-band login-band-logo">
-        <img src="i.ntegr.a/logo-oficial.png?v=2143" alt="I.ntegr.A Moura Leite">
+        <img src="assets/integra/logo-oficial.png?v=e3b8c67c10" alt="I.ntegr.A Moura Leite">
       </div>
 
       <div class="login-band login-band-action">
@@ -902,13 +902,13 @@
       </div>
 
       <div class="login-band login-band-30">
-        <img class="login-30-logo" src="Banner/logo preta comemorativa.png" alt="Moura Leite 30 anos" onerror="this.onerror=null; this.src='Banner/logo comemorativa.png';">
+        <img class="login-30-logo" src="assets/marca/logo preta comemorativa.png" alt="Moura Leite 30 anos" onerror="this.onerror=null; this.src='assets/marca/logo comemorativa.png';">
       </div>
     </div>
 
     <div class="login-pane-video">
       <video id="login-bg-video" autoplay muted loop playsinline preload="auto">
-        <source src="Banner/Banner_.mp4" type="video/mp4">
+        <source src="assets/marca/Banner_.mp4" type="video/mp4">
       </video>
     </div>
     
@@ -935,7 +935,7 @@
       <div class="brand-section">
         <div class="brand-logo-container" style="background: #ffffff; box-shadow: none;">
           <img
-            src="i.ntegr.a/arvore.png"
+            src="assets/integra/arvore.png"
             alt="I.ntegr.A Moura Leite" style="width: 100%; height: 100%; object-fit: contain;">
         </div>
         <div class="brand-text">
@@ -1026,6 +1026,9 @@
                 </li>
                 <li data-tab="dashboard" data-module="sub_fin_cr_fila_cobranca_acessar">
                   <a onclick="switchTab('dashboard', 'Fila de Cobrança')">Fila de Cobrança</a>
+                </li>
+                <li data-tab="importar-acionamentos" data-module="sub_fin_cr_importar_acionamentos_acessar">
+                  <a onclick="switchTab('importar-acionamentos', 'Importar acionamentos')">Importar acionamentos</a>
                 </li>
                 <li data-tab="central-email" data-module="sub_fin_cr_central_email_acessar">
                   <a onclick="switchTab('central-email', 'Central de e-mail')">Central de e-mail</a>
@@ -1495,7 +1498,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2143 &nbsp;&middot;&nbsp; 13/11/2026
+            v1.0.2145 &nbsp;&middot;&nbsp; 13/11/2026
           </span>
         </div>
       </div>
@@ -3362,6 +3365,10 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
         <div id="scod-root"></div>
       </section>
 
+      <section id="tab-importar-acionamentos" class="tab-pane" style="display: none;">
+        <div id="importar-acionamentos-root"></div>
+      </section>
+
       <section id="tab-recebimentos-webro" class="tab-pane" style="display: none;">
         <div id="recebimentos-webro-root"></div>
       </section>
@@ -3442,7 +3449,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
         <!-- Container padrão (Em Construção) -->
         <div id="home-em-construcao-container"
           style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 500px; text-align: center;">
-          <img src="i.ntegr.a/arvore.png?v=2143" alt="I.ntegr.A" style="width: min(560px, 72vw); max-width: 560px; margin-bottom: 1.25rem;">
+          <img src="assets/integra/arvore.png?v=7a29624c98" alt="I.ntegr.A" style="width: min(560px, 72vw); max-width: 560px; margin-bottom: 1.25rem;">
           <p style="color: var(--color-primary); font-size: 1.15rem; font-weight: 600; letter-spacing: 0.06em; margin: 0;">
             Inteligência - Integração - Agilidade
           </p>
@@ -4248,7 +4255,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
         <section id="tab-construcao-seguranca" class="tab-pane" style="display: none;">
           <div
             style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 500px; text-align: center;">
-            <img src="i.ntegr.a/arvore.png?v=2143" alt="I.ntegr.A" style="width: min(560px, 72vw); max-width: 560px; margin-bottom: 2rem;">
+            <img src="assets/integra/arvore.png?v=7a29624c98" alt="I.ntegr.A" style="width: min(560px, 72vw); max-width: 560px; margin-bottom: 2rem;">
             <h2 style="color: var(--color-primary); font-size: 1.8rem; margin-bottom: 0;">Módulo em Construção</h2>
           </div>
         </section>
@@ -8747,152 +8754,153 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/digidem/leaflet-side-by-side@2.0.0/leaflet-side-by-side.min.js"></script>
   <!-- Scripts de Negócio -->
-  <script type="module" src="firebase-config.js?v=2143"></script>
+  <script type="module" src="js/nucleo/firebase-config.js?v=21868475ac"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="data.js?v=2143"></script>
-  <script defer src="sienge-api.js?v=2143"></script>
-  <script defer src="consumo-api.js?v=2143"></script>
-  <script defer src="azure-auth.js?v=2143"></script>
-  <script defer src="usuarios-online.js?v=2143"></script>
-  <script defer src="alertas-popup.js?v=2143"></script>
-  <script defer src="auditoria-login.js?v=2143"></script>
-  <script defer src="app.js?v=2143"></script>
-  <script defer src="followup-cnd.js?v=2143"></script>
-  <script defer src="central-email.js?v=2143"></script>
-  <script defer src="fluxos-processo.js?v=2143"></script>
-  <script defer src="custas-judiciais.js?v=2143"></script>
-  <script defer src="pagar-reembolso.js?v=2143"></script>
-  <script defer src="processo-contra.js?v=2143"></script>
-  <script defer src="reintegracao-posse.js?v=2143"></script>
-  <script defer src="empresa-filter.js?v=2143"></script>
-  <script defer src="cartao-taxas.js?v=2143"></script>
-  <script defer src="alcada-desconto.js?v=2143"></script>
-  <script defer src="alcada-distrato.js?v=2143"></script>
-  <script defer src="home-dashboard.js?v=2143"></script>
-  <script defer src="anexos.js?v=2143"></script>
-  <script defer src="contas-pagar.js?v=2143"></script>
-    <script defer src="boleto-check.js?v=2143"></script>
-    <script defer src="nota-fiscal-check.js?v=2143"></script>
-    <script defer src="gerar-pagamento.js?v=2143"></script>
-    <script defer src="contabil.js?v=2143"></script>
-    <script defer src="contabil-equiv.js?v=2143"></script>
-    <script defer src="contabil-depara.js?v=2143"></script>
-  <script defer src="rydoo.js?v=2143"></script>
-  <script defer src="titulos-incompletos.js?v=2143"></script>
-  <script defer src="compras-previsoes.js?v=2143"></script>
-  <script defer src="compras-controle-financeiro.js?v=2143"></script>
-  <script defer src="compras-dashboard.js?v=2143"></script>
-  <script defer src="caucao-core.js?v=2143"></script>
-  <script defer src="engenharia-caucao.js?v=2143"></script>
-  <script defer src="engenharia-custo-obra-dados.js?v=2143"></script>
-  <script defer src="engenharia-custo-obra.js?v=2143"></script>
-  <script defer src="engenharia-acompanhamento.js?v=2143"></script>
-  <script defer src="config-tags.js?v=2143"></script>
-  <script defer src="config-users.js?v=2143"></script>
-  <script defer src="suporte.js?v=2143"></script>
-  <script defer src="aviso-develop.js?v=2143"></script>
-  <script defer src="ml-select-unico.js?v=2143"></script>
-  <script defer src="escala-home-office.js?v=2143"></script>
-  <script defer src="alerta-ponto.js?v=2143"></script>
-  <script defer src="construcao.js?v=2143"></script>
-  <script defer src="empresas.js?v=2143"></script>
-  <script defer src="relacionamento.js?v=2143"></script>
-  <script defer src="aditamento.js?v=2143"></script>
-  <script defer src="cessao-direitos.js?v=2143"></script>
-  <script defer src="permuta-lote.js?v=2143"></script>
-  <script defer src="doc-assinatura.js?v=2143"></script>
-  <script defer src="compromissario.js?v=2143"></script>
-  <script defer src="comercial.js?v=2143"></script>
-  <script defer src="estoque-comercial.js?v=2143"></script>
-  <script defer src="condicoes-pagamento.js?v=2143"></script>
-  <script defer src="documentos-sienge.js?v=2143"></script>
-  <script defer src="tabelas-vigentes.js?v=2143"></script>
-  <script defer src="controle-comissao.js?v=2143"></script>
-  <script defer src="recebimentos-webro.js?v=2143"></script>
-  <script defer src="scod.js?v=2143"></script>
-  <script defer src="centros-custo.js?v=2143"></script>
-  <script defer src="marketing.js?v=2143"></script>
+  <script defer src="js/nucleo/data.js?v=2145"></script>
+  <script defer src="js/nucleo/sienge-api.js?v=1d7ed0a8f7"></script>
+  <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
+  <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
+  <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
+  <script defer src="js/nucleo/alertas-popup.js?v=3b5263ea20"></script>
+  <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
+  <script defer src="js/nucleo/app.js?v=ed847ed32a"></script>
+  <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
+  <script defer src="js/nucleo/central-email.js?v=5c605a8ce3"></script>
+  <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
+  <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
+  <script defer src="js/financeiro/pagar-reembolso.js?v=1079cb05e6"></script>
+  <script defer src="js/juridico/processo-contra.js?v=003fc233bd"></script>
+  <script defer src="js/juridico/reintegracao-posse.js?v=39af9228c7"></script>
+  <script defer src="js/nucleo/empresa-filter.js?v=24fd609a86"></script>
+  <script defer src="js/nucleo/cartao-taxas.js?v=d66cfab366"></script>
+  <script defer src="js/cobranca/alcada-desconto.js?v=e8826f2636"></script>
+  <script defer src="js/cobranca/alcada-distrato.js?v=2811047cfb"></script>
+  <script defer src="js/nucleo/home-dashboard.js?v=a36d15465d"></script>
+  <script defer src="js/cobranca/anexos.js?v=181a44e013"></script>
+  <script type="text/x-sob-demanda" data-grupo="contas-pagar" data-src="js/financeiro/contas-pagar.js?v=3f6d4ddbf5"></script>
+    <script defer src="js/financeiro/boleto-check.js?v=42fb1639c2"></script>
+    <script defer src="js/financeiro/nota-fiscal-check.js?v=27ba062a96"></script>
+    <script defer src="js/financeiro/gerar-pagamento.js?v=82e4e1085c"></script>
+    <script defer src="js/contabil/contabil.js?v=508491accb"></script>
+    <script defer src="js/contabil/contabil-equiv.js?v=bf21ef1b34"></script>
+    <script defer src="js/contabil/contabil-depara.js?v=a581419424"></script>
+  <script defer src="js/financeiro/rydoo.js?v=2cf1cec31a"></script>
+  <script defer src="js/cobranca/titulos-incompletos.js?v=f4e16e2b3e"></script>
+  <script defer src="js/compras/compras-previsoes.js?v=adef79f84f"></script>
+  <script defer src="js/compras/compras-controle-financeiro.js?v=0fbbb45cdb"></script>
+  <script defer src="js/compras/compras-dashboard.js?v=56f03f4429"></script>
+  <script defer src="js/engenharia/caucao-core.js?v=43733f7412"></script>
+  <script defer src="js/engenharia/engenharia-caucao.js?v=091e39ca27"></script>
+  <script type="text/x-sob-demanda" data-grupo="custo-obra" data-src="js/engenharia/engenharia-custo-obra-dados.js?v=0fdc296e64"></script>
+  <script type="text/x-sob-demanda" data-grupo="custo-obra" data-src="js/engenharia/engenharia-custo-obra.js?v=7937a5e38b"></script>
+  <script type="text/x-sob-demanda" data-grupo="acompanhamento-obra" data-src="js/engenharia/engenharia-acompanhamento.js?v=f3947e5b4f"></script>
+  <script defer src="js/nucleo/config-tags.js?v=a8132c6595"></script>
+  <script defer src="js/nucleo/config-users.js?v=3ba5515df4"></script>
+  <script defer src="js/nucleo/suporte.js?v=4f659044ca"></script>
+  <script defer src="js/nucleo/aviso-develop.js?v=d62ea14336"></script>
+  <script defer src="js/nucleo/ml-select-unico.js?v=4f7efa8871"></script>
+  <script defer src="js/nucleo/escala-home-office.js?v=d269d4eced"></script>
+  <script defer src="js/nucleo/alerta-ponto.js?v=3f3477a576"></script>
+  <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
+  <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
+  <script defer src="js/cobranca/relacionamento.js?v=824f951684"></script>
+  <script defer src="js/cobranca/aditamento.js?v=d5201982ac"></script>
+  <script defer src="js/cobranca/cessao-direitos.js?v=a362080a19"></script>
+  <script defer src="js/cobranca/permuta-lote.js?v=30876b3cb8"></script>
+  <script defer src="js/cobranca/doc-assinatura.js?v=6707b12419"></script>
+  <script defer src="js/cobranca/compromissario.js?v=c1dda0ed84"></script>
+  <script defer src="js/comercial/comercial.js?v=d470ed9e13"></script>
+  <script defer src="js/comercial/estoque-comercial.js?v=5ba3af486d"></script>
+  <script defer src="js/nucleo/condicoes-pagamento.js?v=b9728514f2"></script>
+  <script defer src="js/nucleo/documentos-sienge.js?v=6b96789811"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
+  <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
+  <script defer src="js/comercial/recebimentos-webro.js?v=4e08ebacae"></script>
+  <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
+  <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
+  <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
+  <script type="text/x-sob-demanda" data-grupo="marketing" data-src="js/marketing/marketing.js?v=894145a776"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
-  <script defer src="marketing-budget.js?v=2143"></script>
-  <script defer src="plano-financeiro.js?v=2143"></script>
-  <script defer src="orcamento-data.js?v=2143"></script>
-  <script defer src="orcamento-origem.js?v=2143"></script>
-  <script defer src="orcamento-2026.js?v=2143"></script>
-  <script defer src="orcamento.js?v=2143"></script>
-  <script defer src="orcamento-modulo.js?v=2143"></script>
-  <script defer src="prestacao-contas.js?v=2143"></script>
+  <script type="text/x-sob-demanda" data-grupo="marketing" data-src="js/marketing/marketing-budget.js?v=8e4e7fc417"></script>
+  <script defer src="js/financeiro/plano-financeiro.js?v=580cfe7c52"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-data.js?v=8871c60b44"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-origem.js?v=69402af372"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-2026.js?v=ebc6b252b1"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento.js?v=e68228ab84"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-modulo.js?v=dd4e86c786"></script>
+  <script defer src="js/financeiro/prestacao-contas.js?v=8678c7c437"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
-  <script defer src="fluxo-caixa.js?v=2143"></script>
-  <script defer src="orcamento-dfc-2027.js?v=2143"></script>
-  <script defer src="orcamento-dfc.js?v=2143"></script>
-  <script defer src="orcamento-aportes.js?v=2143"></script>
-  <script defer src="orcamento-dfc-slides.js?v=2143"></script>
-  <script defer src="caixa-diario.js?v=2143"></script>
-  <script defer src="mutuo.js?v=2143"></script>
-  <script defer src="resultado-caixa.js?v=2143"></script>
-  <script defer src="relatorio-honorarios.js?v=2143"></script>
-  <script defer src="investimento.js?v=2143"></script>
-  <script defer src="parametrizacao-parceiro.js?v=2143"></script>
-  <script defer src="societario.js?v=2143"></script>
-  <script defer src="participacoes.js?v=2143"></script>
-  <script defer src="fiscal.js?v=2143"></script>
-  <script defer src="orcamento-estimativas.js?v=2143"></script>
-  <script defer src="orcamento-forecast.js?v=2143"></script>
-  <script defer src="fiscal-inserir-nota.js?v=2143"></script>
-  <script defer src="fiscal-enviar-nota.js?v=2143"></script>
-  <script defer src="fiscal-rastrear-pedido.js?v=2143"></script>
-  <script defer src="indexadores.js?v=2143"></script>
-  <script defer src="indices-mercado-calc.js?v=2143"></script>
-  <script defer src="indices-mercado.js?v=2143"></script>
-  <script defer src="orion-store.js?v=2156"></script>
-  <script defer src="orion-premissas-calc.js?v=2156"></script>
-  <script defer src="orion-premissas.js?v=2156"></script>
-  <script defer src="orion-fechamento.js?v=2156"></script>
-  <script defer src="orion-base-integra.js?v=2156"></script>
-  <script defer src="orion-orcamento-calc.js?v=2156"></script>
-  <script defer src="orion-realizado.js?v=2156"></script>
-  <script defer src="orion-filtros.js?v=2157"></script>
-  <script defer src="orion-orcamentos.js?v=2156"></script>
-  <script defer src="orion-orcamento-novo.js?v=2156"></script>
-  <script defer src="orion-orcamento-grade.js?v=2156"></script>
-  <script defer src="orion-orcamento-orion.js?v=2156"></script>
-  <script defer src="orion-dfc-visao.js?v=2156"></script>
-  <script defer src="orion-dfc.js?v=2156"></script>
-  <script defer src="orion-resumo.js?v=2156"></script>
-  <script defer src="orion-analitico.js?v=2156"></script>
-  <script defer src="orion-analise.js?v=2157"></script>
-  <script defer src="orion-orcado-realizado.js?v=2156"></script>
-  <script defer src="orion-dashboard-orcamento.js?v=2156"></script>
-  <script defer src="orion-viabilidade-calc.js?v=2156"></script>
-  <script defer src="orion-viabilidades.js?v=2156"></script>
-  <script defer src="orion-viabilidade-edicao.js?v=2156"></script>
-  <script defer src="orion-viabilidade-fotos.js?v=2156"></script>
-  <script defer src="orion-viabilidade-documentos.js?v=2156"></script>
-  <script defer src="orion-viabilidade-tela.js?v=2156"></script>
-  <script defer src="orion-viabilidade-tela2.js?v=2143"></script>
-  <script defer src="orion-acompanhamento.js?v=2156"></script>
-  <script defer src="orion-acompanhamento-calc.js?v=2156"></script>
-  <script defer src="orion-obras.js?v=2156"></script>
-  <script defer src="orion-obras-tela.js?v=2156"></script>
-  <script defer src="orion-obras-dfc.js?v=2156"></script>
-  <script defer src="orion-carga.js?v=2156"></script>
-  <script defer src="orion-sharepoint-calc.js?v=2156"></script>
-  <script defer src="orion-carga-sharepoint.js?v=2156"></script>
-  <script defer src="orion-departamentos.js?v=2156"></script>
-  <script defer src="orion-departamentos-ui.js?v=2156"></script>
-  <script defer src="verificar-construcao.js?v=2143"></script>
-  <script defer src="financiamento.js?v=2143"></script>
-  <script src="repactuacoes.js?v=2143"></script>
-  <script defer src="repactuacao-lote.js?v=2143"></script>
-  <script defer src="registro.js?v=2143"></script>
+  <script defer src="js/financeiro/fluxo-caixa.js?v=bfaac752df"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-2027.js?v=eceb14cc8f"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc.js?v=e2731851ba"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-aportes.js?v=ba792d4803"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-slides.js?v=7d6dccf9d1"></script>
+  <script defer src="js/financeiro/caixa-diario.js?v=abfdade485"></script>
+  <script type="text/x-sob-demanda" data-grupo="mutuo" data-src="js/financeiro/mutuo.js?v=58de946e11"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=9f37632e55"></script>
+  <script defer src="js/cobranca/relatorio-honorarios.js?v=aa553c2b1d"></script>
+  <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
+  <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
+  <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
+  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=f35308634e"></script>
+  <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=981e037a7b"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>
+  <script defer src="js/fiscal/fiscal-inserir-nota.js?v=a21f49f1c3"></script>
+  <script defer src="js/fiscal/fiscal-enviar-nota.js?v=fbbe582aef"></script>
+  <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
+  <script defer src="js/nucleo/indexadores.js?v=0adcce7721"></script>
+  <script defer src="js/engenharia/verificar-construcao.js?v=42e231416d"></script>
+  <script defer src="js/cobranca/financiamento.js?v=1347b8c00c"></script>
+  <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
+  <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>
+  <script defer src="js/cobranca/registro.js?v=39d59d3a5e"></script>
+  <script defer src="indices-mercado-calc.js?v=2158"></script>
+  <script defer src="indices-mercado.js?v=2158"></script>
+  <script defer src="orion-store.js?v=2158"></script>
+  <script defer src="orion-premissas-calc.js?v=2158"></script>
+  <script defer src="orion-premissas.js?v=2158"></script>
+  <script defer src="orion-fechamento.js?v=2158"></script>
+  <script defer src="orion-base-integra.js?v=2158"></script>
+  <script defer src="orion-orcamento-calc.js?v=2158"></script>
+  <script defer src="orion-realizado.js?v=2158"></script>
+  <script defer src="orion-filtros.js?v=2158"></script>
+  <script defer src="orion-orcamentos.js?v=2158"></script>
+  <script defer src="orion-orcamento-novo.js?v=2158"></script>
+  <script defer src="orion-orcamento-grade.js?v=2158"></script>
+  <script defer src="orion-orcamento-orion.js?v=2158"></script>
+  <script defer src="orion-dfc-visao.js?v=2158"></script>
+  <script defer src="orion-dfc.js?v=2158"></script>
+  <script defer src="orion-resumo.js?v=2158"></script>
+  <script defer src="orion-analitico.js?v=2158"></script>
+  <script defer src="orion-analise.js?v=2158"></script>
+  <script defer src="orion-orcado-realizado.js?v=2158"></script>
+  <script defer src="orion-dashboard-orcamento.js?v=2158"></script>
+  <script defer src="orion-viabilidade-calc.js?v=2158"></script>
+  <script defer src="orion-viabilidades.js?v=2158"></script>
+  <script defer src="orion-viabilidade-edicao.js?v=2158"></script>
+  <script defer src="orion-viabilidade-fotos.js?v=2158"></script>
+  <script defer src="orion-viabilidade-documentos.js?v=2158"></script>
+  <script defer src="orion-viabilidade-tela.js?v=2158"></script>
+  <script defer src="orion-viabilidade-tela2.js?v=2158"></script>
+  <script defer src="orion-acompanhamento.js?v=2158"></script>
+  <script defer src="orion-acompanhamento-calc.js?v=2158"></script>
+  <script defer src="orion-obras.js?v=2158"></script>
+  <script defer src="orion-obras-tela.js?v=2158"></script>
+  <script defer src="orion-obras-dfc.js?v=2158"></script>
+  <script defer src="orion-carga.js?v=2158"></script>
+  <script defer src="orion-sharepoint-calc.js?v=2158"></script>
+  <script defer src="orion-carga-sharepoint.js?v=2158"></script>
+  <script defer src="orion-departamentos.js?v=2158"></script>
+  <script defer src="orion-departamentos-ui.js?v=2158"></script>
   
   <!-- Dashboard de Inadimplência -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script defer src="dashboard-inadimplencia.js?v=2143"></script>
+  <script defer src="js/cobranca/dashboard-inadimplencia.js?v=f5ebf654f1"></script>
 
   <!-- Modal Compartilhar Lembrete -->
   <div id="share-agenda-modal" class="modal-overlay" style="display: none; z-index: 999999;">

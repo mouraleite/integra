@@ -3412,7 +3412,7 @@ const PrestacaoContasApp = {
     }
     return `<div style="position:relative;width:794px;height:1123px;background:#fff;overflow:hidden;font-family:'Segoe UI',Calibri,sans-serif;color:#0f172a;">
       <div style="height:62px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 36px;box-sizing:border-box;">
-        <img src="Banner/logo%20moura%20leite%20loteamentos.png" alt="" style="height:34px;object-fit:contain;">
+        <img src="assets/marca/logo%20moura%20leite%20loteamentos.png" alt="" style="height:34px;object-fit:contain;">
         <div style="text-align:right;">
           <div style="font-size:12px;font-weight:700;color:#105436;letter-spacing:0.04em;">Prestação de contas</div>
           <div style="font-size:11px;color:#64748b;margin-top:2px;">${this.esc(per.label)}</div>
@@ -3449,7 +3449,7 @@ const PrestacaoContasApp = {
     const parceiro = this.nomeParceiroRelatorio();
     const empresa = this.rotuloEmpresa();
     return `<div style="height:100%;background:#fff;display:flex;flex-direction:column;padding:78px 68px 72px;box-sizing:border-box;">
-      <img src="Banner/logo%20moura%20leite%20loteamentos.png" alt="" style="height:46px;object-fit:contain;align-self:flex-start;">
+      <img src="assets/marca/logo%20moura%20leite%20loteamentos.png" alt="" style="height:46px;object-fit:contain;align-self:flex-start;">
       <div style="margin-top:auto;max-width:620px;">
         <div style="width:56px;height:4px;background:#f37021;border-radius:2px;"></div>
         <div style="margin-top:22px;font-size:13px;letter-spacing:0.22em;text-transform:uppercase;color:#105436;font-weight:700;">Prestação de contas</div>

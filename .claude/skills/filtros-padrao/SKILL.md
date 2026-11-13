@@ -21,7 +21,7 @@ Tudo que fica lado a lado numa barra (botões, campos, selects, datas) tem **40p
 
 ## 2. Seleção única de empresa, empreendimento ou centro de custo: `MlSelectUnico`
 
-Visual do campo "Centro de Custo (Empreendimento)" do Assistente de Anexos: busca + botão de seta + lista com **ID em destaque verde** e o **nome completo**. Arquivo: `ml-select-unico.js` (carregado no `index.html`).
+Visual do campo "Centro de Custo (Empreendimento)" do Assistente de Anexos: busca + botão de seta + lista com **ID em destaque verde** e o **nome completo**. Arquivo: `js/nucleo/ml-select-unico.js` (carregado no `index.html`).
 
 ```js
 // no render():
@@ -42,7 +42,7 @@ MlSelectUnico.bind("minha-emp", { onSelect: (id) => { this.empresaId = id; this.
 
 ## 3. Seleção múltipla: `MlEmpresaFilter` (padrão "Filtros avançados")
 
-Botão com o resumo ("Todos", "3 empresas"), lista com busca, **Marcar Todos** (verde) e **Desmarcar Todos** (laranja), itens "ID - NOME" com caixa de marcar. Arquivo: `empresa-filter.js`.
+Botão com o resumo ("Todos", "3 empresas"), lista com busca, **Marcar Todos** (verde) e **Desmarcar Todos** (laranja), itens "ID - NOME" com caixa de marcar. Arquivo: `js/nucleo/empresa-filter.js`.
 
 ```js
 const html = MlEmpresaFilter.html({
@@ -60,5 +60,5 @@ MlEmpresaFilter.bind("minha-emp-multi", {
 ```
 
 ## Exemplos no código
-- Seleção única: `mutuo.js` (filtro Empresa).
-- Seleção múltipla: `caixa-diario.js`, `centros-custo.js`, `compras-previsoes.js`.
+- Seleção única: `js/financeiro/mutuo.js` (filtro Empresa).
+- Seleção múltipla: `js/financeiro/caixa-diario.js`, `js/financeiro/centros-custo.js`, `js/compras/compras-previsoes.js`.

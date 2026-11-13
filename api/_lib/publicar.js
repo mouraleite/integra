@@ -132,7 +132,9 @@ function subirVersao(html) {
   const nova = m[1] + "." + m[2] + "." + patch;
   const hoje = hojeBrasil();
   let out = html.replace(/v\d+\.\d+\.\d+\s*&nbsp;.+?\d{2}\/\d{2}\/\d{4}/, "v" + nova + " &nbsp;&middot;&nbsp; " + hoje);
-  out = out.replace(/\?v=\d+/g, "?v=" + patch);
+  // O deploy.bat grava em ?v= um código do conteúdo de cada arquivo. Aqui não há acesso aos
+  // arquivos, então todos recebem o número da versão (o navegador baixa tudo uma vez, como antes).
+  out = out.replace(/\?v=[0-9A-Za-z]+/g, "?v=" + patch);
   return { html: out, versao: nova, hoje };
 }
 

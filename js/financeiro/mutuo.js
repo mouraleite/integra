@@ -7,7 +7,7 @@ window.MutuoApp = {
   DEPARTAMENTO_TESOURARIA: 31,
   // Última ND emitida na pasta "20 - NOTAS DE DÉBITO\MLDU" quando o módulo veio para o Integra (ND 43).
   ND_PISO: 43,
-  MODELO_XLSX: "modelos/nota-debito.xlsx",
+  MODELO_XLSX: "assets/modelos/nota-debito.xlsx",
   MESES: ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"],
 
   EMPRESAS: {

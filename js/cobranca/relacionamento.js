@@ -2732,7 +2732,7 @@ const RelacionamentoApp = {
         <div style="background:#fff;border-radius:12px;width:100%;max-width:880px;max-height:calc(100vh - 32px);overflow:auto;box-shadow:0 18px 40px rgba(0,0,0,0.22);padding:22px;">
           <div style="font-size:1rem;font-weight:800;color:#105436;margin-bottom:8px;">Matrícula não cadastrada no Sienge</div>
           <div id="qui-matricula-texto" style="font-size:0.92rem;color:#1e293b;line-height:1.5;"></div>
-          <img src="Banner/sienge-matricula.png?v=3" alt="Sienge: Cadastro de Unidades, campo Matrícula" style="display:block;width:100%;margin-top:14px;border:1px solid #e2e8f0;border-radius:8px;">
+          <img src="assets/marca/sienge-matricula.png?v=3" alt="Sienge: Cadastro de Unidades, campo Matrícula" style="display:block;width:100%;margin-top:14px;border:1px solid #e2e8f0;border-radius:8px;">
           <div style="display:flex;justify-content:flex-end;margin-top:16px;">
             <button type="button" class="btn btn-primary" data-close="1">Entendi</button>
           </div>
@@ -2844,7 +2844,7 @@ const RelacionamentoApp = {
       const page = document.createElement("div");
       page.style.cssText = `position:fixed;left:-13000px;top:0;width:${W}px;height:${H}px;background:#fff;box-sizing:border-box;padding:${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px;overflow:hidden;color:#111;`;
       page.innerHTML = `
-        ${i === 0 ? `<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><img src="Banner/logo moura leite loteamentos.png" style="height:60px;object-fit:contain;"></div>` : ""}
+        ${i === 0 ? `<div style="display:flex;justify-content:flex-end;margin-bottom:8px;"><img src="assets/marca/logo moura leite loteamentos.png" style="height:60px;object-fit:contain;"></div>` : ""}
         <div class="qui-pg">${paginas[i]}</div>
         <div style="position:absolute;right:${PAD_X}px;bottom:28px;font-family:'Times New Roman',serif;font-size:9pt;color:#111;">${i + 1} de ${paginas.length}</div>`;
       document.body.appendChild(page);
