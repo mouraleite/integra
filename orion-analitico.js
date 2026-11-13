@@ -129,15 +129,42 @@ const OrionAnaliticoApp = {
       <tr class="${cls}"><td>Desvio %</td>${ms.map((m) => `<td class="is-right">${pct(x.o[m - 1], x.r[m - 1])}</td>`).join("")}<td class="is-right"><b>${pct(x.orcado, x.realizado)}</b></td></tr>`;
   },
 
+  /** Parcelas pagas do realizado agrupadas como no Órion (credor, documento, nº doc., autorização e o valor de cada mês). */
+  tabelaParcelas(rows, ms, colspan, comCc, nomesCc) {
+    const C = this.C();
+    const rec = this.dados && this.dados.tipo === "RECEITAS";
+    const g = new Map();
+    rows.forEach((p) => {
+      const k = [comCc ? p.cc : "", p.credor, p.doc_nome, p.doc_numero, p.titulo, p.autorizacao].join("|");
+      if (!g.has(k)) g.set(k, { p, v: {}, t: 0 });
+      const x = g.get(k), c = C.centavos(p.valor);
+      x.v[p.mes] = (x.v[p.mes] || 0) + c; x.t += c;
+    });
+    const lin = [...g.values()].sort((a, b) => b.t - a.t);
+    const f = (c) => C.fmtReais(c || 0, true);
+    const MAX = 300;
+    const totM = {}; let tot = 0;
+    lin.forEach((x) => { ms.forEach((m) => { totM[m] = (totM[m] || 0) + (x.v[m] || 0); }); tot += x.t; });
+    const th = "padding:5px 8px;font-size:0.66rem;text-transform:uppercase;font-weight:700;color:#105436;background:#e7f6ee;text-align:left;white-space:nowrap";
+    const td = "padding:4px 8px;border-top:1px solid #eef4f0;font-size:0.72rem;white-space:nowrap";
+    return `<tr class="oa-det"><td colspan="${colspan}" style="padding:8px 10px 10px 30px;background:#fbfdfc">
+      <div style="display:inline-flex;align-items:center;gap:6px;font-size:0.72rem;font-weight:800;color:#105436;text-transform:uppercase;margin-bottom:6px">🧾 ${rec ? "Parcelas recebidas — contas a receber" : "Parcelas pagas — contas a pagar"}</div>
+      <div class="cc-scroll" style="max-height:340px;border:1px solid #dfe9e3;border-radius:8px;background:#fff"><table style="border-collapse:collapse;width:100%;min-width:max-content">
+        <thead><tr>${comCc ? `<th style="${th}">Centro de custo</th>` : ""}<th style="${th}">${rec ? "Cliente" : "Credor"}</th><th style="${th}">Documento</th><th style="${th}">Nº doc.</th><th style="${th}">Autorização</th>${ms.map((m) => `<th style="${th};text-align:right">${C.MESES[m - 1]}</th>`).join("")}<th style="${th};text-align:right;border-left:1px solid #cfe0d6">Total</th></tr></thead>
+        <tbody>${lin.slice(0, MAX).map(({ p, v, t }) => `<tr>${comCc ? `<td style="${td}" title="${this.esc(p.cc + " " + ((nomesCc && nomesCc.get(p.cc)) || ""))}">${this.esc(p.cc)} ${this.esc((nomesCc && nomesCc.get(p.cc)) || "")}</td>` : ""}<td style="${td};max-width:240px;overflow:hidden;text-overflow:ellipsis" title="${this.esc(p.credor || "")}">${this.esc(p.credor || "—")}</td>
+          <td style="${td};max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${this.esc(p.doc_nome || p.documento || "")}">${this.esc(p.doc_nome || p.documento || "—")}</td><td style="${td}">${this.esc(p.doc_numero || p.titulo || "—")}</td>
+          <td style="${td};max-width:180px;overflow:hidden;text-overflow:ellipsis" title="${this.esc(p.autorizacao || "")}">${this.esc(p.autorizacao || "—")}</td>
+          ${ms.map((m) => `<td style="${td};text-align:right">${f(v[m])}</td>`).join("")}<td style="${td};text-align:right;font-weight:700;border-left:1px solid #eef4f0">${f(t)}</td></tr>`).join("")}</tbody>
+        <tfoot><tr><td colspan="${comCc ? 5 : 4}" style="${td};font-weight:800;background:#f7faf8">${lin.length} linha(s)${lin.length > MAX ? ` (mostrando ${MAX}; veja todas no Realizado CP)` : ""} · ${rows.length} pagamento(s), valores rateados pelo plano e centro de custo</td>${ms.map((m) => `<td style="${td};text-align:right;font-weight:800;background:#f7faf8">${f(totM[m])}</td>`).join("")}<td style="${td};text-align:right;font-weight:800;background:#f7faf8;border-left:1px solid #eef4f0">${f(tot)}</td></tr></tfoot></table></div></td></tr>`;
+  },
+
   linhasDetalhe(x, ms, colspan) {
-    const C = this.C(), R = this.R();
+    const R = this.R();
     const set = new Set(ms);
     const emp = this.empresas && this.empresas.length ? new Set(this.empresas.map(String)) : null;
     const rows = R.detalhe(this.dados.real, (a) => a.cc === x.cc && a.plano === x.plano && set.has(a.mes) && (!emp || emp.has(String(a.empresa))), this.dados.tipo === "RECEITAS" ? 1 : -1);
     if (!rows.length) return `<tr class="oa-det"><td colspan="${colspan}" style="padding-left:30px">Nenhum pagamento no realizado deste centro de custo e plano no período.</td></tr>`;
-    const fmtD = (d) => (d ? d.split("-").reverse().join("/") : "—");
-    const corpo = rows.map((p) => `<tr class="oa-det"><td style="padding-left:30px">${fmtD(p.data)} · ${this.esc(p.credor || "—")}</td><td colspan="${colspan - 2}">${this.esc(p.documento)}${p.titulo ? ` · título ${this.esc(p.titulo)}` : ""}${p.parcela ? ` · parcela ${this.esc(p.parcela)}` : ""} · empresa ${this.esc(p.empresa)}</td><td class="is-right">${C.fmtReais(C.centavos(p.valor), true)}</td></tr>`).join("");
-    return corpo + `<tr class="oa-det"><td colspan="${colspan - 1}" style="padding-left:30px"><b>${rows.length} pagamento(s)</b> (valores rateados pelo plano e centro de custo do movimento)</td><td class="is-right"><b>${C.fmtReais(rows.reduce((s, p) => s + C.centavos(p.valor), 0), true)}</b></td></tr>`;
+    return this.tabelaParcelas(rows, ms, colspan, false);
   },
 
   /** Realizado detalhado (Órion: Realizado CP): todos os pagamentos/recebimentos do caixa que formam o realizado das linhas do orçamento. */
@@ -155,13 +182,13 @@ const OrionAnaliticoApp = {
     const tot = rows.reduce((s2, p) => s2 + C.centavos(p.valor), 0);
     const MAX = 2000;
     const fmtD = (x) => (x ? x.split("-").reverse().join("/") : "—");
-    const corpo = rows.slice(0, MAX).map((p) => { const l = nomes.get(p.cc + "|" + p.plano) || {}; return `<tr><td>${fmtD(p.data)}</td><td>${this.esc(p.empresa)}</td><td>${this.esc(p.cc)} ${this.esc(l.cc_nome || "")}</td><td>${this.esc(p.plano)} ${this.esc(l.plano_nome || "")}</td><td>${this.esc(p.credor || "—")}</td><td>${this.esc(p.documento)}</td><td>${this.esc(p.titulo)}${p.parcela ? "/" + this.esc(p.parcela) : ""}</td><td class="is-right">${C.fmtReais(C.centavos(p.valor), true)}</td></tr>`; }).join("");
+    const corpo = rows.slice(0, MAX).map((p) => { const l = nomes.get(p.cc + "|" + p.plano) || {}; return `<tr><td>${fmtD(p.data)}</td><td>${this.esc(p.empresa)}</td><td>${this.esc(p.cc)} ${this.esc(l.cc_nome || "")}</td><td>${this.esc(p.plano)} ${this.esc(l.plano_nome || "")}</td><td>${this.esc(p.credor || "—")}</td><td>${this.esc(p.doc_nome || p.documento || "—")}</td><td>${this.esc(p.doc_numero || p.titulo || "—")}${p.parcela ? "/" + this.esc(p.parcela) : ""}</td><td>${this.esc(p.autorizacao || "—")}</td><td class="is-right">${C.fmtReais(C.centavos(p.valor), true)}</td></tr>`; }).join("");
     return `<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:8px"><div><label class="ml-emp-filter-label">Buscar</label><input id="oa-busca-pag" class="idx-select" style="height:40px;width:320px;box-sizing:border-box" placeholder="Buscar credor, documento ou nº…" value="${this.esc(this.buscaPag || "")}" oninput="OrionAnaliticoApp.setBuscaPag(this.value)"></div>
         <div style="font-size:0.75rem;color:#334155;padding-bottom:10px"><b>${rows.length}</b> lançamento(s) · total <b>${C.fmtReais(tot, true)}</b>${rows.length > MAX ? ` · mostrando os ${MAX} primeiros (use a busca)` : ""}. Valores rateados pelo centro de custo e plano do movimento, só das linhas do orçamento.</div></div>
       <div class="cc-scroll" style="max-height:70vh"><table class="cc-table">
-        <colgroup><col style="width:90px"><col style="width:70px"><col style="width:220px"><col style="width:220px"><col><col style="width:150px"><col style="width:110px"><col style="width:120px"></colgroup>
-        <thead><tr><th>Data</th><th>Empresa</th><th>Centro de custo</th><th>Plano</th><th>${d.tipo === "RECEITAS" ? "Cliente" : "Credor"}</th><th>Documento</th><th>Título/parcela</th><th class="is-right">Valor</th></tr></thead>
-        <tbody>${corpo || `<tr><td colspan="8" style="text-align:center;padding:30px">Nenhum lançamento.</td></tr>`}</tbody></table></div>`;
+        <colgroup><col style="width:90px"><col style="width:70px"><col style="width:220px"><col style="width:220px"><col><col style="width:150px"><col style="width:110px"><col style="width:150px"><col style="width:120px"></colgroup>
+        <thead><tr><th>Data</th><th>Empresa</th><th>Centro de custo</th><th>Plano</th><th>${d.tipo === "RECEITAS" ? "Cliente" : "Credor"}</th><th>Documento</th><th>Nº doc.</th><th>Autorização</th><th class="is-right">Valor</th></tr></thead>
+        <tbody>${corpo || `<tr><td colspan="9" style="text-align:center;padding:30px">Nenhum lançamento.</td></tr>`}</tbody></table></div>`;
   },
 
   setBuscaPag(v) {
@@ -215,16 +242,13 @@ const OrionAnaliticoApp = {
 
   /** Pagamentos do realizado de um plano em todos os centros de custo da linha (Analítico II). */
   linhasPagPlano(x, ms, ncol) {
-    const C = this.C(), R = this.R();
+    const R = this.R();
     const set = new Set(ms), ccs = new Set((x.filhos || []).map((y) => y.cc));
     const nomes = new Map((x.filhos || []).map((y) => [y.cc, y.cc_nome]));
     const emp = this.empresas && this.empresas.length ? new Set(this.empresas.map(String)) : null;
     const rows = R.detalhe(this.dados.real, (a) => a.plano === x.plano && ccs.has(a.cc) && set.has(a.mes) && (!emp || emp.has(String(a.empresa))), this.dados.tipo === "RECEITAS" ? 1 : -1);
     if (!rows.length) return `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px">Nenhum pagamento no realizado deste plano no período.</td></tr>`;
-    const fmtD = (d) => (d ? d.split("-").reverse().join("/") : "—");
-    const MAX = 300;
-    const corpo = rows.slice(0, MAX).map((p) => `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px;white-space:normal">${fmtD(p.data)} · <b>${C.fmtReais(C.centavos(p.valor), true)}</b> · ${this.esc(p.credor || "—")} · ${this.esc(p.cc)} ${this.esc(nomes.get(p.cc) || "")} · ${this.esc(p.documento || "")}${p.titulo ? ` · título ${this.esc(p.titulo)}` : ""}${p.parcela ? `/${this.esc(p.parcela)}` : ""} · empresa ${this.esc(p.empresa)}</td></tr>`).join("");
-    return corpo + `<tr class="oa-det"><td colspan="${ncol}" style="padding-left:30px"><b>${rows.length} pagamento(s)</b>${rows.length > MAX ? ` (mostrando ${MAX}; veja todos em Lançamentos)` : ""} · total <b>${C.fmtReais(rows.reduce((s2, p) => s2 + C.centavos(p.valor), 0), true)}</b> (valores rateados pelo plano e centro de custo do movimento)</td></tr>`;
+    return this.tabelaParcelas(rows, ms, ncol, true, nomes);
   },
 
   htmlResultado() {

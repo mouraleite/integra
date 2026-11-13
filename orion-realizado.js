@@ -92,6 +92,15 @@ OrionRealizado.detalhe = function (res, filtro, sinal) {
       data: String(m.bankMovementDate || m.paymentDate || m.date || "").slice(0, 10),
       credor: m.creditorName || (m.creditor && m.creditor.name) || m.customerName || "",
       documento: [m.documentIdentificationId || m.documentId, m.documentIdentificationNumber || m.documentNumber].filter(Boolean).join(" "),
+      doc_nome: m.documentIdentificationName || m.documentIdentificationId || m.documentId || m.title || "",
+      doc_numero: String(m.documentIdentificationNumber || m.documentNumber || ""),
+      autorizacao: (() => { // departamento do título (departamentsCosts de maior rateio; senão authorizations), como o Órion
+        let melhor = null;
+        (m.departamentsCosts || m.departmentsCosts || []).forEach((d) => { const n = String((d && (d.name || d.departmentName)) || "").trim(); const r = Number(d && d.rate) || 0; if (n && (!melhor || r > melhor.r)) melhor = { n, r }; });
+        if (melhor) return melhor.n;
+        const au = (m.authorizations || []).find((x) => x && (x.name || x.departmentName));
+        return au ? String(au.name || au.departmentName).trim() : "";
+      })(),
       titulo: m.billId || "",
       parcela: m.installmentNumber || m.installmentId || "",
       empresa: a.empresa, cc: a.cc, plano: a.plano, mes: a.mes, valor: a.valor * s
