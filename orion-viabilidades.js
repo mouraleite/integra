@@ -359,7 +359,12 @@ const OrionViabilidadesApp = {
     if (!root) return;
     if (!this.V()) { root.innerHTML = `<div style="padding:12px;color:#991b1b">Arquivo de cálculo não carregou. Recarregue a página.</div>`; return; }
     const V = this.V();
-    const barra = `
+    // tela igual à do Órion (orion-viabilidade-tela.js): sem filtros na lista e sem barra no detalhe; o cálculo é sempre o do cenário base
+    const telaOrion = typeof this.htmlListaOrion === "function";
+    if (telaOrion) this.cenario = "";
+    const barra = telaOrion ? (this.aberto ? "" : `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px">
+          ${this.ehAdmin() ? `<button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionViabilidadesApp.escolher()">Importar do Órion</button><input type="file" id="ov-arquivos" accept=".json" multiple style="display:none" onchange="OrionViabilidadesApp.lerArquivos(this.files)">` : ""}
+          <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionViabilidadesApp.carregar()">Atualizar</button></div>`) : `
       <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <div><label class="ml-emp-filter-label">Cenário</label><select class="idx-select" style="height:40px;min-width:180px" onchange="OrionViabilidadesApp.setCenario(this.value)">
           <option value="" ${this.cenario === "" ? "selected" : ""}>Base</option>
@@ -379,7 +384,7 @@ const OrionViabilidadesApp = {
     root.innerHTML = `${barra}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.htmlCarga()}
-      <div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: viabilidades trazidas do Órion, calculadas com o mesmo motor do Órion. Para alterar receitas, obras, despesas, impostos, permuta, funding, dados físicos ou datas, use Editar premissas: o resultado é recalculado na hora.</div>
+      ${telaOrion ? "" : `<div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:12px;font-size:0.75rem">Tela de transição: viabilidades trazidas do Órion, calculadas com o mesmo motor do Órion. Para alterar receitas, obras, despesas, impostos, permuta, funding, dados físicos ou datas, use Editar premissas: o resultado é recalculado na hora.</div>`}
       ${this.aviso ? `<div style="padding:10px 14px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;margin-bottom:12px">${this.esc(this.aviso)}</div>` : ""}
       ${corpo}`;
     if (window.lucide) window.lucide.createIcons();

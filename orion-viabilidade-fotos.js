@@ -49,6 +49,10 @@
     return o;
   };
 
+  A.LINHAS_RESUMO = LINHAS;
+  A.ANTIGOS_RESUMO = ANTIGOS;
+  A.resumoDe = resumo;
+
   Object.assign(A, {
     fmtLinha(v, t) {
       if (v == null || v === "") return "—";
