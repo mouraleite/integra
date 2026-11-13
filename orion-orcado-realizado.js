@@ -767,12 +767,14 @@
       return out;
     },
     /** linhas de uma versão, agrupadas como no Órion (produto × plano; vendas: produto × forma de venda × distrato) */
+    docsVersao(v, tipos) {
+      const C = this.C();
+      if (v.base === "orcamento") return C.documentosVigentes(this.escopo("orcamento").filter((c) => rotuloOrc(c.descricao) === v.chave), { ano: this.ano, dept: "TODOS", base: "orcamento", tipos }).docs;
+      return C.documentosVigentes(this.escopo("forecast"), { ano: this.ano, dept: "TODOS", base: "forecast", versao: v.chave, tipos }).docs.filter((c) => String(c.descricao || "") === v.chave);
+    },
     async linhasVersao(v, tipo) {
-      const C = this.C(), tipos = tipo === "CONSOLIDADO" ? ["DESPESAS", "RECEITAS"] : [tipo];
-      let docs;
-      if (v.base === "orcamento") docs = C.documentosVigentes(this.escopo("orcamento").filter((c) => rotuloOrc(c.descricao) === v.chave), { ano: this.ano, dept: "TODOS", base: "orcamento", tipos }).docs;
-      else docs = C.documentosVigentes(this.escopo("forecast"), { ano: this.ano, dept: "TODOS", base: "forecast", versao: v.chave, tipos }).docs.filter((c) => String(c.descricao || "") === v.chave);
-      const o = await this.lerConjunto(v.base, docs);
+      const tipos = tipo === "CONSOLIDADO" ? ["DESPESAS", "RECEITAS"] : [tipo];
+      const o = await this.lerConjunto(v.base, this.docsVersao(v, tipos));
       const mapa = new Map();
       if (tipo === "VENDAS") {
         o.vendas.forEach((l) => {
@@ -882,6 +884,7 @@
         counts: { comDesvio: all.length, favoravel: favs.length, desfavoravel: desf.length, inclusoes: inc.length, exclusoes: exc.length, alteracoes: alt.length, semMudanca: semMud.length, totalLinhas: rawInc.length + rawExc.length + rawAlt.length } };
     },
     htmlComparativo() {
+      if (this.cmp.dfc) return this.htmlDfcCmp();
       const c = this.cmp, vs = this.versoesCmp(c.tipo), r = c.res;
       const tipos = [["CONSOLIDADO", "Consolidado"], ["DESPESAS", "Despesas"], ["RECEITAS", "Receitas"], ["VENDAS", "Vendas"]];
       const tipoLabel = tipos.find((x) => x[0] === c.tipo)[1];
@@ -893,7 +896,8 @@
           <div class="oxr-barra"><div><label class="ml-emp-filter-label">Versão base</label><select class="idx-select" style="height:40px;min-width:200px" onchange="${N}.setCmp('a',this.value)">${op(c.a)}</select></div>
             <span style="color:#9fcdb4;font-size:1.2rem;padding-bottom:8px">⇄</span>
             <div><label class="ml-emp-filter-label">Versão comparada</label><select class="idx-select" style="height:40px;min-width:200px" onchange="${N}.setCmp('b',this.value)">${op(c.b)}</select></div>
-            <button type="button" class="btn btn-primary" ${!c.a || !c.b || c.carregando ? "disabled" : ""} onclick="${N}.comparar()">${c.carregando ? "⟳ Comparando…" : "⇆ Comparar"}</button></div></div></div>`;
+            <button type="button" class="btn btn-primary" ${!c.a || !c.b || c.carregando ? "disabled" : ""} onclick="${N}.comparar()">${c.carregando ? "⟳ Comparando…" : "⇆ Comparar"}</button>
+            ${c.tipo !== "VENDAS" ? `<button type="button" class="btn btn-secondary" title="Abre as mesmas duas versões na árvore da Visão DFC (entradas e saídas)" ${!c.a || !c.b ? "disabled" : ""} onclick="${N}.abrirDfc()">≣ Visão DFC</button>` : ""}</div></div></div>`;
       if (!this.cabs.orcamento) return config + `<div style="text-align:center;padding:30px;color:#64748b"><div class="spinner" style="margin:0 auto 15px;"></div>Carregando versões…</div>`;
       if (!r && !c.carregando) return config + `<div class="oxr-vazio"><div style="font-size:1.6rem">⇆</div><div style="font-weight:800;color:#1c2e24;margin:4px 0">Selecione duas versões para comparar</div><div style="font-size:0.78rem;max-width:460px;margin:0 auto">Escolha o tipo, a versão base (orçamento) e a versão comparada (forecast ou outra versão) para ver variações consolidadas e por produto.</div></div>`;
       if (!r) return config + `<div class="oxr-vazio">⟳ Gerando comparativo…</div>`;
@@ -924,6 +928,118 @@
           <div class="oxr-box"><h5><span>📈 Top drivers (linha)</span><button type="button" class="oxr-link" onclick="${desp ? `${N}.irAnalitico('analitico1')` : abrir("destaques")}">Ver todos →</button></h5>${drivers}</div>
           <div class="oxr-box" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px"><div><h5>▤ Por produto</h5>${porProd}</div><div><h5>Por plano</h5>${porPlano}</div></div></div>
         <div style="border:1px dashed #cfe0d6;border-radius:10px;background:#fbfdfc;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.76rem;color:#4a6355">${desp ? "Detalhe transacional de Contas a Pagar nos analíticos e ledger CP." : "Precisa do detalhe linha a linha? Use a visão analítica com busca, filtros e exportação."}${desp ? this.linksDespesas() : `<button type="button" class="oxr-link" onclick="${abrir("destaques")}">Abrir analítica ›</button>`}</div>`;
+    },
+    /* ----- Visão DFC do comparativo (Órion: DFC › Comparar versões) ----- */
+    abrirDfc() { const c = this.cmp; c.dfc = true; c.dfcA = c.a; c.dfcB = c.b; c.dfcRes = null; c.dfcPorMes = false; this.carregarDfc(); },
+    fecharDfc() { this.cmp.dfc = false; this.render(); },
+    setDfc(campo, v) { this.cmp[campo] = v; if (campo === "dfcA" || campo === "dfcB") return this.carregarDfc(); this.render(); },
+    async carregarDfc() {
+      const c = this.cmp, vs = this.versoesCmp("CONSOLIDADO");
+      const a = vs.find((x) => x.id === c.dfcA), b = vs.find((x) => x.id === c.dfcB);
+      if (!a || !b) { c.dfcRes = null; return this.render(); }
+      c.dfcCarregando = true; c.dfcErro = ""; this.render();
+      try {
+        const ler = async (v) => this.lerConjunto(v.base, this.docsVersao(v, ["DESPESAS", "RECEITAS"]));
+        c.dfcRes = { A: await ler(a), B: await ler(b), nomeA: a.descricao, nomeB: b.descricao };
+        c.dfcAbertos = null;
+      } catch (e) { c.dfcErro = "A consulta falhou: " + (e.message || e); c.dfcRes = null; }
+      c.dfcCarregando = false;
+      this.render();
+    },
+    /** Árvore da Visão DFC do Integra com as duas versões: entradas (receitas) +, saídas (despesas) −; grupos-pai somam os filhos. */
+    montarDfcCmp() {
+      const c = this.cmp, d = c.dfcRes, R = this.R(), ms = this.ms();
+      const grupos = ((R && R.grupos()) || []).filter((g) => g && g.id && g.type !== "formula");
+      if (!grupos.length) return null;
+      const porId = {}; grupos.forEach((g) => { porId[g.id] = g; });
+      const planos = new Map();
+      const lado = (o, campo) => {
+        const add = (l, sinal) => {
+          if (!this.passa(l.cc, l.cc_nome, null)) return;
+          const gid = R.grupoDe(l.plano);
+          if (!gid || !porId[gid]) return;
+          const k = gid + "|" + l.plano;
+          if (!planos.has(k)) planos.set(k, { gid, codigo: l.plano, nome: l.plano_nome || "", a: zeros(), b: zeros() });
+          const x = planos.get(k);
+          if (!x.nome && l.plano_nome) x.nome = l.plano_nome;
+          (l.m || []).forEach((v, i) => { x[campo][i] += (Number(v) || 0) * sinal; });
+        };
+        o.rec.forEach((l) => add(l, 1));
+        o.desp.forEach((l) => add(l, -1));
+      };
+      lado(d.A, "a"); lado(d.B, "b");
+      const fin = (x) => { x.ta = soma(x.a, ms); x.tb = soma(x.b, ms); x.vr = x.tb - x.ta; x.vp = Math.abs(x.ta) < 1 ? null : x.vr / Math.abs(x.ta); x.mv = x.b.map((v, i) => v - x.a[i]); return x; };
+      const filhos = {};
+      grupos.forEach((g) => { if (g.parentId && porId[g.parentId]) (filhos[g.parentId] = filhos[g.parentId] || []).push(g.id); });
+      const no = {};
+      const montar = (gid) => {
+        if (no[gid]) return no[gid];
+        const g = porId[gid];
+        const ps = [...planos.values()].filter((p) => p.gid === gid).map(fin).sort((x, y) => String(x.nome).localeCompare(String(y.nome), "pt-BR") || String(x.codigo).localeCompare(String(y.codigo)));
+        const fs = (filhos[gid] || []).map(montar);
+        const x = { id: gid, codigo: g.code || g.codigo || "", nome: g.name || g.nome || gid, planos: ps, filhos: fs, a: zeros(), b: zeros() };
+        ps.concat(fs).forEach((y) => { for (let i = 0; i < 12; i++) { x.a[i] += y.a[i]; x.b[i] += y.b[i]; } });
+        no[gid] = fin(x);
+        return no[gid];
+      };
+      const topo = grupos.filter((g) => !g.parentId || !porId[g.parentId]).map((g) => montar(g.id));
+      const linhas = [];
+      const plana = (x, nivel) => { linhas.push(Object.assign(x, { nivel })); x.filhos.forEach((y) => plana(y, nivel + 1)); };
+      topo.forEach((x) => plana(x, 0));
+      const la = topo.reduce((s2, x) => s2 + x.ta, 0), lb = topo.reduce((s2, x) => s2 + x.tb, 0);
+      return { linhas, la, lb, vr: lb - la, vp: Math.abs(la) < 1 ? null : (lb - la) / Math.abs(la), ms };
+    },
+    htmlDfcCmp() {
+      const c = this.cmp, vs = this.versoesCmp("CONSOLIDADO");
+      const op = (sel) => `<option value="">Selecione…</option>` + vs.map((v) => `<option value="${this.esc(v.id)}" ${v.id === sel ? "selected" : ""}>${this.esc(v.descricao)}</option>`).join("");
+      const num = (v) => `<span style="color:${v < 0 ? "#dc2626" : v > 0 ? "#1c2e24" : "#94a3b8"}">${v ? this.rs(v) : "R$ 0"}</span>`;
+      const per = (v) => (v == null ? `<span style="color:#cbd5e1">—</span>` : `<span style="color:${v < 0 ? "#dc2626" : "#334155"}">${this.pc(v)}</span>`);
+      const topo = `<div style="margin-bottom:10px"><button type="button" class="oxr-link" style="font-size:0.8rem" onclick="${N}.fecharDfc()">← Voltar ao comparativo de versões</button></div>
+        <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div style="font-size:1.15rem;font-weight:800;color:var(--color-primary)">DFC</div><div style="font-size:0.8rem;color:#6b8474">Comparativo de versões pela Visão DFC — mesma estrutura do demonstrativo.</div></div>
+        <div class="oxr-card"><div class="oxr-barra"><div><label class="ml-emp-filter-label">Versão base</label><select class="idx-select" style="height:40px;min-width:220px" onchange="${N}.setDfc('dfcA',this.value)">${op(c.dfcA)}</select></div>
+          <div><label class="ml-emp-filter-label">Versão comparada</label><select class="idx-select" style="height:40px;min-width:220px" onchange="${N}.setDfc('dfcB',this.value)">${op(c.dfcB)}</select></div>
+          <button type="button" class="btn btn-primary" ${!c.dfcA || !c.dfcB || c.dfcCarregando ? "disabled" : ""} onclick="${N}.carregarDfc()">⇆ Comparar no DFC</button></div>
+          <div style="font-size:0.72rem;color:#6b8474;margin-top:8px">Mesma árvore da Visão DFC — colunas Base · Comparada · variação. Saídas negativas.</div></div>`;
+      if (!c.dfcA || !c.dfcB) return topo + `<div class="oxr-vazio">Selecione as duas versões para montar o DFC comparativo.</div>`;
+      if (c.dfcCarregando) return topo + `<div style="text-align:center;padding:30px;color:#64748b"><div class="spinner" style="margin:0 auto 15px;"></div>Montando o DFC comparativo…</div>`;
+      if (c.dfcErro) return topo + `<div class="oxr-vazio" style="color:#92400e">${this.esc(c.dfcErro)}</div>`;
+      if (!c.dfcRes) return topo + `<div class="oxr-vazio">Clique em Comparar no DFC.</div>`;
+      const M = this.montarDfcCmp();
+      if (!M) return topo + `<div class="oxr-vazio">A Visão DFC do Integra ainda não carregou (Configurações gerais › Plano Financeiro e Visões). Recarregue a página e tente de novo.</div>`;
+      if (!c.dfcAbertos) { c.dfcAbertos = {}; M.linhas.forEach((x) => { c.dfcAbertos[x.id] = true; }); }
+      const A = c.dfcRes.nomeA, B = c.dfcRes.nomeB, porMes = !!c.dfcPorMes;
+      const hero = `<div class="oxr-g4" style="margin-top:0">
+          <div class="oxr-box"><div class="oxr-lbl">Líquido · ${this.esc(A)}</div><div style="font-size:1.15rem;font-weight:800;margin-top:4px">${num(M.la)}</div></div>
+          <div class="oxr-box"><div class="oxr-lbl">Líquido · ${this.esc(B)}</div><div style="font-size:1.15rem;font-weight:800;margin-top:4px">${num(M.lb)}</div></div>
+          <div class="oxr-box"><div style="display:flex;justify-content:space-between"><span class="oxr-lbl">Variação R$</span>${this.farolDot(M.lb, M.la, "RESULTADO")}</div><div style="font-size:1.15rem;font-weight:800;margin-top:4px">${num(M.vr)}</div></div>
+          <div class="oxr-box"><div class="oxr-lbl">Variação %</div><div style="font-size:1.15rem;font-weight:800;margin-top:4px">${per(M.vp)}</div></div></div>`;
+      const cels = (x) => (porMes ? TODOS_MESES.map((i) => `<td class="is-right" style="border-left:1px solid #e2e8f0">${num(x.a[i])}</td><td class="is-right">${num(x.b[i])}</td><td class="is-right" style="font-weight:700">${num(x.mv[i])}</td>`).join("")
+        : `<td class="is-right" style="border-left:1px solid #e2e8f0">${num(x.ta)}</td><td class="is-right">${num(x.tb)}</td><td class="is-right" style="font-weight:700">${num(x.vr)}</td><td class="is-right">${per(x.vp)}</td>`);
+      let corpo = "";
+      M.linhas.forEach((x) => {
+        const ab = !!c.dfcAbertos[x.id], tem = x.planos.length > 0;
+        corpo += `<tr style="background:#fff"><td class="oxr-sticky" style="padding-left:${8 + x.nivel * 16}px;white-space:normal;${tem ? "cursor:pointer" : ""}" ${tem ? `onclick="${N}.cmp.dfcAbertos['${this.esc(x.id)}']=${ab ? "false" : "true"};${N}.render()"` : ""}><span style="display:inline-block;width:14px;color:#94a3b8">${tem ? (ab ? "▾" : "▸") : ""}</span><span style="font-family:monospace;color:#94a3b8;margin-right:6px">${this.esc(x.codigo)}</span><b>${this.esc(x.nome)}</b></td>${cels(x)}</tr>`;
+        if (ab) x.planos.forEach((p) => { corpo += `<tr style="background:#f8faf9"><td class="oxr-sticky" style="padding-left:${24 + (x.nivel + 1) * 16}px;white-space:normal;color:#4a6355"><span style="font-family:monospace;color:#94a3b8;margin-right:6px">${this.esc(p.codigo)}</span>${this.esc(p.nome)}</td>${cels(p)}</tr>`; });
+      });
+      const head = porMes ? `<tr><th class="oxr-sticky" rowspan="2">Categoria</th>${MES.map((m) => `<th colspan="3" class="is-center">${m}</th>`).join("")}</tr><tr>${MES.map(() => `<th class="is-right" title="${this.esc(A)}">${this.esc(A)}</th><th class="is-right" title="${this.esc(B)}">${this.esc(B)}</th><th class="is-right">Var. R$</th>`).join("")}</tr>`
+        : `<tr><th class="oxr-sticky">Categoria</th><th class="is-right" title="${this.esc(A)}">${this.esc(A)}</th><th class="is-right" title="${this.esc(B)}">${this.esc(B)}</th><th class="is-right">Var. R$</th><th class="is-right">Var. %</th></tr>`;
+      const cols = porMes ? `<col style="width:340px">${MES.map(() => `<col style="width:115px"><col style="width:115px"><col style="width:100px">`).join("")}` : `<col><col style="width:160px"><col style="width:160px"><col style="width:150px"><col style="width:100px">`;
+      const barra = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0 8px"><div style="font-weight:800;color:#1c2e24">Visão DFC <span style="font-size:0.66rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-left:6px">comparativo</span></div>
+        <div style="display:flex;gap:8px;align-items:center">${this.seg([["0", "Total"], ["1", "Por mês"]], porMes ? "1" : "0", `${N}.setDfc('dfcPorMes','$'==='1')`)}<button type="button" class="oxr-link" onclick="${N}.expandirDfc(true)">Expandir</button><button type="button" class="oxr-link" style="color:#6b8474" onclick="${N}.expandirDfc(false)">Recolher</button><button type="button" class="btn btn-excel" style="height:32px" onclick="${N}.excelDfc()">⬇ Excel completo</button></div></div>`;
+      return topo + hero + barra + (M.linhas.length ? `<div class="cc-scroll" style="max-height:62vh"><table class="cc-table oxr-mat" style="${porMes ? `min-width:${340 + 12 * 330}px` : ""}"><colgroup>${cols}</colgroup><thead>${head}</thead><tbody>${corpo}</tbody></table></div>` : `<div class="oxr-vazio">Sem linhas na Visão DFC para estas versões.</div>`)
+        + `<div style="font-size:0.7rem;color:#94a3b8;margin-top:6px">Grupos da Visão DFC padrão do Integra; planos fora da visão não entram. Entradas (receitas) positivas e saídas (despesas) negativas.${this.mesesOn ? " Totais só dos meses escolhidos." : ""}</div>`;
+    },
+    expandirDfc(on) { const c = this.cmp, M = c.dfcRes && this.montarDfcCmp(); c.dfcAbertos = {}; if (on && M) M.linhas.forEach((x) => { c.dfcAbertos[x.id] = true; }); this.render(); },
+    excelDfc() {
+      const c = this.cmp, M = this.montarDfcCmp();
+      if (!M) return;
+      const A = c.dfcRes.nomeA, B = c.dfcRes.nomeB, porMes = !!c.dfcPorMes, r = (v) => this.reais(v);
+      const cab = ["Código", "Descrição", "Tipo", A, B, "Var. R$", "Var. %"];
+      if (porMes) MES.forEach((m) => cab.push(`${m} ${A}`, `${m} ${B}`, `${m} Var`));
+      const rows = [];
+      const push = (x, tipo) => { const l = [x.codigo, x.nome, tipo, r(x.ta), r(x.tb), r(x.vr), x.vp == null ? "" : x.vp * 100]; if (porMes) TODOS_MESES.forEach((i) => l.push(r(x.a[i]), r(x.b[i]), r(x.mv[i]))); rows.push(l); };
+      M.linhas.forEach((x) => { push(x, "Categoria"); x.planos.forEach((p) => push(p, "Plano")); });
+      this.xlsx(cab, rows, `DFC_comparativo_${this.ano}.xlsx`);
     },
     abrirCmpAnalitica(view, busca, modo) { const c = this.cmp; c.visao = "analitica"; if (view) c.view = view; if (busca) c.busca = busca; if (modo) c.modo = modo; this.render(); },
     setBuscaCmp(v) { this.cmp.busca = v; this.render(); const i = document.getElementById("oxr-cmp-busca"); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } },
