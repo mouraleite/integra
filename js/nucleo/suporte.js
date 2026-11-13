@@ -401,6 +401,15 @@
     return out;
   }
 
+  /** Quem assumiu o chamado (botão "Assumir chamado"). */
+  function responsavelChip(t) {
+    if (t && t.responsavelEmail) {
+      const meu = String(t.responsavelEmail).toLowerCase() === String(currentUser().email || "").toLowerCase();
+      return `<span class="suporte-resp${meu ? " is-meu" : ""}" title="Assumido em ${esc(fmtDate(t.responsavelEm))}"><i data-lucide="user-check" style="width:13px;height:13px;"></i> Responsável: ${esc(meu ? "você" : (t.responsavelNome || t.responsavelEmail))}</span>`;
+    }
+    return `<span class="suporte-resp is-livre"><i data-lucide="user-x" style="width:13px;height:13px;"></i> Sem responsável</span>`;
+  }
+
   function statusBadge(status) {
     const cls = status === "atendido" ? "ok" : status === "aguardando_usuario" ? "wait" : "pend";
     return `<span class="suporte-badge ${cls}">${esc(STATUS_LABEL[status] || status)}</span>`;
@@ -1174,6 +1183,7 @@
           </div>
           <p>${esc((t.descricao || "").slice(0, 160))}${(t.descricao || "").length > 160 ? "…" : ""}</p>
           <small>${esc(t.userName || t.userEmail || "")} · ${esc(fmtDate(t.updatedAt || t.createdAt))}</small>
+          ${t.status !== "atendido" || t.responsavelEmail ? responsavelChip(t) : ""}
         </button>
         ${action}
       </div>`;
@@ -1287,6 +1297,7 @@
         <span>${esc(localPathOf(t))}</span>
         <span>${esc(t.userName || t.userEmail || "")}</span>
         <span>${esc(fmtDate(t.createdAt))}</span>
+        ${responsavelChip(t)}
       </div>
       <p class="suporte-desc">${esc(t.descricao)}</p>
       ${anexosHtml(imgs)}
@@ -1347,6 +1358,9 @@
           <div class="suporte-reply-actions">
             ${adminView ? `
               <div class="suporte-reply-actions-main">
+                ${t.status !== "atendido" ? (souResponsavel(t)
+                  ? `<button type="button" class="btn btn-outline" id="suporte-liberar" title="Deixa o chamado sem responsável"><i data-lucide="user-minus"></i> Liberar chamado</button>`
+                  : `<button type="button" class="btn btn-outline" id="suporte-assumir" title="${t.responsavelEmail ? "Passa o chamado para você" : "Você fica responsável por este chamado"}"><i data-lucide="user-check"></i> Assumir chamado</button>`) : ""}
                 <button type="button" class="btn btn-outline" id="suporte-ask-info"><i data-lucide="message-circle"></i> Solicitar mais informações</button>
                 <button type="button" class="btn btn-primary suporte-btn-send" id="suporte-send-admin"><i data-lucide="send"></i> Enviar resposta</button>
               </div>
@@ -1385,6 +1399,10 @@
       if (ask) ask.onclick = () => replyTicket(id, { asAdmin: true, status: "aguardando_usuario", requireText: true });
       const done = document.getElementById("suporte-mark-done");
       if (done) done.onclick = () => replyTicket(id, { asAdmin: true, status: "atendido", allowEmpty: true });
+      const assumir = document.getElementById("suporte-assumir");
+      if (assumir) assumir.onclick = () => assumirChamado(id, false);
+      const liberar = document.getElementById("suporte-liberar");
+      if (liberar) liberar.onclick = () => assumirChamado(id, true);
       const arch = document.getElementById("suporte-archive");
       if (arch) arch.onclick = () => archiveFromDetail(id, !t.arquivadoAt);
       if (window.lucide) lucide.createIcons();
@@ -1466,6 +1484,51 @@
     } catch (err) {
       alert("Não foi possível responder: " + (err.message || err));
       sendBtns.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  function souResponsavel(t) {
+    const eu = String(currentUser().email || "").toLowerCase();
+    return !!(t && eu && String(t.responsavelEmail || "").toLowerCase() === eu);
+  }
+
+  /**
+   * Assumir: quem clica fica responsável pelo chamado (pendente passa para "Em atendimento").
+   * Se outra pessoa já tinha assumido, pede confirmação antes de passar para você.
+   * Liberar: o chamado volta a ficar sem responsável.
+   */
+  async function assumirChamado(id, liberar) {
+    const btn = document.getElementById(liberar ? "suporte-liberar" : "suporte-assumir");
+    if (btn) btn.disabled = true;
+    try {
+      const t = await loadTicket(id);
+      const u = currentUser();
+      const eu = String(u.email || "").toLowerCase();
+      if (!eu) throw new Error("Não identifiquei seu usuário. Entre de novo no Integra.");
+      const atual = String(t.responsavelEmail || "").toLowerCase();
+      if (!liberar && atual && atual !== eu
+        && !confirm(`Este chamado está com ${t.responsavelNome || t.responsavelEmail}. Assumir no lugar?`)) {
+        if (btn) btn.disabled = false;
+        return;
+      }
+      if (liberar && atual !== eu) {
+        alert("Este chamado já não está com você.");
+        await openDetail(id, { admin: true });
+        return;
+      }
+      const agora = new Date().toISOString();
+      const patch = liberar
+        ? { responsavelNome: "", responsavelEmail: "", responsavelEm: null, updatedAt: agora }
+        : { responsavelNome: u.name || u.email || "", responsavelEmail: eu, responsavelEm: agora, updatedAt: agora };
+      if (!liberar && t.status === "pendente") patch.status = "em_atendimento";
+      const { db, c } = fb();
+      await c.updateDoc(c.doc(db, COLLECTION, id), patch);
+      ticketMap[id] = Object.assign({}, t, patch);
+      await openDetail(id, { admin: true });
+      if (window.activeAppTab === "suporte") renderAdmin();
+    } catch (err) {
+      alert("Não foi possível " + (liberar ? "liberar" : "assumir") + " o chamado: " + (err.message || err));
+      if (btn) btn.disabled = false;
     }
   }
 

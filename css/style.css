@@ -4166,6 +4166,22 @@ circle.donut-segment {
 .suporte-badge.pend { background: #fef3c7; color: #92400e; }
 .suporte-badge.wait { background: #dbeafe; color: #1d4ed8; }
 .suporte-badge.ok { background: #ecfdf5; color: #047857; }
+/* Responsável pelo chamado (botão "Assumir chamado") */
+.suporte-resp {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  background: #e7f6ee;
+  color: #105436;
+}
+.suporte-resp.is-meu { background: #1b8253; color: #fff; }
+.suporte-resp.is-livre { background: #f1f5f9; color: #64748b; font-weight: 600; }
+.suporte-card-hit .suporte-resp { margin-left: 8px; vertical-align: middle; }
 .suporte-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 0.8rem; color: #64748b; }
 .suporte-desc { white-space: pre-wrap; color: #0f172a; font-size: 0.9rem; }
 .suporte-thread { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
