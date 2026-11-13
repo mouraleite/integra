@@ -71,7 +71,7 @@ const OrionAnaliseApp = {
   alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
   expandir(abrir) {
     this.abertos = {};
-    if (abrir && this.dados) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); marca(this.montar().empresas); }
+    if (abrir && this.dados) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); const m = this.montar(); marca(m.empresas); marca(m.empreendimentos || []); }
     this.render();
   },
 
@@ -214,20 +214,23 @@ const OrionAnaliseApp = {
     const linha = (x, nivel) => {
       const tem = x.filhos && x.filhos.length;
       const ab = !!this.abertos[x.id];
-      const cls = { empresa: "oan-empresa", grupo: "oan-grupo", centro: "oan-centro" }[x.tipo] || "";
+      const cls = nivel === 0 && x.tipo !== "total" ? "oan-empresa" : ({ empresa: "oan-empresa", grupo: "oan-grupo", centro: "oan-centro" }[x.tipo] || "");
       let out = `<tr class="${cls}" ${tem ? `onclick="OrionAnaliseApp.alternar('${this.esc(x.id)}')"` : ""}><td style="position:sticky;left:0;background:inherit;z-index:1;padding-left:${8 + nivel * 16}px">${tem ? (ab ? "▾ " : "▸ ") : ""}<span class="oan-cod">${this.esc(x.codigo)}</span>${this.esc(x.nome)}</td>${celulas(x)}</tr>`;
       if (tem && ab) x.filhos.forEach((y) => { out += linha(y, nivel + 1); });
       return out;
     };
     const btnS = (k, t) => `<button type="button" class="btn ${S[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.alternarSerie('${k}')">${t}</button>`;
-    return `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0"><b>Navegação</b><span style="font-size:0.7rem;color:#64748b">VISÃO DFC</span>
+    const nav = `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0"><b>Navegação</b><span style="font-size:0.7rem;color:#64748b">VISÃO DFC</span>
         <span style="margin-left:auto;font-size:0.7rem;color:#64748b">COLUNAS</span><button type="button" class="btn ${this.colunas === "mensal" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'mensal')">Mês a mês</button><button type="button" class="btn ${this.colunas === "acumulado" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'acumulado')">YTD · YTG · FY</button>
         <span style="margin-left:10px;font-size:0.7rem;color:#64748b">SÉRIES</span>${btnS("n", this.ano + " cheio")}${btnS("ref", refT + " cheio")}${btnS("n_mldu", this.ano + " MLDU")}${btnS("ref_mldu", refT + " MLDU")}
-        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false)">Recolher</button></div>
-      <div class="cc-scroll" style="max-height:68vh"><table class="cc-table oan-tab or-larga">
-        <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:300px">EMPRESA / GRUPO / EMPREENDIMENTO</th>${cab1}</tr><tr>${cab2}</tr></thead>
-        <tbody>${a.empresas.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem ${d.tipo === "RECEITAS" ? "receitas" : "despesas"} para os filtros.</td></tr>`}
+        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false)">Recolher</button></div>`;
+    const tabela = (itens, cab) => `<div class="cc-scroll" style="max-height:68vh"><table class="cc-table oan-tab or-larga">
+        <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:300px">${cab}</th>${cab1}</tr><tr>${cab2}</tr></thead>
+        <tbody>${itens.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem ${d.tipo === "RECEITAS" ? "receitas" : "despesas"} para os filtros.</td></tr>`}
           <tr class="oan-total"><td style="position:sticky;left:0;background:#105436">TOTAL</td>${celulas(a.total)}</tr></tbody></table></div>`;
+    return nav + tabela(a.empresas, "EMPRESA / GRUPO / EMPREENDIMENTO")
+      + `<div style="display:flex;align-items:center;gap:8px;margin:18px 0 6px"><b>Por empreendimento</b><span style="font-size:0.7rem;color:#64748b">EMPREENDIMENTO › GRUPO › PLANO · mesmas colunas, séries e totais da tabela acima</span></div>`
+      + tabela(a.empreendimentos || [], "EMPREENDIMENTO / GRUPO");
   },
 
   render() {

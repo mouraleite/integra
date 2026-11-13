@@ -734,7 +734,26 @@
       });
       if (gs.length) empresas.push(no("empresa", e.id, e.nome, e.id, gs));
     });
-    return { empresas, total: no("total", "total", "Total", "", empresas), corte, semGrupo };
+    // mesma informação na ordem empreendimento › grupo › plano (segunda tabela da tela)
+    const porCc = new Map();
+    arv.forEach(({ e, grupos }) => grupos.forEach(({ g, ccs: cm }) => cm.forEach((fs, cc) => {
+      if (!porCc.has(cc)) porCc.set(cc, { cc, e, nome: (fs[0] && fs[0].cc_nome) || cc, grupos: new Map() });
+      const x = porCc.get(cc);
+      if (!x.grupos.has(g.id)) x.grupos.set(g.id, { g, fs: [] });
+      x.grupos.get(g.id).fs.push(...fs);
+    })));
+    const empreendimentos = [];
+    [...porCc.values()].sort((a, b) => cmp(a.cc, b.cc)).forEach(({ cc, e, nome, grupos }) => {
+      const gs = [];
+      [...grupos.values()].sort((a, b) => cmp(a.g.codigo || a.g.id, b.g.codigo || b.g.id)).forEach(({ g, fs }) => {
+        const ps = fs.slice().sort((a, b) => cmp(a.plano, b.plano))
+          .map((f) => no("plano", "E|" + cc + "|" + g.id + "|" + f.plano, f.plano_nome || f.plano, f.plano, [], serie(f, Number(e.fator) || 0)))
+          .filter((x) => !vazio(x));
+        if (ps.length) gs.push(no("grupo", "E|" + cc + "|" + g.id, g.nome, g.codigo || "", ps));
+      });
+      if (gs.length) empreendimentos.push(no("centro", "E|" + cc, nome, cc, gs));
+    });
+    return { empresas, empreendimentos, total: no("total", "total", "Total", "", empresas), corte, semGrupo };
   }
 
   /**
