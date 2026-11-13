@@ -486,7 +486,7 @@
     return { anos, meses, linhas, conferencia: { lucro_dfc: lucro, lucro_lista: ll, desvio: lucro - ll, ok: Math.abs(lucro - ll) < 1 } };
   }
 
-  const api = { dfcVida, grupoOrion, codigoGrupo, GRUPO_ORION, calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, ESTOQUE, TMA_PADRAO };
+  const api = { dfcVida, grupoOrion, codigoGrupo, GRUPO_ORION, calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, planosDasVendas, ESTOQUE, TMA_PADRAO };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   raiz.OrionAcompanhamentoCalc = api;
 })(typeof window !== "undefined" ? window : globalThis);
