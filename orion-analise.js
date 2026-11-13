@@ -6,7 +6,7 @@
  * Navegação na visão DFC do Integra: empresa › grupo › empreendimento › plano, mês a mês, com semáforo. Só leitura. */
 const OrionAnaliseApp = {
   ano: String(new Date().getFullYear()),
-  tipo: "DESPESAS", diretoria: "", dept: "TODOS", versao: "", base: "orcamento", corte: null, grupo: "", cc: "",
+  tipo: "DESPESAS", diretoria: "", dept: "TODOS", versao: "", base: "orcamento", corte: null, grupo: "", grupos: [], grpAberto: false, grpBusca: "", cc: "",
   empresas: [], empAberto: false, empBusca: "",
   series: { n: true, ref: true, n_mldu: false, ref_mldu: false }, colunas: "mensal",
   cabs: { orcamentos: null, forecasts: null },
@@ -66,7 +66,7 @@ const OrionAnaliseApp = {
   },
 
   limpar() { this.dados = null; this.abertos = {}; this.render(); },
-  set(campo, v) { this[campo] = v; if (["ano"].indexOf(campo) >= 0) { this.versao = ""; this.corte = null; } if (campo === "diretoria") this.dept = "TODOS"; if (campo === "tipo") { this.versao = ""; this.grupo = ""; this.cc = ""; } if (["tipo", "ano", "dept", "diretoria", "versao", "base", "corte"].indexOf(campo) >= 0) this.limpar(); else this.render(); },
+  set(campo, v) { this[campo] = v; if (["ano"].indexOf(campo) >= 0) { this.versao = ""; this.corte = null; } if (campo === "diretoria") this.dept = "TODOS"; if (campo === "tipo") { this.versao = ""; this.grupo = ""; this.grupos = []; this.cc = ""; } if (["tipo", "ano", "dept", "diretoria", "versao", "base", "corte"].indexOf(campo) >= 0) this.limpar(); else this.render(); },
   alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
   alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
   expandir(abrir) {
@@ -141,10 +141,22 @@ const OrionAnaliseApp = {
     if (this.cc) { const k = String(this.cc); nfc = nfc.filter((l) => String(l.cc).replace(/\D/g, "") === k); refL = refL.filter((l) => String(l.cc).replace(/\D/g, "") === k); }
     const grupos = {};
     (R.grupos() || []).forEach((g) => { if (g && g.id) grupos[g.id] = g; });
+    // filtro de grupos (vários): escolher um grupo-pai (ex.: 05 DESPESAS) traz todos os filhos (05.01, 05.02…)
+    if (this.grupos.length) {
+      const sel = new Set(this.grupos.map(String)), cache = {};
+      const dentro = (gid) => {
+        if (gid in cache) return cache[gid];
+        let g = gid, n = 0, ok = false;
+        while (g && n++ < 20) { if (sel.has(String(g))) { ok = true; break; } g = (grupos[g] || {}).parentId; }
+        return (cache[gid] = ok);
+      };
+      const vale = (plano) => { const gid = R.grupoDe(plano); return !!gid && dentro(gid); };
+      nfc = nfc.filter((l) => vale(l.plano)); refL = refL.filter((l) => vale(l.plano)); al = al.filter((x) => vale(x.plano));
+    }
     const mapa = F.mapaCcEmpresa();
     return C.analiseOrcamentoAnual({
       n_fc: nfc, ref: refL, n_real: al, corte: d.corte, sinal: d.tipo === "RECEITAS" ? 1 : -1,
-      grupoDe: (p) => { const gid = R.grupoDe(p); if (!gid || (this.grupo && gid !== this.grupo)) return null; const g = grupos[gid] || {}; return { id: gid, nome: g.name || g.nome || gid, codigo: g.code || g.codigo || "" }; },
+      grupoDe: (p) => { const gid = R.grupoDe(p); if (!gid) return null; const g = grupos[gid] || {}; return { id: gid, nome: g.name || g.nome || gid, codigo: g.code || g.codigo || "" }; },
       empresaDe: (cc) => { const id = mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; }
     });
   },
@@ -234,7 +246,7 @@ const OrionAnaliseApp = {
     const corte = this.corteAtual();
     const op = (v, t, sel) => `<option value="${this.esc(v)}" ${String(v) === String(sel) ? "selected" : ""}>${this.esc(t)}</option>`;
     const R = this.R();
-    const grupos = this.dados && R ? (R.grupos() || []).filter((g) => g && g.id && g.type !== "formula") : [];
+    const grupos = this.dados && R ? (R.grupos() || []).filter((g) => g && g.id && g.type !== "formula").slice().sort((a, b) => `${a.code || ""} ${a.name || ""}`.trim().localeCompare(`${b.code || ""} ${b.name || ""}`.trim(), "pt-BR", { numeric: true })) : [];
     const ccsDados = this.dados ? [...new Set(this.dados.nfc.concat(this.dados.refL).map((l) => String(l.cc).replace(/\D/g, "")))].sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })) : [];
     const nomesCc = cad.nomesCc || {};
     const empSlot = this.dados && window.MlEmpresaFilter ? window.MlEmpresaFilter.html({ id: "OrionAnaliseApp-emp", label: "Empresa", items: this.dados.empresas.map((id) => ({ id: String(id), label: `${id} - ${String(window.OrionFiltros.nomeEmpresa(id) || "").toUpperCase()}` })), selectedIds: this.empresas.length ? this.empresas : this.dados.empresas.map(String), open: !!this.empAberto, query: this.empBusca || "", emptyMeansAll: true }) : "";
@@ -249,7 +261,7 @@ const OrionAnaliseApp = {
         <div class="ofg-f"><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" onchange="OrionAnaliseApp.set('diretoria', this.value)">${op("", "Todas", this.diretoria)}${diretorias.map((x) => op(x, x, this.diretoria)).join("")}</select></div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" onchange="OrionAnaliseApp.set('dept', this.value)">${op("TODOS", "Todos", this.dept)}${deps.map((d) => op(d.id, d.nome, this.dept)).join("")}</select></div>
         <div class="ofg-f" id="oan-emp">${empSlot || `<label class="ml-emp-filter-label">Empresa</label><div class="ofg-fake" title="A lista de empresas aparece depois de calcular">Todas · calcule para filtrar</div>`}</div>
-        <div class="ofg-f"><label class="ml-emp-filter-label">Grupo</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('grupo', this.value)">${op("", "Todos", this.grupo)}${grupos.map((g) => op(g.id, `${g.code || g.codigo || ""} ${g.name || g.nome || g.id}`.trim(), this.grupo)).join("")}</select>` : `<div class="ofg-fake">Todos · calcule para filtrar</div>`}</div>
+        <div class="ofg-f">${this.dados && window.MlEmpresaFilter ? window.MlEmpresaFilter.html({ id: "OrionAnaliseApp-grp", label: "Grupo", items: grupos.map((g) => ({ id: String(g.id), label: `${g.code || g.codigo || ""} ${g.name || g.nome || g.id}`.trim() })), selectedIds: this.grupos.length ? this.grupos : grupos.map((g) => String(g.id)), open: !!this.grpAberto, query: this.grpBusca || "", emptyMeansAll: true }) : `<label class="ml-emp-filter-label">Grupo</label><div class="ofg-fake">Todos · calcule para filtrar</div>`}</div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Empreendimento</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('cc', this.value)">${op("", "Todos", this.cc)}${ccsDados.map((c) => op(c, `${c} - ${nomesCc[c] || ""}`, this.cc)).join("")}</select>` : `<div class="ofg-fake">Todos · calcule para filtrar</div>`}</div>
         <div class="ofg-sec">Período e comparação</div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Ano</label><select class="idx-select" onchange="OrionAnaliseApp.set('ano', this.value)">${anos.map((x) => op(x, x, this.ano)).join("")}</select></div>
@@ -263,6 +275,30 @@ const OrionAnaliseApp = {
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
       ${a ? this.htmlCards(a) + `<div style="font-size:0.7rem;color:#64748b;margin:-4px 0 8px">SEMÁFORO <span class="oan-dot" style="background:#cbd5e1"></span>Imaterial (&lt; R$ 5 mil) <span class="oan-dot" style="background:#10b981"></span>Favorável ou ≤ 5% <span class="oan-dot" style="background:#fbbf24"></span>Atenção (≤ 10%) <span class="oan-dot" style="background:#ef4444"></span>Acima do limite <span class="oan-dot" style="background:#0ea5e9"></span>Novo · Referência: ${this.esc(this.dados.refDesc)} · forecast ${this.esc(this.dados.versao || "—")} · ${this.dados.real.movimentos} movimentos do caixa${a.semGrupo ? ` · ${a.semGrupo} linha(s) fora da visão DFC` : ""}</div>` + this.htmlTabela(a) : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha os filtros e clique em Calcular. O realizado é lido do Sienge na hora (até o corte).</div>`)}`;
     if (this.dados && window.OrionFiltros) window.OrionFiltros.bind(this, "OrionAnaliseApp", this.dados.empresas);
+    if (this.dados && window.MlEmpresaFilter && document.getElementById("OrionAnaliseApp-grp")) {
+      const todos = grupos.map((g) => String(g.id));
+      const atuais = () => (this.grupos.length ? this.grupos.slice() : todos.slice());
+      const fixa = (l) => { this.grupos = l.length >= todos.length ? [] : l; this.abertos = {}; this.render(); };
+      window.MlEmpresaFilter.bind("OrionAnaliseApp-grp", {
+        toggleOpen: () => { this.grpAberto = !this.grpAberto; this.render(); },
+        close: () => { this.grpAberto = false; setTimeout(() => this.render(), 0); },
+        setQuery: (q) => { this.grpBusca = q; this.render(); },
+        // marcar/desmarcar um grupo-pai marca/desmarca junto os filhos (05 DESPESAS › 05.01, 05.02…)
+        toggleId: (id, on) => {
+          const fam = new Set([String(id)]);
+          let cresceu = true;
+          while (cresceu) { cresceu = false; grupos.forEach((g) => { if (g.parentId != null && fam.has(String(g.parentId)) && !fam.has(String(g.id))) { fam.add(String(g.id)); cresceu = true; } }); }
+          // desmarcar um filho tira também o pai (senão o pai continuaria trazendo o filho)
+          const pais = new Set(); if (!on) { const by = {}; grupos.forEach((g) => { by[String(g.id)] = g; }); let pg = (by[String(id)] || {}).parentId, n = 0; while (pg != null && n++ < 20) { pais.add(String(pg)); pg = (by[String(pg)] || {}).parentId; } }
+          const l = atuais().filter((x) => x !== "__nenhum__" && !fam.has(x) && !pais.has(x));
+          if (on) fam.forEach((x) => l.push(x));
+          if (!l.length) { this.grupos = ["__nenhum__"]; this.abertos = {}; return this.render(); }
+          fixa(l);
+        },
+        selectAll: () => fixa(todos.slice()),
+        selectNone: () => { this.grupos = ["__nenhum__"]; this.abertos = {}; this.render(); }
+      });
+    }
   }
 };
 

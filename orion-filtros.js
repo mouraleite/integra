@@ -60,7 +60,7 @@ const OrionFiltros = {
       .ofg .ml-emp-filter { width:100%; max-width:none; min-width:0; flex:none; }
       .ofg .ml-emp-filter-btn { height:40px; min-height:40px; box-sizing:border-box; border-color:#cbd5e1; border-radius:8px; font-weight:600; }
       .ofg .ofg-check { display:flex; align-items:center; gap:8px; height:40px; padding:0 10px; border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#334155; font-size:0.85rem; font-weight:600; cursor:pointer; box-sizing:border-box; margin:0 !important; }
-      .ofg .ml-emp-filter-panel { width:max-content; min-width:100%; max-width:min(640px, 90vw); }
+      .ofg .ml-emp-filter-panel { width:max-content; min-width:max(100%, 320px); max-width:min(640px, 90vw); }
       .ofg .ml-emp-filter-item span { white-space:nowrap; }
       .ofg .ml-sel { width:100% !important; }
       .ofg .ml-sel input { height:40px; box-sizing:border-box; }
