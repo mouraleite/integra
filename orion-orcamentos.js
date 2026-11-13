@@ -265,7 +265,7 @@ const OrionOrcamentosApp = {
 
   /** Pode editar: permissão de edição e ser usuário do departamento (quando o cadastro de departamentos existir). */
   podeEditarCab(cab) {
-    if (!cab || !this.C().editavel(cab.status)) return false;
+    if (!cab || cab.integra || !this.C().editavel(cab.status)) return false;
     if (this.ehAdmin()) return true;
     if (typeof window.hasCrmPerm !== "function" || !window.hasCrmPerm("sub_orion_geral_orcamentos_editar")) return false;
     const cad = this.cadDep;
@@ -475,6 +475,7 @@ const OrionOrcamentosApp = {
     const C = this.C();
     const a = this.aberto;
     if (!a) return;
+    if (a.cab.integra) { this.erro = "Este orçamento vem do Orçamento do Integra (Orçamento › Acompanhamento) e só é alterado por lá."; return this.render(); }
     let trans;
     try { trans = C.resolverTransicao(a.cab.status, para); } catch (err) { this.erro = err.message; return this.render(); }
     if (C.ACOES_GESTOR.indexOf(trans.acao) >= 0 && !this.ehGestor()) { this.erro = "Sem permissão para aprovar ou rejeitar."; return this.render(); }
@@ -563,8 +564,9 @@ const OrionOrcamentosApp = {
     const C = this.C();
     const cab = this.aberto.cab;
     const botoes = [];
+    if (cab.integra) botoes.push(`<span style="font-size:0.72rem;color:#6b8474;max-width:360px;line-height:1.3">Vem do Orçamento do Integra (${this.esc((cab.origem_integra || {}).arquivo || "")}, versão ${this.esc(cab.versao)}). Para alterar, use Orçamento › Acompanhamento.</span>`);
     if (!this.edicao && this.podeEditarCab(cab)) botoes.push(`<button type="button" class="btn btn-primary" style="height:32px" onclick="OrionOrcamentosApp.editar()">Editar</button>`);
-    if (!this.edicao) {
+    if (!this.edicao && !cab.integra) {
       C.acoesDoStatus(cab.status).forEach((x) => {
         const gestor = C.ACOES_GESTOR.indexOf(x.acao) >= 0;
         const pode = gestor ? this.ehGestor() : (x.acao === "solicitar_reabertura" ? true : this.podeEditarCab(Object.assign({}, cab, { status: "Rascunho" })));
