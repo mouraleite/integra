@@ -141,21 +141,21 @@ const OrionAnaliseApp = {
     if (this.cc) { const k = String(this.cc); nfc = nfc.filter((l) => String(l.cc).replace(/\D/g, "") === k); refL = refL.filter((l) => String(l.cc).replace(/\D/g, "") === k); }
     const grupos = {};
     (R.grupos() || []).forEach((g) => { if (g && g.id) grupos[g.id] = g; });
-    // filtro de grupos (vários): escolher um grupo-pai (ex.: 05 DESPESAS) traz todos os filhos (05.01, 05.02…)
+    // filtro de grupos (vários): escolher um grupo-pai (ex.: 05 DESPESAS) traz todos os filhos (05.01, 05.02…).
+    // O cálculo é o mesmo de "Todos"; o filtro só escolhe quais grupos aparecem (as partes somam o total).
+    let manterGrupo = null;
     if (this.grupos.length) {
       const sel = new Set(this.grupos.map(String)), cache = {};
-      const dentro = (gid) => {
+      manterGrupo = (gid) => {
         if (gid in cache) return cache[gid];
         let g = gid, n = 0, ok = false;
         while (g && n++ < 20) { if (sel.has(String(g))) { ok = true; break; } g = (grupos[g] || {}).parentId; }
         return (cache[gid] = ok);
       };
-      const vale = (plano) => { const gid = R.grupoDe(plano); return !!gid && dentro(gid); };
-      nfc = nfc.filter((l) => vale(l.plano)); refL = refL.filter((l) => vale(l.plano)); al = al.filter((x) => vale(x.plano));
     }
     const mapa = F.mapaCcEmpresa();
     return C.analiseOrcamentoAnual({
-      n_fc: nfc, ref: refL, n_real: al, corte: d.corte, sinal: d.tipo === "RECEITAS" ? 1 : -1,
+      n_fc: nfc, ref: refL, n_real: al, corte: d.corte, sinal: d.tipo === "RECEITAS" ? 1 : -1, manterGrupo,
       grupoDe: (p) => { const gid = R.grupoDe(p); if (!gid) return null; const g = grupos[gid] || {}; return { id: gid, nome: g.name || g.nome || gid, codigo: g.code || g.codigo || "" }; },
       empresaDe: (cc) => { const id = mapa[cc] || "_sem"; return { id, nome: id === "_sem" ? "SEM EMPRESA NO CADASTRO" : String(F.nomeEmpresa(id) || "Empresa " + id).toUpperCase(), fator: this.fatorMldu(id) }; }
     });

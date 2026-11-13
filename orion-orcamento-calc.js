@@ -708,6 +708,7 @@
     folhas.forEach((f) => {
       const g = o.grupoDe ? o.grupoDe(f.plano) : null;
       if (!g) { semGrupo++; return; }
+      if (o.manterGrupo && !o.manterGrupo(g.id)) return; // filtro de grupos da tela: não conta como "fora da visão DFC"
       const e = (o.empresaDe && o.empresaDe(f.cc)) || { id: "_sem", nome: "Sem empresa", fator: 0 };
       if (!arv.has(e.id)) arv.set(e.id, { e, grupos: new Map() });
       const ge = arv.get(e.id).grupos;
