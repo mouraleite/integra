@@ -318,16 +318,20 @@
         const depts = new Map();
         (this.cabs.orcamento || []).concat(this.cabs.forecast || []).filter((c) => String(c.ano) === String(this.ano) && c.departamento && (this.diretoria === "TODAS" || this.dirDe(c.departamento.id) === this.diretoria)).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
         const emps = this.empresas();
-        const multi = (id, rot, items, sel) => window.MlEmpresaFilter ? `<div>${MlEmpresaFilter.html({ id, label: rot, items, selectedIds: sel, open: this.fOpen === id, query: this.fQ[id] || "", emptyMeansAll: true })}</div>` : "";
-        return `<div class="odv-card"><div class="odv-barra">
-          ${dirs.length ? `<div><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" style="height:40px;min-width:150px" onchange="${N}.setDiretoria(this.value)"><option value="TODAS">Todas</option>${dirs.map((d) => `<option ${d === this.diretoria ? "selected" : ""}>${this.esc(d)}</option>`).join("")}</select></div>` : ""}
-          <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:200px" onchange="${N}.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-          ${multi(this.rootId + "-eid", "ID Empresa", emps.map((e) => ({ id: e.id, label: e.id })), this.empIds)}
-          ${multi(this.rootId + "-enome", "Empresa", [...new Set(emps.map((e) => e.nome).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((n) => ({ id: n, label: n.toUpperCase() })), this.empNomes)}
-          ${multi(this.rootId + "-mes", "Meses", MES.map((m, i) => ({ id: String(i), label: m })), this.meses.map(String))}
-          <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px;min-width:100px" onchange="${N}.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-          ${extra || ""}
-          <button type="button" class="btn btn-primary" style="margin-left:auto" ${this.carregando || !this.cabs.orcamento ? "disabled" : ""} onclick="${N}.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div></div>`;
+        const F = window.OrionFiltros;
+        const multi = (id, rot, items, sel, cls) => window.MlEmpresaFilter ? `<div class="ofg-f${cls ? " " + cls : ""}">${MlEmpresaFilter.html({ id, label: rot, items, selectedIds: sel, open: this.fOpen === id, query: this.fQ[id] || "", emptyMeansAll: true })}</div>` : "";
+        const sec1 = [
+          F.campo("Diretoria", `<select class="idx-select" onchange="${N}.setDiretoria(this.value)" ${dirs.length ? "" : "disabled"}><option value="TODAS">Todas</option>${dirs.map((d) => `<option ${d === this.diretoria ? "selected" : ""}>${this.esc(d)}</option>`).join("")}</select>`),
+          F.campo("Departamento", `<select class="idx-select" onchange="${N}.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select>`),
+          multi(this.rootId + "-eid", "ID Empresa", emps.map((e) => ({ id: e.id, label: e.id })), this.empIds),
+          multi(this.rootId + "-enome", "Empresa", [...new Set(emps.map((e) => e.nome).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")).map((n) => ({ id: n, label: n.toUpperCase() })), this.empNomes, "ofg-span3")
+        ];
+        const sec2 = [
+          F.campo("Ano", `<select class="idx-select" onchange="${N}.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select>`),
+          multi(this.rootId + "-mes", "Meses", MES.map((m, i) => ({ id: String(i), label: m })), this.meses.map(String))
+        ].concat(Array.isArray(extra) ? extra : (extra ? [extra] : []));
+        const acao = `<button type="button" class="btn btn-primary" ${this.carregando || !this.cabs.orcamento ? "disabled" : ""} onclick="${N}.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button>`;
+        return F.grade([{ titulo: "O que analisar", campos: sec1 }, { titulo: "Período e comparação", campos: sec2.concat([`<div class="ofg-acao">${acao}</div>`]) }], "");
       },
       ligarFiltros() {
         if (!window.MlEmpresaFilter) return;

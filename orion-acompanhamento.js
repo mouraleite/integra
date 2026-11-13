@@ -163,13 +163,14 @@ const OrionAcompanhamentoApp = {
     const a = this.aberto, d = a.dados;
     const f = (v) => this.R0(v);
     const cls = (v) => (v < -0.5 ? "ov-neg" : "");
-    const topo = `<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
-        <div style="font-size:1rem;font-weight:700;margin-right:12px">${this.esc(a.doc.project_name)}</div>
-        <div><label class="ml-emp-filter-label">Centro de custo da obra</label><input class="idx-select" style="height:40px;width:120px;box-sizing:border-box" value="${this.esc(a.cc)}" onchange="OrionAcompanhamentoApp.setCc(this.value)"></div>
-        <div><label class="ml-emp-filter-label">Mês 1 da viabilidade</label><input type="month" class="idx-select" style="height:40px;box-sizing:border-box" value="${this.esc(a.inicio)}" onchange="OrionAcompanhamentoApp.setInicio(this.value)"></div>
-        ${this.podeEditar() ? `<button type="button" class="btn btn-secondary" style="height:40px" title="Grava o mês 1 e o centro de custo nesta viabilidade" onclick="OrionAcompanhamentoApp.gravarInicio()">Gravar</button>` : ""}
-        <button type="button" class="btn btn-primary" style="height:40px" ${a.carregando ? "disabled" : ""} onclick="OrionAcompanhamentoApp.calcular()">${a.carregando ? "Calculando..." : "Calcular"}</button>
-        <button type="button" class="btn btn-secondary" style="height:40px;margin-left:auto" onclick="OrionAcompanhamentoApp.fechar()">Voltar à lista</button></div>
+    const F = window.OrionFiltros;
+    const topo = `<div style="font-size:1rem;font-weight:700;margin-bottom:8px">${this.esc(a.doc.project_name)}</div>
+      ${F.grade([{ campos: [
+        F.campo("Centro de custo da obra", `<input class="idx-select" value="${this.esc(a.cc)}" onchange="OrionAcompanhamentoApp.setCc(this.value)">`),
+        F.campo("Mês 1 da viabilidade", `<input type="month" class="idx-select" value="${this.esc(a.inicio)}" onchange="OrionAcompanhamentoApp.setInicio(this.value)">`)] }],
+        `${this.podeEditar() ? `<button type="button" class="btn btn-secondary" title="Grava o mês 1 e o centro de custo nesta viabilidade" onclick="OrionAcompanhamentoApp.gravarInicio()">Gravar</button>` : ""}
+        <button type="button" class="btn btn-primary" ${a.carregando ? "disabled" : ""} onclick="OrionAcompanhamentoApp.calcular()">${a.carregando ? "Calculando..." : "Calcular"}</button>
+        <button type="button" class="btn btn-secondary" onclick="OrionAcompanhamentoApp.fechar()">Voltar à lista</button>`, { acaoCls: "ofg-acao3" })}
       ${a.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:10px">${this.esc(a.erro)}</div>` : ""}
       ${a.aviso ? `<div style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;color:#166534;border-radius:8px;margin-bottom:10px">${this.esc(a.aviso)}</div>` : ""}
       ${!a.cc || !a.inicio ? `<div style="font-size:0.8rem;color:#92400e">Informe o centro de custo da obra e o mês 1 da viabilidade (mês da data de lançamento) e clique em Calcular.</div>` : ""}

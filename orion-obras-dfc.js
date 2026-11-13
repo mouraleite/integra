@@ -93,12 +93,12 @@ const OrionObrasDfcApp = {
     const anosDisp = d && !d.semDados ? d.anos : [];
     root.innerHTML = `${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${O.carregando ? `<div style="text-align:center;padding:12px;color:#64748b;"><div class="spinner" style="margin:0 auto 8px;"></div>${this.esc(O.passo || "Aguarde…")}</div>` : ""}
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:12px">
-        <div><label class="ml-emp-filter-label">Empreendimento</label><select class="idx-select" style="height:40px;min-width:340px" onchange="OrionObrasDfcApp.set('id', this.value)">${lista.map((g) => `<option value="${this.esc(g.id)}" ${g.id === this.id ? "selected" : ""}>${this.esc(g.cidade)} - ${this.esc(g.nome)}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Período</label><div style="display:flex;gap:4px">${[["ano", "Ano"], ["mes", "Mês"]].map(([k, t]) => `<button type="button" class="btn ${this.periodo === k ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionObrasDfcApp.set('periodo', '${k}')">${t}</button>`).join("")}</div></div>
-        ${this.periodo === "mes" && anosDisp.length ? `<div><label class="ml-emp-filter-label">Ano</label><div style="display:flex;gap:4px;flex-wrap:wrap">${anosDisp.map((a) => `<button type="button" class="btn ${this.anos.indexOf(a) >= 0 ? "btn-primary" : "btn-secondary"}" style="height:40px;padding:0 10px" onclick="OrionObrasDfcApp.alternarAno('${a}')">${a}</button>`).join("")}</div></div>` : ""}
-        <button type="button" class="btn btn-secondary" style="height:40px;margin-left:auto" ${O.carregando ? "disabled" : ""} onclick="OrionObrasDfcApp.atualizar()">Atualizar com o Sienge</button>
-        <button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionObrasDfcApp.exportar()">Exportar Excel</button></div>
+      ${window.OrionFiltros.grade([{ campos: [
+        window.OrionFiltros.campo("Empreendimento", `<select class="idx-select" onchange="OrionObrasDfcApp.set('id', this.value)">${lista.map((g) => `<option value="${this.esc(g.id)}" ${g.id === this.id ? "selected" : ""}>${this.esc(g.cidade)} - ${this.esc(g.nome)}</option>`).join("")}</select>`, "ofg-span2"),
+        window.OrionFiltros.campo("Período", window.OrionFiltros.seg([["ano", "Ano", "OrionObrasDfcApp.set('periodo', 'ano')"], ["mes", "Mês", "OrionObrasDfcApp.set('periodo', 'mes')"]], this.periodo)),
+        this.periodo === "mes" && anosDisp.length ? window.OrionFiltros.campo("Anos", `<div class="ofg-chips" style="min-height:40px">${anosDisp.map((a) => `<button type="button" class="btn ${this.anos.indexOf(a) >= 0 ? "btn-primary" : "btn-secondary"}" onclick="OrionObrasDfcApp.alternarAno('${a}')">${a}</button>`).join("")}</div>`, "ofg-span2") : ""] }],
+        `<button type="button" class="btn btn-secondary" ${O.carregando ? "disabled" : ""} onclick="OrionObrasDfcApp.atualizar()">Atualizar com o Sienge</button>
+        <button type="button" class="btn btn-secondary" onclick="OrionObrasDfcApp.exportar()">Exportar Excel</button>`)}
       ${corpo}`;
   }
 };

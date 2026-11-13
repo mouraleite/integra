@@ -123,19 +123,11 @@ const OrionFechamentoApp = {
     }).join("");
 
     root.innerHTML = `
-      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-        <div>
-          <label class="ml-emp-filter-label" for="ofech-ano">Ano</label>
-          <select id="ofech-ano" class="idx-select" style="height:40px" onchange="OrionFechamentoApp.setAno(this.value)">
-            ${anos.map((a) => `<option ${a === this.ano ? "selected" : ""}>${a}</option>`).join("")}
-          </select>
-        </div>
-        <div style="display:flex;gap:8px;align-items:flex-end;margin-left:auto">
-          ${ed && this.dados ? `<div><label class="ml-emp-filter-label">Fechar de uma vez</label><select id="ofech-ate" class="idx-select" style="height:40px">${this.MESES.map((m, i) => `<option value="${i + 1}">jan a ${m}</option>`).join("")}</select></div>
-          <button type="button" class="btn btn-secondary" style="height:40px" ${this.salvando ? "disabled" : ""} onclick="OrionFechamentoApp.fecharAte(document.getElementById('ofech-ate').value)">Fechar meses</button>` : ""}
-          <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionFechamentoApp.carregar()"><i data-lucide="refresh-cw"></i> Atualizar</button>
-        </div>
-      </div>
+      ${window.OrionFiltros.grade([{ campos: [
+        window.OrionFiltros.campo("Ano", `<select id="ofech-ano" class="idx-select" onchange="OrionFechamentoApp.setAno(this.value)">${anos.map((a) => `<option ${a === this.ano ? "selected" : ""}>${a}</option>`).join("")}</select>`),
+        ed && this.dados ? window.OrionFiltros.campo("Fechar de uma vez", `<select id="ofech-ate" class="idx-select">${this.MESES.map((m, i) => `<option value="${i + 1}">jan a ${m}</option>`).join("")}</select>`) : ""] }],
+        `${ed && this.dados ? `<button type="button" class="btn btn-secondary" ${this.salvando ? "disabled" : ""} onclick="OrionFechamentoApp.fecharAte(document.getElementById('ofech-ate').value)">Fechar meses</button>` : ""}
+          <button type="button" class="btn btn-primary" ${this.carregando ? "disabled" : ""} onclick="OrionFechamentoApp.carregar()"><i data-lucide="refresh-cw"></i> Atualizar</button>`)}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px;">${this.esc(this.erro)}</div>` : ""}
       ${!this.dados ? `<div style="text-align:center;padding:40px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>Carregando...</p></div>` : `
       <div class="cc-scroll">

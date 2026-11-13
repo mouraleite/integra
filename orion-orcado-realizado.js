@@ -358,11 +358,11 @@
       const f = this.fo, o = this.opcoesFiltro();
       const ativos = ["ids", "prods", "planos", "empIds", "emps"].reduce((s, k) => s + (f[k].length ? 1 : 0), f.busca ? 1 : 0);
       const ehV = this.aba === "vendas" || (this.aba === "comparativo" && this.cmp.tipo === "VENDAS") || (this.aba === "visualizacao" && this.vis.tipo === "VENDAS");
-      const multi = (k, rot) => window.MlEmpresaFilter ? `<div>${MlEmpresaFilter.html({ id: "oxr-f-" + k, label: rot, items: o[k].map((x) => ({ id: x, label: x })), selectedIds: f[k], open: f.open === k, query: f.q[k] || "", emptyMeansAll: true })}</div>` : "";
+      const multi = (k, rot) => window.MlEmpresaFilter ? `<div class="ofg-f">${MlEmpresaFilter.html({ id: "oxr-f-" + k, label: rot, items: o[k].map((x) => ({ id: x, label: x })), selectedIds: f[k], open: f.open === k, query: f.q[k] || "", emptyMeansAll: true })}</div>` : "";
       return `<div class="oxr-card" style="padding:10px 16px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="${N}.fo.aberto=!${N}.fo.aberto;${N}.render()"><span style="font-weight:700;color:#105436;font-size:0.85rem">⏷ Filtros${ativos ? ` <span style="background:#105436;color:#fff;border-radius:999px;padding:0 8px;font-size:0.7rem">${ativos}</span>` : ""}</span><span style="color:#6b8474">${f.aberto ? "▴" : "▾"}</span></div>
-        ${f.aberto ? `<div class="oxr-filtros"><div><label class="ml-emp-filter-label">Buscar</label><input id="oxr-f-busca" class="idx-select" style="width:100%;height:40px;box-sizing:border-box;min-width:0" placeholder="Nome do centro de custo..." value="${this.esc(f.busca)}" oninput="${N}.setBusca(this.value)"></div>
-          ${multi("ids", "ID Centro de Custo")}${multi("prods", "Produto")}${multi("planos", ehV ? "Forma de Venda" : "Plano Financeiro")}${multi("empIds", "ID Empresa")}${multi("emps", "Empresa")}</div>
-          ${ativos ? `<div style="text-align:right;padding-top:6px"><button type="button" class="btn btn-secondary" style="height:32px" onclick="${N}.limparFiltros()">Limpar filtros</button></div>` : ""}` : ""}</div>`;
+        ${f.aberto ? window.OrionFiltros.grade([{ campos: [window.OrionFiltros.campo("Buscar", `<input id="oxr-f-busca" class="idx-select" placeholder="Nome do centro de custo..." value="${this.esc(f.busca)}" oninput="${N}.setBusca(this.value)">`, "ofg-span2"),
+          multi("ids", "ID Centro de Custo"), multi("prods", "Produto"), multi("planos", ehV ? "Forma de Venda" : "Plano Financeiro"), multi("empIds", "ID Empresa"), multi("emps", "Empresa")] }],
+          ativos ? `<button type="button" class="btn btn-secondary" onclick="${N}.limparFiltros()">Limpar filtros</button>` : "", { cls: "ofg-plano" }) : ""}</div>`;
     },
     setBusca(v) { this.fo.busca = v; this.render(); const i = document.getElementById("oxr-f-busca"); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } },
     limparFiltros() { Object.assign(this.fo, { busca: "", ids: [], prods: [], planos: [], empIds: [], emps: [], q: {}, open: null }); this.render(); },
@@ -896,12 +896,13 @@
       const nome = (id) => (vs.find((v) => v.id === id) || {}).descricao || id;
       const config = `<div class="oxr-card" style="background:linear-gradient(135deg,#f7faf8,#fff);margin-bottom:10px"><div style="display:flex;gap:14px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap">
           <div style="min-width:0">${r ? `<div style="font-size:0.78rem;font-weight:700;color:#1c2e24;margin-bottom:6px">${tipoLabel} · ${this.esc(nome(c.a))} vs ${this.esc(nome(c.b))}</div>` : `<div class="oxr-lbl">Comparativo de versões</div><div style="font-size:0.84rem;color:#4a6355;margin:2px 0 8px">Compare orçamento e forecast · ${tipoLabel} · ${this.esc(this.ano)}</div>`}
-            <div style="display:flex;gap:6px;flex-wrap:wrap">${tipos.map(([k, l]) => `<button type="button" class="btn ${c.tipo === k ? "btn-primary" : "btn-secondary"}" style="height:32px;font-size:0.78rem" onclick="${N}.setCmp('tipo','${k}')">${l}</button>`).join("")}</div></div>
-          <div class="oxr-barra"><div><label class="ml-emp-filter-label">Versão base</label><select class="idx-select" style="height:40px;min-width:200px" onchange="${N}.setCmp('a',this.value)">${op(c.a)}</select></div>
-            <span style="color:#9fcdb4;font-size:1.2rem;padding-bottom:8px">⇄</span>
-            <div><label class="ml-emp-filter-label">Versão comparada</label><select class="idx-select" style="height:40px;min-width:200px" onchange="${N}.setCmp('b',this.value)">${op(c.b)}</select></div>
-            <button type="button" class="btn btn-primary" ${!c.a || !c.b || c.carregando ? "disabled" : ""} onclick="${N}.comparar()">${c.carregando ? "⟳ Comparando…" : "⇆ Comparar"}</button>
-            ${c.tipo !== "VENDAS" ? `<button type="button" class="btn btn-secondary" title="Abre as mesmas duas versões na árvore da Visão DFC (entradas e saídas)" ${!c.a || !c.b ? "disabled" : ""} onclick="${N}.abrirDfc()">≣ Visão DFC</button>` : ""}</div></div></div>`;
+</div>
+          </div>${window.OrionFiltros.grade([{ campos: [
+            window.OrionFiltros.campo("Tipo", `<select class="idx-select" onchange="${N}.setCmp('tipo',this.value)">${tipos.map(([k, l]) => `<option value="${k}" ${c.tipo === k ? "selected" : ""}>${l}</option>`).join("")}</select>`),
+            window.OrionFiltros.campo("Versão base", `<select class="idx-select" onchange="${N}.setCmp('a',this.value)">${op(c.a)}</select>`),
+            window.OrionFiltros.campo("Versão comparada", `<select class="idx-select" onchange="${N}.setCmp('b',this.value)">${op(c.b)}</select>`)] }],
+            `<button type="button" class="btn btn-primary" ${!c.a || !c.b || c.carregando ? "disabled" : ""} onclick="${N}.comparar()">${c.carregando ? "⟳ Comparando…" : "⇆ Comparar"}</button>
+            ${c.tipo !== "VENDAS" ? `<button type="button" class="btn btn-secondary" title="Abre as mesmas duas versões na árvore da Visão DFC (entradas e saídas)" ${!c.a || !c.b ? "disabled" : ""} onclick="${N}.abrirDfc()">≣ Visão DFC</button>` : ""}`, { cls: "ofg-plano" })}</div>`;
       if (!this.cabs.orcamento) return config + `<div style="text-align:center;padding:30px;color:#64748b"><div class="spinner" style="margin:0 auto 15px;"></div>Carregando versões…</div>`;
       if (!r && !c.carregando) return config + `<div class="oxr-vazio"><div style="font-size:1.6rem">⇆</div><div style="font-weight:800;color:#1c2e24;margin:4px 0">Selecione duas versões para comparar</div><div style="font-size:0.78rem;max-width:460px;margin:0 auto">Escolha o tipo, a versão base (orçamento) e a versão comparada (forecast ou outra versão) para ver variações consolidadas e por produto.</div></div>`;
       if (!r) return config + `<div class="oxr-vazio">⟳ Gerando comparativo…</div>`;
@@ -1000,9 +1001,10 @@
       const per = (v) => (v == null ? `<span style="color:#cbd5e1">—</span>` : `<span style="color:${v < 0 ? "#dc2626" : "#334155"}">${this.pc(v)}</span>`);
       const topo = `<div style="margin-bottom:10px"><button type="button" class="oxr-link" style="font-size:0.8rem" onclick="${N}.fecharDfc()">← Voltar ao comparativo de versões</button></div>
         <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div style="font-size:1.15rem;font-weight:800;color:var(--color-primary)">DFC</div><div style="font-size:0.8rem;color:#6b8474">Comparativo de versões pela Visão DFC — mesma estrutura do demonstrativo.</div></div>
-        <div class="oxr-card"><div class="oxr-barra"><div><label class="ml-emp-filter-label">Versão base</label><select class="idx-select" style="height:40px;min-width:220px" onchange="${N}.setDfc('dfcA',this.value)">${op(c.dfcA)}</select></div>
-          <div><label class="ml-emp-filter-label">Versão comparada</label><select class="idx-select" style="height:40px;min-width:220px" onchange="${N}.setDfc('dfcB',this.value)">${op(c.dfcB)}</select></div>
-          <button type="button" class="btn btn-primary" ${!c.dfcA || !c.dfcB || c.dfcCarregando ? "disabled" : ""} onclick="${N}.carregarDfc()">⇆ Comparar no DFC</button></div>
+        <div class="oxr-card">${window.OrionFiltros.grade([{ campos: [
+          window.OrionFiltros.campo("Versão base", `<select class="idx-select" onchange="${N}.setDfc('dfcA',this.value)">${op(c.dfcA)}</select>`, "ofg-span2"),
+          window.OrionFiltros.campo("Versão comparada", `<select class="idx-select" onchange="${N}.setDfc('dfcB',this.value)">${op(c.dfcB)}</select>`, "ofg-span2")] }],
+          `<button type="button" class="btn btn-primary" ${!c.dfcA || !c.dfcB || c.dfcCarregando ? "disabled" : ""} onclick="${N}.carregarDfc()">⇆ Comparar no DFC</button>`, { cls: "ofg-plano" })}
           <div style="font-size:0.72rem;color:#6b8474;margin-top:8px">Mesma árvore da Visão DFC — colunas Base · Comparada · variação. Saídas negativas.</div></div>`;
       if (!c.dfcA || !c.dfcB) return topo + `<div class="oxr-vazio">Selecione as duas versões para montar o DFC comparativo.</div>`;
       if (c.dfcCarregando) return topo + `<div style="text-align:center;padding:30px;color:#64748b"><div class="spinner" style="margin:0 auto 15px;"></div>Montando o DFC comparativo…</div>`;
@@ -1196,15 +1198,18 @@
       const dirs = [...new Set(deps.map((d) => d.diretoria).filter(Boolean))].sort();
       const depts = new Map();
       (this.cabs.orcamento || []).concat(this.cabs.forecast || []).filter((c) => String(c.ano) === String(this.ano) && c.departamento && (this.diretoria === "TODAS" || this.dirDe(c.departamento.id) === this.diretoria)).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
+      const F = window.OrionFiltros;
+      const meses = `<div class="ofg-f ofg-full"><div class="ofg-chips"><button type="button" class="oxr-sw ${this.mesesOn ? "on" : ""}" title="Ativar filtro de meses" onclick="${N}.alternarMeses()"></button><span class="ofg-nota" style="margin:0 6px 0 2px">${this.mesesOn ? "filtro ligado" : "todos os meses"}${this.aba === "comparativo" ? " · recalcula KPIs" : ""}</span>
+            ${MES.map((m, i) => `<button type="button" class="oxr-mes ${this.mesesOn && this.mesesSel.indexOf(i) >= 0 ? "on" : ""}" ${this.mesesOn ? "" : "disabled"} onclick="${N}.alternarMes(${i})">${m}</button>`).join("")}</div></div>`;
       const topo = `<h2 class="oxr-tit">Orçado × Realizado</h2>
-        <div class="oxr-card"><div class="oxr-barra">
-          ${dirs.length ? `<div><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" style="height:40px;min-width:160px" onchange="${N}.setDiretoria(this.value)"><option value="TODAS">Todas</option>${dirs.map((d) => `<option ${d === this.diretoria ? "selected" : ""}>${this.esc(d)}</option>`).join("")}</select></div>` : ""}
-          <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="${N}.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-          <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px;min-width:100px" onchange="${N}.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-          <button type="button" class="btn btn-primary" style="margin-left:auto" ${this.carregando || !this.cabs.orcamento ? "disabled" : ""} onclick="${N}.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid #eef3f0"><span class="oxr-lbl">📅 Meses</span>${this.aba === "comparativo" ? `<span style="font-size:0.66rem;color:#94a3b8">· recalcula KPIs</span>` : ""}<button type="button" class="oxr-sw ${this.mesesOn ? "on" : ""}" title="Ativar filtro de meses" onclick="${N}.alternarMeses()"></button>
-            ${MES.map((m, i) => `<button type="button" class="oxr-mes ${this.mesesOn && this.mesesSel.indexOf(i) >= 0 ? "on" : ""}" ${this.mesesOn ? "" : "disabled"} onclick="${N}.alternarMes(${i})">${m}</button>`).join("")}</div>
-        </div>${this.htmlFiltros()}`;
+        ${F.grade([
+          { titulo: "O que analisar", campos: [
+            F.campo("Diretoria", `<select class="idx-select" onchange="${N}.setDiretoria(this.value)" ${dirs.length ? "" : "disabled"}><option value="TODAS">Todas</option>${dirs.map((d) => `<option ${d === this.diretoria ? "selected" : ""}>${this.esc(d)}</option>`).join("")}</select>`),
+            F.campo("Departamento", `<select class="idx-select" onchange="${N}.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select>`),
+            F.campo("Ano", `<select class="idx-select" onchange="${N}.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select>`),
+            `<div class="ofg-acao"><button type="button" class="btn btn-primary" ${this.carregando || !this.cabs.orcamento ? "disabled" : ""} onclick="${N}.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div>`] },
+          { titulo: "📅 Meses", campos: [meses] }
+        ], "")}${this.htmlFiltros()}`;
       const abas = [["consolidado", "Consolidado", "bar-chart-2"], ["despesas", "Despesas", "trending-down"], ["receitas", "Receitas", "trending-up"], ["vendas", "Vendas", "dollar-sign"], ["comparativo", "Comparativo de Versões", "git-compare"], ["visualizacao", "Visualização", "eye"]];
       let corpo = "";
       try {

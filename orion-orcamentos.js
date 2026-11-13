@@ -729,21 +729,15 @@ const OrionOrcamentosApp = {
     const anos = [...new Set(lista.map((c) => c.ano))].sort((a, b) => b - a);
     const depts = new Map();
     lista.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
-    const barra = `
-      <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px" class="oo-barra">
-        <div style="display:flex;gap:6px">
-          <button type="button" class="btn ${this.tipo === "orcamentos" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionOrcamentosApp.setTipo('orcamentos')">Orçamentos</button>
-          <button type="button" class="btn ${this.tipo === "forecasts" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionOrcamentosApp.setTipo('forecasts')">Forecasts</button>
-        </div>
-        <div><label class="ml-emp-filter-label">Ano</label><select class="idx-select" style="height:40px" onchange="OrionOrcamentosApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select></div>
-        <div><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" style="height:40px;min-width:220px" onchange="OrionOrcamentosApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select></div>
-        <label style="display:flex;align-items:center;gap:6px;height:40px;font-size:0.8rem"><input type="checkbox" ${this.verSubstituidos ? "checked" : ""} onchange="OrionOrcamentosApp.setSubst(this.checked)"> Mostrar versões substituídas</label>
-        <div style="margin-left:auto;display:flex;gap:8px">
-          ${this.podeCriar && this.podeCriar() && !this.aberto ? `<button type="button" class="btn btn-primary" style="height:40px" onclick="OrionOrcamentosApp.abrirNovo()">${this.tipo === "forecasts" ? "Novo forecast" : "Novo orçamento"}</button>` : ""}
-          ${this.ehAdmin() ? `<button type="button" class="btn btn-secondary" style="height:40px" onclick="OrionOrcamentosApp.escolher()">Importar do Órion</button><input type="file" id="oo-arquivos" accept=".json" multiple style="display:none" onchange="OrionOrcamentosApp.lerArquivos(this.files)">` : ""}
-          <button type="button" class="btn btn-primary cc-atualizar" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionOrcamentosApp.carregar()">Atualizar</button>
-        </div>
-      </div>`;
+    const F = window.OrionFiltros;
+    const barra = F.grade([{ campos: [
+        F.campo("Tipo", F.seg([["orcamentos", "Orçamentos", "OrionOrcamentosApp.setTipo('orcamentos')"], ["forecasts", "Forecasts", "OrionOrcamentosApp.setTipo('forecasts')"]], this.tipo)),
+        F.campo("Ano", `<select class="idx-select" onchange="OrionOrcamentosApp.setAno(this.value)">${anos.map((a) => `<option ${String(a) === String(this.ano) ? "selected" : ""}>${a}</option>`).join("")}</select>`),
+        F.campo("Departamento", `<select class="idx-select" onchange="OrionOrcamentosApp.setDept(this.value)"><option value="TODOS">Todos</option>${[...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")).map(([id, n]) => `<option value="${this.esc(id)}" ${id === String(this.dept) ? "selected" : ""}>${this.esc(n)}</option>`).join("")}</select>`),
+        F.campo("Versões", `<select class="idx-select" onchange="OrionOrcamentosApp.setSubst(this.value === 'todas')"><option value="vigentes" ${this.verSubstituidos ? "" : "selected"}>Só as vigentes</option><option value="todas" ${this.verSubstituidos ? "selected" : ""}>Com as substituídas</option></select>`)] }],
+      `${this.podeCriar && this.podeCriar() && !this.aberto ? `<button type="button" class="btn btn-primary" onclick="OrionOrcamentosApp.abrirNovo()">${this.tipo === "forecasts" ? "Novo forecast" : "Novo orçamento"}</button>` : ""}
+          ${this.ehAdmin() ? `<button type="button" class="btn btn-secondary" onclick="OrionOrcamentosApp.escolher()">Importar do Órion</button><input type="file" id="oo-arquivos" accept=".json" multiple style="display:none" onchange="OrionOrcamentosApp.lerArquivos(this.files)">` : ""}
+          <button type="button" class="btn btn-primary" ${this.carregando ? "disabled" : ""} onclick="OrionOrcamentosApp.carregar()">Atualizar</button>`, { acaoCls: (this.ehAdmin() ? 1 : 0) + (this.podeCriar && this.podeCriar() && !this.aberto ? 1 : 0) >= 2 ? "ofg-acao-linha" : "" });
     let corpo;
     if (this.carregando && !this.aberto && !this.cab[this.tipo]) corpo = `<div style="text-align:center;padding:40px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>Carregando...</p></div>`;
     else corpo = this.aberto ? this.htmlDetalhe() : this.htmlLista();

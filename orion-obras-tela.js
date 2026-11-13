@@ -84,16 +84,15 @@
       return `<div class="oac-kpis oac-kpis8">
           ${this.kpi("Empreendimentos", f.length)}${this.kpi("VGV Total", this.Mi(vgv))}${this.kpi("Vendas (Acum.)", this.Mi(vend))}${this.kpi("% Vendido (VGV)", this.P(vgv > 0 ? (vend / vgv) * 100 : 0), "pos")}
           ${this.kpi("Lucro (Acum.)", this.Mi(lucro), lucro < 0 ? "neg" : "")}${this.kpi("TIR Média Anual", this.P(tirMed))}${this.kpi("Payback Médio", this.N(pb))}${this.kpi("Exp. Máx Caixa", this.Mi(ex), "neg")}</div>
-        <div class="oac-card"><div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid #e7f0ea">
-            <div style="min-width:260px">${filtro("oob-emp", "Empreendimentos", uniq((r) => r.nome), this.filtroEmp, this.filtroEmpAberto, this.filtroEmpBusca)}</div>
-            <div style="min-width:220px">${filtro("oob-cat", "Categorias", uniq((r) => r.categoria), this.filtroCats, this.filtroCatAberto, this.filtroCatBusca)}</div>
-            <div style="min-width:220px">${filtro("oob-st", "Status", uniq((r) => r.status), this.filtroSts, this.filtroStAberto, this.filtroStBusca)}</div>
-            <div style="margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        <div class="oac-card"><div style="padding:14px 16px;border-bottom:1px solid #e7f0ea" class="oac-nao-imprime">${window.OrionFiltros.grade([{ titulo: "Filtros", campos: [
+            `<div class="ofg-f">${filtro("oob-emp", "Empreendimentos", uniq((r) => r.nome), this.filtroEmp, this.filtroEmpAberto, this.filtroEmpBusca)}</div>`,
+            `<div class="ofg-f">${filtro("oob-cat", "Categorias", uniq((r) => r.categoria), this.filtroCats, this.filtroCatAberto, this.filtroCatBusca)}</div>`,
+            `<div class="ofg-f">${filtro("oob-st", "Status", uniq((r) => r.status), this.filtroSts, this.filtroStAberto, this.filtroStBusca)}</div>`] }],
+            `${this.podeEditar() ? `<button type="button" class="btn oac-out" onclick="OrionObrasApp.abrirEditor()">Obras acompanhadas</button>` : ""}
+            <button type="button" class="btn btn-primary" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar()">Atualizar todos com o Sienge</button>`,
+            { cls: "ofg-plano", acaoCls: "ofg-acao3", rodape: `<div class="ofg-full" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
               <span class="oac-selo" style="border:1px solid #dfe9e3;color:#4a6355" title="Mesmo recorte de caixa efetivo do orçamento: caixa e bancos do Integra (visão DFC) e contas a pagar / receber em aberto do Sienge.">Caixa realizado: <b>contas a pagar / receber</b></span>
-              ${ult ? `<span class="oac-selo" style="border:1px solid #bbf7d0;background:#f0fdf4;color:#105436" title="Data e horário da última leitura do Sienge">🕒 Sienge lido em: <b>${new Date(ult).toLocaleDateString("pt-BR")} às ${new Date(ult).toLocaleTimeString("pt-BR")}</b></span>` : ""}</div></div>
-          <div style="display:flex;gap:8px;justify-content:flex-end;padding:10px 16px" class="oac-nao-imprime">
-            ${this.podeEditar() ? `<button type="button" class="btn oac-out" style="height:40px" onclick="OrionObrasApp.abrirEditor()">Obras acompanhadas</button>` : ""}
-            <button type="button" class="btn btn-primary" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar()">Atualizar todos com o Sienge</button></div>
+              ${ult ? `<span class="oac-selo" style="border:1px solid #bbf7d0;background:#f0fdf4;color:#105436" title="Data e horário da última leitura do Sienge">🕒 Sienge lido em: <b>${new Date(ult).toLocaleDateString("pt-BR")} às ${new Date(ult).toLocaleTimeString("pt-BR")}</b></span>` : ""}</div>` })}</div>
           ${tab}</div>`;
     },
 
@@ -167,12 +166,12 @@
       const ehObra = item.tipo === "obra";
       const sel = window.MlSelectUnico ? MlSelectUnico.html({ id: "oob-sel", label: "Selecione o empreendimento", items: lista.map((r) => ({ id: r.id, label: r.nome })), selectedId: item.id, largura: "340px", semId: true, placeholder: "Digite o nome ou escolha na lista..." })
         : `<div><label class="ml-emp-filter-label">Selecione o empreendimento</label><select class="idx-select" style="height:40px;min-width:320px" onchange="OrionObrasApp.abrir(this.value)">${lista.map((r) => `<option value="${this.esc(r.id)}" ${r.id === item.id ? "selected" : ""}>${this.esc(r.nome)}</option>`).join("")}</select></div>`;
-      const barra = `<div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px" class="oac-nao-imprime">${sel}
-          <div><label class="ml-emp-filter-label">Visão de parceria</label><div class="oac-seg">${[["consolidado", "Consolidada"], ["empreendedor", "Empreendedor"], ["parceiro", "Parceiro"]].map(([k, t]) => `<button type="button" class="${this.visao === k ? "on" : ""}" ${ehObra ? "" : "disabled title=\"Viabilidade sem obra: só a visão consolidada\""} onclick="OrionObrasApp.setVisao('${k}')">${t}</button>`).join("")}</div></div>
-          <div style="margin-left:auto;display:flex;gap:8px">
-            <button type="button" class="btn oac-out" style="height:40px" onclick="OrionObrasApp.comoLemos=true;OrionObrasApp.render()">Como lemos estes números</button>
-            ${ehObra ? `<button type="button" class="btn oac-out" style="height:40px" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar('${this.esc(item.id)}')">⟳ Atualizar com o Sienge</button>` : ""}
-            <button type="button" class="btn btn-primary" style="height:40px" onclick="window.print()">⬇ Exportar</button></div></div>`;
+      const barra = `<div class="oac-nao-imprime">${window.OrionFiltros.grade([{ campos: [
+          `<div class="ofg-f ofg-span2">${sel}</div>`,
+          window.OrionFiltros.campo("Visão de parceria", `<select class="idx-select" ${ehObra ? "" : "disabled title=\"Viabilidade sem obra: só a visão consolidada\""} onchange="OrionObrasApp.setVisao(this.value)">${[["consolidado", "Consolidada"], ["empreendedor", "Empreendedor"], ["parceiro", "Parceiro"]].map(([k, t]) => `<option value="${k}" ${this.visao === k ? "selected" : ""}>${t}</option>`).join("")}</select>`)] }],
+          `<button type="button" class="btn oac-out" onclick="OrionObrasApp.comoLemos=true;OrionObrasApp.render()">Como lemos estes números</button>
+            ${ehObra ? `<button type="button" class="btn oac-out" ${this.carregando ? "disabled" : ""} onclick="OrionObrasApp.atualizar('${this.esc(item.id)}')">⟳ Atualizar com o Sienge</button>` : ""}
+            <button type="button" class="btn btn-primary" onclick="window.print()">⬇ Exportar</button>`, { acaoCls: "ofg-acao3" })}</div>`;
       let d;
       if (ehObra) {
         const acts = this.actsDe(item, this.visao, false);

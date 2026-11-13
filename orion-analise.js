@@ -21,7 +21,7 @@ const OrionAnaliseApp = {
   root() { return document.getElementById("orion-analise-root"); },
   esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); },
 
-  init() { this.estilos(); this.render(); if (!this.cabs.orcamentos) this.lerCabecalhos(); },
+  init() { if (window.OrionFiltros) window.OrionFiltros.estilosGrade(); this.estilos(); this.render(); if (!this.cabs.orcamentos) this.lerCabecalhos(); },
 
   estilos() {
     if (document.getElementById("oan-estilos")) return;
@@ -43,26 +43,6 @@ const OrionAnaliseApp = {
       .oan-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
       .oan-neg { color:#b91c1c; }
       .oan-nav .btn, .oan-nav span { white-space:nowrap; }
-      .oan-filtros { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:12px 14px; align-items:end; margin-bottom:12px; padding:14px 16px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
-      .oan-filtros .oan-sec { grid-column:1 / -1; font-size:0.66rem; font-weight:800; letter-spacing:0.06em; text-transform:uppercase; color:#105436; padding-bottom:4px; border-bottom:1px solid #eef2f7; }
-      .oan-filtros .oan-sec + .oan-sec, .oan-filtros .oan-sec.oan-sec2 { margin-top:4px; }
-      .oan-filtros .oan-f { min-width:0; }
-      .oan-filtros .oan-f > label, .oan-filtros .oan-f > .ml-emp-filter-label { display:block; }
-      .oan-filtros select.idx-select, .oan-filtros .oan-fake { width:100%; height:40px; box-sizing:border-box; }
-      .oan-filtros .oan-fake { display:flex; align-items:center; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc; color:#94a3b8; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .oan-filtros .ml-emp-filter { width:100%; max-width:none; min-width:0; flex:none; }
-      .oan-filtros .ml-emp-filter-btn { height:40px; min-height:40px; box-sizing:border-box; }
-      .oan-filtros .ml-emp-filter-panel { width:max-content; min-width:100%; max-width:min(640px, 90vw); }
-      .oan-filtros .ml-emp-filter-item span { white-space:nowrap; }
-      .oan-filtros .oan-seg { display:flex; width:100%; }
-      .oan-filtros .oan-seg .btn { flex:1; height:40px; margin:0; padding:0 10px; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; white-space:nowrap; }
-      .oan-filtros .oan-seg .btn:first-child { border-top-right-radius:0; border-bottom-right-radius:0; }
-      .oan-filtros .oan-seg .btn:last-child { border-top-left-radius:0; border-bottom-left-radius:0; }
-      .oan-filtros .oan-acao { display:flex; justify-content:flex-end; }
-      .oan-filtros .oan-acao .btn { height:40px; width:100%; margin:0; display:inline-flex; align-items:center; justify-content:center; box-sizing:border-box; }
-      .oan-filtros .oan-span2 { grid-column:span 2; }
-      @media (max-width: 1280px) { .oan-filtros { grid-template-columns:repeat(4, minmax(0, 1fr)); } }
-      @media (max-width: 860px) { .oan-filtros { grid-template-columns:repeat(2, minmax(0, 1fr)); } .oan-filtros .oan-span2 { grid-column:1 / -1; } }
     `;
     document.head.appendChild(st);
   },
@@ -241,6 +221,7 @@ const OrionAnaliseApp = {
   render() {
     const root = this.root();
     if (!root) return;
+    if (window.OrionFiltros) window.OrionFiltros.estilosGrade();
     if (!this.C()) { root.innerHTML = `<div style="padding:12px;color:#991b1b">Arquivo de cálculo não carregou. Recarregue a página.</div>`; return; }
     const C = this.C();
     const todos = (this.cabs.orcamentos || []).concat(this.cabs.forecasts || []);
@@ -262,20 +243,20 @@ const OrionAnaliseApp = {
     const a = this.dados ? this.montar() : null;
     root.innerHTML = `
       <div style="font-size:0.8rem;color:#475569;margin-bottom:10px">YTD real ${this.esc(this.ano)}, YTG forecast, FY contra ${this.base === "forecast" ? "forecast" : "orçado"} ${Number(this.ano) + 1}. Cheio e MLDU lado a lado. ${nomeT} positiva.</div>
-      <div class="oan-filtros">
-        <div class="oan-sec">O que analisar</div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Tipo</label><select class="idx-select" onchange="OrionAnaliseApp.set('tipo', this.value)">${op("DESPESAS", "Despesas", this.tipo)}${op("RECEITAS", "Receitas", this.tipo)}</select></div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" onchange="OrionAnaliseApp.set('diretoria', this.value)">${op("", "Todas", this.diretoria)}${diretorias.map((x) => op(x, x, this.diretoria)).join("")}</select></div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" onchange="OrionAnaliseApp.set('dept', this.value)">${op("TODOS", "Todos", this.dept)}${deps.map((d) => op(d.id, d.nome, this.dept)).join("")}</select></div>
-        <div class="oan-f" id="oan-emp">${empSlot || `<label class="ml-emp-filter-label">Empresa</label><div class="oan-fake" title="A lista de empresas aparece depois de calcular">Todas · calcule para filtrar</div>`}</div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Grupo</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('grupo', this.value)">${op("", "Todos", this.grupo)}${grupos.map((g) => op(g.id, `${g.code || g.codigo || ""} ${g.name || g.nome || g.id}`.trim(), this.grupo)).join("")}</select>` : `<div class="oan-fake">Todos · calcule para filtrar</div>`}</div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Empreendimento</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('cc', this.value)">${op("", "Todos", this.cc)}${ccsDados.map((c) => op(c, `${c} - ${nomesCc[c] || ""}`, this.cc)).join("")}</select>` : `<div class="oan-fake">Todos · calcule para filtrar</div>`}</div>
-        <div class="oan-sec oan-sec2">Período e comparação</div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Ano</label><select class="idx-select" onchange="OrionAnaliseApp.set('ano', this.value)">${anos.map((x) => op(x, x, this.ano)).join("")}</select></div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Corte YTD</label><select class="idx-select" onchange="OrionAnaliseApp.set('corte', this.value)">${this.MESES.map((m, i) => op(i + 1, m.charAt(0) + m.slice(1).toLowerCase(), corte)).join("")}</select></div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Comparar com</label><div class="oan-seg">${seg("base", "orcamento", "Orçado", this.base)}${seg("base", "forecast", "Forecast", this.base)}</div></div>
-        <div class="oan-f"><label class="ml-emp-filter-label">Versão do forecast</label><select class="idx-select" onchange="OrionAnaliseApp.set('versao', this.value)">${vs.map((v, i) => op(v.descricao, this.C().rotuloVersao(v.descricao, "forecast"), this.versao || (i === 0 ? v.descricao : ""))).join("") || "<option>sem forecast</option>"}</select></div>
-        <div class="oan-f oan-acao oan-span2"><button type="button" class="btn btn-primary" style="max-width:220px" ${this.carregando ? "disabled" : ""} onclick="OrionAnaliseApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div>
+      <div class="ofg">
+        <div class="ofg-sec">O que analisar</div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Tipo</label><select class="idx-select" onchange="OrionAnaliseApp.set('tipo', this.value)">${op("DESPESAS", "Despesas", this.tipo)}${op("RECEITAS", "Receitas", this.tipo)}</select></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Diretoria</label><select class="idx-select" onchange="OrionAnaliseApp.set('diretoria', this.value)">${op("", "Todas", this.diretoria)}${diretorias.map((x) => op(x, x, this.diretoria)).join("")}</select></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Departamento</label><select class="idx-select" onchange="OrionAnaliseApp.set('dept', this.value)">${op("TODOS", "Todos", this.dept)}${deps.map((d) => op(d.id, d.nome, this.dept)).join("")}</select></div>
+        <div class="ofg-f" id="oan-emp">${empSlot || `<label class="ml-emp-filter-label">Empresa</label><div class="ofg-fake" title="A lista de empresas aparece depois de calcular">Todas · calcule para filtrar</div>`}</div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Grupo</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('grupo', this.value)">${op("", "Todos", this.grupo)}${grupos.map((g) => op(g.id, `${g.code || g.codigo || ""} ${g.name || g.nome || g.id}`.trim(), this.grupo)).join("")}</select>` : `<div class="ofg-fake">Todos · calcule para filtrar</div>`}</div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Empreendimento</label>${this.dados ? `<select class="idx-select" onchange="OrionAnaliseApp.set('cc', this.value)">${op("", "Todos", this.cc)}${ccsDados.map((c) => op(c, `${c} - ${nomesCc[c] || ""}`, this.cc)).join("")}</select>` : `<div class="ofg-fake">Todos · calcule para filtrar</div>`}</div>
+        <div class="ofg-sec">Período e comparação</div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Ano</label><select class="idx-select" onchange="OrionAnaliseApp.set('ano', this.value)">${anos.map((x) => op(x, x, this.ano)).join("")}</select></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Corte YTD</label><select class="idx-select" onchange="OrionAnaliseApp.set('corte', this.value)">${this.MESES.map((m, i) => op(i + 1, m.charAt(0) + m.slice(1).toLowerCase(), corte)).join("")}</select></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Comparar com</label><div class="ofg-seg">${seg("base", "orcamento", "Orçado", this.base)}${seg("base", "forecast", "Forecast", this.base)}</div></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Versão do forecast</label><select class="idx-select" onchange="OrionAnaliseApp.set('versao', this.value)">${vs.map((v, i) => op(v.descricao, this.C().rotuloVersao(v.descricao, "forecast"), this.versao || (i === 0 ? v.descricao : ""))).join("") || "<option>sem forecast</option>"}</select></div>
+        <div class="ofg-acao"><button type="button" class="btn btn-primary" ${this.carregando ? "disabled" : ""} onclick="OrionAnaliseApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div>
       </div>
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.dados && this.dados.avisos.length ? `<div style="padding:8px 12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;margin-bottom:10px;font-size:0.78rem">${this.dados.avisos.map((x) => this.esc(x)).join("<br>")}</div>` : ""}

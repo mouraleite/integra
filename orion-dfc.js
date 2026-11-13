@@ -144,8 +144,13 @@
       this.estilos();
       root.classList.add("odv");
       const N = this.N, vs = this.versoesFc();
-      const extra = `<div><label class="ml-emp-filter-label">Comparar com</label><div class="odv-seg alto"><button type="button" class="${this.modo === "orcado" ? "on" : ""}" onclick="${N}.setModo('orcado')">Orçado</button><button type="button" class="${this.modo === "forecast" ? "on" : ""}" onclick="${N}.setModo('forecast')">Forecast</button></div></div>
-        ${this.modo === "forecast" && vs.length ? `<div><label class="ml-emp-filter-label">Versão</label><select class="idx-select" style="height:40px;min-width:150px" onchange="${N}.setVersao(this.value)">${vs.map((v) => `<option value="${this.esc(v)}" ${v === this.versaoAtual() ? "selected" : ""}>${this.esc(this.C().rotuloVersao(v, "forecast"))}</option>`).join("")}</select></div>` : ""}`;
+      const F = window.OrionFiltros;
+      const extra = [
+        F.campo("Comparar com", F.seg([["orcado", "Orçado", `${N}.setModo('orcado')`], ["forecast", "Forecast", `${N}.setModo('forecast')`]], this.modo)),
+        this.modo === "forecast" && vs.length
+          ? F.campo("Versão do forecast", `<select class="idx-select" onchange="${N}.setVersao(this.value)">${vs.map((v) => `<option value="${this.esc(v)}" ${v === this.versaoAtual() ? "selected" : ""}>${this.esc(this.C().rotuloVersao(v, "forecast"))}</option>`).join("")}</select>`)
+          : F.campoVazio("Versão do forecast", this.modo === "forecast" ? "sem forecast no ano" : "— (só em Forecast)")
+      ];
       const topo = `<div style="margin-bottom:12px"><h2 style="font-size:1.4rem;font-weight:800;color:var(--color-primary);margin:0">DFC gerencial</h2>
           <p style="font-size:0.8rem;color:#6b8474;margin:2px 0 0">Mesmos números do DFC, por empresa, visão, plano e centro de custo. Cheio e MLDU lado a lado. Saídas negativas.</p></div>` + this.htmlFiltros(extra);
       const corpo = this.corpoPadrao(() => {

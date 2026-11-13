@@ -312,13 +312,13 @@ const OrionAnaliticoApp = {
     l.filter((c) => String(c.ano) === String(this.ano) && c.departamento).forEach((c) => depts.set(String(c.departamento.id), c.departamento.nome));
     const ate = this.ate || (this.R() && this.R().ateMes(this.ano)) || 12;
     const conteudos = [["despesas", "Despesas"], ["receitas", "Receitas"], ["investimentos", "Investimentos e participações"], ["lotes", "Receita de lotes"]];
-    const visoes = `<div><label class="ml-emp-filter-label">Conteúdo</label><select class="idx-select" style="height:40px" onchange="OrionAnaliticoApp.setConteudo(this.value)">${conteudos.map(([v, t]) => `<option value="${v}" ${v === this.conteudo ? "selected" : ""}>${t}</option>`).join("")}</select></div>
-      <div style="display:flex;gap:6px">
-          <button type="button" class="btn ${this.visao === "cc" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('cc')">I · Centro de custo e plano</button>
-          <button type="button" class="btn ${this.visao === "plano" ? "btn-primary" : "btn-secondary"}" style="height:40px" onclick="OrionAnaliticoApp.setVisao('plano')">II · Por plano</button>
-          <button type="button" class="btn ${this.visao === "pagamentos" ? "btn-primary" : "btn-secondary"}" style="height:40px" title="Realizado detalhado (como o Realizado CP do Órion): cada pagamento ou recebimento" onclick="OrionAnaliticoApp.setVisao('pagamentos')">Lançamentos</button>
-          ${this.tipoAtual() === "RECEITAS" ? `<button type="button" class="btn ${this.visao === "grupo" ? "btn-primary" : "btn-secondary"}" style="height:40px" title="Recebimento por grupo (como no Órion): à vista, sinal, parcelado, recorrente, outros" onclick="OrionAnaliticoApp.setVisao('grupo')">III · Por grupo de recebimento</button>` : ""}</div>`;
-    root.innerHTML = `${window.OrionFiltros.html(this, "OrionAnaliticoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano, [this.tipoAtual()]), empresas: this.dados ? this.dados.empresas : [], comMeses: !!this.dados, extra: visoes })}
+    const F = window.OrionFiltros;
+    const opV = [["cc", "I · Centro de custo e plano"], ["plano", "II · Por plano"], ["pagamentos", "Lançamentos (cada pagamento ou recebimento)"]].concat(this.tipoAtual() === "RECEITAS" ? [["grupo", "III · Por grupo de recebimento"]] : []);
+    const visoes = [
+      F.campo("Conteúdo", `<select class="idx-select" onchange="OrionAnaliticoApp.setConteudo(this.value)">${conteudos.map(([v, t]) => `<option value="${v}" ${v === this.conteudo ? "selected" : ""}>${t}</option>`).join("")}</select>`),
+      F.campo("Visão", `<select class="idx-select" onchange="OrionAnaliticoApp.setVisao(this.value)">${opV.map(([v, t]) => `<option value="${v}" ${v === this.visao ? "selected" : ""}>${t}</option>`).join("")}</select>`, "ofg-span2")
+    ];
+    root.innerHTML = `${window.OrionFiltros.html(this, "OrionAnaliticoApp", { anos, depts: [...depts.entries()].sort((a, b) => a[1].localeCompare(b[1], "pt-BR")), versoes: C.versoesForecast(l, this.ano, [this.tipoAtual()]), empresas: this.dados ? this.dados.empresas : [], comMeses: !!this.dados, campos: visoes })}
       ${this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : ""}
       ${this.carregando ? `<div style="text-align:center;padding:30px;color:#64748b;"><div class="spinner" style="margin:0 auto 15px;"></div><p>${this.esc(this.passo || "Calculando…")}</p></div>` : ""}
       ${this.dados ? this.htmlResultado() : (this.carregando ? "" : `<div style="font-size:0.8rem;color:#64748b">Escolha o ano, o mês final e o departamento e clique em Calcular. O realizado é lido do Sienge na hora e pode levar alguns minutos. Depois do cálculo dá para filtrar por empresa e por mês sem nova busca.</div>`)}`;
