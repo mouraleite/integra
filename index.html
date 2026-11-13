@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=52f2ffe602">
+  <link rel="stylesheet" href="css/style.css?v=328142004e">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -1440,7 +1440,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2151 &nbsp;&middot;&nbsp; 13/11/2026
+            v1.0.2152 &nbsp;&middot;&nbsp; 13/11/2026
           </span>
         </div>
       </div>
@@ -1698,25 +1698,42 @@
 
       <!-- TAB: UPLOAD DE MAPA -->
       <section id="tab-upload-mapa" class="tab-pane" style="display: none;">
-        <div class="crm-card" style="max-width: 860px; margin: 20px auto 0;">
-          <p style="color: var(--color-text-muted); font-size: 0.9rem; margin: 0 0 16px;">Um PDF por centro de custo. A planta aparece na aba de vizinhos e lotes desse empreendimento.</p>
-          <div id="mapa-filtro-cc"></div>
-          <input type="hidden" id="mapa-empreendimento-id" value="">
-          <div class="form-group" style="margin-top: 14px;">
-            <label for="mapa-file-input">Arquivo do projeto (PDF)</label>
-            <input type="file" id="mapa-file-input" class="form-control" accept="application/pdf,.pdf">
+        <div class="cc-page kmz-page mapa-page">
+          <div class="cc-toolbar">
+            <div id="mapa-filtro-cc" class="mapa-cc"></div>
+            <input type="hidden" id="mapa-empreendimento-id" value="">
+            <div class="kmz-arquivo">
+              <label for="mapa-file-input">Arquivo do projeto (PDF)</label>
+              <input type="file" id="mapa-file-input" class="form-control" accept="application/pdf,.pdf">
+            </div>
+            <div class="cc-toolbar-actions">
+              <button type="button" class="btn btn-primary cc-atualizar" onclick="window.uploadMapa()">
+                <i data-lucide="upload" style="width: 14px; height: 14px;"></i> Enviar projeto
+              </button>
+            </div>
           </div>
           <input type="file" id="mapa-file-replace" accept="application/pdf,.pdf" hidden onchange="window.substituirMapa(this)">
-          <div style="margin-top: 18px; text-align: right;">
-            <button type="button" class="btn btn-primary" onclick="window.uploadMapa()">
-              <i data-lucide="upload" style="width: 16px;"></i> Enviar projeto
-            </button>
-          </div>
-          <div id="mapa-upload-status" style="margin-top: 15px; font-size: 0.9rem;"></div>
-        </div>
-        <div class="crm-card" style="max-width: 860px; margin: 20px auto 0;">
-          <div id="mapa-list-container">
-            <div style="text-align: center; color: #666; padding: 15px;">Carregando projetos...</div>
+          <div id="mapa-upload-status" class="kmz-status"></div>
+          <div class="cc-scroll">
+            <table class="cc-table">
+              <colgroup>
+                <col class="kmz-c-id">
+                <col class="kmz-c-nome">
+                <col class="mapa-c-data">
+                <col class="mapa-c-acao">
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Centro de custo</th>
+                  <th class="is-center">Atualizado em</th>
+                  <th class="is-center">Ações</th>
+                </tr>
+              </thead>
+              <tbody id="mapa-list-body">
+                <tr><td colspan="4" class="is-center">Carregando projetos…</td></tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -8615,20 +8632,20 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/digidem/leaflet-side-by-side@2.0.0/leaflet-side-by-side.min.js"></script>
   <!-- Scripts de Negócio -->
-  <script type="module" src="js/nucleo/firebase-config.js?v=21868475ac"></script>
+  <script type="module" src="js/nucleo/firebase-config.js?v=93185dbb31"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2151"></script>
+  <script defer src="js/nucleo/data.js?v=2152"></script>
   <script defer src="js/nucleo/sienge-api.js?v=1d7ed0a8f7"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=3b5263ea20"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=d24e5c02b6"></script>
+  <script defer src="js/nucleo/app.js?v=2b68534227"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=5c605a8ce3"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>

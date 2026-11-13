@@ -47281,7 +47281,29 @@ window.mapaPlantaBind = function() {
 
 window.mapaPlantaPintarFiltro = function() {
   const wrap = document.getElementById("mapa-filtro-cc");
-  if (!wrap || !window.MlEmpresaFilter) return;
+  if (!wrap) return;
+  // Seleção única padrão do Integra (MlSelectUnico), como no Assistente de Anexos.
+  if (window.MlSelectUnico) {
+    const st = window._mapaPlanta;
+    const hidden = document.getElementById("mapa-empreendimento-id");
+    wrap.innerHTML = MlSelectUnico.html({
+      id: "mapa-cc",
+      label: "Centro de custo",
+      items: (window._mapaPlantaCentros || []).map((c) => ({ id: c.id, label: c.name })),
+      selectedId: st.id || "",
+      placeholder: "Digite o ID ou o nome do empreendimento"
+    });
+    MlSelectUnico.bind("mapa-cc", {
+      onSelect(id) {
+        st.id = String(id || "");
+        if (hidden) hidden.value = st.id;
+      }
+    });
+    if (hidden) hidden.value = st.id || "";
+    if (window.lucide) window.lucide.createIcons();
+    return;
+  }
+  if (!window.MlEmpresaFilter) return;
   window.mapaPlantaBind();
   const st = window._mapaPlanta;
   wrap.innerHTML = MlEmpresaFilter.html({
@@ -47339,60 +47361,78 @@ window.mapaPlantaEnviar = async function(empId, file) {
   return true;
 };
 
+/** Lista dos projetos urbanísticos (PDF): mesma tabela do Upload de KMZ, em ordem crescente de ID. */
 window.loadMapaList = async function() {
-  const container = document.getElementById("mapa-list-container");
-  if (!container) return;
+  const body = document.getElementById("mapa-list-body");
+  if (!body) return;
+  const linhaUnica = (html, cor) => {
+    body.innerHTML = `<tr><td colspan="4" class="is-center"${cor ? ` style="color:${cor};"` : ""}>${html}</td></tr>`;
+  };
   if (!window._mapaPlantaCentros) {
     try { await window.mapaPlantaCarregarCentros(); } catch (e) {}
   }
   if (!window.firebaseStorage || !window.firebaseCollections) {
-    container.innerHTML = '<div style="color: var(--color-danger); padding: 15px;">Erro: Firebase não configurado.</div>';
+    linhaUnica("O armazenamento não está disponível.", "#b91c1c");
     return;
   }
   try {
-    const { ref, listAll, getDownloadURL } = window.firebaseCollections;
+    const { ref, listAll, getDownloadURL, getMetadata } = window.firebaseCollections;
     const res = await listAll(ref(window.firebaseStorage, "mapas"));
     const itens = (res.items || []).filter((item) => String(item.name || "").toLowerCase().endsWith(".pdf"));
     if (!itens.length) {
-      container.innerHTML = '<div style="text-align: center; color: #666; padding: 15px;">Nenhum projeto urbanístico carregado.</div>';
+      linhaUnica("Nenhum projeto urbanístico carregado.");
       return;
     }
-    itens.sort((a, b) => Number(String(a.name).replace(".pdf", "")) - Number(String(b.name).replace(".pdf", "")));
+    const idDe = (item) => String(item.name).replace(/\.pdf$/i, "");
+    itens.sort((a, b) => (Number(idDe(a)) || 0) - (Number(idDe(b)) || 0) || idDe(a).localeCompare(idDe(b)));
     window._mapaPlantaUrls = {};
     const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    const linhas = [];
-    for (const item of itens) {
-      const empId = String(item.name).replace(/\.pdf$/i, "");
+    const dados = await Promise.all(itens.map(async (item) => {
+      const empId = idDe(item);
       let url = "";
+      let atualizado = "";
       try { url = await getDownloadURL(item); } catch (e) {}
+      if (typeof getMetadata === "function") {
+        try { atualizado = (await getMetadata(item)).updated || ""; } catch (e) {}
+      }
+      return { empId, url, atualizado };
+    }));
+    const fmt = (iso) => {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      return isNaN(d) ? "—" : d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    };
+    body.innerHTML = dados.map(({ empId, url, atualizado }) => {
       window._mapaPlantaUrls[empId] = url;
-      const rotulo = window.mapaPlantaRotulo(empId);
-      linhas.push(`<tr>
-        <td title="${esc(rotulo)}"><strong>${esc(rotulo)}</strong></td>
-        <td class="is-right" style="width: 120px; white-space: nowrap;">
-          <button type="button" class="tvig-ico" title="Visualizar" onclick="window.showProjectMap(window._mapaPlantaUrls['${empId}'] || '')">
-            <i data-lucide="eye" style="width:15px;height:15px;"></i>
+      const hit = (window._mapaPlantaCentros || []).find((c) => String(c.id) === String(empId));
+      const nome = hit && hit.name ? hit.name : "";
+      const id = esc(empId);
+      return `<tr>
+        <td><strong>${id}</strong></td>
+        <td class="cc-nome" title="${esc(nome)}">${esc(nome || "—")}</td>
+        <td class="is-center">${esc(fmt(atualizado))}</td>
+        <td class="kmz-acoes">
+          <button type="button" class="tvig-ico" title="Visualizar" onclick="window.showProjectMap(window._mapaPlantaUrls['${id}'] || '')">
+            <i data-lucide="eye" style="width: 15px; height: 15px;"></i>
           </button>
-          <button type="button" class="tvig-ico" title="Editar" onclick="window.editarMapa('${empId}')">
-            <i data-lucide="pencil" style="width:15px;height:15px;"></i>
+          <button type="button" class="tvig-ico" title="Editar (trocar o PDF)" onclick="window.editarMapa('${id}')">
+            <i data-lucide="pencil" style="width: 15px; height: 15px;"></i>
           </button>
-          <button type="button" class="tvig-ico is-danger" title="Remover" onclick="window.deleteMapa('${empId}')">
-            <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+          <button type="button" class="tvig-ico is-danger" title="Excluir" onclick="window.deleteMapa('${id}')">
+            <i data-lucide="trash-2" style="width: 15px; height: 15px;"></i>
           </button>
         </td>
-      </tr>`);
-    }
-    container.innerHTML = `<div class="table-container" style="max-height: 420px; overflow-y: auto;">
-      <table class="custom-table" style="font-size: 0.85rem; width: 100%;">
-        <thead><tr><th>Centro de custo</th><th class="is-right" style="width: 120px;">Ações</th></tr></thead>
-        <tbody>${linhas.join("")}</tbody>
-      </table>
-    </div>`;
+      </tr>`;
+    }).join("");
     if (window.lucide) window.lucide.createIcons();
   } catch (err) {
-    container.innerHTML = `<div style="color: var(--color-danger); padding: 15px;">Erro ao carregar a lista: ${err.message}</div>`;
+    linhaUnica("Erro ao carregar a lista: " + mapaPlantaEsc(err && err.message), "#b91c1c");
   }
 };
+
+function mapaPlantaEsc(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
 window.editarMapa = function(empId) {
   window._mapaPlantaSubstituir = String(empId || "");
@@ -47560,7 +47600,8 @@ function kmzLerDocumento(xmlDoc, empDoArquivo, grupos, stats) {
   });
 
   itens.forEach((it) => {
-    let codigo = it.emp || kmzCodigoNoNomeDoLote(it.nome) || empDoArquivo || "";
+    // O código no nome do lote (13900-B-58) vale mais que a pasta: lote guardado na pasta errada vai para o centro certo.
+    let codigo = kmzCodigoNoNomeDoLote(it.nome) || it.emp || empDoArquivo || "";
     if (!codigo) {
       const mapa = codigosDoContainer[it.container] || {};
       const chaves = Object.keys(mapa);
