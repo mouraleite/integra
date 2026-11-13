@@ -69,9 +69,16 @@ const OrionAnaliseApp = {
   set(campo, v) { this[campo] = v; if (["ano"].indexOf(campo) >= 0) { this.versao = ""; this.corte = null; } if (campo === "diretoria") this.dept = "TODOS"; if (campo === "tipo") { this.versao = ""; this.grupo = ""; this.grupos = []; this.cc = ""; } if (["tipo", "ano", "dept", "diretoria", "versao", "base", "corte"].indexOf(campo) >= 0) this.limpar(); else this.render(); },
   alternarSerie(k) { this.series[k] = !this.series[k]; this.render(); },
   alternar(id) { this.abertos[id] = !this.abertos[id]; this.render(); },
-  expandir(abrir) {
-    this.abertos = {};
-    if (abrir && this.dados) { const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } }); const m = this.montar(); marca(m.empresas); marca(m.empreendimentos || []); }
+  /** Expandir / Recolher de uma tabela só: qual = "empresa" (Por empresa) ou "empreendimento" (Por empreendimento). */
+  expandir(abrir, qual) {
+    const daTabela = (id) => (qual === "empreendimento" ? String(id).indexOf("E|") === 0 : String(id).indexOf("E|") !== 0);
+    Object.keys(this.abertos).forEach((k) => { if (!qual || daTabela(k)) delete this.abertos[k]; });
+    if (abrir && this.dados) {
+      const marca = (l) => l.forEach((x) => { if (x.filhos && x.filhos.length) { this.abertos[x.id] = true; marca(x.filhos); } });
+      const m = this.montar();
+      if (!qual || qual === "empresa") marca(m.empresas);
+      if (!qual || qual === "empreendimento") marca(m.empreendimentos || []);
+    }
     this.render();
   },
 
@@ -231,16 +238,17 @@ const OrionAnaliseApp = {
       return out;
     };
     const btnS = (k, t) => `<button type="button" class="btn ${S[k] ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.alternarSerie('${k}')">${t}</button>`;
-    const nav = `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0"><b>Por empresa</b><span style="font-size:0.7rem;color:#64748b">EMPRESA › GRUPO › EMPREENDIMENTO › PLANO</span>
-        <span style="margin-left:auto;font-size:0.7rem;color:#64748b">COLUNAS</span><button type="button" class="btn ${this.colunas === "mensal" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'mensal')">Mês a mês</button><button type="button" class="btn ${this.colunas === "acumulado" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'acumulado')">YTD · YTG · FY</button>
-        <span style="margin-left:10px;font-size:0.7rem;color:#64748b">SÉRIES</span>${btnS("n", this.ano + " cheio")}${btnS("ref", refT + " cheio")}${btnS("n_mldu", this.ano + " MLDU")}${btnS("ref_mldu", refT + " MLDU")}
-        <button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true)">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false)">Recolher</button></div>`;
+    const exib = `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:6px 0 10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc"><b style="font-size:0.78rem;color:#105436;margin-right:6px">EXIBIÇÃO</b><span style="font-size:0.7rem;color:#64748b">vale para as duas tabelas</span>
+        <span style="margin-left:auto"></span><span style="font-size:0.7rem;color:#64748b">COLUNAS</span><button type="button" class="btn ${this.colunas === "mensal" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'mensal')">Mês a mês</button><button type="button" class="btn ${this.colunas === "acumulado" ? "btn-primary" : "btn-secondary"}" style="height:28px;padding:0 10px;font-size:0.7rem" onclick="OrionAnaliseApp.set('colunas', 'acumulado')">YTD · YTG · FY</button>
+        <span style="margin-left:10px;font-size:0.7rem;color:#64748b">SÉRIES</span>${btnS("n", this.ano + " cheio")}${btnS("ref", refT + " cheio")}${btnS("n_mldu", this.ano + " MLDU")}${btnS("ref_mldu", refT + " MLDU")}</div>`;
+    const tit = (titulo, sub, qual) => `<div class="oan-nav" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:14px 0 6px"><b>${titulo}</b><span style="font-size:0.7rem;color:#64748b">${sub}</span>
+        <span style="margin-left:auto"></span><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(true, '${qual}')">Expandir</button><button type="button" class="btn btn-secondary" style="height:28px;font-size:0.7rem" onclick="OrionAnaliseApp.expandir(false, '${qual}')">Recolher</button></div>`;
     const tabela = (itens, cab) => `<div class="cc-scroll" style="max-height:68vh"><table class="cc-table oan-tab or-larga">
         <thead><tr><th rowspan="2" style="position:sticky;left:0;z-index:3;min-width:300px">${cab}</th>${cab1}</tr><tr>${cab2}</tr></thead>
         <tbody>${itens.map((e) => linha(e, 0)).join("") || `<tr><td colspan="99" style="text-align:center;padding:30px">Sem ${d.tipo === "RECEITAS" ? "receitas" : "despesas"} para os filtros.</td></tr>`}
           <tr class="oan-total"><td style="position:sticky;left:0;background:#105436">TOTAL</td>${celulas(a.total)}</tr></tbody></table></div>`;
-    return nav + tabela(a.empresas, "EMPRESA / GRUPO / EMPREENDIMENTO")
-      + `<div style="display:flex;align-items:center;gap:8px;margin:18px 0 6px"><b>Por empreendimento</b><span style="font-size:0.7rem;color:#64748b">EMPREENDIMENTO › GRUPO › PLANO · mesmas colunas, séries e totais da tabela acima</span></div>`
+    return exib + tit("Por empresa", "EMPRESA › GRUPO › EMPREENDIMENTO › PLANO", "empresa") + tabela(a.empresas, "EMPRESA / GRUPO / EMPREENDIMENTO")
+      + tit("Por empreendimento", "EMPREENDIMENTO › GRUPO › PLANO · mesmo total da tabela acima", "empreendimento")
       + tabela(a.empreendimentos || [], "EMPREENDIMENTO / GRUPO");
   },
 
