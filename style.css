@@ -10782,13 +10782,23 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .alog-ocio.is-alto .alog-ocio-tag { background: #fef2f2; color: #b91c1c; }
 .alog-ocio.is-alto .alog-ocio-bar i { background: #dc2626; }
 .alog-tab tr.is-causa td:first-child { box-shadow: inset 3px 0 0 #f37021; }
-.alog-quem small { display: block; font-size: 0.72rem; color: #475569 !important; font-weight: 600; }
-.alog-quem small.alog-sem { color: #94a3b8 !important; font-weight: 500; font-style: italic; }
-.alog-perfil { display: inline-block; margin-top: 2px; font-size: 0.64rem; font-weight: 700; color: #105436; background: #e7f6ee; border-radius: 999px; padding: 0 7px; }
-.alog-tab tr.alog-grupo td { background: #e7f6ee; color: #105436; border-top: 2px solid #c6e9d5; padding: 7px 10px; }
-.alog-tab tr.alog-grupo td span { font-size: 0.76rem; color: #334155; margin-left: 6px; }
-.alog-grupo strong.is-ok { color: #105436; }
-.alog-grupo strong.is-alto { color: #b91c1c; }
+.alog-filtros { position: relative; z-index: 5; overflow: visible; }
+.alog-filtros .ml-emp-filter { margin: 0; }
+.alog-tit-abas { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.alog-abas { display: inline-flex; gap: 4px; background: #f1f5f9; border-radius: 8px; padding: 3px; }
+.alog-abas button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border: 0; border-radius: 6px; background: transparent; color: #475569; font-size: 0.8rem; font-weight: 700; cursor: pointer; }
+.alog-abas button svg { width: 15px; height: 15px; }
+.alog-abas button.is-ativa { background: #fff; color: #105436; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); }
+.alog-tab tr.alog-grupo { cursor: pointer; }
+.alog-tab tr.alog-grupo td { background: #f7faf8; font-weight: 700; }
+.alog-tab tr.alog-grupo:hover td { background: #e7f6ee; }
+.alog-tab tr.alog-grupo.is-aberto td { background: #e7f6ee; color: #105436; }
+.alog-quem .alog-seta { display: inline-flex; vertical-align: middle; margin-right: 4px; color: #105436; }
+.alog-quem .alog-seta svg { width: 16px; height: 16px; }
+.alog-quem small { font-weight: 500; color: #64748b; margin-left: 4px; }
+.alog-quem .alog-sem { color: #94a3b8; font-style: italic; }
+.alog-tab tr.alog-filho td { background: #fff; }
+.alog-tab tr.alog-filho td.alog-quem { padding-left: 34px; }
 .alog-forte { font-weight: 800; color: #c2410c !important; }
 .alog-cinza { color: #94a3b8; }
 .alog-chip { display: inline-flex; align-items: baseline; gap: 4px; background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; border-radius: 999px; padding: 1px 9px; margin: 1px 2px; font-size: 0.76rem; font-weight: 700; white-space: nowrap; }

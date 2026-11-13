@@ -1174,7 +1174,16 @@ window.handleDynamicCustomerSearch = function(query, type, source) {
     }, 400);
 };
 // Lógica das Abas do Cliente
+/** Abas da ficha que o perfil OPERADOR COBRANÇA TERCEIRIZADO não vê. */
+window.FICHA_ABAS_OCULTAS_TERC = ["tab-quitacao", "tab-vizinhos", "tab-comportamento", "tab-repactuacoes", "tab-construcao", "tab-notificacoes"];
+window.FICHA_CADASTRO_OCULTAS_TERC = ["ficha-anexos"];
+window.fichaAbaOcultaPerfil = function(tabId) {
+  if (typeof window.crmUsuarioEhTerceirizada !== "function" || !window.crmUsuarioEhTerceirizada()) return false;
+  return window.FICHA_ABAS_OCULTAS_TERC.indexOf(tabId) >= 0 || window.FICHA_CADASTRO_OCULTAS_TERC.indexOf(tabId) >= 0;
+};
+
 function switchCustomerTab(tabId) {
+  if (window.fichaAbaOcultaPerfil(tabId)) tabId = "tab-contrato";
   if (tabId === 'tab-quitacao' && AppState.isCurrentContractPaid) {
     alert(AppState.currentPayoffMsg);
     return;
@@ -1279,6 +1288,7 @@ function switchCustomerTab(tabId) {
 
 // Lógica das Abas da Ficha Cadastral
 window.switchFichaTab = function(tabId) {
+  if (typeof window.fichaAbaOcultaPerfil === "function" && window.fichaAbaOcultaPerfil(tabId)) tabId = "ficha-cadastro";
   document.querySelectorAll('.ficha-tab-pane').forEach(pane => {
     pane.style.display = 'none';
     pane.classList.remove('active');
@@ -56914,6 +56924,20 @@ window.applyFichaPerfilVista = function(refreshSim) {
   const showInterno = !isAdvogado && !isTerc && (isInternoOuApoio || !isSubjudice);
   show(document.querySelector('button[data-target="ficha-score"]'), showInterno);
   show(document.getElementById("btn-informe-rendimentos"), showInterno);
+  // Perfil terceirizado: some com Anexos (cadastro) e com Valor Quitação, Vizinhos, Comportamento de Pgto,
+  // Repactuações, Construção e Notificações (contrato).
+  window.FICHA_ABAS_OCULTAS_TERC.concat(window.FICHA_CADASTRO_OCULTAS_TERC).forEach(function(id) {
+    show(document.querySelector('button[data-target="' + id + '"]'), !isTerc);
+  });
+  if (isTerc) {
+    const ativaContrato = window.FICHA_ABAS_OCULTAS_TERC.some(function(id) {
+      const pane = document.getElementById(id);
+      return pane && pane.style.display !== "none" && pane.classList.contains("active");
+    });
+    if (ativaContrato && typeof switchCustomerTab === "function") switchCustomerTab("tab-contrato");
+    const anexosPane = document.getElementById("ficha-anexos");
+    if (anexosPane && anexosPane.classList.contains("active") && typeof switchFichaTab === "function") switchFichaTab("ficha-cadastro");
+  }
   if (!showInterno) {
     const scorePane = document.getElementById("ficha-score");
     if (scorePane && scorePane.classList.contains("active") && typeof switchFichaTab === "function") {

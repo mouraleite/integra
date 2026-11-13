@@ -16,7 +16,13 @@ const AuditoriaLoginApp = {
   carregando: false,
   enviando: "",
   erro: "",
-  filtro: { de: "", ate: "", escritorio: true, agrupar: false },
+  filtro: { de: "", ate: "", escritorio: true },
+  aba: "usuario",
+  deptos: [],
+  deptoAberto: false,
+  deptoBusca: "",
+  expandidos: new Set(),
+  SEM_DEPTO: "__sem__",
   sort: { campo: "ocioso", dir: -1 },
 
   esc(s) {
@@ -343,6 +349,46 @@ const AuditoriaLoginApp = {
     return r;
   },
 
+  deptoDe(login) {
+    const p = this.pessoaDe(login);
+    return p ? p.perfil : this.SEM_DEPTO;
+  },
+
+  nomeDepto(k) {
+    return k === this.SEM_DEPTO ? "Sem departamento no Integra" : k;
+  },
+
+  setAba(aba) {
+    this.aba = aba;
+    this.render();
+  },
+
+  alternarDepto(k) {
+    if (this.expandidos.has(k)) this.expandidos.delete(k); else this.expandidos.add(k);
+    this.render();
+  },
+
+  ligarFiltroDepto(itens) {
+    if (!window.MlEmpresaFilter) return;
+    MlEmpresaFilter.bind("alog-depto", {
+      toggleOpen: () => { this.deptoAberto = !this.deptoAberto; this.render(); },
+      close: () => { if (!this.deptoAberto) return; this.deptoAberto = false; this.render(); },
+      setQuery: (q) => {
+        this.deptoBusca = q;
+        const list = document.getElementById("alog-depto-list");
+        if (list) list.innerHTML = MlEmpresaFilter.listHtml({ items: itens, selectedIds: this.deptos, query: q, keepOrder: true, nouns: { singular: "departamento", plural: "departamentos" } });
+      },
+      toggleId: (id, on) => {
+        const s = new Set(this.deptos);
+        if (on) s.add(String(id)); else s.delete(String(id));
+        this.deptos = [...s];
+        this.render();
+      },
+      selectAll: () => { this.deptos = itens.map((x) => x.id); this.render(); },
+      selectNone: () => { this.deptos = []; this.render(); }
+    });
+  },
+
   setFiltro(campo, valor) {
     this.filtro[campo] = valor;
     this.render();
@@ -474,47 +520,67 @@ const AuditoriaLoginApp = {
         </td>`;
     };
 
-    const SEM = "Sem cadastro no Integra";
-    const celUsuario = (u) => {
-      const p = this.pessoaDe(u.u);
-      return `<td class="alog-quem"><b>${esc(u.u)}</b>${p
-        ? `<small>${esc(p.nome || p.email)}</small>${f.agrupar ? "" : `<span class="alog-perfil">${esc(p.perfil)}</span>`}`
-        : `<small class="alog-sem">${SEM}</small>`}</td>`;
-    };
-    const linhaUsu = (u) => `<tr class="${u.causados ? "is-causa" : ""}">
-        ${celUsuario(u)}
+    // Departamento = perfil do usuário no cadastro do Integra (Usuários e Perfis).
+    const todosDeptos = a ? [...new Set(a.usuarios.map((u) => this.deptoDe(u.u)))] : [];
+    const itensDepto = todosDeptos
+      .sort((x, y) => (x === this.SEM_DEPTO) - (y === this.SEM_DEPTO) || x.localeCompare(y, "pt-BR"))
+      .map((k) => ({ id: k, label: this.nomeDepto(k) }));
+    this.deptos = this.deptos.filter((k) => todosDeptos.includes(k));
+    const filtroDepto = new Set(this.deptos);
+    const usuariosVis = a ? a.usuarios.filter((u) => !filtroDepto.size || filtroDepto.has(this.deptoDe(u.u))) : [];
+
+    const linhaUsu = (u, filho) => `<tr class="${filho ? "alog-filho" : ""}">
+        <td class="alog-quem"><b>${esc(u.u)}</b></td>
         <td class="num">${u.sessoes}</td>
         <td class="num">${this.fmtDuracao(u.logado)}</td>
         ${celOcioso(u)}
-        <td class="num alog-forte">${u.causados || "—"}</td>
-        <td class="num">${u.vitimasN || "—"}</td>
-        <td class="num">${u.presente || "—"}</td>
-        <td class="num">${u.barrado || "—"}</td>
       </tr>`;
+    const { campo, dir } = this.sort;
     let linhasUsu = "";
-    if (a && f.agrupar) {
+    if (a && this.aba === "depto") {
       const grupos = new Map();
-      a.usuarios.forEach((u) => {
-        const p = this.pessoaDe(u.u);
-        const k = p ? p.perfil : SEM;
+      usuariosVis.forEach((u) => {
+        const k = this.deptoDe(u.u);
         if (!grupos.has(k)) grupos.set(k, []);
         grupos.get(k).push(u);
       });
       const soma = (arr, c) => arr.reduce((t, x) => t + (x[c] || 0), 0);
       linhasUsu = [...grupos.entries()]
-        .map(([k, arr]) => ({ k, arr, ocioso: soma(arr, "ocioso"), logado: soma(arr, "logado"), causados: soma(arr, "causados") }))
-        .sort((x, y) => (x.k === SEM) - (y.k === SEM) || y.ocioso - x.ocioso || x.k.localeCompare(y.k, "pt-BR"))
+        .map(([k, arr]) => {
+          const g = { k, nome: this.nomeDepto(k), arr, sessoes: soma(arr, "sessoes"), ocioso: soma(arr, "ocioso"), logado: soma(arr, "logado"), expiradas: soma(arr, "expiradas") };
+          g.pctOcioso = g.logado ? Math.min(1, g.ocioso / g.logado) : 0;
+          return g;
+        })
+        .sort((x, y) => {
+          const va = campo === "u" ? x.nome : x[campo];
+          const vb = campo === "u" ? y.nome : y[campo];
+          const c = typeof va === "string" ? va.localeCompare(vb, "pt-BR") : (va || 0) - (vb || 0);
+          return c * dir || y.ocioso - x.ocioso || x.nome.localeCompare(y.nome, "pt-BR");
+        })
         .map((g) => {
-          const pc = g.logado ? Math.min(1, g.ocioso / g.logado) : 0;
-          const [cls, rot] = nivelOcioso(pc);
-          return `<tr class="alog-grupo"><td colspan="8">
-              <b>${esc(g.k)}</b> <span>${g.arr.length} pessoa(s) · ${this.fmtDuracao(g.ocioso)} parado de ${this.fmtDuracao(g.logado)} logado ·
-              <strong class="is-${cls}">${pct(pc)} (${rot})</strong>${g.causados ? ` · barrou outros ${g.causados}x` : ""}</span>
-            </td></tr>` + g.arr.map(linhaUsu).join("");
+          const aberto = this.expandidos.has(g.k);
+          return `<tr class="alog-grupo${aberto ? " is-aberto" : ""}" onclick="AuditoriaLoginApp.alternarDepto(${esc(JSON.stringify(g.k))})" title="${aberto ? "Fechar" : "Ver os usuários deste departamento"}">
+              <td class="alog-quem"><span class="alog-seta"><i data-lucide="${aberto ? "chevron-down" : "chevron-right"}"></i></span><b class="${g.k === this.SEM_DEPTO ? "alog-sem" : ""}">${esc(g.nome)}</b> <small>${g.arr.length} usuário(s)</small></td>
+              <td class="num">${g.sessoes}</td>
+              <td class="num">${this.fmtDuracao(g.logado)}</td>
+              ${celOcioso(g)}
+            </tr>` + (aberto ? g.arr.map((u) => linhaUsu(u, true)).join("") : "");
         }).join("");
     } else if (a) {
-      linhasUsu = a.usuarios.map(linhaUsu).join("");
+      linhasUsu = usuariosVis.map((u) => linhaUsu(u)).join("");
     }
+    const filtroDeptoHtml = a && window.MlEmpresaFilter ? MlEmpresaFilter.html({
+      id: "alog-depto",
+      label: "Departamento",
+      items: itensDepto,
+      selectedIds: this.deptos,
+      open: this.deptoAberto,
+      query: this.deptoBusca,
+      emptyMeansAll: true,
+      countMode: true,
+      keepOrder: true,
+      nouns: { singular: "departamento", plural: "departamentos", noMatch: "Nenhum departamento com esse nome." }
+    }) : "";
 
     const horas = [];
     for (let h = f.escritorio ? 8 : 0; h < (f.escritorio ? 18 : 24); h++) horas.push(String(h).padStart(2, "0"));
@@ -565,11 +631,7 @@ const AuditoriaLoginApp = {
             <span class="moura-switch-track" aria-hidden="true"></span>
             <span class="moura-switch-text">Só horário do escritório (seg a sex, 8h às 18h)</span>
           </label>
-          <label class="moura-switch">
-            <input type="checkbox" ${f.agrupar ? "checked" : ""} onchange="AuditoriaLoginApp.setFiltro('agrupar', this.checked)">
-            <span class="moura-switch-track" aria-hidden="true"></span>
-            <span class="moura-switch-text">Agrupar por área (perfil no Integra)</span>
-          </label>
+          ${filtroDeptoHtml}
         </div>
 
         ${this.carregando && !temDados ? `<div class="crm-card alog-vazio">Carregando relatórios…</div>` : ""}
@@ -583,20 +645,21 @@ const AuditoriaLoginApp = {
         </div>
 
         <div class="crm-card alog-bloco">
-          <div class="alog-tit">Quem segura licença parado</div>
+          <div class="alog-tit alog-tit-abas">Quem segura licença parado
+            <div class="alog-abas">
+              <button type="button" class="${this.aba === "usuario" ? "is-ativa" : ""}" onclick="AuditoriaLoginApp.setAba('usuario')"><i data-lucide="user"></i> Por usuário</button>
+              <button type="button" class="${this.aba === "depto" ? "is-ativa" : ""}" onclick="AuditoriaLoginApp.setAba('depto')"><i data-lucide="building-2"></i> Por departamento</button>
+            </div>
+          </div>
           <div class="alog-tab alog-usu"><table>
             <thead><tr>
-              ${th("Usuário", "u")}${th("Sessões", "sessoes", 1)}${th("Tempo logado", "logado", 1)}
-              ${th("Tempo parado", "ocioso")}${th("Barrou outros", "causados", 1)}${th("Pessoas barradas", "vitimasN", 1)}
-              ${th("Logado em bloqueios", "presente", 1)}${th("Foi barrado", "barrado", 1)}
+              ${th(this.aba === "depto" ? "Departamento" : "Usuário", "u")}${th("Sessões", "sessoes", 1)}${th("Tempo logado", "logado", 1)}${th("Tempo parado", "ocioso")}
             </tr></thead>
-            <tbody>${linhasUsu || `<tr><td colspan="8" class="alog-cinza">Sem acessos no período.</td></tr>`}</tbody>
+            <tbody>${linhasUsu || `<tr><td colspan="4" class="alog-cinza">Sem acessos no período${filtroDepto.size ? " para os departamentos escolhidos" : ""}.</td></tr>`}</tbody>
           </table></div>
           <small class="alog-nota"><b>Tempo parado</b>: ${this.TIMEOUT_MIN} minutos por sessão expirada (o Sienge só derruba depois de ${this.TIMEOUT_MIN} minutos sem uso).
             A barra mostra quanto do tempo logado ficou parado: o aceitável é até ${marca}% (risco na barra); acima disso fica em vermelho.
-            <b>Usuário</b>: login do Sienge e, embaixo, a pessoa e o perfil cadastrados em Usuários e Perfis do Integra (pelo usuário Sienge, e-mail ou nome).
-            <b>Barrou outros</b>: tentativas de outras pessoas recusadas por falta de licença enquanto este usuário estava nesses ${this.TIMEOUT_MIN} minutos parado.
-            <b>Logado em bloqueios</b>: vezes em que estava logado (usando ou não) quando alguém foi barrado.${a.outrasFalhas ? ` ${a.outrasFalhas} falha(s) de login por outros motivos não entram na conta.` : ""}</small>
+            <b>Departamento</b>: perfil da pessoa em Usuários e Perfis do Integra (ligado pelo usuário Sienge, e-mail ou nome). Clique no departamento para ver os usuários.${a.outrasFalhas ? ` ${a.outrasFalhas} falha(s) de login por outros motivos não entram na conta.` : ""}</small>
         </div>
 
         <div class="crm-card alog-bloco">
@@ -620,6 +683,7 @@ const AuditoriaLoginApp = {
           </table></div>
         </div>` : ""}
       </div>`;
+    if (filtroDeptoHtml) this.ligarFiltroDepto(itensDepto);
     try { if (window.lucide) lucide.createIcons(); } catch (e) {}
   },
 

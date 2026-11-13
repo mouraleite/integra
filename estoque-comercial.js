@@ -3746,6 +3746,30 @@ const EstoqueComercialApp = {
     };
   },
 
+  /** Venda gravada no Integra que não existe no Sienge (título apagado ou de outra unidade): tira saldo e vínculo. */
+  unidadeSemVendaNoSienge(u, titulo, agora) {
+    return {
+      ...u,
+      carteiraCt: false,
+      relFin: null,
+      quitado: false,
+      outstandingBalance: null,
+      presentDebitBalance: null,
+      kpiVencidas: 0,
+      kpiAVencer: 0,
+      openParcelas: [],
+      receivableBillId: null,
+      contractId: null,
+      contractNumber: null,
+      customerId: null,
+      customerName: "",
+      statementDone: false,
+      tituloInexistente: titulo || null,
+      finAt: agora,
+      siengeConferidoEm: agora
+    };
+  },
+
   /**
    * Título que sumiu do extrato aberto. O extrato do centro não pede parcelas revogadas,
    * então um distrato deixa de vir e o saldo antigo ficava gravado na unidade.
@@ -3761,6 +3785,10 @@ const EstoqueComercialApp = {
       return null;
     }
     if (!bill || typeof bill !== "object") return { tipo: "ausente" };
+    // Título inexistente: o Sienge responde 200 com todos os campos nulos (ex.: 18357, venda de teste apagada).
+    if (bill.receivableBillId == null && bill.customerId == null && bill.documentNumber == null && bill.receivableBillValue == null) {
+      return { tipo: "ausente" };
+    }
     const st = this.classifyReceivableBill(bill);
     const dataCab = this.isoDate(bill.cancellationDate || bill.revokedDate || bill.revokedBillReceivableDate || bill.cancelDate) || "";
     if (st === "distratado" || dataCab) return { tipo: "distratado", data: dataCab };
@@ -3770,6 +3798,8 @@ const EstoqueComercialApp = {
       const res = await window.siengeFetchWithRetry("/accounts-receivable/receivable-bills/" + encodeURIComponent(billId) + "/installments?limit=200", 1);
       inst = (res && res.results) || (Array.isArray(res) ? res : []);
     } catch (e) {
+      const status = Number(e && e.status) || 0;
+      if (status === 404 || /\b404\b/.test(String((e && e.message) || e || ""))) return { tipo: "ausente" };
       return null;
     }
     let aberto = 0;
@@ -3829,12 +3859,19 @@ const EstoqueComercialApp = {
     const usados = new Set();
     const semTitulo = [];
     const distratadosNovos = [];
+    const titulosInexistentes = [];
     let reabertos = 0;
     let reativados = 0;
     let quitadosNovos = 0;
     const revogados = bills.filter((b) => b.revoked);
+    // Título cujas unidades no Sienge existem no Integra pertence a elas: o número do título gravado em outra
+    // unidade (ex.: "SPA" e "CASA SPA" com o título 16955) não pode puxar o mesmo saldo duas vezes.
+    const idsNoCc = new Set(this.state.units.filter((x) => String(x.enterpriseId) === String(ccId)).map((x) => String(x.id)));
+    const daOutraUnidade = (b, u) => b.units.length > 0
+      && !b.units.some((x) => x.id === String(u.id))
+      && b.units.some((x) => idsNoCc.has(x.id));
     const daUnidade = (lista, u, rb) => {
-      const porId = lista.filter((b) => b.units.some((x) => x.id === String(u.id)) || (rb && b.id === rb));
+      const porId = lista.filter((b) => b.units.some((x) => x.id === String(u.id)) || (rb && b.id === rb && !daOutraUnidade(b, u)));
       return porId.length ? porId : lista.filter((b) => b.units.some((x) => this.unitNameMatches(x.name, u.name)));
     };
     this.state.units = this.state.units.map((u) => {
@@ -3879,6 +3916,11 @@ const EstoqueComercialApp = {
           return this.unidadeDistratada(u, rev.id, String(rev.revoked).slice(0, 10), agora);
         }
         const saldoInt = Number(this.unitBalance(u)) || 0;
+        const dono = rb && vivos.find((b) => b.id === rb && daOutraUnidade(b, u));
+        if (dono) {
+          titulosInexistentes.push({ unidade: u.name, titulo: rb, cliente: u.customerName || "", saldo: saldoInt, outraUnidade: dono.units.map((x) => x.name).join(", ") });
+          return this.unidadeSemVendaNoSienge(u, rb, agora);
+        }
         semTitulo.push({
           _uid: String(u.id),
           unidade: u.name, contrato: this.displayContract(u) || "", situacao: fin0, cliente: u.customerName || "",
@@ -3967,6 +4009,10 @@ const EstoqueComercialApp = {
             finAt: agora,
             siengeConferidoEm: agora
           };
+        } else if (info.tipo === "ausente") {
+          // O título não existe no Sienge: a venda gravada no Integra é velha (ou de teste). Tira o saldo e o vínculo.
+          titulosInexistentes.push({ unidade: u.name, titulo: s.titulo, cliente: u.customerName || "", saldo: s.saldo });
+          this.state.units[idx] = this.unidadeSemVendaNoSienge(u, s.titulo, agora);
         } else {
           distratadosNovos.push({ unidade: u.name, titulo: s.titulo, cliente: u.customerName || "", data: info.data || "" });
           this.state.units[idx] = this.unidadeDistratada(u, s.titulo, info.data || "", agora);
@@ -3998,6 +4044,7 @@ const EstoqueComercialApp = {
       })),
       semTitulo,
       distratadosNovos,
+      titulosInexistentes,
       reabertos,
       reativados,
       quitadosNovos,
@@ -4078,6 +4125,7 @@ const EstoqueComercialApp = {
       semTitulo: c.semTitulo.length,
       titulosSemUnidade: c.semUnidade,
       unidadesSemTitulo: c.semTitulo,
+      titulosInexistentes: c.titulosInexistentes || [],
       rateioFalhas: c.rateioFalhas || []
     };
   },
@@ -4152,6 +4200,8 @@ const EstoqueComercialApp = {
     }));
     const semMotivo = g.ccs.some((c) => c.semUnidade.n && !c.motivos);
     const reabertos = soma((c) => c.reabertos);
+    const inexist = [];
+    g.ccs.forEach((c) => (c.titulosInexistentes || []).forEach((i) => inexist.push({ cc: c.ccId, ...i })));
     const acertar = Object.entries(motivos).sort((a, b) => b[1].valor - a[1].valor).map(([k, m]) => {
       const info = this.MOTIVOS_SEM_UNIDADE[k] || this.MOTIVOS_SEM_UNIDADE.outro;
       const top = m.ccs.sort((a, b) => b.valor - a.valor).slice(0, 4).map((x) => esc(x.id)).join(", ");
@@ -4165,6 +4215,7 @@ const EstoqueComercialApp = {
         </table></div>` : ""}
         ${semMotivo ? `<small class="est-conf-nota">Esta conferência foi feita antes da separação por motivo: clique em "Batimento financeiro" de novo para ver o motivo de cada título.</small>` : ""}
         ${tot.semTitulo ? `<small class="est-conf-nota">${tot.semTitulo} unidade(s) ativa(s) no Integra sem título no Sienge: conferir se foram distratadas ou quitadas (lista ao escolher o empreendimento).</small>` : ""}
+        ${inexist.length ? `<small class="est-conf-nota">${inexist.length} unidade(s) tinham no Integra uma venda que não existe no Sienge (título apagado ou de outra unidade) (${inexist.slice(0, 5).map((i) => esc(i.cc + " " + i.unidade + " · título " + i.titulo)).join("; ")}${inexist.length > 5 ? "…" : ""}): o saldo antigo foi retirado nesta conferência.</small>` : ""}
         ${reabertos ? `<small class="est-conf-nota">${reabertos} unidade(s) estavam como quitadas ou distratadas no Integra, mas têm saldo no Sienge, e foram reabertas nesta conferência.</small>` : ""}
       </div>`;
     const temListas = g.ccs.some((c) => Array.isArray(c.titulosSemUnidade));
@@ -4273,6 +4324,7 @@ const EstoqueComercialApp = {
           <small>${bateSaldo ? "A receber igual ao Sienge" : "A receber diferente do Sienge"}${temVencido ? (bateVenc ? " · vencido igual" : ` · vencido difere ${this.money(difVenc)}`) : ""}</small>
           ${(c.semTitulo || []).length || (c.semUnidade || []).length ? `<small>Há unidades ou títulos sem par: veja abaixo</small>` : ""}</div>
       </div>
+      ${lista("Vendas que não existem no Sienge (saldo antigo retirado da unidade)", c.titulosInexistentes || [], (i) => `<li>${esc(i.unidade)} · título ${esc(i.titulo)}${i.cliente ? " · " + esc(i.cliente) : ""}${i.outraUnidade ? " · o título é da unidade " + esc(i.outraUnidade) : " · título não existe no Sienge"}${i.saldo ? " · saldo retirado " + this.money(i.saldo) : ""}</li>`)}
       ${lista("Unidades distratadas no Sienge (passaram para Distratado)", c.distratadosNovos || [], (i) => `<li>${esc(i.unidade)} · título ${esc(i.titulo)}${i.cliente ? " · " + esc(i.cliente) : ""}${i.data ? " · distrato " + esc(i.data.split("-").reverse().join("/")) : ""}</li>`)}
       ${lista("Títulos com saldo no Sienge sem unidade no Integra", (c.semUnidade || []).slice().sort((a, b) => String(a.motivo || "").localeCompare(String(b.motivo || "")) || b.aberto - a.aberto), (i) => `<li>Título ${esc(i.titulo)} · ${esc(i.cliente)}${i.unidades ? " · " + esc(i.unidades) : ""} · ${this.money(i.aberto)}${i.motivo ? ` · <em class="est-conf-motivo">${esc((this.MOTIVOS_SEM_UNIDADE[i.motivo] || {}).titulo || i.motivo)}${i.situacao ? " (" + esc(i.situacao) + ")" : ""}</em>` : ""}</li>`)}
       ${lista("Unidades ativas no Integra sem título no Sienge", c.semTitulo, (i) => `<li>${esc(i.unidade)}${i.contrato ? " · contrato " + esc(i.contrato) : ""}${i.cliente ? " · " + esc(i.cliente) : ""} · ${esc(i.situacao)}${i.saldo != null ? ` · saldo no Integra ${this.money(i.saldo)}` : ""}</li>`)}
