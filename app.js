@@ -3937,6 +3937,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-fechamento": "Fechamento de meses",
     "orion-orcamentos": "Orçamentos e forecasts (Órion)",
     "orion-dfc": "DFC gerencial (Órion)",
+    "orion-dfcv": "DFC (Órion)",
     "orion-viabilidades": "Viabilidades (Órion)",
     "orion-acompanhamento": "Viabilidade × realizado (Órion)",
     "orion-obras": "Acompanhamento de empreendimentos (Órion)",
@@ -4037,6 +4038,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-fechamento": "calendar-check",
     "orion-orcamentos": "orbit",
     "orion-dfc": "bar-chart-3",
+    "orion-dfcv": "bar-chart-3",
     "orion-viabilidades": "building-2",
     "orion-acompanhamento": "activity",
     "orion-obras": "layout-dashboard",
@@ -4298,6 +4300,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof OrionOrcamentosApp !== "undefined") OrionOrcamentosApp.init();
   } else if (tabId === "orion-dfc") {
     if (typeof OrionDfcApp !== "undefined") OrionDfcApp.init();
+  } else if (tabId === "orion-dfcv") {
+    if (typeof OrionDfcVisaoApp !== "undefined") OrionDfcVisaoApp.init();
   } else if (tabId === "orion-carga-sharepoint") {
     if (typeof OrionCargaSharepointApp !== "undefined") OrionCargaSharepointApp.init();
   } else if (tabId === "orion-carga") {

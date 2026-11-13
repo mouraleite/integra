@@ -1233,6 +1233,9 @@
             <li data-tab="orion-analise" data-module="sub_orion_geral_analise_orcamento_acessar">
               <a onclick="switchTab('orion-analise', 'Análise de orçamento (Órion)')">Análise de orçamento</a>
             </li>
+            <li data-tab="orion-dfcv" data-module="sub_orion_geral_dfc_gerencial_acessar">
+              <a onclick="switchTab('orion-dfcv', 'DFC (Órion)')">DFC</a>
+            </li>
             <li data-tab="orion-dfc" data-module="sub_orion_geral_dfc_gerencial_acessar">
               <a onclick="switchTab('orion-dfc', 'DFC gerencial (Órion)')">DFC gerencial</a>
             </li>
@@ -1813,6 +1816,9 @@
       </section>
 
       <!-- TAB: ÓRION (TRANSIÇÃO) - DFC GERENCIAL -->
+      <section id="tab-orion-dfcv" class="tab-pane" style="display: none;">
+        <div id="orion-dfcv-root" style="padding: 16px;"></div>
+      </section>
       <section id="tab-orion-dfc" class="tab-pane" style="display: none;">
         <div id="orion-dfc-root" style="padding: 16px;"></div>
       </section>
@@ -8855,6 +8861,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-orcamento-grade.js?v=2147"></script>
   <script defer src="orion-orcamento-orion.js?v=2147"></script>
   <script defer src="orion-dfc.js?v=2147"></script>
+  <script defer src="orion-dfc-visao.js?v=2148"></script>
   <script defer src="orion-resumo.js?v=2147"></script>
   <script defer src="orion-analitico.js?v=2147"></script>
   <script defer src="orion-analise.js?v=2147"></script>
