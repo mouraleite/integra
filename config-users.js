@@ -432,6 +432,7 @@ const ConfigUsersApp = {
           actions: [
             { id: "dashboard", label: "Dashboard", permBase: "sub_fin_cr_dashboard" },
             { id: "fila_cobranca", label: "Fila de Cobrança" },
+            { id: "importar_acionamentos", label: "Importar acionamentos" },
             { id: "central_email", label: "Central de e-mail" },
             { id: "agenda", label: "Agenda do Operador" },
             { id: "zero_paid", label: "Clientes 0% Pago" },

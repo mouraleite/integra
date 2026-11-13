@@ -3917,6 +3917,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "Fluxo de caixa diário",
     mutuo: "Mútuo",
     "relatorios-cr": "Relatórios",
+    "importar-acionamentos": "Importar acionamentos",
     "resultado-caixa": "Resultado de caixa",
     "orcamento-novo": "Novo orçamento",
     "orcamento-forecast": "Novo forecast",
@@ -7019,15 +7020,22 @@ window.applyPermissions = function(profileName) {
   }
 
   if (window.isCrmAdminProfileName(profileName)) {
+    if (typeof window.crmGarantirImportarAcionamentos === "function") {
+      const atuais = typeof window.readCrmProfilePerms === "function" ? window.readCrmProfilePerms(profileName) : {};
+      window.crmGarantirImportarAcionamentos(profileName, atuais);
+    }
     window._crmAcessoSoHome = false;
     document.querySelectorAll("li[data-module]").forEach((item) => { item.style.display = ""; });
     document.querySelectorAll(".nav-group").forEach((group) => { group.style.display = ""; });
     return;
   }
 
-  const perms = typeof window.readCrmProfilePerms === "function"
+  let perms = typeof window.readCrmProfilePerms === "function"
     ? window.readCrmProfilePerms(profileName)
     : {};
+  if (typeof window.crmGarantirImportarAcionamentos === "function") {
+    perms = window.crmGarantirImportarAcionamentos(profileName, perms) || perms;
+  }
   const hasAny = !!(perms && Object.keys(perms).some((k) => String(k).startsWith("mod_") && perms[k] === true));
   
   if (hasAny) {
