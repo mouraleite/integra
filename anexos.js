@@ -1777,6 +1777,18 @@ function renderAnexosModule(opts) {
 const AnexosDB = {
   dbName: 'CRM_AnexosDB',
   storeName: 'customerAttachments',
+  collectionName: 'anexos_juridicos',
+
+  firebase() {
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !window.firebaseStorage || !fc
+      || !fc.collection || !fc.getDocs || !fc.query || !fc.where || !fc.doc
+      || !fc.getDoc || !fc.setDoc || !fc.deleteDoc || !fc.ref || !fc.uploadBytes
+      || !fc.getDownloadURL || !fc.deleteObject) {
+      throw new Error('Firebase indisponível para sincronizar os anexos jurídicos.');
+    }
+    return fc;
+  },
   
   async init() {
     return new Promise((resolve, reject) => {
@@ -1792,28 +1804,156 @@ const AnexosDB = {
     });
   },
 
-  async save(customerId, files) {
-    const db = await this.init();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(this.storeName, 'readwrite');
-      const store = tx.objectStore(this.storeName);
-      store.put({ customerId: String(customerId), files: files });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  },
-
-  async load(customerId) {
+  async loadLocal(customerId) {
     const db = await this.init();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(this.storeName, 'readonly');
       const store = tx.objectStore(this.storeName);
       const request = store.get(String(customerId));
-      request.onsuccess = () => {
-        resolve(request.result ? request.result.files : null);
-      };
+      request.onsuccess = () => resolve(request.result ? request.result.files || [] : []);
       request.onerror = () => reject(request.error);
     });
+  },
+
+  async removeLocal(customerId) {
+    const db = await this.init();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, 'readwrite');
+      const store = tx.objectStore(this.storeName);
+      store.delete(String(customerId));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  firebaseDocId(customerId, fileId) {
+    return encodeURIComponent(`${String(customerId)}_${String(fileId)}`);
+  },
+
+  async fileBlob(file) {
+    if (file.file instanceof Blob) return file.file;
+    if (file.base64 && /^data:/i.test(String(file.base64))) {
+      const response = await fetch(file.base64);
+      if (!response.ok) throw new Error(`Não foi possível preparar o arquivo ${file.originalName || ''}.`);
+      return response.blob();
+    }
+    throw new Error(`O arquivo ${file.originalName || ''} não possui conteúdo para sincronização.`);
+  },
+
+  async uploadOne(customerId, file, fc) {
+    const fileId = String(file.id || `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`);
+    const originalName = String(file.originalName || (file.file && file.file.name) || 'anexo');
+    const blob = await this.fileBlob(file);
+    const safeName = originalName.replace(/[^\w.-]/g, '_').slice(0, 100) || 'anexo';
+    const storagePath = `${this.collectionName}/${encodeURIComponent(String(customerId))}/${encodeURIComponent(fileId)}_${safeName}`;
+    const storageRef = fc.ref(window.firebaseStorage, storagePath);
+    await fc.uploadBytes(storageRef, blob, { contentType: blob.type || 'application/octet-stream' });
+    const payload = {
+      customerId: String(customerId),
+      fileId,
+      originalName,
+      ext: String(file.ext || originalName.split('.').pop() || 'pdf').toLowerCase(),
+      size: Number(file.size) || blob.size,
+      tags: Array.isArray(file.tags) ? file.tags : (file.tags ? [file.tags] : []),
+      dateOverride: file.dateOverride || '',
+      targetCustomerId: file.targetCustomerId || '',
+      targetCustomerIds: Array.isArray(file.targetCustomerIds) ? file.targetCustomerIds.map(String) : [],
+      storagePath,
+      uploadedAt: file.uploadedAt || new Date().toISOString()
+    };
+    const docId = this.firebaseDocId(customerId, fileId);
+    try {
+      await fc.setDoc(fc.doc(window.firebaseDb, this.collectionName, docId), payload);
+    } catch (e) {
+      try {
+        await fc.deleteObject(storageRef);
+      } catch (cleanupError) {
+        console.warn('[Anexos] Falha ao limpar arquivo após erro de gravação:', cleanupError);
+      }
+      throw e;
+    }
+    return { ...payload, id: fileId, _docId: docId };
+  },
+
+  async load(customerId, options) {
+    const cid = String(customerId);
+    const fc = this.firebase();
+    const snapshot = await fc.getDocs(fc.query(
+      fc.collection(window.firebaseDb, this.collectionName),
+      fc.where('customerId', '==', cid)
+    ));
+    const cloudFiles = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      cloudFiles.push({ ...data, id: String(data.fileId || docSnap.id), _docId: docSnap.id });
+    });
+
+    let localFiles = [];
+    try {
+      localFiles = await this.loadLocal(cid);
+    } catch (e) {
+      console.warn('[Anexos] Não foi possível consultar os anexos locais antigos:', e);
+    }
+    if (localFiles.length) {
+      const existingIds = new Set(cloudFiles.map((file) => String(file.fileId || file.id)));
+      const pending = localFiles.filter((file) => !existingIds.has(String(file.id)));
+      for (const file of pending) {
+        cloudFiles.push(await this.uploadOne(cid, file, fc));
+      }
+      if (pending.length || cloudFiles.length) {
+        try {
+          await this.removeLocal(cid);
+        } catch (e) {
+          console.warn('[Anexos] Não foi possível remover a cópia local já sincronizada:', e);
+        }
+      }
+    }
+
+    cloudFiles.sort((a, b) => String(a.uploadedAt || '').localeCompare(String(b.uploadedAt || '')));
+    const includeFiles = !!(options && options.includeFiles);
+    return Promise.all(cloudFiles.map(async (file) => {
+      if (!file.storagePath) throw new Error(`O anexo ${file.originalName || file.id} não tem arquivo sincronizado.`);
+      const storageRef = fc.ref(window.firebaseStorage, file.storagePath);
+      const url = await fc.getDownloadURL(storageRef);
+      let blob = null;
+      if (includeFiles) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Não foi possível baixar o anexo ${file.originalName || file.id}.`);
+        blob = await response.blob();
+      }
+      return { ...file, file: blob, previewUrl: url, status: file.status || 'Pronto' };
+    }));
+  },
+
+  async save(customerId, files) {
+    const cid = String(customerId);
+    const fc = this.firebase();
+    const saved = [];
+    try {
+      for (const file of files || []) {
+        if (file._docId && file.storagePath) continue;
+        saved.push(await this.uploadOne(cid, file, fc));
+      }
+    } catch (e) {
+      await Promise.all(saved.map(async (file) => {
+        try {
+          await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, file._docId));
+          await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
+        } catch (cleanupError) {
+          console.warn('[Anexos] Falha ao limpar um upload incompleto:', cleanupError);
+        }
+      }));
+      throw e;
+    }
+  },
+
+  async delete(customerId, file) {
+    const fc = this.firebase();
+    const docId = file._docId || this.firebaseDocId(customerId, file.fileId || file.id);
+    if (file.storagePath) {
+      await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
+    }
+    await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, docId));
   }
 };
 
@@ -4643,8 +4783,8 @@ const AnexosApp = {
         AnexosApp.renderAnexosJuridicoTab();
         alert(filesToSend.length + " documento(s) enviado(s) para a aba Anexos Jurídico.");
       }).catch(err => {
-        console.error("Erro ao salvar no IndexedDB:", err);
-        alert("Erro ao salvar anexos localmente.");
+        console.error("Erro ao sincronizar anexos jurídicos:", err);
+        alert("Erro ao sincronizar anexos jurídicos: " + ((err && err.message) || err));
       });
       return;
     }
@@ -5075,9 +5215,13 @@ const AnexosApp = {
     const msg = "Apagar o anexo " + tag + "?";
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
     if (!ok) return;
-    files.splice(index, 1);
-    await AnexosDB.save(customerId, files);
-    this.renderAnexosJuridicoTab();
+    try {
+      await AnexosDB.delete(customerId, files[index]);
+      this.renderAnexosJuridicoTab();
+    } catch (e) {
+      console.error("Erro ao excluir anexo jurídico:", e);
+      alert("Não foi possível excluir o anexo: " + ((e && e.message) || e));
+    }
   },
 
   async renderAnexosJuridicoTab() {
@@ -5140,7 +5284,8 @@ const AnexosApp = {
       if (window.lucide) window.lucide.createIcons();
     } catch (e) {
       console.error("Erro ao carregar anexos jurídicos", e);
-      listEl.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--color-danger);">Erro ao carregar os documentos.</div>';
+      const message = anexosEsc((e && e.message) || e);
+      listEl.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--color-danger);">Erro ao carregar os documentos: ${message}</div>`;
     }
   }
 };
