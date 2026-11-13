@@ -625,6 +625,7 @@ const EstoqueComercialApp = {
     this.state.batimentoDone = !!data.batimentoDone;
     if (!this.state.complete && this.inventarioCarregado()) this.state.complete = true;
     this.sealInferredFinance();
+    this.retirarTitulosTeste();
   },
 
   /** Estoque já gravado e batimento do dia fechado. O campo complete fica false porque a carga grava o meta a cada empreendimento, antes de marcar o fim. */
@@ -2641,6 +2642,11 @@ const EstoqueComercialApp = {
 
   applyContractInfo(u, info) {
     if (!info) return u;
+    const tituloTeste = this.tituloTesteExcluido(info.receivableBillId) || this.tituloTesteExcluido(u && u.receivableBillId);
+    if (tituloTeste && !info.receivableBillId) {
+      return this.unidadeSemVendaNoSienge(u, String(u.receivableBillId).replace(/^B-/i, "").split("-")[0], new Date().toISOString());
+    }
+    if (this.tituloTesteExcluido(info.receivableBillId)) return u;
     const bal = info.outstandingBalance;
     const value = info.contractValue != null ? Number(info.contractValue) : (u.contractValue != null ? Number(u.contractValue) : null);
     const sit = String(info.situation || u.situation || "").toLowerCase();
@@ -3746,6 +3752,16 @@ const EstoqueComercialApp = {
     };
   },
 
+  /** Título de teste apagado no Sienge. A lista fica em NEX_TESTE_TITULOS; 18357 é o fallback. */
+  tituloTesteExcluido(v) {
+    const id = String(v || "").replace(/^B-/i, "").split("-")[0];
+    if (!id) return false;
+    const lista = (typeof window !== "undefined" && Array.isArray(window.NEX_TESTE_TITULOS) && window.NEX_TESTE_TITULOS.length)
+      ? window.NEX_TESTE_TITULOS
+      : ["18357"];
+    return lista.map(String).indexOf(id) >= 0;
+  },
+
   /** Venda gravada no Integra que não existe no Sienge (título apagado ou de outra unidade): tira saldo e vínculo. */
   unidadeSemVendaNoSienge(u, titulo, agora) {
     return {
@@ -3775,6 +3791,7 @@ const EstoqueComercialApp = {
    * então um distrato deixa de vir e o saldo antigo ficava gravado na unidade.
    */
   async lerTituloForaDoExtrato(billId) {
+    if (this.tituloTesteExcluido(billId)) return { tipo: "ausente" };
     let bill = null;
     try {
       bill = await window.siengeFetchWithRetry("/accounts-receivable/receivable-bills/" + encodeURIComponent(billId), 1);
@@ -3877,6 +3894,13 @@ const EstoqueComercialApp = {
     this.state.units = this.state.units.map((u) => {
       if (String(u.enterpriseId) !== String(ccId)) return u;
       const rb = String(u.receivableBillId || "").replace(/^B-/, "").split("-")[0];
+      if (this.tituloTesteExcluido(rb)) {
+        const outro = daUnidade(vivos, u, "").some((b) => b.aberto > 0.009 && !this.tituloTesteExcluido(b.id));
+        if (!outro) {
+          titulosInexistentes.push({ unidade: u.name, titulo: rb, cliente: u.customerName || "", saldo: Number(this.unitBalance(u)) || 0 });
+          return this.unidadeSemVendaNoSienge(u, rb, agora);
+        }
+      }
       const ligada = daUnidade(vivos, u, rb).some((b) => b.aberto > 0.009);
       const soPeloTitulo = !!u.carteiraCt && !this.isFinanceUnit({ ...u, carteiraCt: false });
       if (!ligada && soPeloTitulo) {

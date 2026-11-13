@@ -874,7 +874,7 @@ const GerarPagamentoApp = {
     if (this.state.started && this.state.costCenters.length) {
       this.recarregarCustom();
       this.render();
-      this.sincronizarContas().then(() => {
+      Promise.all([this.sincronizarContas(), this.garantirDadosParceria()]).then(() => {
         this.recarregarCustom();
         if (this.state.titulos && this.state.titulos.length) this.reclassificar();
         this.render();
@@ -882,6 +882,34 @@ const GerarPagamentoApp = {
       return;
     }
     this.load();
+  },
+
+  /**
+   * A conferência do rateio usa a Parametrização de Parceiro (quais planos entram na parceria de cada obra)
+   * e a visão DFC do Plano Financeiro. Sem isso carregado, um título sem rateio num plano da parceria
+   * passava como "Não se aplica". Aqui só LÊ do Firebase; não grava nada.
+   */
+  async garantirDadosParceria() {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (PP && typeof PP.loadItems === "function") {
+      try { await PP.loadItems(); } catch (e) { console.warn("[Gerar Pagamento] Parcerias:", e); }
+    }
+    try {
+      const PF = window.PlanoFinanceiroApp;
+      let local = [];
+      try { local = JSON.parse(localStorage.getItem("crm_plano_visoes_v2") || "[]") || []; } catch (e) { local = []; }
+      const temDfc = (lista) => Array.isArray(lista) && lista.some((v) => v && v.id === "dfc_default" && Array.isArray(v.groups) && v.groups.length);
+      if (PF && !temDfc(PF.visoes) && !temDfc(local) && window.firebaseDb && window.firebaseCollections) {
+        const { doc, getDoc } = window.firebaseCollections;
+        const snap = await getDoc(doc(window.firebaseDb, "config", "global"));
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        const raw = existe ? (snap.data() || {}).crm_plano_visoes_v2 : null;
+        const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (temDfc(nuvem)) PF.visoes = nuvem;
+      }
+    } catch (e) {
+      console.warn("[Gerar Pagamento] Visão DFC:", e);
+    }
   },
 
   recarregarCustom() {
@@ -927,7 +955,8 @@ const GerarPagamentoApp = {
     this.state.titulos.forEach((r) => {
       const distrato = this.contaPagamentoDistratoNovo(r);
       const repasse = distrato ? null : this.contaPagamentoRepasse(r);
-      const esperada = distrato || repasse || this.contaParceriaDe(this.ccDe(r.ccId));
+      const semRateio = distrato || repasse ? null : this.contaPagamentoSemRateio(r);
+      const esperada = distrato || repasse || semRateio || this.contaParceriaDe(this.ccDe(r.ccId));
       const alvo = esperada ? this.numConta(esperada.numero || esperada.id) : "";
       r.esperada = esperada;
       const parRepasse = repasse ? this.parDoObra(r.ccId, this.companyIdOf(this.ccDe(r.ccId)) || r.companyId) : null;
@@ -949,7 +978,7 @@ const GerarPagamentoApp = {
       ]);
       this.state.costCenters = Array.isArray(ccs) ? ccs : ((ccs && ccs.results) || []);
       this.state.companies = Array.isArray(companies) ? companies : ((companies && companies.results) || []);
-      await this.sincronizarContas();
+      await Promise.all([this.sincronizarContas(), this.garantirDadosParceria()]);
       this.recarregarCustom();
       this.state.started = true;
       await this.carregarConferencia();
@@ -1015,7 +1044,7 @@ const GerarPagamentoApp = {
       alert("O módulo de contas a pagar não está disponível.");
       return;
     }
-    await this.sincronizarContas();
+    await Promise.all([this.sincronizarContas(), this.garantirDadosParceria()]);
     this.recarregarCustom();
     const parceiros = this.parceiros();
     if (!parceiros.length) {
@@ -4111,6 +4140,20 @@ const GerarPagamentoApp = {
    * mesmo quando o título está apropriado só no centro da obra (13800).
    * Vale para todas as obras com par empreendedor + parceiro.
    */
+  /**
+   * Plano financeiro que entra na parceria (Parametrização de Parceiro), lançado só no CC da Moura Leite
+   * (ex.: 13100 sem o 13101): não houve rateio, e o título sai pela conta do centro do parceiro.
+   */
+  contaPagamentoSemRateio(r) {
+    if (!r || this.ccDeParceriaPeloNome(r.ccId, r.ccNome)) return null;
+    const ccs = r.ccsTitulo && r.ccsTitulo.length
+      ? r.ccsTitulo
+      : [{ id: r.ccId, nome: r.ccNome, planos: [], rateio: 100 }];
+    const conf = this.conferirRateio(ccs, r.tituloValor != null ? r.tituloValor : r.valor, this.contextoRateio(r));
+    const o = (conf.obras || []).find((x) => x.semRateioParceria && x.linhas.some((l) => String(l.id) === String(r.ccId)));
+    return o ? this.contaDoCentro(o.contaParceiro) : null;
+  },
+
   contaPagamentoDistratoNovo(r) {
     if (!r || this.ccDeParceriaPeloNome(r.ccId, r.ccNome)) return null;
     const ccs = r.ccsTitulo && r.ccsTitulo.length
@@ -4360,7 +4403,14 @@ const GerarPagamentoApp = {
       if (exigeRateio && !aplicouRateio && !distratoAntigo) {
         erroRateio = true;
         o.linhas.forEach((l) => { l.ok = false; });
-        problemas.push(`Obra ${o.rotulo}: o plano ${exigeRateio} entra na parceria e o título foi lançado sem rateio${parc ? ` (falta o centro ${parc})` : ""}.`);
+        // Só no CC da Moura Leite, sem o do parceiro: o pagamento sai pela conta do centro do parceiro.
+        const contaParc = parc && temBase && !parcTitulo ? this.contaDoCentro(parc) : null;
+        if (contaParc) {
+          o.semRateioParceria = true;
+          o.contaParceiro = parc;
+        }
+        problemas.push(`Obra ${o.rotulo}: o plano ${exigeRateio} entra na parceria e o título foi lançado sem rateio${parc ? ` (falta o centro ${parc})` : ""}.`
+          + (contaParc ? ` O pagamento sai pela conta do centro do parceiro ${parc} (C/C ${contaParc.numero || contaParc.id}).` : ""));
         return;
       }
       if (soParceiro && !distratoAntigo) {
@@ -4422,7 +4472,7 @@ const GerarPagamentoApp = {
       rateioTexto: linhas.map((l) => `${l.id} ${this.pct(l.pct)}`).join(" · "),
       planoTexto: planos.join(" / "),
       plano: !conf ? "Não conferido" : (conf.erroPlano ? "Divergente" : (planos.length ? "Conferido" : "Sem plano")),
-      rateio: !conf ? "Não conferido" : (conf.erroRateio ? "Fora do padrão" : (conf.semPadrao ? "Sem padrão" : (temParceiro ? "Conferido" : "Não se aplica"))),
+      rateio: !conf ? "Não conferido" : (conf.obras.some((o) => o.semRateioParceria) ? "Sem rateio" : conf.erroRateio ? "Fora do padrão" :(conf.semPadrao ? "Sem padrão" : (temParceiro ? "Conferido" : "Não se aplica"))),
       pagamento: !c ? "Não conferido" : (["erro", "aviso", "sem"].includes(c.nivel) ? "Divergente" : "Conferido"),
       desconto: !c ? "Não conferido" : (c.desconto ? "Com desconto" : "Não se aplica")
     };
@@ -4489,7 +4539,8 @@ const GerarPagamentoApp = {
     }
     if (conf && conf.ok === false) {
       const dica = conf.problemas && conf.problemas.length ? conf.problemas.join("\n") : "Não validado.";
-      return { texto: "Não validado", cls: "bchk-erro", dica };
+      const semRateio = conf.obras && conf.obras.some((o) => o.semRateioParceria);
+      return { texto: semRateio ? "Sem rateio" : "Não validado", cls: "bchk-erro", dica };
     }
     if (!temRateio) return { texto: "Não se aplica", cls: "bchk-info", dica: "Este título não tem rateio entre centros de custo." };
     if (!conf) return { texto: "Não conferido", cls: "bchk-wait", dica: "O rateio ainda não foi conferido." };
@@ -4526,8 +4577,9 @@ const GerarPagamentoApp = {
 
   rateioSeloHtml(conf) {
     if (!conf || !conf.obras.length || conf.ok) return "";
+    const semRateio = conf.obras.some((o) => o.semRateioParceria);
     const rotulos = [
-      conf.erroRateio ? "Rateio fora do padrão" : "",
+      semRateio ? "Sem rateio com o parceiro · pagar pela conta do parceiro" : (conf.erroRateio ? "Rateio fora do padrão" : ""),
       conf.erroPlano ? "Plano financeiro diferente" : "",
       conf.semPadrao ? "Sem rateio padrão no cadastro" : ""
     ].filter(Boolean);
