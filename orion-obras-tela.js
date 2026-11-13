@@ -207,7 +207,8 @@
           ${(d.fluxo_caixa || []).length ? `<tr class="oob-total"><td>Total</td>${cols.map(([k]) => `<td class="is-right">${k === "Saldo_Acumulado" ? "" : this.R$(tot[k])}</td>`).join("")}</tr>` : ""}</tbody></table></div></div>`;
       const cache = ehObra ? this.cache[item.chave] : null;
       const info = `<div style="font-size:0.72rem;color:#6b8474;margin:-6px 0 12px">${this.esc(item.nome)} · ${this.esc(item.cidade)} · ${this.esc(item.status)} · ${this.badge(item.categoria)}${ehObra ? ` · centros ${item.membros.map((m) => this.esc(m.cc)).join(", ")}${cache ? ` · lido do Sienge em ${new Date(cache.em).toLocaleString("pt-BR")}${cache.por ? " por " + this.esc(cache.por) : ""}` : ""}` : " · números da viabilidade aprovada"}${ehObra && this.visao !== "consolidado" ? " · visão " + this.visao + ": " + this.esc(item.membros.map((m) => { const par = this.parceriaDoCc(m.cc); return par ? `${m.cc} parceiro ${String(par.pct).replace(".", ",")}% (Parametrização de Parceiro${par.nome ? " " + par.nome : ""})` : null; }).filter(Boolean).join("; ") || "sem Parametrização de Parceiro para estes centros (usa a participação do Órion)") : ""}</div>`;
-      return barra + info + kpis + `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start"><div>${dre}</div><div>${planos}${velT}</div></div>` + fluxo;
+      return barra + info + kpis + `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start"><div>${dre}</div><div>${planos}${velT}</div></div>` + fluxo
+        + (ehObra && typeof this.htmlViabRealizado === "function" ? this.htmlViabRealizado(item) : "");
     },
 
     /* ---------- Como lemos estes números ---------- */
