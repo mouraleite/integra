@@ -8,7 +8,6 @@ const AuditoriaLoginApp = {
   COL_PARTES: "auditoria_login_partes",
   TIMEOUT_MIN: 10,
   OCIOSO_NORMAL: 0.1,
-  OCIOSO_ALTO: 0.2,
   ESCRITORIO: { ini: 8 * 60, fim: 18 * 60 },
   LINHAS_POR_PARTE: 2500,
   relatorios: [],
@@ -17,7 +16,7 @@ const AuditoriaLoginApp = {
   carregando: false,
   enviando: "",
   erro: "",
-  filtro: { de: "", ate: "", escritorio: true },
+  filtro: { de: "", ate: "", escritorio: true, agrupar: false },
   sort: { campo: "ocioso", dir: -1 },
 
   esc(s) {
@@ -316,6 +315,34 @@ const AuditoriaLoginApp = {
     }
   },
 
+  /** Liga o login do Sienge (ex.: THIAGO.SILVA) ao cadastro de usuários do Integra: usuário Sienge, e-mail ou nome. */
+  pessoaDe(login) {
+    const norm = (s) => String(s || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const L = norm(login);
+    if (!L) return null;
+    const lista = typeof window.getCrmUsersList === "function" ? window.getCrmUsersList() : [];
+    if (this._pessoasFonte !== lista.length || !this._pessoas) { this._pessoas = new Map(); this._pessoasFonte = lista.length; }
+    if (this._pessoas.has(L)) return this._pessoas.get(L);
+    const usuarios = lista.filter((u) => u && (u.name || u.email));
+    const nomeTokens = (u) => norm(u.name).split(/[^a-z0-9]+/).filter(Boolean);
+    const local = (u) => norm(String(u.email || "").split("@")[0]);
+    let achado = usuarios.find((u) => norm(u.sienge_user) === L || norm(u.sienge_user).replace(/\s+/g, ".") === L)
+      || usuarios.find((u) => local(u) === L);
+    if (!achado) {
+      const partes = L.split(/[^a-z0-9]+/).filter(Boolean);
+      let cand = [];
+      if (partes.length >= 2) {
+        cand = usuarios.filter((u) => { const t = nomeTokens(u); return t[0] === partes[0] && t.includes(partes[partes.length - 1]); });
+      } else if (partes.length === 1) {
+        cand = usuarios.filter((u) => nomeTokens(u)[0] === partes[0] || local(u).split(/[^a-z0-9]+/)[0] === partes[0]);
+      }
+      if (cand.length === 1) achado = cand[0];
+    }
+    const r = achado ? { nome: String(achado.name || "").trim(), perfil: String(achado.profile_name || "").trim() || "Sem perfil", email: achado.email || "" } : null;
+    this._pessoas.set(L, r);
+    return r;
+  },
+
   setFiltro(campo, valor) {
     this.filtro[campo] = valor;
     this.render();
@@ -435,7 +462,7 @@ const AuditoriaLoginApp = {
     const card = (rotulo, valor, sub, cor) => `<div class="crm-card alog-card"><span>${rotulo}</span><b style="color:${cor || "#0f172a"}">${valor}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
     const th = (rot, campo, dir) => `<th class="${dir ? "num" : ""}" onclick="AuditoriaLoginApp.ordenar('${campo}')" style="cursor:pointer;user-select:none;">${rot} <i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i></th>`;
     const pct = (x) => `${Math.round(x * 100)}%`;
-    const nivelOcioso = (x) => (x <= this.OCIOSO_NORMAL ? ["ok", "Normal"] : x <= this.OCIOSO_ALTO ? ["atencao", "Atenção"] : ["alto", "Alto"]);
+    const nivelOcioso = (x) => (x <= this.OCIOSO_NORMAL ? ["ok", "Aceitável"] : ["alto", "Acima de " + Math.round(this.OCIOSO_NORMAL * 100) + "%"]);
     const marca = Math.round(this.OCIOSO_NORMAL * 100);
     const celOcioso = (u) => {
       if (!u.logado) return `<td class="alog-ocio alog-cinza">—</td>`;
@@ -447,8 +474,15 @@ const AuditoriaLoginApp = {
         </td>`;
     };
 
-    const linhasUsu = a ? a.usuarios.map((u) => `<tr class="${u.causados ? "is-causa" : ""}">
-        <td><b>${esc(u.u)}</b></td>
+    const SEM = "Sem cadastro no Integra";
+    const celUsuario = (u) => {
+      const p = this.pessoaDe(u.u);
+      return `<td class="alog-quem"><b>${esc(u.u)}</b>${p
+        ? `<small>${esc(p.nome || p.email)}</small>${f.agrupar ? "" : `<span class="alog-perfil">${esc(p.perfil)}</span>`}`
+        : `<small class="alog-sem">${SEM}</small>`}</td>`;
+    };
+    const linhaUsu = (u) => `<tr class="${u.causados ? "is-causa" : ""}">
+        ${celUsuario(u)}
         <td class="num">${u.sessoes}</td>
         <td class="num">${this.fmtDuracao(u.logado)}</td>
         ${celOcioso(u)}
@@ -456,7 +490,31 @@ const AuditoriaLoginApp = {
         <td class="num">${u.vitimasN || "—"}</td>
         <td class="num">${u.presente || "—"}</td>
         <td class="num">${u.barrado || "—"}</td>
-      </tr>`).join("") : "";
+      </tr>`;
+    let linhasUsu = "";
+    if (a && f.agrupar) {
+      const grupos = new Map();
+      a.usuarios.forEach((u) => {
+        const p = this.pessoaDe(u.u);
+        const k = p ? p.perfil : SEM;
+        if (!grupos.has(k)) grupos.set(k, []);
+        grupos.get(k).push(u);
+      });
+      const soma = (arr, c) => arr.reduce((t, x) => t + (x[c] || 0), 0);
+      linhasUsu = [...grupos.entries()]
+        .map(([k, arr]) => ({ k, arr, ocioso: soma(arr, "ocioso"), logado: soma(arr, "logado"), causados: soma(arr, "causados") }))
+        .sort((x, y) => (x.k === SEM) - (y.k === SEM) || y.ocioso - x.ocioso || x.k.localeCompare(y.k, "pt-BR"))
+        .map((g) => {
+          const pc = g.logado ? Math.min(1, g.ocioso / g.logado) : 0;
+          const [cls, rot] = nivelOcioso(pc);
+          return `<tr class="alog-grupo"><td colspan="8">
+              <b>${esc(g.k)}</b> <span>${g.arr.length} pessoa(s) · ${this.fmtDuracao(g.ocioso)} parado de ${this.fmtDuracao(g.logado)} logado ·
+              <strong class="is-${cls}">${pct(pc)} (${rot})</strong>${g.causados ? ` · barrou outros ${g.causados}x` : ""}</span>
+            </td></tr>` + g.arr.map(linhaUsu).join("");
+        }).join("");
+    } else if (a) {
+      linhasUsu = a.usuarios.map(linhaUsu).join("");
+    }
 
     const horas = [];
     for (let h = f.escritorio ? 8 : 0; h < (f.escritorio ? 18 : 24); h++) horas.push(String(h).padStart(2, "0"));
@@ -507,6 +565,11 @@ const AuditoriaLoginApp = {
             <span class="moura-switch-track" aria-hidden="true"></span>
             <span class="moura-switch-text">Só horário do escritório (seg a sex, 8h às 18h)</span>
           </label>
+          <label class="moura-switch">
+            <input type="checkbox" ${f.agrupar ? "checked" : ""} onchange="AuditoriaLoginApp.setFiltro('agrupar', this.checked)">
+            <span class="moura-switch-track" aria-hidden="true"></span>
+            <span class="moura-switch-text">Agrupar por área (perfil no Integra)</span>
+          </label>
         </div>
 
         ${this.carregando && !temDados ? `<div class="crm-card alog-vazio">Carregando relatórios…</div>` : ""}
@@ -530,7 +593,8 @@ const AuditoriaLoginApp = {
             <tbody>${linhasUsu || `<tr><td colspan="8" class="alog-cinza">Sem acessos no período.</td></tr>`}</tbody>
           </table></div>
           <small class="alog-nota"><b>Tempo parado</b>: ${this.TIMEOUT_MIN} minutos por sessão expirada (o Sienge só derruba depois de ${this.TIMEOUT_MIN} minutos sem uso).
-            A barra mostra quanto do tempo logado ficou parado: até ${marca}% é <b>normal</b> (risco na barra), até ${Math.round(this.OCIOSO_ALTO * 100)}% pede <b>atenção</b> e acima disso é <b>alto</b>.
+            A barra mostra quanto do tempo logado ficou parado: o aceitável é até ${marca}% (risco na barra); acima disso fica em vermelho.
+            <b>Usuário</b>: login do Sienge e, embaixo, a pessoa e o perfil cadastrados em Usuários e Perfis do Integra (pelo usuário Sienge, e-mail ou nome).
             <b>Barrou outros</b>: tentativas de outras pessoas recusadas por falta de licença enquanto este usuário estava nesses ${this.TIMEOUT_MIN} minutos parado.
             <b>Logado em bloqueios</b>: vezes em que estava logado (usando ou não) quando alguém foi barrado.${a.outrasFalhas ? ` ${a.outrasFalhas} falha(s) de login por outros motivos não entram na conta.` : ""}</small>
         </div>
