@@ -706,8 +706,13 @@
     const arv = new Map();
     let semGrupo = 0;
     folhas.forEach((f) => {
-      const g = o.grupoDe ? o.grupoDe(f.plano) : null;
-      if (!g) { semGrupo++; return; }
+      let g = o.grupoDe ? o.grupoDe(f.plano) : null;
+      if (!g) {
+        semGrupo++;
+        // o.mostrarSemGrupo: a conta sem grupo na Visão DFC aparece num grupo à parte (para o total bater com as outras telas)
+        if (!o.mostrarSemGrupo || o.manterGrupo) return;
+        g = { id: "_sem_grupo", nome: "FORA DA VISÃO DFC (conta sem grupo no Plano Financeiro e Visões)", codigo: "99" };
+      }
       if (o.manterGrupo && !o.manterGrupo(g.id)) return; // filtro de grupos da tela: não conta como "fora da visão DFC"
       const e = (o.empresaDe && o.empresaDe(f.cc)) || { id: "_sem", nome: "Sem empresa", fator: 0 };
       if (!arv.has(e.id)) arv.set(e.id, { e, grupos: new Map() });
