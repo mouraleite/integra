@@ -56,6 +56,14 @@
       `;
       document.head.appendChild(st);
     },
+    /** O ano escolhido precisa existir nos documentos do tipo (senão o seletor mostra um ano e a tela busca outro). */
+    ajustarAno() {
+      const anos = [...new Set((this.cab[this.tipo] || []).filter((c) => String(c.tipo || "").toUpperCase() === this.modoTipo).map((c) => Number(c.ano)).filter(Boolean))].sort((a, b) => a - b);
+      if (!anos.length || anos.indexOf(Number(this.ano)) >= 0) return;
+      const atual = new Date().getFullYear();
+      this.ano = String(anos.indexOf(atual) >= 0 ? atual : anos[anos.length - 1]);
+      this.docSel = null; this.aberto = null; this.edicao = null;
+    },
     tituloModo() { const t = TIPOS[this.modoTipo]; return t ? t[this.tipo === "forecasts" ? "f" : "o"] : ["", ""]; },
     empresaDe(cc) {
       const l = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
@@ -288,7 +296,7 @@
       root.insertAdjacentHTML("afterbegin", pills);
       return;
     }
-    if (this.cab[this.tipo]) this.garantirDoc();
+    if (this.cab[this.tipo]) { this.ajustarAno(); this.garantirDoc(); }
     if (this.edicao) this.edicao.ocultos = Object.assign({}, this.mesesOcultos);
     root.innerHTML = pills
       + (this.erro ? `<div style="padding:10px 14px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;border-radius:8px;margin-bottom:12px">${this.esc(this.erro)}</div>` : "")
