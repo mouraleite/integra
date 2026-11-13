@@ -672,6 +672,8 @@
    */
   function analiseOrcamentoAnual(o) {
     const corte = Math.max(0, Math.min(12, Number(o.corte) || 0));
+    // realizado vem com o sinal da DFC (entrada +, saída -): despesa fica positiva com -1 (padrão), receita com +1
+    const sinalReal = Number(o.sinal) === 1 ? 1 : -1;
     const dig = (v) => String(v == null ? "" : v).replace(/\D/g, "");
     const folhas = new Map();
     const folha = (cc, pl, cn, pn) => {
@@ -688,7 +690,7 @@
     (o.n_real || []).forEach((a) => {
       const cc = dig(a.cc), pl = dig(a.plano), m = Number(a.mes);
       if (!ccs.has(cc) || !planos.has(pl) || !(m >= 1 && m <= corte)) return;
-      folha(cc, pl).real[m - 1] += centavos(-Number(a.valor));
+      folha(cc, pl).real[m - 1] += centavos(sinalReal * Number(a.valor));
     });
     const z = () => new Array(12).fill(0);
     const serie = (f, fator) => {
