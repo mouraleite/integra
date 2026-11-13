@@ -2356,9 +2356,10 @@ const RelacionamentoApp = {
       const titulo = sale.receivableBillId || bill?.id || "____";
       const matriculaRaw = unitDetails?.legalRegistrationNumber || unitDetails?.legalregistrationnumber || "";
       const matriculaNum = String(matriculaRaw || "").replace(/\D/g, "");
-      const matricula = matriculaNum
+      // Só reformata quando é número puro (ex.: 27403 -> 27.403); "R.2 - 7.403" sai igual ao Sienge.
+      const matricula = matriculaNum && /^[d.s]+$/.test(String(matriculaRaw).trim())
         ? Number(matriculaNum).toLocaleString("pt-BR")
-        : (matriculaRaw || "____");
+        : (String(matriculaRaw || "").trim() || "____");
       const areaNum = unitDetails?.privateArea || unitDetails?.Privatearea || unit.area || "";
       const areaLabel = areaNum === "" || areaNum == null ? "____" : (String(areaNum).match(/m/) ? String(areaNum) : (Number(areaNum).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " m²"));
       const areaExt = areaNum && !isNaN(Number(areaNum))

@@ -2866,7 +2866,8 @@ const CessaoPopup = {
     const ud = st.unitDetails || {};
     const matriculaRaw = ud.legalRegistrationNumber || ud.legalregistrationnumber || "";
     const matriculaNum = String(matriculaRaw || "").replace(/\D/g, "");
-    const matricula = matriculaNum ? Number(matriculaNum).toLocaleString("pt-BR") : (matriculaRaw || "____");
+    // Só reformata quando é número puro; "R.2 - 7.403" sai igual ao Sienge.
+    const matricula = matriculaNum && /^[d.s]+$/.test(String(matriculaRaw).trim()) ? Number(matriculaNum).toLocaleString("pt-BR") : (String(matriculaRaw || "").trim() || "____");
     const areaNum = typeof window.parseAreaNumber === "function"
       ? window.parseAreaNumber(ud.privateArea || ud.Privatearea || ud.terrainArea)
       : Number(ud.privateArea || 0);
