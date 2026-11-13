@@ -215,13 +215,21 @@
       const det = this.aberto && this._detalheAtual && this._detalheAtual.item.id === this.aberto ? this._detalheAtual : null;
       const l = this.filtrada();
       let fatos = null;
-      if (det) {
-        const d = det.d, fc = d.fluxo_caixa || [];
-        let pagas = 0, prev = 0, ter = 0;
-        fc.forEach((r) => { const o = Math.abs(Number(r.Obras) || 0); ter += Math.abs(Number(r.Terreno) || 0); if (r.is_forecast) prev += o; else pagas += o; });
-        const terDre = (d.dre || []).find((r) => /terreno|aquisi[cç][aã]o (de )?[aá]rea/i.test(String(r.item || "")));
-        fatos = { nome: det.item.nome, fase: det.item.status, estoqueUnidades: d.estoque_unidades || 0, vgvEstoque: d.vgv_estoque || 0, terreno: terDre ? Math.abs(Number(terDre.valor) || 0) : ter, obrasPagas: pagas, obrasPrevistas: prev, tirAnual: Number(d.tir_anual) || 0, mtirAnual: Number(d.mtir_anual) || 0, payback: Number(d.payback) || 0, exposicao: Number(d.exposicao_maxima) || 0 };
-      } else if (l.length === 1) { const k = l[0].kpis || {}; fatos = { nome: l[0].nome, fase: l[0].status, estoqueUnidades: 0, vgvEstoque: 0, terreno: 0, obrasPagas: 0, obrasPrevistas: 0, tirAnual: Number(k.tir_anual) || 0, mtirAnual: Number(k.mtir_anual) || 0, payback: Number(k.payback) || 0, exposicao: Number(k.exposicao_max_caixa) || 0 }; }
+      if (det) fatos = this.fatosComoLemos(det.item, det.d);
+      else if (l.length === 1) { const k = l[0].kpis || {}; fatos = { nome: l[0].nome, fase: l[0].status, estoqueUnidades: 0, vgvEstoque: 0, terreno: 0, obrasPagas: 0, obrasPrevistas: 0, tirAnual: Number(k.tir_anual) || 0, mtirAnual: Number(k.mtir_anual) || 0, payback: Number(k.payback) || 0, exposicao: Number(k.exposicao_max_caixa) || 0 }; }
+      return this.htmlComoLemosPara(fatos, "OrionObrasApp.comoLemos=false;OrionObrasApp.render()");
+    },
+    /** Fatos do painel "Como lemos estes números" a partir do detalhe de um empreendimento (detalheGrupo). */
+    fatosComoLemos(item, d) {
+      const fc = d.fluxo_caixa || [];
+      let pagas = 0, prev = 0, ter = 0;
+      fc.forEach((r) => { const o = Math.abs(Number(r.Obras) || 0); ter += Math.abs(Number(r.Terreno) || 0); if (r.is_forecast) prev += o; else pagas += o; });
+      const terDre = (d.dre || []).find((r) => /terreno|aquisi[cç][aã]o (de )?[aá]rea/i.test(String(r.item || "")));
+      return { nome: item.nome, fase: item.status, estoqueUnidades: d.estoque_unidades || 0, vgvEstoque: d.vgv_estoque || 0, terreno: terDre ? Math.abs(Number(terDre.valor) || 0) : ter, obrasPagas: pagas, obrasPrevistas: prev, tirAnual: Number(d.tir_anual) || 0, mtirAnual: Number(d.mtir_anual) || 0, payback: Number(d.payback) || 0, exposicao: Number(d.exposicao_maxima) || 0 };
+    },
+    /** Painel "Como lemos estes números" (usado no Acompanhamento e na DFC de empreendimentos). extra = html a mais no fim. */
+    htmlComoLemosPara(fatos, fecharJs, extra) {
+      this.estilosTela();
       const f1 = (v) => (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
       const tir = fatos ? ((Number(fatos.tirAnual) || 0) === 0 && (Number(fatos.mtirAnual) || 0) > 0.5
         ? `TIR clássica só existe se o caixa começa com investimento. Neste produto o card pode mostrar 0% — a taxa da vida é a MTIR ${f1(fatos.mtirAnual)}%. Payback ${Math.round(fatos.payback)} meses. Exposição máxima ${this.miPainel(Math.abs(fatos.exposicao))}.`
@@ -229,16 +237,16 @@
         : "A TIR clássica só existe se o caixa começa com investimento. Se o primeiro mês já é entrada, o card pode mostrar 0% — a taxa da vida é a MTIR (TMA 12%). Payback e exposição leem o mesmo fluxo.";
       const camada = (cor, t, x) => `<div style="display:flex;gap:10px"><div style="width:6px;border-radius:4px;background:${cor};flex-shrink:0"></div><div><p style="font-weight:700;color:#1c2e24">${t}</p><p>${x}</p></div></div>`;
       const tile = (r, v) => `<div style="flex:1;border:1px solid #dfe9e3;border-radius:8px;padding:10px;background:#f7faf8"><div style="font-size:0.66rem;font-weight:700;color:#64748b;text-transform:uppercase">${r}</div><div style="font-size:1rem;font-weight:800;color:#105436">${v}</div></div>`;
-      return `<div class="oac-painel-fundo" onclick="if(event.target===this){OrionObrasApp.comoLemos=false;OrionObrasApp.render()}"><aside class="oac-painel" role="dialog" aria-modal="true">
+      return `<div class="oac-painel-fundo" onclick="if(event.target===this){${fecharJs}}"><aside class="oac-painel" role="dialog" aria-modal="true">
         <header><div><div style="font-size:0.66rem;font-weight:800;color:#f37021;text-transform:uppercase;letter-spacing:.06em">Método</div><div style="font-size:1.2rem;font-weight:800;color:#105436">Como lemos estes números</div><div style="font-size:0.8rem;color:#6b8474">${fatos ? this.esc([fatos.nome, fatos.fase].filter(Boolean).join(" · ")) : "O método é o mesmo em todos os produtos. Abra um empreendimento para ver os números desta obra."}</div></div>
-          <button type="button" class="btn oac-out" style="height:34px;align-self:flex-start;white-space:nowrap;padding:0 12px" onclick="OrionObrasApp.comoLemos=false;OrionObrasApp.render()">✕ Fechar</button></header>
+          <button type="button" class="btn oac-out" style="height:34px;align-self:flex-start;white-space:nowrap;padding:0 12px" onclick="${fecharJs}">✕ Fechar</button></header>
         <div class="corpo">
           ${fatos ? `<div style="display:flex;gap:8px">${tile("Pago (obra)", this.miPainel(fatos.obrasPagas))}${tile("Cronograma de obra", this.miPainel(fatos.obrasPrevistas))}${tile("Terreno", this.miPainel(fatos.terreno))}</div>` : ""}
           <div style="display:flex;flex-direction:column;gap:12px">${camada("#f59e0b", "Cronograma de desembolso de obra", "Olhamos o saldo do orçamento da obra que ainda não foi pago nem comprometido e jogamos no cronograma a partir do mês que vem.")}${camada("#0284c7", "Vendas de lotes em estoque", "Olhamos os últimos 6 meses que tiveram venda e fazemos a média do m².")}${camada("#1b8253", "Comprometido", "Olhamos os títulos em aberto no Sienge: já lançados, ainda sem baixa.")}${camada("#105436", "Pago", "Olhamos as baixas do Sienge: o que já entrou ou saiu do caixa.")}</div>
           ${fatos && fatos.estoqueUnidades > 0 ? `<p style="background:#f0f9ff;border-radius:8px;padding:8px 10px">Estoque neste produto: ${fatos.estoqueUnidades} unidades${fatos.vgvEstoque > 0 ? " · " + this.miPainel(fatos.vgvEstoque) : ""}.</p>` : ""}
           <section><h4>VGV e estoque</h4><p>O VGV vendido soma os contratos. O estoque é a área que ainda não vendeu, vezes a média do m² dos últimos 6 meses com venda.</p></section>
           <section><h4>DRE</h4><p>O lucro operacional é caixa: entrada menos saída. Não é o VGV dos contratos.</p></section>
-          <section><h4>TIR e MTIR</h4><p>${this.esc(tir)}</p></section></div></aside></div>`;
+          <section><h4>TIR e MTIR</h4><p>${this.esc(tir)}</p></section>${extra || ""}</div></aside></div>`;
     }
   });
 

@@ -194,6 +194,26 @@
   }
 
   /** Órion: _calc_actuals_for_cc. */
+  /**
+   * Como o Acompanhamento lê uma linha do caixa (realizado ou a realizar): a mesma regra vale para a DFC de empreendimentos.
+   * Devolve null (linha fora) ou { tipo: "INCOME" | "DISTRATO" | "SAIDA", val (positivo = valor da categoria; "(-)" inverte),
+   * mes, ano, campo/col (classificação da saída) }. o: { regras, multApportioned, multDefault, rateada }.
+   */
+  function lerLinha(r, o) {
+    if (r.tipo === "INCOME" && CATEGORIAS_EXCLUIDAS_RECEITA.has(String(r.categoria || "").trim().toLowerCase())) return null;
+    const regras = o.regras || null, mA = o.multApportioned == null ? 1 : o.multApportioned, mD = o.multDefault == null ? 1 : o.multDefault;
+    const mes = r.mes || "N/A", ano = mes !== "N/A" ? mes.slice(0, 4) : "N/A";
+    const cat = String(r.categoria || "").toLowerCase().trim();
+    let val = Math.abs(Number(r.valor) || 0);
+    if (String(r.categoria || "").trim().indexOf("(-)") === 0) val = -val;
+    if (regras) val *= (typeof o.rateada === "function" ? o.rateada(r) : linhaRateada(regras, r.tipo, cat, r.grupo)) ? mA : mD;
+    if (r.tipo === "INCOME") return { tipo: "INCOME", val, mes, ano };
+    const g = String(r.grupo || "").toUpperCase();
+    if (g.indexOf("DISTRATO") >= 0 || g.indexOf("CANCELAMENTO") >= 0 || cat.indexOf("distrat") >= 0) return { tipo: "DISTRATO", val, mes, ano };
+    const [campo, col] = classificarSaida(g, cat);
+    return { tipo: "SAIDA", val, mes, ano, campo, col };
+  }
+
   function calcularCentro(o) {
     const regras = o.regras || null, mA = o.multApportioned == null ? 1 : o.multApportioned, mD = o.multDefault == null ? 1 : o.multDefault;
     const temRegraReceita = o.vendasRateadas != null ? !!o.vendasRateadas : !!(regras && Object.keys(regras).some((k) => regras[k] && /receita|venda|entrada|recebimento/i.test(k)));
@@ -209,29 +229,24 @@
       else if (v.categoria === "Distrato") { t.distratos += Math.abs(val); if (mes !== "N/A") (distratosMes[mes] = distratosMes[mes] || []).push(v); }
     });
     const linha = (r, anual, cf, rev) => {
-      if (r.tipo === "INCOME" && CATEGORIAS_EXCLUIDAS_RECEITA.has(String(r.categoria || "").trim().toLowerCase())) return;
-      const mes = r.mes || "N/A", ano = mes !== "N/A" ? mes.slice(0, 4) : "N/A";
-      const cat = String(r.categoria || "").toLowerCase().trim();
-      let val = Math.abs(Number(r.valor) || 0);
-      if (String(r.categoria || "").trim().indexOf("(-)") === 0) val = -val;
-      if (regras) val *= (typeof o.rateada === "function" ? o.rateada(r) : linhaRateada(regras, r.tipo, cat, r.grupo)) ? mA : mD;
-      if (r.tipo === "INCOME") {
+      const x = lerLinha(r, o);
+      if (!x) return;
+      const { mes, ano, val } = x;
+      if (x.tipo === "INCOME") {
         t.recebimentos += val;
         if (ano !== "N/A") anual.get(ano).Entradas += val;
         if (mes !== "N/A") { cf.add(mes, val); rev.add(mes, val); }
         return;
       }
-      const g = String(r.grupo || "").toUpperCase();
-      if (g.indexOf("DISTRATO") >= 0 || g.indexOf("CANCELAMENTO") >= 0 || cat.indexOf("distrat") >= 0) {
+      if (x.tipo === "DISTRATO") {
         if (ano !== "N/A") anual.get(ano).Devolucao_Distratos += val;
         if (mes !== "N/A") cf.add(mes, -val);
         return;
       }
       if (ano !== "N/A") anual.get(ano).Saidas += val;
       if (mes !== "N/A") cf.add(mes, -val);
-      const [campo, col] = classificarSaida(g, cat);
-      t[campo] += val;
-      if (ano !== "N/A") anual.get(ano)[col] += val;
+      t[x.campo] += val;
+      if (ano !== "N/A") anual.get(ano)[x.col] += val;
     };
     (o.real || []).forEach((r) => linha(r, anualReal, cfReal, revReal));
     (o.previsto || []).forEach((r) => linha(r, anualFc, cfFc, revFc));
@@ -247,11 +262,13 @@
     const nEst = est.length;
     // terreno informado na obra (Órion: cost_center.manual_land_cost) — 1ª parte: entra no realizado, no primeiro mês do caixa
     const tm = o.terrenoManual || null, tmValor = tm ? Number(tm.valor) || 0 : 0;
+    const lancTerreno = [], projRec = {}, projTrib = {};
     if (tmValor > 0) {
       const mlc = tmValor * mA;
       const ms = Object.keys(cfReal.o).filter((k) => k !== "N/A").sort();
       const pm = ms.length ? ms[0] : String(o.hoje || "");
       cfReal.add(pm, -mlc);
+      lancTerreno.push({ mes: pm, valor: mlc, parte: "realizado" });
       const l = anualReal.get(pm.slice(0, 4)); l.Saidas += mlc; l.Terreno += mlc;
       t.terreno += mlc;
     }
@@ -267,9 +284,9 @@
           const [ah, mh] = String(o.hoje || "").split("-").map(Number);
           const [ap, mp] = proxMes(ah, mh);
           const rec = projetarEstoque(nEst, media, vgvEstoque / nEst, pesos, mp, ap);
-          Object.entries(rec).forEach(([k, v]) => { anualFc.get(k.slice(0, 4)).Entradas += v; cfFc.add(k, v); });
+          Object.entries(rec).forEach(([k, v]) => { anualFc.get(k.slice(0, 4)).Entradas += v; cfFc.add(k, v); projRec[k] = (projRec[k] || 0) + v; });
           const trib = tributosPresumido(rec, o.aliquotas);
-          Object.entries(trib).forEach(([k, v]) => { if (v <= 0) return; t.impostos += v; cfFc.add(k, -v); const l = anualFc.get(k.slice(0, 4)); l.Tributos += v; l.Saidas += v; });
+          Object.entries(trib).forEach(([k, v]) => { if (v <= 0) return; t.impostos += v; cfFc.add(k, -v); const l = anualFc.get(k.slice(0, 4)); l.Tributos += v; l.Saidas += v; projTrib[k] = (projTrib[k] || 0) + v; });
         }
       }
     }
@@ -281,8 +298,8 @@
         const ini = /^\d{4}-\d{2}$/.test(String(tm.inicio || "")) ? tm.inicio : String(o.hoje || "");
         let [ay, am] = ini.split("-").map(Number);
         const curva = Array.isArray(tm.curva) && tm.curva.length ? tm.curva.map(Number) : null;
-        if (curva) curva.forEach((p) => { const v = (p / 100) * tmValor; if (v > 0) { anualFc.get(String(ay)).Terreno += v; cfFc.add(chave(ay, am), -v); } [ay, am] = proxMes(ay, am); });
-        else { anualFc.get(String(ay)).Terreno += tmValor; cfFc.add(chave(ay, am), -tmValor); }
+        if (curva) curva.forEach((p) => { const v = (p / 100) * tmValor; if (v > 0) { anualFc.get(String(ay)).Terreno += v; cfFc.add(chave(ay, am), -v); lancTerreno.push({ mes: chave(ay, am), valor: v, parte: "curva" }); } [ay, am] = proxMes(ay, am); });
+        else { anualFc.get(String(ay)).Terreno += tmValor; cfFc.add(chave(ay, am), -tmValor); lancTerreno.push({ mes: chave(ay, am), valor: tmValor, parte: "curva" }); }
       }
     }
 
@@ -333,6 +350,7 @@
     const base = Object.assign({}, t, { vgv_estoque: vgvEstoque, estoque_area: areaDisp, estoque_unidades: nEst, preco_medio: precoMedio, lucro_operacional: lucroOperacional, lucro_liq_operacional: llo,
       receita_bruta: vgvLiq, dre, fluxo_caixa, final_cf_dict: final, monthly_net_cf_real: cfReal.o, monthly_net_cf_fcst: cfFc.o, monthly_revenues_real: revReal.o, monthly_revenues_fcst: revFc.o,
       tir_anual: ind.tir_anual, tir_mensal: ind.tir_mensal, mtir_anual: ind.mtir_anual || 0, mtir_mensal: ind.mtir_mensal || 0, payback: ind.payback || 0, periodo_exposicao: ind.periodo_exposicao, vida: ind.vida, exposicao_maxima: ind.exposicao_maxima, rent_inv: rent,
+      lanc_terreno: lancTerreno, terreno_informado: tmValor, projecao: { receitas: projRec, tributos: projTrib },
       saidas_totais: t.impostos + t.terreno + t.projetos + t.obras + t.adm_obra + t.custo_extra_obra + t.marketing + t.comercial + t.administrativas + t.despesas_extras + t.funding });
     if (o.kpisOnly) return base;
 
@@ -421,47 +439,56 @@
 
 
   /**
-   * DFC da vida do empreendimento (Órion: tracking_dfc.montar_dfc_vida): realizado + a realizar de todos os centros da obra
-   * na visão DFC, por grupo e por plano, mês a mês; pais somam os filhos pelo código e as linhas de fórmula do Órion
-   * (03 = 04 + 05, 06 = 01 + 02 + 03, 08 = 06 + 07, 10 = 08 + 09, 12 = 10 + 11). Conferência: lucro da DFC (sem cancelamentos)
-   * contra o lucro líquido operacional da lista.
-   * o: { centros: [{ entrada: { real, previsto }, terreno }], grupos: [{ id, name }], hoje, lucroLista }
+   * DFC da vida do empreendimento: o mesmo caixa e as mesmas regras do Acompanhamento de empreendimentos, na visão DFC do
+   * Integra, por grupo e por plano, mês a mês. Cada linha do caixa é lida como no Acompanhamento (lerLinha: categorias de receita
+   * excluídas, "(-)" inverte, distratos à parte, visão de parceria); entram também a projeção do estoque (vendas futuras e
+   * tributos presumidos) e o terreno informado na obra, exatamente como o cálculo do Acompanhamento lançou (calc de cada centro).
+   * Pais somam os filhos pelo código; fórmulas do Órion (03 = 04 + 05, 06 = 01 + 02 + 03, 08 = 06 + 07, 10 = 08 + 09, 12 = 10 + 11).
+   * Conferência: lucro da DFC (sem cancelamentos) contra o lucro líquido operacional do Acompanhamento (o: lucroAcomp) e, sem a
+   * projeção do estoque, contra o lucro da Visão Geral (o: lucroLista).
+   * o: { centros: [{ entrada: { real, previsto }, calc (calcularCentro do centro), opts (regras e multiplicadores) }], grupos, hoje, lucroAcomp, lucroLista }
    */
   function dfcVida(o) {
     const nos = (o.grupos || []).map((g) => ({ id: g.id, codigo: codigoGrupo(g.name || g.nome), descricao: String(g.name || g.nome || "").replace(/^\s*\d{2}(?:\.\d{2})*\s+/, "").trim() }))
       .filter((n) => n.codigo).sort((a, b) => (a.codigo < b.codigo ? -1 : a.codigo > b.codigo ? 1 : 0));
     const porCod = (c) => (nos.find((n) => n.codigo === c) || {}).id || null;
     const porPref = (p) => (nos.find((n) => n.codigo.indexOf(p) === 0) || {}).id || null;
-    const venda = porCod("01.01") || porPref("01."), admin = porCod("05.03") || porPref("05."), cancel = porCod("01.04"), terrenoNo = porCod("04.01") || porCod("04.05") || porPref("04.");
+    const venda = porCod("01.01") || porPref("01."), admin = porCod("05.03") || porPref("05."), cancel = porCod("01.04") || porPref("01.04");
+    const terrenoNo = porCod("04.01") || porCod("04.05") || porPref("04."), tribNo = porCod("02.01") || porPref("02.") || porCod("02");
     const ids = new Set(nos.map((n) => n.id));
     const folha = {}, planos = {};
-    let lucro = 0;
+    let lucro = 0, lucroProj = 0;
     const lancar = (nid, plano, mes, v) => {
       (folha[nid] = folha[nid] || {})[mes] = (folha[nid][mes] || 0) + v;
       const k = nid + "|" + plano;
       const p = planos[k] || (planos[k] = { nid, descricao: plano, valores_mes: {} });
       p.valores_mes[mes] = (p.valores_mes[mes] || 0) + v;
     };
-    const acumular = (r) => {
-      const mes = r.mes;
-      if (!/^\d{4}-\d{2}$/.test(String(mes || ""))) return;
-      const g = String(r.grupo || "").toUpperCase(), cat = String(r.categoria || "").toLowerCase();
-      let nid = r.gid && ids.has(r.gid) ? r.gid : null;
-      if (!nid) nid = r.tipo === "INCOME" ? venda : (g.indexOf("DISTRATO") >= 0 || g.indexOf("CANCELAMENTO") >= 0 || cat.indexOf("distrat") >= 0) ? cancel : admin;
-      if (!nid) return;
-      const val = Math.abs(Number(r.valor) || 0);
-      const v = r.tipo === "INCOME" || String(r.categoria || "").trim().indexOf("(-)") === 0 ? val : -val;
-      lancar(nid, String(r.categoria || "").trim() || "Sem plano", mes, v);
-      if (nid !== cancel) lucro += v;
-    };
-    (o.centros || []).forEach((c) => { ((c.entrada && c.entrada.real) || []).forEach(acumular); ((c.entrada && c.entrada.previsto) || []).forEach(acumular); });
+    const semMes = { n: 0, valor: 0 };
     (o.centros || []).forEach((c) => {
-      const mlc = c.terreno ? Number(c.terreno.valor) || 0 : 0;
-      if (mlc <= 0 || !terrenoNo) return;
-      const ms = [...new Set(((c.entrada && c.entrada.real) || []).map((r) => r.mes).filter((m) => /^\d{4}-\d{2}$/.test(String(m || ""))))].sort();
-      const pm = ms[0] || String(o.hoje || "");
-      lancar(terrenoNo, "Terreno (custo manual)", pm, -mlc);
-      lucro -= mlc;
+      const opts = c.opts || {};
+      const ler = (r) => {
+        const x = lerLinha(r, opts);
+        if (!x) return;
+        const v = x.tipo === "INCOME" ? x.val : -x.val;
+        if (!/^\d{4}-\d{2}$/.test(String(x.mes || ""))) { if (x.tipo !== "DISTRATO") { semMes.n++; semMes.valor += v; lucro += v; } return; }
+        let nid;
+        if (x.tipo === "DISTRATO") nid = cancel || (r.gid && ids.has(r.gid) ? r.gid : null);
+        else nid = r.gid && ids.has(r.gid) && r.gid !== cancel ? r.gid : x.tipo === "INCOME" ? venda : admin;
+        if (!nid) return;
+        lancar(nid, String(r.categoria || "").trim() || "Sem plano", x.mes, v);
+        if (x.tipo !== "DISTRATO") lucro += v;
+      };
+      ((c.entrada && c.entrada.real) || []).forEach(ler);
+      ((c.entrada && c.entrada.previsto) || []).forEach(ler);
+      const k = c.calc || {};
+      (k.lanc_terreno || []).forEach((x) => { if (!terrenoNo) return; lancar(terrenoNo, x.parte === "curva" ? "Terreno informado na obra (curva de pagamento)" : "Terreno informado na obra (custo manual)", x.mes, -x.valor); lucro -= x.valor; });
+      const pr = k.projecao || {};
+      Object.entries(pr.receitas || {}).forEach(([m, v]) => { if (!venda) return; lancar(venda, "Projeção: venda do estoque", m, v); lucro += v; lucroProj += v; });
+      Object.entries(pr.tributos || {}).forEach(([m, v]) => { if (!tribNo) return; lancar(tribNo, "Projeção: tributos presumidos sobre a venda do estoque", m, -v); lucro -= v; lucroProj -= v; });
+      // terreno: no cálculo do Acompanhamento a 2ª parte entra no custo mesmo sem curva lançada (ex.: só a lista)
+      const tm = k.terreno_informado || 0, lan = (k.lanc_terreno || []).filter((x) => x.parte === "curva").reduce((s2, x) => s2 + x.valor, 0);
+      if (tm && Math.abs(tm - lan) > 0.5 && terrenoNo) { const m = String(o.hoje || ""); lancar(terrenoNo, "Terreno informado na obra (ajuste da curva)", m, -(tm - lan)); lucro -= tm - lan; }
     });
     const valores = (vm) => { const anos = {}; Object.entries(vm).forEach(([m, v]) => { anos[m.slice(0, 4)] = (anos[m.slice(0, 4)] || 0) + v; }); return { valores: anos, valores_mes: vm, total: Object.values(vm).reduce((a, b) => a + b, 0) }; };
     const linhas = nos.map((n) => Object.assign({ kind: "categoria", id: n.id, codigo: n.codigo, descricao: n.descricao, nivel: (n.codigo.match(/\./g) || []).length,
@@ -482,11 +509,15 @@
     });
     const anos = [...new Set([].concat(...linhas.map((l) => Object.keys(l.valores).filter((a) => Math.abs(l.valores[a]) > 0.005))))].sort();
     const meses = [...new Set([].concat(...linhas.map((l) => Object.keys(l.valores_mes).filter((m) => Math.abs(l.valores_mes[m]) > 0.005))))].sort();
-    const ll = Number(o.lucroLista) || 0;
-    return { anos, meses, linhas, conferencia: { lucro_dfc: lucro, lucro_lista: ll, desvio: lucro - ll, ok: Math.abs(lucro - ll) < 1 } };
+    const la = Number(o.lucroAcomp) || 0, ll = o.lucroLista == null ? null : Number(o.lucroLista) || 0;
+    return { anos, meses, linhas, sem_mes: semMes,
+      conferencia: { lucro_dfc: lucro, lucro_acomp: la, desvio: lucro - la, ok: Math.abs(lucro - la) < 1,
+        projecao: lucroProj, lucro_dfc_sem_proj: lucro - lucroProj, lucro_lista: ll, desvio_lista: ll == null ? null : lucro - lucroProj - ll, ok_lista: ll == null ? null : Math.abs(lucro - lucroProj - ll) < 1,
+        // mantido para quem lia o formato antigo
+        lucro_lista_antigo: ll } };
   }
 
-  const api = { dfcVida, grupoOrion, codigoGrupo, GRUPO_ORION, calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, planosDasVendas, ESTOQUE, TMA_PADRAO };
+  const api = { dfcVida, lerLinha, grupoOrion, codigoGrupo, GRUPO_ORION, calcularCentro, indicadores, kpisGrupo, detalheGrupo, classificarSaida, projetarEstoque, tributosPresumido, irrNewton, serieMensal, nomeProjeto, mesmaObra, faixaParcelas, planosDasVendas, ESTOQUE, TMA_PADRAO };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   raiz.OrionAcompanhamentoCalc = api;
 })(typeof window !== "undefined" ? window : globalThis);

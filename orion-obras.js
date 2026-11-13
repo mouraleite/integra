@@ -249,14 +249,18 @@ const OrionObrasApp = {
     const tma = this.tmaDe(g.membros.map((m) => m.cc));
     return cache.centros.map((c) => {
       const obra = (this.obras || []).find((o) => o.cc === c.cc) || {};
-      const par = visao === "consolidado" ? null : this.parceriaDoCc(c.cc);
-      const p = par ? par.pct / 100 : (Number(obra.participacao) || 0) / 100;
-      // sem parametrização no Integra, o Órion usava as regras da parceria por grupo; sem regra cadastrada, todas desligadas
-      const regras = visao === "consolidado" ? null : {};
-      const mult = visao === "empreendedor" ? [1 - p, 1] : visao === "parceiro" ? [p, 0] : [1, 1];
-      return C.calcularCentro(Object.assign({}, c.entrada, { aliquotas: this.aliquotas(), tmaAnual: tma, hoje: this.hoje(), regras, multApportioned: mult[0], multDefault: mult[1], terrenoManual: obra.terreno || null, kpisOnly: !!kpisOnly },
-        par ? { rateada: par.rateada, vendasRateadas: par.vendasRateadas } : {}));
+      return C.calcularCentro(Object.assign({}, c.entrada, { aliquotas: this.aliquotas(), tmaAnual: tma, hoje: this.hoje(), terrenoManual: obra.terreno || null, kpisOnly: !!kpisOnly }, this.optsVisao(c.cc, visao)));
     });
+  },
+  /** Regras da visão de parceria de um centro (as mesmas no Acompanhamento e na DFC de empreendimentos). */
+  optsVisao(cc, visao) {
+    const obra = (this.obras || []).find((o) => o.cc === cc) || {};
+    const par = visao === "consolidado" ? null : this.parceriaDoCc(cc);
+    const p = par ? par.pct / 100 : (Number(obra.participacao) || 0) / 100;
+    // sem parametrização no Integra, o Órion usava as regras da parceria por grupo; sem regra cadastrada, todas desligadas
+    const regras = visao === "consolidado" ? null : {};
+    const mult = visao === "empreendedor" ? [1 - p, 1] : visao === "parceiro" ? [p, 0] : [1, 1];
+    return Object.assign({ regras, multApportioned: mult[0], multDefault: mult[1] }, par ? { rateada: par.rateada, vendasRateadas: par.vendasRateadas } : {});
   },
   linhasLista() {
     const C = this.C();
