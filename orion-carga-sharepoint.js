@@ -70,7 +70,7 @@ const OrionCargaSharepointApp = {
     if (!files.length) return;
     if (typeof XLSX === "undefined") { this.erro = "O leitor de Excel não carregou. Recarregue a página."; return this.render(); }
     const S = this.S();
-    this.lendo = true; this.erro = ""; this.aviso = ""; this.pastas = null; this.render();
+    this.lendo = true; this.erro = ""; this.aviso = ""; this.pastas = null; this.importadas = {}; this.render();
     try {
       const arqs = files.map((f) => ({ arquivo: f, nome: f.name, caminho: f.webkitRelativePath || f.name, mtime: f.lastModified || 0 }));
       const g = S.agruparArquivos(arqs);
@@ -135,6 +135,17 @@ const OrionCargaSharepointApp = {
     this.render();
   },
 
+  /** As outras telas do Órion guardam a lista de forecasts lida ao abrir; depois da carga, elas leem de novo. */
+  limparCachesTelas() {
+    const W = window;
+    try {
+      if (W.OrionOrcamentosApp) { W.OrionOrcamentosApp.cab = { orcamentos: null, forecasts: null }; W.OrionOrcamentosApp.aberto = null; }
+      ["OrionResumoApp", "OrionAnaliticoApp"].forEach((n) => { if (W[n]) { W[n].cabs = { orcamento: null, forecast: null }; W[n].resultado = null; } });
+      if (W.OrionAnaliseApp) { W.OrionAnaliseApp.cabs = { orcamentos: null, forecasts: null }; }
+      ["OrionOxRApp", "OrionDfcApp", "OrionDfcVisaoApp"].forEach((n) => { if (W[n]) { W[n].cabs = { orcamento: null, forecast: null }; W[n].fcLinhas = {}; W[n].calc = null; if (W[n].cmp) { W[n].cmp.res = null; W[n].cmp.dfcRes = null; } if (W[n].vis) { W[n].vis.dados = null; W[n].vis.chave = ""; } } });
+    } catch (e) { /* só conveniência */ }
+  },
+
   /* ---------- gravação ---------- */
   async importar() {
     if (!this.ehAdmin()) { this.erro = "Só administrador grava a Carga SharePoint (como no Órion)."; return this.render(); }
@@ -188,6 +199,8 @@ const OrionCargaSharepointApp = {
       }
       try { const r = await window.OrionStore.gravar("sharepoint_sync", this.sync, this.syncVersao); this.syncVersao = typeof r === "number" ? r : this.syncVersao + 1; } catch (e) { /* controle de "sem alteração" é só conveniência */ }
       this.aviso = "Importado: " + feitos.join(" · ") + ". Os forecasts já aparecem em Orçamentos e forecasts e nas telas de análise.";
+      this.importadas = Object.assign(this.importadas || {}, ...fila.map((p) => ({ [p.descricao]: agora })));
+      this.limparCachesTelas();
       await this.lerCabs();
     } catch (e) { this.erro = (e.message || String(e)) + (feitos.length ? ` — já gravados: ${feitos.join(" · ")}` : ""); }
     this.gravando = false; this.passo = "";
@@ -209,10 +222,12 @@ const OrionCargaSharepointApp = {
       const td = f.DESPESAS.reduce((s, l) => s + l.total, 0), tr = f.RECEITAS.reduce((s, l) => s + l.total, 0);
       const ex = existentes(p);
       const semMud = this.sync[p.descricao] === p.mtime;
+      const agoraImp = (this.importadas || {})[p.descricao];
       const sit = p.erro ? `<span style="color:#b91c1c">${this.esc(p.erro)}</span>`
         : p.semDados ? `<span style="color:#92400e">Nenhum valor orçado nas planilhas.</span>`
         : (p.pendencias || []).length ? `<span style="color:#92400e">${p.pendencias.length} pendência(s) de de-para</span>`
-        : `<span style="color:#105436">Pronta</span>${ex.length ? ` · já existe (${ex.map((c) => `${c.tipo.toLowerCase()} V${c.versao} ${c.status}`).join(", ")}): será substituída` : " · novo forecast"}${semMud ? " · sem alteração desde a última carga" : ""}`;
+        : agoraImp ? `<span style="color:#105436;font-weight:700">✓ Importada agora</span> (${ex.map((c) => `${c.tipo.toLowerCase()} V${c.versao}`).join(", ")}). Já aparece em Orçamentos e forecasts › Forecast.`
+        : `<span style="color:#105436">Pronta</span>${ex.length ? ` · já existe no Integra (${ex.map((c) => `${c.tipo.toLowerCase()} V${c.versao} ${c.status}`).join(", ")})${semMud ? ", sem alteração desde a última carga: só importe de novo se quiser gravar outra versão igual" : ": ao importar, vira uma versão nova e a anterior fica como Substituído"}` : " · novo forecast"}`;
       return `<tr><td class="is-center"><input type="checkbox" ${this.marcadas[p.descricao] && pronta(p) ? "checked" : ""} ${pronta(p) ? "" : "disabled"} onchange="OrionCargaSharepointApp.marcar('${this.esc(p.descricao)}', this.checked)"></td>
         <td><b>${this.esc(p.descricao)}</b><div style="font-size:0.68rem;color:#64748b">corte: mês ${p.mes_corte} · ${p.arquivos.length} arquivo(s)</div></td>
         <td class="is-right">${new Set(p.dados.map((d) => d.cc_id_sienge || d.cc_nome)).size}</td>
@@ -243,14 +258,14 @@ const OrionCargaSharepointApp = {
       <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px">
         ${card("Pastas lidas", this.pastas ? this.pastas.length : "—", "Forecast - N+M")}
         ${card("Pendências", this.pastas ? pend.length : "—", "nomes sem vínculo no Integra")}
-        ${card("Selecionados", nSel, "vínculos prontos para salvar")}</div>
+        ${card("Vínculos escolhidos", nSel, "de-para pronto para salvar")}</div>
       ${this.pastas ? `<div class="or-sec" style="font-weight:700;color:#105436;margin:8px 0 6px">Pastas encontradas</div>
         <div class="cc-scroll"><table class="cc-table"><colgroup><col style="width:44px"><col style="width:190px"><col style="width:60px"><col style="width:80px"><col style="width:140px"><col style="width:80px"><col style="width:140px"><col></colgroup>
           <thead><tr><th></th><th>Pasta</th><th class="is-right">Obras</th><th class="is-right">Linhas desp.</th><th class="is-right">Despesas</th><th class="is-right">Linhas rec.</th><th class="is-right">Receitas</th><th>Situação</th></tr></thead>
           <tbody>${linhasPastas}</tbody></table></div>${this.fora.length ? `<div style="font-size:0.7rem;color:#64748b;margin-top:4px">${this.fora.length} arquivo(s) fora de pastas "Forecast - N+M" ignorado(s).</div>` : ""}` : ""}
       ${this.pastas ? `<div style="display:flex;align-items:center;gap:10px;margin:16px 0 6px"><div style="font-weight:700;color:#105436">Pendências de mapeamento (de-para)</div>
           ${pend.length ? `<input id="ocs-busca" class="idx-select" style="height:34px;width:260px" placeholder="Buscar por nome ou tipo…" value="${this.esc(this.busca)}" oninput="OrionCargaSharepointApp.setBusca(this.value)">` : ""}
-          <button type="button" class="btn btn-primary" style="height:34px;margin-left:auto" onclick="OrionCargaSharepointApp.salvarDepara()">Salvar selecionados</button></div>
+          ${pend.length ? `<button type="button" class="btn btn-primary" style="height:34px;margin-left:auto" ${nSel ? "" : "disabled"} onclick="OrionCargaSharepointApp.salvarDepara()">Salvar vínculos do de-para (${nSel})</button>` : ""}</div>
         ${pend.length ? `<div class="cc-scroll" style="max-height:420px"><table class="cc-table"><colgroup><col style="width:130px"><col><col style="width:420px"></colgroup>
           <thead><tr><th>Tipo</th><th>Nome na planilha</th><th>Vincular com o Integra</th></tr></thead><tbody>${linhasPend || `<tr><td colspan="3" style="text-align:center;padding:14px">Nenhuma pendência para a busca.</td></tr>`}</tbody></table></div>
           <datalist id="ocs-l-cc">${optsCc}</datalist><datalist id="ocs-l-pl">${optsPl}</datalist>`
