@@ -119,20 +119,20 @@
       if (VA && !VA.lista && typeof VA.carregar === "function" && !this._vvCarregandoViab) { this._vvCarregandoViab = true; Promise.resolve(VA.carregar()).then(() => this.render()).catch(() => {}); }
       if (!this.vvTaxas) this.vvLerTaxas();
       const titulo = `<h3 style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="OrionObrasApp.vvAberto=!OrionObrasApp.vvAberto;OrionObrasApp.render()">${this.vvAberto ? "▾" : "▸"} Viabilidade × realizado <span style="font-size:0.7rem;font-weight:600;color:#6b8474;text-transform:none;letter-spacing:0">o que a viabilidade aprovada previu × o caixa do Acompanhamento (realizado + em aberto + projeção)</span></h3>`;
-      if (!this.vvAberto) return `<div id="oob-vv" class="oac-card oac-nao-imprime" style="margin-top:16px">${titulo}</div>`;
+      if (!this.vvAberto) return `<div id="oob-vv" class="oac-card oac-nao-imprime" style="overflow:visible;margin-top:16px">${titulo}</div>`;
       const doc = this.vvDaObra(item);
       if (!doc) {
         const lista = this.vvLista().filter((d) => d.status === "Aprovado").sort((a, b) => String(a.project_name).localeCompare(String(b.project_name), "pt-BR"));
         const sel = window.MlSelectUnico && lista.length ? MlSelectUnico.html({ id: "oob-vv-sel", label: "Viabilidade aprovada", items: lista.map((d) => ({ id: d._id, label: `${d.project_name}${d.city ? " · " + d.city : ""}${d.obra_cc ? " (ligada ao centro " + d.obra_cc + ")" : ""}` })), selectedId: this.vvEscolha, semId: true, placeholder: "Digite o nome da viabilidade..." }) : "";
-        return `<div id="oob-vv" class="oac-card" style="margin-top:16px;scroll-margin-top:16px">${titulo}<div style="padding:14px 16px;font-size:0.82rem;color:#4a6355">
+        return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px;scroll-margin-top:16px">${titulo}<div style="padding:14px 16px;font-size:0.82rem;color:#4a6355">
             <p style="margin:0 0 10px">Nenhuma viabilidade <b>aprovada</b> está ligada aos centros desta obra (${item.membros.map((m) => this.esc(m.cc)).join(", ")}). ${lista.length ? "Escolha a viabilidade desta obra para comparar:" : "Não há viabilidade aprovada no Integra. Aprove a viabilidade em Órion (transição) › Viabilidades para comparar aqui."}</p>
             ${lista.length && this.vvPodeVincular() ? window.OrionFiltros.grade([{ campos: [`<div class="ofg-f ofg-span3">${sel}</div>`] }], `<button type="button" class="btn btn-primary" ${this.vvGravando ? "disabled" : ""} onclick="OrionObrasApp.vvVincular(OrionObrasApp.linhasLista().find((r) => r.id === OrionObrasApp.aberto))">${this.vvGravando ? "Gravando…" : "Vincular à obra"}</button>`, { cls: "ofg-plano" }) : lista.length ? `<p style="margin:0;color:#92400e">Só quem edita viabilidades pode fazer o vínculo.</p>` : ""}
             ${this.vvMsg ? `<p style="margin:8px 0 0;color:#105436">${this.esc(this.vvMsg)}</p>` : ""}</div></div>`;
       }
       const prev = this.vvPrevisto(doc);
       const ac = this.vvAcomp(item);
-      if (!ac) return `<div id="oob-vv" class="oac-card" style="margin-top:16px">${titulo}<div style="padding:16px;color:#64748b;font-size:0.82rem">Viabilidade ligada: <b>${this.esc(doc.project_name)}</b>. Clique em <b>Atualizar com o Sienge</b> para ler o caixa da obra e montar a comparação.</div></div>`;
-      if (!prev || !ac) return `<div id="oob-vv" class="oac-card" style="margin-top:16px;scroll-margin-top:16px">${titulo}<div style="padding:20px;text-align:center;color:#64748b"><div class="spinner" style="margin:0 auto 8px"></div>Calculando a viabilidade…</div></div>`;
+      if (!ac) return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px">${titulo}<div style="padding:16px;color:#64748b;font-size:0.82rem">Viabilidade ligada: <b>${this.esc(doc.project_name)}</b>. Clique em <b>Atualizar com o Sienge</b> para ler o caixa da obra e montar a comparação.</div></div>`;
+      if (!prev || !ac) return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px;scroll-margin-top:16px">${titulo}<div style="padding:20px;text-align:center;color:#64748b"><div class="spinner" style="margin:0 auto 8px"></div>Calculando a viabilidade…</div></div>`;
       const R = (v) => this.R$(Math.abs(v || 0) < 0.5 ? 0 : v);
       const N0 = (v) => (Math.abs(v || 0) < 0.5 ? "—" : Math.round(v).toLocaleString("pt-BR"));
       const pc = (a, b) => (Math.abs(b) > 0.5 ? (((a - b) / Math.abs(b)) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%" : "—");
@@ -164,7 +164,7 @@
       const ind = prev.ind || {}, d = ac.det;
       const P = (v) => (v == null || isNaN(v) ? "n/d" : this.P(v));
       const kp = (t, v, a) => `<div style="border:1px solid #dfe9e3;border-radius:8px;padding:8px 10px;background:#fff"><div style="font-size:0.64rem;color:#64748b;font-weight:700;text-transform:uppercase">${t}</div><div style="font-size:0.85rem;font-weight:800;color:#1c2e24">${v} <span style="color:#94a3b8;font-weight:600">→</span> ${a}</div><div style="font-size:0.64rem;color:#64748b">viabilidade → acompanhamento</div></div>`;
-      return `<div id="oob-vv" class="oac-card" style="margin-top:16px;scroll-margin-top:16px">${titulo}
+      return `<div id="oob-vv" class="oac-card" style="overflow:visible;margin-top:16px;scroll-margin-top:16px">${titulo}
         <div style="padding:0 16px 6px;font-size:0.72rem;color:#6b8474">Viabilidade <b>${this.esc(doc.project_name)}</b> (aprovada${doc.versao_de ? ", cenário" : ""}) · ${this.vvFases(doc).length} fase(s) · mês 1 = ${ini ? this.esc(ini.split("-").reverse().join("/")) : "sem data (o por ano fica vazio)"} · ligada ao centro ${this.esc(doc.obra_cc)}. Acompanhamento na visão consolidada, com a projeção do estoque. Semáforo: custo acima do previsto ou receita/lucro abaixo ficam em vermelho.</div>
         <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;padding:6px 16px 10px">
           ${kp("Lucro", R(prev.cat.lucro), R(ac.cat.lucro))}${kp("TIR (a.a.)", P(ind.tir_aa), P(d.tir_anual))}${kp("Exposição máxima", R(ind.exposicao_maxima), R(d.exposicao_maxima))}${kp("Payback", (ind.payback || "—") + "º mês", (d.payback || "—") + "º mês")}</div>
