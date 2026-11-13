@@ -242,15 +242,20 @@ const ResultadoCaixaApp = {
         const de = nomesMes[sel] || seguintes[0];
         throw new Error("O mês escolhido é o realizado acumulado até " + (nomesMes[sel - 1] || "") + "/" + ano + ". O forecast precisa dos meses seguintes, de " + de + " a dezembro/" + ano + ".");
       }
+      // O forecast fica na competência da tela. Substitui só o desta competência (mesmo arquivo ou mesma empresa).
+      const base = this.competenciaAtual();
       const substituir = {};
       lidos.forEach((arq) => {
-        substituir[arq.nome] = 1;
-        if (!arq.empresa) return;
+        substituir[base + "|" + arq.nome] = 1;
         Object.keys(this.forecasts || {}).forEach((ym) => {
           const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
-          Object.keys(por).forEach((nome) => {
-            const emp = Number(por[nome].empresa) || this.empresaId(nome) || this.empresaId(por[nome].rotulo);
-            if (emp && emp === arq.empresa) substituir[nome] = 1;
+          Object.keys(por).forEach((chave) => {
+            if (this.baseForecast(chave, por[chave]) !== base) return;
+            if (this.nomeForecast(chave, por[chave]) === arq.nome) { substituir[chave] = 1; return; }
+            if (!arq.empresa) return;
+            const nomeArq = this.nomeForecast(chave, por[chave]);
+            const emp = Number(por[chave].empresa) || this.empresaId(nomeArq) || this.empresaId(por[chave].rotulo);
+            if (emp && emp === arq.empresa) substituir[chave] = 1;
           });
         });
       });
@@ -262,7 +267,7 @@ const ResultadoCaixaApp = {
       planos.forEach((p) => {
         const doc = this.garantirForecast(p.ym);
         doc.em = em;
-        doc.porArquivo[p.nome] = { rotulo: p.rotulo, empresa: p.empresa || 0, contas: p.contas, nomes: p.nomes, em: em };
+        doc.porArquivo[base + "|" + p.nome] = { nome: p.nome, base: base, rotulo: p.rotulo, empresa: p.empresa || 0, contas: p.contas, nomes: p.nomes, em: em };
         mesesGravados[p.ym] = 1;
       });
       seguintes.forEach((ym) => {
@@ -290,10 +295,20 @@ const ResultadoCaixaApp = {
     this.render();
   },
 
+  /** Remove o forecast desta competência; o enviado em outras competências continua. */
   removerForecast() {
     Object.keys(this.forecasts || {}).forEach((ym) => {
-      delete this.forecasts[ym];
-      this.apagarForecastNuvem(ym);
+      const doc = this.forecasts[ym];
+      const por = (doc && doc.porArquivo) || {};
+      const daqui = Object.keys(por).filter((chave) => this.forecastDaCompetencia(chave, por[chave]));
+      if (!daqui.length) return;
+      daqui.forEach((chave) => { delete por[chave]; });
+      if (!Object.keys(por).length) {
+        delete this.forecasts[ym];
+        this.apagarForecastNuvem(ym);
+      } else {
+        this.salvarForecastNuvem(ym, doc);
+      }
     });
     this.aplicarForecastVista();
     this.gravarForecastLocal();
@@ -306,6 +321,7 @@ const ResultadoCaixaApp = {
     Object.keys(this.forecasts || {}).forEach((ym) => {
       const doc = this.forecasts[ym];
       if (!doc || !doc.porArquivo || !doc.porArquivo[nome]) return;
+      if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
       delete doc.porArquivo[nome];
       if (!Object.keys(doc.porArquivo).length) {
         delete this.forecasts[ym];
@@ -317,6 +333,38 @@ const ResultadoCaixaApp = {
     this.aplicarForecastVista();
     this.gravarForecastLocal();
     this.render();
+  },
+
+  /**
+   * Competência em que o forecast foi enviado. Cada competência tem o seu forecast:
+   * o enviado em setembro não aparece em outubro, e apagar num mês não apaga no outro.
+   * Arquivo antigo, sem essa marca, é do mês anterior ao primeiro mês que ele projeta.
+   */
+  baseForecast(chave, arq) {
+    if (arq && /^\d{4}-\d{2}$/.test(String(arq.base || ""))) return String(arq.base);
+    const m = String(chave || "").match(/^(\d{4}-\d{2})\|/);
+    if (m) return m[1];
+    let menor = "";
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      if (por[chave] && (!menor || ym < menor)) menor = ym;
+    });
+    if (!menor) return "";
+    const y = Number(menor.slice(0, 4));
+    const mes = Number(menor.slice(5, 7)) - 1;
+    return mes >= 1 ? this.chaveMes(y, mes) : this.chaveMes(y - 1, 12);
+  },
+
+  /** Nome do arquivo de forecast (a chave guarda "competência|nome"). */
+  nomeForecast(chave, arq) {
+    if (arq && arq.nome) return String(arq.nome);
+    const s = String(chave || "");
+    const i = s.indexOf("|");
+    return i >= 0 ? s.slice(i + 1) : s;
+  },
+
+  forecastDaCompetencia(chave, arq) {
+    return this.baseForecast(chave, arq) === this.competenciaAtual();
   },
 
   garantirForecast(ym) {
@@ -443,7 +491,10 @@ const ResultadoCaixaApp = {
       const doc = this.forecasts[ym] || {};
       meses.push(ym);
       if (doc.em && doc.em > em) em = doc.em;
-      Object.keys(doc.porArquivo || {}).forEach((nome) => { if (arquivos.indexOf(nome) < 0) arquivos.push(nome); });
+      Object.keys(doc.porArquivo || {}).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+        if (arquivos.indexOf(nome) < 0) arquivos.push(nome);
+      });
       this.juntarForecast({ contas: contas, nomes: nomes }, fatia);
     });
     if (!meses.length) {
@@ -564,6 +615,7 @@ const ResultadoCaixaApp = {
     const por = doc.porArquivo;
     if (por && typeof por === "object" && !Array.isArray(por) && Object.keys(por).length) {
       Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
         if (this.estaFora("fc", nome)) return;
         this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]);
       });
@@ -582,7 +634,10 @@ const ResultadoCaixaApp = {
     const lista = [];
     const por = doc.porArquivo;
     if (por && typeof por === "object" && !Array.isArray(por) && Object.keys(por).length) {
-      Object.keys(por).forEach((nome) => lista.push(Object.assign({ nome: nome }, por[nome])));
+      Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
+        lista.push(Object.assign({}, por[nome], { nome: nome }));
+      });
     } else if (doc.contas) {
       lista.push({ nome: "", empresa: 0, contas: doc.contas, nomes: doc.nomes || {} });
     }
@@ -751,7 +806,10 @@ const ResultadoCaixaApp = {
     return cheio(ant) || cheio(mes);
   },
 
-  /** Um arquivo por empresa: vale o da competência mais recente, até o mês escolhido. */
+  /**
+   * Arquivos da competência escolhida: só os que foram enviados nela.
+   * Cada competência é independente (antes, um mês sem envio mostrava os do mês anterior).
+   */
   arquivosVigentes(ano) {
     const y = String(ano);
     const base = String(this.anoBase());
@@ -761,8 +819,7 @@ const ResultadoCaixaApp = {
     }
     const teto = this.chaveMes(base);
     const chaves = Object.keys((this.acervo && this.acervo.meses) || {})
-      .filter((k) => k.slice(0, 4) === base && k <= teto)
-      .sort();
+      .filter((k) => k === teto);
     const porEmp = new Map();
     chaves.forEach((slot) => {
       const arquivos = (this.acervo.meses[slot] && this.acervo.meses[slot].arquivos) || {};
@@ -1149,7 +1206,7 @@ const ResultadoCaixaApp = {
       ? "ResultadoCaixaApp.removerForecastArquivo('" + chave + "')"
       : "ResultadoCaixaApp.removerArquivo('" + tipo + "','" + chave + "')";
     const dica = fora ? "Fora do resultado. Clique para incluir." : "Entra no resultado. Clique para deixar de fora.";
-    return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc(nome)}">
+    return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
       <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
       <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
       <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
@@ -1157,7 +1214,7 @@ const ResultadoCaixaApp = {
   },
 
   nomeEmpresaArquivo(nome) {
-    let base = String(nome || "").replace(/\.(xlsx|xlsm)$/i, "").trim();
+    let base = String(nome || "").replace(/^\d{4}-\d{2}\|/, "").replace(/\.(xlsx|xlsm)$/i, "").trim();
     base = base.replace(/^\d+\s*-\s*\d{4}_/i, "");
     base = base.replace(/^\d+\s*[ªa°º]?\s*vers[aã]o_/i, "");
     return base.replace(/_/g, " ").replace(/\s+/g, " ").trim();
@@ -1662,20 +1719,7 @@ const ResultadoCaixaApp = {
         _slot: destino.id,
         _doc: docId
       };
-      if (destino.tipo === "mes" && empresa) {
-        Object.keys(this.acervo.meses || {}).forEach((k) => {
-          if (k === destino.chave || String(k).slice(0, 4) !== String(ano)) return;
-          const bag = this.acervo.meses[k];
-          if (!bag || !bag.arquivos) return;
-          Object.keys(bag.arquivos).forEach((nome) => {
-            const outro = bag.arquivos[nome];
-            if (nome !== nomeArquivo && Number(outro && outro.empresa) !== empresa) return;
-            if (outro && outro._doc && outro._doc !== docId) this.apagarNuvem(outro._doc);
-            delete bag.arquivos[nome];
-          });
-          if (!Object.keys(bag.arquivos).length) delete this.acervo.meses[k];
-        });
-      }
+      // Cada competência guarda os seus arquivos: enviar em outubro não mexe no que foi enviado em setembro.
     });
     this._dfcKey = "";
     this._dfcPedido = "";
@@ -1755,7 +1799,9 @@ const ResultadoCaixaApp = {
     const y = Number(ano);
     const base = this.anoBase();
     if (y === base) {
-      const slots = Object.keys(this.acervo.meses || {}).filter((k) => k.slice(0, 4) === String(base));
+      // Só a competência da tela: o mesmo arquivo enviado em outro mês continua lá.
+      const atual = this.chaveMes(base);
+      const slots = Object.keys(this.acervo.meses || {}).filter((k) => k === atual);
       let achou = false;
       slots.forEach((k) => {
         const bolsa = this.acervo.meses[k];
@@ -1765,7 +1811,7 @@ const ResultadoCaixaApp = {
         delete bolsa.arquivos[nome];
         if (!Object.keys(bolsa.arquivos).length) delete this.acervo.meses[k];
       });
-      if (!achou) this.removerAno(ano);
+      if (!achou) console.warn("[Resultado de caixa] Arquivo não encontrado nesta competência:", nome);
       this._dfcKey = "";
       this._dfcPedido = "";
       this.montarVista();
@@ -2485,6 +2531,7 @@ const ResultadoCaixaApp = {
       if (!usados[ym]) return;
       const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
       Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
         if (!mapa.has(nome)) mapa.set(nome, { arq: por[nome] || {}, meses: [] });
         mapa.get(nome).meses.push(ym);
       });
