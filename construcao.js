@@ -1123,7 +1123,6 @@ window.openNewConstrucaoModal = function(editId = null) {
         const defaultResp = editCheck ? (editCheck.responsible || responsible) : responsible;
         const defaultObs = editCheck ? (editCheck.observations || '') : '';
         const defaultStage = editCheck ? editCheck.stage : '';
-        const siengeOn = !!(editCheck && (editCheck.sendToSienge || editCheck.siengeSent));
 
         let stageOptions = window.ConstrucaoApp.stages.map(s => `<option value="${s}" ${s === defaultStage ? 'selected' : ''}>${s}</option>`).join('');
 
@@ -1169,16 +1168,7 @@ window.openNewConstrucaoModal = function(editId = null) {
                     </div>
                 </div>
 
-                <div style="margin-bottom: 20px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-                    <div>
-                        <strong style="display: block; color: #1e293b; font-size: 0.9rem;">Enviar para o Sienge</strong>
-                        <span style="color: #64748b; font-size: 0.8rem;">Anexar os arquivos selecionados ao contrato no Sienge</span>
-                    </div>
-                    <label class="moura-switch" title="Enviar para o Sienge">
-                        <input type="checkbox" id="vistoria-send-sienge" ${siengeOn ? "checked" : ""}>
-                        <span class="moura-switch-track" aria-hidden="true"></span>
-                    </label>
-                </div>
+                <div style="margin-bottom: 20px; color: #64748b; font-size: 0.8rem;">Ao salvar, os arquivos são anexados à unidade no Sienge.</div>
 
                 <div style="display: flex; justify-content: flex-end; gap: 10px;">
                     <button type="button" class="btn btn-cancel" onclick="window.fecharModalVistoria()">Cancelar</button>
@@ -1445,7 +1435,15 @@ window.saveNovaVistoria = async function() {
         const listaArquivos = (window.ConstrucaoApp.vistoriaArquivos || []).slice();
         const fileUrls = [];
         const fileNames = [];
-        const sendToSienge = document.getElementById('vistoria-send-sienge') && document.getElementById('vistoria-send-sienge').checked;
+        // Sempre anexa à unidade no Sienge. Na edição, só manda o que ainda não foi enviado
+        // (arquivos novos ou que falharam antes), para não duplicar anexos no Sienge.
+        const editIdSienge = (document.getElementById('vistoria-edit-id') || {}).value || "";
+        const checkAnterior = editIdSienge ? (window.ConstrucaoApp.currentChecks || []).find(c => c.id === editIdSienge) : null;
+        const urlsJaNoSienge = new Set(Array.isArray(checkAnterior && checkAnterior.siengeSentUrls)
+            ? checkAnterior.siengeSentUrls
+            : ((checkAnterior && checkAnterior.siengeSent) ? (checkAnterior.fileUrls || (checkAnterior.fileUrl ? [checkAnterior.fileUrl] : [])) : []));
+        const paraSienge = listaArquivos.filter(item => item.file || !(item.url && urlsJaNoSienge.has(item.url)));
+        const sendToSienge = paraSienge.length > 0;
 
         for (let i = 0; i < listaArquivos.length; i++) {
             const item = listaArquivos[i];
@@ -1466,11 +1464,9 @@ window.saveNovaVistoria = async function() {
         let siengeSent = false;
         let siengeErr = "";
         const siengeFalhas = [];
+        const urlsEnviadasAgora = [];
         if (sendToSienge) {
-            if (!listaArquivos.length) {
-                siengeErr = "Anexe ao menos um arquivo da vistoria para enviar ao Sienge.";
-                siengeFalhas.push(siengeErr);
-            } else try {
+            try {
                 const siengeUnitId = await window.ConstrucaoApp.findSiengeUnitId(contractObj);
                 const ccIdSienge = window.ConstrucaoApp.extractCostCenterId(contractObj);
                 const unitNameNorm = window.ConstrucaoApp.extractUnitName(contractObj);
@@ -1482,12 +1478,13 @@ window.saveNovaVistoria = async function() {
                 const descricaoSienge = `${dateStrDesc} - FOTO DE VISTORIA MANUAL`;
                 const clienteNome = contractObj.customerName || (typeof AppState !== "undefined" && AppState.selectedCustomerName) || "";
                 let enviados = 0;
-                for (let i = 0; i < listaArquivos.length; i++) {
-                    const item = listaArquivos[i];
-                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; animation: vc-spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> Enviando ao Sienge ' + (i + 1) + ' de ' + listaArquivos.length + '...';
+                const jaNoSienge = listaArquivos.length - paraSienge.length;
+                for (let i = 0; i < paraSienge.length; i++) {
+                    const item = paraSienge[i];
+                    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 6px; animation: vc-spin 1s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> Enviando ao Sienge ' + (i + 1) + ' de ' + paraSienge.length + '...';
                     const extMatch = String(item.name || "").match(/\.([a-z0-9]{1,5})$/i);
                     const ext = extMatch ? extMatch[1].toLowerCase() : "jpg";
-                    const sufixo = listaArquivos.length > 1 ? " " + (i + 1) : "";
+                    const sufixo = listaArquivos.length > 1 ? " " + (jaNoSienge + i + 1) : "";
                     const nomeFinal = `${baseName}${sufixo}.${ext}`;
                     try {
                         let blob = item.file;
@@ -1499,6 +1496,7 @@ window.saveNovaVistoria = async function() {
                         if (!blob) throw new Error("Arquivo vazio.");
                         await window.ConstrucaoApp.postUnitAttachment(siengeUnitId, blob, nomeFinal, descricaoSienge);
                         enviados += 1;
+                        if (item.url) urlsEnviadasAgora.push(item.url);
                         if (typeof window.logCrmAudit === "function") {
                             window.logCrmAudit({
                                 action: "ANEXO_ENVIADO",
@@ -1529,7 +1527,7 @@ window.saveNovaVistoria = async function() {
                         }
                     }
                 }
-                siengeSent = enviados === listaArquivos.length && enviados > 0;
+                siengeSent = enviados === paraSienge.length && enviados > 0;
                 siengeErr = siengeFalhas.join("\n");
             } catch (err) {
                 siengeErr = (err && err.message) || String(err);
@@ -1575,8 +1573,10 @@ window.saveNovaVistoria = async function() {
             fileName: fileName,
             fileUrls: fileUrls,
             fileNames: fileNames,
-            sendToSienge: !!sendToSienge,
-            siengeSent: !!siengeSent,
+            sendToSienge: true,
+            // Enviado = todos os arquivos desta vistoria já estão na unidade no Sienge.
+            siengeSent: fileUrls.length > 0 && fileUrls.every(u => urlsJaNoSienge.has(u) || urlsEnviadasAgora.indexOf(u) >= 0),
+            siengeSentUrls: fileUrls.filter(u => urlsJaNoSienge.has(u) || urlsEnviadasAgora.indexOf(u) >= 0),
             siengeError: siengeErr || "",
             updatedAt: new Date().toISOString()
         };
@@ -1595,7 +1595,7 @@ window.saveNovaVistoria = async function() {
         window.fecharModalVistoria();
         window.loadConstrucoes();
         if (sendToSienge && !siengeSent) {
-            alert("A vistoria foi salva no CRM, mas nem todos os arquivos foram enviados ao Sienge.\n\n" + (siengeErr || "Tente de novo em Editar vistoria, com a opção Enviar para o Sienge ligada."));
+            alert("A vistoria foi salva no CRM, mas nem todos os arquivos foram enviados ao Sienge.\n\n" + (siengeErr || "") + "\n\nPara tentar de novo, abra Editar vistoria e clique em Salvar Vistoria: só os arquivos que faltam serão enviados.");
         }
 
     } catch(e) {

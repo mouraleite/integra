@@ -3489,8 +3489,27 @@ const SiengeApiService = {
       };
     }
     try {
-      const res = await siengeFetchWithRetry(`/units?limit=200&offset=0&enterpriseId=${enterpriseId}&name=${encodeURIComponent(name)}&additionalData=NONE`);
-      return res;
+      // O nome da unidade no Sienge às vezes tem espaço ("12- 13") e no título vem sem ("12-13").
+      // A busca do Sienge é exata: tenta as variações e fica só com a unidade de mesmo nome.
+      const semEspaco = (s) => String(s || "").replace(/\s+/g, "").toUpperCase();
+      const alvo = semEspaco(name);
+      const base = String(name || "").trim();
+      const variacoes = [base];
+      if (/-/.test(base)) {
+        const partes = base.split("-").map((p) => p.trim());
+        [partes.join("- "), partes.join(" - "), partes.join(" -"), partes.join("-")].forEach((v) => {
+          if (variacoes.indexOf(v) < 0) variacoes.push(v);
+        });
+      }
+      let ultimo = { results: [] };
+      for (const v of variacoes) {
+        const res = await siengeFetchWithRetry(`/units?limit=200&offset=0&enterpriseId=${enterpriseId}&name=${encodeURIComponent(v)}&additionalData=NONE`);
+        const lista = (res && res.results) || [];
+        const certas = lista.filter((u) => semEspaco(u && u.name) === alvo);
+        if (certas.length) return Object.assign({}, res, { results: certas });
+        if (lista.length && !ultimo.results.length) ultimo = res;
+      }
+      return ultimo;
     } catch (e) {
       console.error("[Sienge] Erro ao obter detalhes da unidade:", e);
       return { results: [] };
