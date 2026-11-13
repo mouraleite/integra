@@ -4,7 +4,8 @@
  * embutido orcamento-dfc-2027.js). Regra do módulo Órion: as telas são do Órion, os dados são do Integra. Por isso essa base
  * NÃO é copiada para orion_orcamentos: este arquivo faz as telas do Órion enxergarem cada versão como um documento
  * "Orçamento" (despesas e receitas) do departamento "Orçamento do Integra", só para leitura:
- *  - a versão 2 (quando existe) é a vigente (Aprovado) e a versão 1 fica como Substituído; só com a versão 1, ela é a vigente;
+ *  - os nomes seguem o Integra: "Orçamento V1" e "Orçamento V2"; a V2 (quando existe) é a vigente (Aprovado), a V1 fica como
+ *    Substituído (fora das somas), mas continua escolhível nos seletores de versão; só com a V1, ela é a vigente;
  *  - as linhas vêm do próprio Integra (empresa, centro de custo, conta, nome da conta, 12 meses) em centavos;
  *  - gravar em um desses documentos é recusado: para mudar o orçamento, use Orçamento › Acompanhamento.
  * Como funciona: as telas do Órion leem orion_orcamentos (lista) e orion_orcamento_itens/{id}_{bloco} (linhas). Aqui as funções
@@ -71,9 +72,10 @@
           });
           if (!itens.length) return;
           const id = `${PREFIXO}${p.year}_v${n}_${tipo.toLowerCase()}`;
-          const quando = p.savedAt ? new Date(p.savedAt).toISOString() : "";
+          const ms = Number(p.savedAt) || 0, ant = versoes.length > 1 && n === 2 ? Number(versoes[0][1].savedAt) || 0 : 0;
+          const quando = ms || ant ? new Date(Math.max(ms, ant + 1)).toISOString() : "";
           cabs.push({
-            _id: id, integra: true, ano: p.year, tipo, descricao: "Orçamento", versao: n,
+            _id: id, integra: true, ano: p.year, tipo, descricao: "Orçamento V" + n, versao: n,
             status: vigente ? "Aprovado" : "Substituído", departamento: DEPTO, produto: null,
             blocos: 1, linhas: itens.length, linhas_venda: 0, vgv: 0, totais: C.somarLinhas(itens),
             empreendimentos: [...new Set(itens.map((l) => l.cc))].sort(),

@@ -757,7 +757,7 @@
     /** Versões que podem ser comparadas (Órion: Orçamento + cada forecast), na ordem do Órion. */
     versoesCmp(tipo) {
       const tipos = tipo === "CONSOLIDADO" ? ["DESPESAS", "RECEITAS"] : [tipo];
-      const doTipo = (l) => l.filter((c) => tipos.indexOf(String(c.tipo).toUpperCase()) >= 0 && c.status !== "Substituído");
+      const doTipo = (l) => l.filter((c) => tipos.indexOf(String(c.tipo).toUpperCase()) >= 0 && (c.status !== "Substituído" || c.integra));
       const out = [], vistos = new Set();
       const rotOrc = [...new Set(doTipo(this.escopo("orcamento")).map((c) => rotuloOrc(c.descricao)))].sort((a, b) => (a === "Orçamento" ? -1 : b === "Orçamento" ? 1 : a.localeCompare(b, "pt-BR")));
       rotOrc.forEach((r) => { out.push({ id: "OC_" + r, descricao: r, base: "orcamento", chave: r }); vistos.add(r); });
@@ -769,6 +769,10 @@
     /** linhas de uma versão, agrupadas como no Órion (produto × plano; vendas: produto × forma de venda × distrato) */
     docsVersao(v, tipos) {
       const C = this.C();
+      if (v.base === "orcamento") {
+        const integ = this.escopo("orcamento").filter((c) => c.integra && rotuloOrc(c.descricao) === v.chave && tipos.indexOf(String(c.tipo).toUpperCase()) >= 0);
+        if (integ.length) return integ;
+      }
       if (v.base === "orcamento") return C.documentosVigentes(this.escopo("orcamento").filter((c) => rotuloOrc(c.descricao) === v.chave), { ano: this.ano, dept: "TODOS", base: "orcamento", tipos }).docs;
       return C.documentosVigentes(this.escopo("forecast"), { ano: this.ano, dept: "TODOS", base: "forecast", versao: v.chave, tipos }).docs.filter((c) => String(c.descricao || "") === v.chave);
     },

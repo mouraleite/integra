@@ -95,6 +95,9 @@
       } else {
         const vig = C.documentosVigentes(docs, { ano: this.ano, dept: "TODOS", base: "orcamento", tipos: [this.modoTipo] }).docs;
         lista = vig.concat(docs.filter((c) => vig.indexOf(c) < 0 && TRAVADOS.indexOf(c.status) < 0));
+        // versões do Orçamento do Integra (V1, V2): todas escolhíveis, como na tela do Integra
+        (this.cab[this.tipo] || []).filter((c) => c.integra && String(c.ano) === String(this.ano) && String(c.tipo || "").toUpperCase() === this.modoTipo && lista.indexOf(c) < 0 && (this.dept === "TODOS" || String(this.dept) === "integra"))
+          .sort((a, b) => b.versao - a.versao).forEach((c) => lista.push(c));
       }
       const nDep = new Set(lista.map(dep)).size;
       const rot = (c) => C.rotuloVersao(c.descricao, fc ? "forecast" : "orcamento") + (nDep > 1 && c.departamento ? " · " + c.departamento.nome : "");
