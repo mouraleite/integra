@@ -3941,7 +3941,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "orion-acompanhamento": "Viabilidade × realizado (Órion)",
     "orion-obras": "Acompanhamento de empreendimentos (Órion)",
     "orion-obras-dfc": "DFC de empreendimentos (Órion)",
-    "orion-resumo": "Resumo do orçamento (Órion)",
+    "orion-resumo": "Dashboard de orçamento (Órion)",
     "orion-analitico": "Analítico de gastos (Órion)",
     "orion-analise": "Análise de orçamento (Órion)",
     "orion-oxr": "Orçado × Realizado (Órion)",

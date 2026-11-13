@@ -317,7 +317,7 @@ const OrionResumoApp = {
       <td>${x.tipo === "RECEITAS" ? "Receita" : "Despesa"}</td><td>${nome(x)}</td><td>${this.esc(x.plano)} ${this.esc(x.plano_nome)}${x.fora ? " (sem orçado)" : ""}</td>
       <td class="is-right">${f(x.orcado)}</td><td class="is-right">${f(x.realizado)}</td><td class="is-right" style="font-weight:700;color:${bom ? "#047857" : "#b91c1c"}">${f(x.dif)}</td>
       <td class="is-right"><span style="font-weight:700;padding:1px 6px;border-radius:4px;background:${bom ? "#ecfdf5" : "#fef2f2"};color:${bom ? "#047857" : "#b91c1c"}">${pct(pv)}</span></td><td>${this.farol(x.semaforo)}</td></tr>`; }).join("");
-    return `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(this.versaoAtual()) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(r.empresas.join(", "))}) só dos centros de custo e planos que estão no orçamento · ${r.movimentos} movimentos. Despesas aparecem positivas; resultado = receitas − despesas.</div>
+    const tudo = `<div style="font-size:0.72rem;color:#64748b;margin-bottom:8px">${ms.map((m) => C.MESES[m - 1]).join(", ")}/${this.esc(this.ano)}${this.base === "forecast" ? " · " + this.esc(this.versaoAtual()) : ""} · ${r.docs} documento(s) · realizado pela regra do Integra (caixa e bancos, visão DFC; empresas ${this.esc(r.empresas.join(", "))}) só dos centros de custo e planos que estão no orçamento · ${r.movimentos} movimentos. Despesas aparecem positivas; resultado = receitas − despesas.</div>
       ${hero}
       ${graficos}
       <div class="or-sec">Geração de caixa (receitas − despesas por mês, com o acumulado)</div>
@@ -338,6 +338,20 @@ const OrionResumoApp = {
         <colgroup><col><col style="width:140px"><col style="width:140px"><col style="width:100px"><col style="width:150px"></colgroup>
         <thead><tr><th>Produto / plano / mês</th><th class="is-right">${ref}</th><th class="is-right">Realizado</th><th class="is-right">Desvio</th><th>Semáforo</th></tr></thead>
         <tbody>${det || `<tr><td colspan="5" style="text-align:center;padding:20px">Nenhum dado para exibir.</td></tr>`}</tbody></table></div>`;
+    // Dashboard de orçamento do Órion: Geração de Caixa e Indicadores e Metas são recortes desta mesma tela
+    const info = tudo.slice(0, tudo.indexOf("</div>") + 6);
+    const pedaco = (de, ate) => { const i = tudo.indexOf(de), j = ate ? tudo.indexOf(ate, i + 1) : tudo.length; return i < 0 ? "" : tudo.slice(i, j < 0 ? tudo.length : j); };
+    const dash = this === window.OrionResumoApp ? this.modoDash : null; // a tela Orçado × Realizado herda desta e não usa os recortes
+    if (dash === "geracao") {
+      const heroCx = hero.replace("Resultado líquido · comparação no período filtrado", "Geração de caixa · receitas − despesas no período filtrado").replace(/Resultado líquido ([^<]*) vs/, "Geração de caixa $1 vs");
+      return info + heroCx + `<div class="or-sec">Geração de caixa mensal (Receitas − Despesas)</div>` + this.grafico(r.mensal.filter((m) => m.usado), ref) + pedaco('<div class="or-sec">Mês a mês</div>', '<div class="or-sec">Top 10') +
+        `<div style="font-size:0.72rem;color:#64748b;margin-top:6px">Para detalhe por plano, use <a style="font-weight:700;color:#105436;cursor:pointer" onclick="OrionDashOrcamento.ir('analitico1')">Analítico I</a>.</div>`;
+    }
+    if (dash === "indicadores") {
+      return info + hero + `<div style="font-size:0.75rem;color:#64748b;margin-top:4px">Metas = valores de ${ref.toLowerCase()} do período. Metas customizadas por departamento podem ser cadastradas em fase posterior.</div>
+        <a style="display:inline-block;margin-top:8px;font-size:0.8rem;font-weight:700;color:#105436;cursor:pointer" onclick="OrionDashOrcamento.ir('analitico1')">Abrir Analítico I →</a>`;
+    }
+    return tudo;
   },
 
   /** VGV e unidades por mês (centavos / unidades) de uma lista de vendas, com o filtro de empresa. */

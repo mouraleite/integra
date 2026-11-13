@@ -1225,10 +1225,10 @@
               <a onclick="switchTab('orion-orcamentos', 'Orçamentos e forecasts (Órion)')">Orçamentos e forecasts</a>
             </li>
             <li data-tab="orion-resumo" data-module="sub_orion_geral_resumo_orcamento_acessar">
-              <a onclick="switchTab('orion-resumo', 'Resumo do orçamento (Órion)')">Resumo do orçamento</a>
+              <a onclick="if (window.OrionDashOrcamento) OrionDashOrcamento.ir('resumo'); else switchTab('orion-resumo', 'Dashboard de orçamento (Órion)')">Dashboard de orçamento</a>
             </li>
             <li data-tab="orion-analitico" data-module="sub_orion_geral_analitico_gastos_acessar">
-              <a onclick="switchTab('orion-analitico', 'Analítico de gastos (Órion)')">Analítico de gastos</a>
+              <a onclick="if (window.OrionDashOrcamento) OrionDashOrcamento.ir('analitico1'); else switchTab('orion-analitico', 'Analítico de gastos (Órion)')">Analítico de gastos</a>
             </li>
             <li data-tab="orion-oxr" data-module="sub_orion_geral_orcado_realizado_acessar">
               <a onclick="switchTab('orion-oxr', 'Orçado × Realizado (Órion)')">Orçado × Realizado</a>
@@ -8856,10 +8856,11 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="orion-orcamento-novo.js?v=2138"></script>
   <script defer src="orion-orcamento-grade.js?v=2138"></script>
   <script defer src="orion-dfc.js?v=2138"></script>
-  <script defer src="orion-resumo.js?v=2138"></script>
+  <script defer src="orion-resumo.js?v=2140"></script>
   <script defer src="orion-analitico.js?v=2138"></script>
   <script defer src="orion-analise.js?v=2138"></script>
   <script defer src="orion-orcado-realizado.js?v=2138"></script>
+  <script defer src="orion-dashboard-orcamento.js?v=2140"></script>
   <script defer src="orion-viabilidade-calc.js?v=2139"></script>
   <script defer src="orion-viabilidades.js?v=2139"></script>
   <script defer src="orion-viabilidade-edicao.js?v=2139"></script>
