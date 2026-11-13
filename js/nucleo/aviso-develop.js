@@ -770,7 +770,10 @@
     const dias = (Date.now() - Number(s.decididoEm || 0)) / 86400000;
     if (dias > 7) return "";
     if (s.status === "publicado") return `Sua alteração foi publicada na produção (v${esc(s.versao || "")}) em ${esc(fmtData(s.publicadoEm || s.decididoEm))}.`;
-    if (s.status === "aprovado") return `Envio aprovado por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}. Entra na produção na próxima publicação.`;
+    if (s.status === "aprovado") {
+      if (s.semAlteracoesCodigo) return `Solicitação manual aprovada por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}. O atendimento depende de ação fora do fluxo automático de publicação.`;
+      return `Envio aprovado por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}. Entra na produção na próxima publicação.`;
+    }
     if (s.status === "recusado") return `Envio recusado por ${esc(s.decididoPor || "administrador")} em ${esc(fmtData(s.decididoEm))}${s.motivo ? ": " + esc(s.motivo) : "."}`;
     return "";
   }
@@ -787,16 +790,13 @@
       return;
     }
     const r = resumoDe(d);
-    if (!r.totais.commits) {
-      corpo.innerHTML = `<p>Este ambiente está igual à produção: não há nada para encaminhar.</p>
-        <p style="color:#64748b;">Se você acabou de subir uma alteração, espere 1 minuto e tente de novo.</p>`;
-      return;
-    }
+    const semAlteracoesCodigo = !r.totais.commits && !r.totais.arquivos;
     const atualizando = minhaSolic && minhaSolic.status === "pendente";
     const anterior = atualizando ? minhaSolic : null;
     const escolhidas = new Set((anterior && Array.isArray(anterior.telas) && anterior.telas.length) ? anterior.telas : sugerirTelas(r, ""));
     const menu = menuTelas();
     corpo.innerHTML = `
+      ${semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Não há commits pendentes nesta branch.</strong> Você pode encaminhar uma solicitação manual para o administrador; ela não fará publicação automática.</div>` : ""}
       ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com o que está abaixo.</div>` : ""}
       <div>
         <div class="avsol-tit">1. Em quais telas mudou?</div>
@@ -812,7 +812,7 @@
         <div class="avsol-tit">3. Como testar (opcional)</div>
         <textarea class="avsol-texto curto" id="avsol-teste" placeholder="Ex.: abrir um cliente com acordo, clicar em Registrar acordo e anexar um PDF.">${esc(anterior ? anterior.comoTestar || "" : "")}</textarea>
       </div>
-      ${htmlVisual(r)}
+      ${semAlteracoesCodigo ? "" : htmlVisual(r)}
       <div class="avsol-acoes">
         <button type="button" class="avdev-btn ok" id="avsol-enviar">${atualizando ? "Atualizar solicitação" : "Enviar para o administrador"}</button>
         <button type="button" class="avdev-btn" data-fechar>Cancelar</button>
@@ -859,7 +859,8 @@
         solicitante: usuarioReal(),
         criadoEm: Date.now(),
         status: "pendente",
-        avisoVisto: false
+        avisoVisto: false,
+        semAlteracoesCodigo
       }, r);
       try {
         if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
@@ -868,10 +869,10 @@
         console.warn("[Encaminhar para produção] Falha ao gravar:", e);
         alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
         btn.disabled = false;
-        btn.textContent = "Enviar para o administrador";
+        btn.textContent = atualizando ? "Atualizar solicitação" : "Enviar para o administrador";
         return;
       }
-      corpo.innerHTML = `<div class="avsol-feito ok"><strong>Solicitação enviada.</strong> O administrador vai receber um aviso. Quando ele aprovar, a produção é atualizada sozinha e você recebe um aviso aqui e na produção.</div>
+      corpo.innerHTML = `<div class="avsol-feito ok"><strong>Solicitação ${semAlteracoesCodigo ? "manual " : ""}enviada.</strong> ${semAlteracoesCodigo ? "O administrador vai analisar a solicitação; não há commits para publicar automaticamente." : "O administrador vai receber um aviso. Quando aprovar, a produção será atualizada automaticamente e você receberá um aviso aqui e na produção."}</div>
         <div class="avsol-acoes"><button type="button" class="avdev-btn" data-fechar>Fechar</button></div>`;
       await carregarMinha();
       pintar();
@@ -1028,7 +1029,7 @@
     const quem = (s.solicitante && (s.solicitante.nome || s.solicitante.email)) || "desenvolvedor";
     const informadas = Array.isArray(s.telas) && s.telas.length;
     const telas = informadas ? s.telas : sugerirTelas(s, s.descricao);
-    const github = `<p style="margin:8px 0 0;"><a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a></p>`;
+    const github = s.semAlteracoesCodigo ? "" : `<p style="margin:8px 0 0;"><a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a></p>`;
     return `<div class="avsol-pedido" style="color:${esc(amb.cor)};" data-id="${esc(s.id)}">
       <div class="avsol-cab">
         <i data-lucide="send" style="width:16px;height:16px;"></i>
@@ -1039,10 +1040,11 @@
         <div><div class="avsol-tit">Onde mudou</div>${htmlTelas(telas, amb, !informadas)}</div>
         ${s.descricao ? `<div><div class="avsol-tit">O que muda para quem usa</div><div class="avsol-desc">${esc(s.descricao)}</div></div>` : ""}
         ${s.comoTestar ? `<div><div class="avsol-tit">Como testar</div><div class="avsol-desc teste">${esc(s.comoTestar)}</div></div>` : ""}
+        ${s.semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Solicitação manual:</strong> não havia commits pendentes na branch. A aprovação não publica código automaticamente.</div>` : ""}
         ${mudouDepois ? `<div class="avsol-aviso">Depois deste pedido, subiram mais alterações nesse ambiente. Só o que foi pedido será publicado.</div>` : ""}
-        ${htmlVisual(s, github)}
+        ${s.semAlteracoesCodigo ? "" : htmlVisual(s, github)}
         <div class="avsol-acoes">
-          <button type="button" class="avdev-btn ok" data-sol="aprovar">Aprovar e publicar</button>
+          <button type="button" class="avdev-btn ok" data-sol="aprovar">${s.semAlteracoesCodigo ? "Aprovar solicitação manual" : "Aprovar e publicar"}</button>
           <button type="button" class="avdev-btn nao" data-sol="recusar">Recusar</button>
           <a class="avdev-btn" href="${esc(amb.url + (telas[0] ? "?tela=" + encodeURIComponent(telas[0]) : ""))}" target="_blank" rel="noopener">Testar na bolha</a>
         </div>
@@ -1075,16 +1077,28 @@
     return Object.assign({ httpStatus: res.status }, j);
   }
 
+  // A chave que publica no GitHub só existe na produção (por segurança, as bolhas de teste não a têm).
+  // Aprovar dentro de uma bolha de teste chamava a API da bolha e caía em "publicação não ligada".
+  function naProducao() {
+    const host = String(location.hostname || "").toLowerCase();
+    return host === "crm-gestao.vercel.app" || /^crm-gestao-[a-z0-9]+-crm-mldu\.vercel\.app$/.test(host);
+  }
+
   async function decidir(caixa, s, status, motivo) {
     const f = fb();
     if (!f) return;
+    if (status === "aprovado" && !s.semAlteracoesCodigo && !naProducao()) {
+      alert("Para aprovar e publicar, abra o Integra da produção (" + URL_PRODUCAO + ") e aprove por lá.\n\n"
+        + "Você está num ambiente de teste, que não tem permissão para publicar. A solicitação continua aguardando.");
+      return;
+    }
     const quem = usuarioReal();
     const botoes = caixa.querySelectorAll("button");
     botoes.forEach((b) => { b.disabled = true; });
     const branch = s.branch || ambientePorChave(s.ambiente).branch;
     const alvo = caixa.querySelector(".avsol-conteudo");
     const registro = { motivo: motivo || "", decididoPor: quem.nome || quem.email, decididoPorEmail: quem.email, decididoEm: Date.now(), avisoVisto: false };
-    if (status === "aprovado") {
+    if (status === "aprovado" && !s.semAlteracoesCodigo) {
       const btn = caixa.querySelector('[data-sol="aprovar"]');
       if (btn) btn.textContent = "Publicando… (até 1 minuto)";
       let resultado = null;
@@ -1121,7 +1135,9 @@
         ${pend.length ? `<br><span style="font-size:.8rem;">Bolhas não atualizadas (têm outras alterações em andamento): ${esc(pend.join(", "))}.</span>` : ""}
         <br><span style="font-size:.8rem;">No seu computador, o próximo deploy.bat já traz esta versão sozinho.</span></div>`;
     } else if (status === "aprovado") {
-      alvo.innerHTML = `<div class="avsol-feito ok"><strong>Aprovado.</strong> ${registro.motivo ? esc(registro.motivo) + " " : "A publicação automática ainda não está ligada: "}peça ao Claude <b>"juntar ${esc(branch)} na main"</b> e rode o <b>deploy.bat</b>.</div>`;
+      alvo.innerHTML = s.semAlteracoesCodigo
+        ? `<div class="avsol-feito ok"><strong>Solicitação manual aprovada.</strong> Não há commits para publicar automaticamente; o atendimento depende de ação administrativa.</div>`
+        : `<div class="avsol-feito ok"><strong>Aprovado.</strong> ${registro.motivo ? esc(registro.motivo) + " " : "A publicação automática ainda não está ligada: "}peça ao Claude <b>"juntar ${esc(branch)} na main"</b> e rode o <b>deploy.bat</b>.</div>`;
     } else {
       alvo.innerHTML = `<div class="avsol-feito nao"><strong>Recusado.</strong> O desenvolvedor verá o motivo.</div>`;
     }
