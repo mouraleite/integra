@@ -1077,9 +1077,21 @@
     return Object.assign({ httpStatus: res.status }, j);
   }
 
+  // A chave que publica no GitHub só existe na produção (por segurança, as bolhas de teste não a têm).
+  // Aprovar dentro de uma bolha de teste chamava a API da bolha e caía em "publicação não ligada".
+  function naProducao() {
+    const host = String(location.hostname || "").toLowerCase();
+    return host === "crm-gestao.vercel.app" || /^crm-gestao-[a-z0-9]+-crm-mldu\.vercel\.app$/.test(host);
+  }
+
   async function decidir(caixa, s, status, motivo) {
     const f = fb();
     if (!f) return;
+    if (status === "aprovado" && !s.semAlteracoesCodigo && !naProducao()) {
+      alert("Para aprovar e publicar, abra o Integra da produção (" + URL_PRODUCAO + ") e aprove por lá.\n\n"
+        + "Você está num ambiente de teste, que não tem permissão para publicar. A solicitação continua aguardando.");
+      return;
+    }
     const quem = usuarioReal();
     const botoes = caixa.querySelectorAll("button");
     botoes.forEach((b) => { b.disabled = true; });

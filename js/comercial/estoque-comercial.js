@@ -3870,7 +3870,12 @@ const EstoqueComercialApp = {
         const ccs = [...this._ccsTituloTeste];
         this._ccsTituloTeste = new Set();
         for (const cc of ccs) {
-          try { await this.saveFirebaseCc(cc); } catch (e) { console.warn("[Estoque] título de teste", cc, e); }
+          try {
+            await this.saveFirebaseCc(cc);
+          } catch (e) {
+            this._ccsTituloTeste.add(cc);
+            console.warn("[Estoque] título de teste", cc, e);
+          }
         }
         if (this._confTituloTesteSuja && this.state.conferenciaGeral) {
           const { doc, setDoc } = window.firebaseCollections;
@@ -3881,7 +3886,7 @@ const EstoqueComercialApp = {
         console.warn("[Estoque] não gravou a retirada do título de teste", e);
       } finally {
         this._persistTituloTeste = null;
-        if (this._ccsTituloTeste.size || this._confTituloTesteSuja) this.persistirTitulosTeste();
+        if (this.fbReady() && (this._ccsTituloTeste.size || this._confTituloTesteSuja)) this.persistirTitulosTeste();
       }
     })();
     return this._persistTituloTeste;
