@@ -53389,8 +53389,11 @@ window.openAnexosClienteModal = async function(customerId) {
 
             let localFiles = null;
             try {
-      if (typeof AnexosDB !== 'undefined') localFiles = await AnexosDB.load(customerId);
-    } catch (e) {}
+      if (typeof AnexosDB !== 'undefined') localFiles = await AnexosDB.load(customerId, { includeFiles: true });
+    } catch (e) {
+      console.error("Erro ao carregar anexos jurídicos no modal:", e);
+      alert("Não foi possível carregar/sincronizar os anexos jurídicos: " + ((e && e.message) || e));
+    }
 
     const [attPack, custPack] = await Promise.all([
       SiengeApiService.getSalesContractAttachments
