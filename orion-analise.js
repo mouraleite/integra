@@ -98,20 +98,21 @@ const OrionAnaliseApp = {
     this.carregando = true; this.erro = ""; this.dados = null; this.render();
     try {
       if (!R) throw new Error("Arquivo do realizado não carregou. Recarregue a página.");
-      const ano = Number(this.ano), anoRef = ano + 1, tipo = this.tipo === "RECEITAS" ? "RECEITAS" : "DESPESAS", nomeT = tipo === "RECEITAS" ? "receitas" : "despesas";
+      const base = this.base === "forecast" || this.base === "orcamento_ano" ? this.base : "orcamento";
+      const ano = Number(this.ano), anoRef = base === "orcamento_ano" ? ano : ano + 1, tipo = this.tipo === "RECEITAS" ? "RECEITAS" : "DESPESAS", nomeT = tipo === "RECEITAS" ? "receitas" : "despesas";
       const depts = this.deptsFiltro();
       const doDept = (c) => !depts || depts.indexOf(String(c.departamento ? c.departamento.id : "")) >= 0;
       const fcN = C.documentosVigentes((this.cabs.forecasts || []).filter(doDept), { ano, base: "forecast", versao: this.versao, tipos: [tipo] });
       let ref, refDesc;
-      if (this.base === "forecast") { ref = C.documentosVigentes((this.cabs.forecasts || []).filter(doDept), { ano: anoRef, base: "forecast", versao: fcN.versao, tipos: [tipo] }); refDesc = `forecast ${anoRef} (${ref.versao || "—"})`; }
-      else { ref = C.documentosVigentes((this.cabs.orcamentos || []).filter(doDept), { ano: anoRef, base: "orcamento", tipos: [tipo] }); refDesc = `orçado ${anoRef}`; }
+      if (base === "forecast") { ref = C.documentosVigentes((this.cabs.forecasts || []).filter(doDept), { ano: anoRef, base: "forecast", versao: fcN.versao, tipos: [tipo] }); refDesc = `forecast ${anoRef} (${ref.versao || "—"})`; }
+      else { ref = C.documentosVigentes((this.cabs.orcamentos || []).filter(doDept), { ano: anoRef, base: "orcamento", tipos: [tipo] }); refDesc = `orçado ${anoRef}${base === "orcamento_ano" ? " (mesmo ano)" : ""}`; }
       const avisos = [];
       if (!fcN.docs.length) avisos.push(`Não há forecast de ${nomeT} de ${ano} — o YTG fica zerado.`);
-      if (!ref.docs.length) avisos.push(this.base === "forecast" ? `Não há forecast de ${nomeT} em ${anoRef} com a descrição «${fcN.versao}».` : `Não há orçamento de ${nomeT} de ${anoRef} — a referência fica zerada.`);
+      if (!ref.docs.length) avisos.push(base === "forecast" ? `Não há forecast de ${nomeT} em ${anoRef} com a descrição «${fcN.versao}».` : `Não há orçamento de ${nomeT} de ${anoRef} — a referência fica zerada.`);
       this.passo = "Lendo forecast e referência…"; this.render();
       const nfc = [], refL = [];
       for (const c of fcN.docs) nfc.push(...(await this.lerLinhas("forecasts", c)));
-      for (const c of ref.docs) refL.push(...(await this.lerLinhas(this.base === "forecast" ? "forecasts" : "orcamentos", c)));
+      for (const c of ref.docs) refL.push(...(await this.lerLinhas(base === "forecast" ? "forecasts" : "orcamentos", c)));
       const corte = this.corteAtual();
       const ccs = [...new Set(nfc.concat(refL).map((l) => String(l.cc).replace(/\D/g, "")))];
       const empresas = R.empresasDosCcs(ccs);
@@ -120,7 +121,7 @@ const OrionAnaliseApp = {
         this.passo = `Lendo o realizado de jan a ${this.MESES[corte - 1].toLowerCase()}/${ano} (${empresas.length} empresa(s))…`; this.render();
         real = await R.buscar(ano, corte, empresas);
       }
-      this.dados = { tipo, nfc, refL, real, corte, empresas, versao: fcN.versao, refDesc, anoRef, avisos };
+      this.dados = { base, tipo, nfc, refL, real, corte, empresas, versao: fcN.versao, refDesc, anoRef, avisos };
     } catch (e) { this.erro = e.message || String(e); }
     this.carregando = false; this.passo = "";
     this.render();
@@ -184,7 +185,7 @@ const OrionAnaliseApp = {
       const v = p.n - p.ref;
       return `<div class="oan-card"><div style="display:flex;justify-content:space-between"><div><b>${t}</b><div style="color:#64748b">${sub}</div></div>${this.farol(p.n, p.ref)}</div>
         <div class="l"><span>${this.esc(this.ano)}</span><span class="big">${this.R$(p.n)}</span></div>
-        <div class="l"><span>${this.base === "forecast" ? "FC" : "ORÇ"} ${d.anoRef}</span><span>${this.R$(p.ref)}</span></div>
+        <div class="l"><span>${d.base === "forecast" ? "FC" : "ORÇ"} ${d.anoRef}</span><span>${this.R$(p.ref)}</span></div>
         <div class="l"><span>VAR</span><span class="${(d.tipo === "RECEITAS" ? v < 0 : v > 0) ? "oan-neg" : ""}">${this.R$(v)} ${p.ref ? ((v / Math.abs(p.ref)) * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%" : "100,0%"}</span></div></div>`;
     };
     const t = a.total.per, c = d.corte;
@@ -194,7 +195,7 @@ const OrionAnaliseApp = {
   htmlTabela(a) {
     const d = this.dados;
     const S = this.series;
-    const refT = (this.base === "forecast" ? "FC " : "ORÇ ") + d.anoRef;
+    const refT = (d.base === "forecast" ? "FC " : "ORÇ ") + d.anoRef;
     const blocos = [];
     if (S.n || S.ref) blocos.push({ n: "n", r: "ref", tn: "REAL " + this.ano, tr: refT, tv: "VAR" });
     if (S.n_mldu || S.ref_mldu) blocos.push({ n: "n_mldu", r: "ref_mldu", tn: "MLDU REAL", tr: "MLDU " + refT, tv: "VAR MLDU" });
@@ -267,7 +268,7 @@ const OrionAnaliseApp = {
     const nomeT = this.tipo === "RECEITAS" ? "Receita" : "Despesa";
     const a = this.dados ? this.montar() : null;
     root.innerHTML = `
-      <div style="font-size:0.8rem;color:#475569;margin-bottom:10px">YTD real ${this.esc(this.ano)}, YTG forecast, FY contra ${this.base === "forecast" ? "forecast" : "orçado"} ${Number(this.ano) + 1}. Cheio e MLDU lado a lado. ${nomeT} positiva.</div>
+      <div style="font-size:0.8rem;color:#475569;margin-bottom:10px">YTD real ${this.esc(this.ano)}, YTG forecast, FY contra ${this.base === "forecast" ? "forecast " + (Number(this.ano) + 1) : this.base === "orcamento_ano" ? "orçado " + this.esc(this.ano) + " (mesmo ano: realizado × orçado de jan até o corte; forecast × orçado no restante)" : "orçado " + (Number(this.ano) + 1)}. Cheio e MLDU lado a lado. ${nomeT} positiva.</div>
       <div class="ofg">
         <div class="ofg-sec">O que analisar</div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Tipo</label><select class="idx-select" onchange="OrionAnaliseApp.set('tipo', this.value)">${op("DESPESAS", "Despesas", this.tipo)}${op("RECEITAS", "Receitas", this.tipo)}</select></div>
@@ -279,7 +280,7 @@ const OrionAnaliseApp = {
         <div class="ofg-sec">Período e comparação</div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Ano</label><select class="idx-select" onchange="OrionAnaliseApp.set('ano', this.value)">${anos.map((x) => op(x, x, this.ano)).join("")}</select></div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Corte YTD</label><select class="idx-select" onchange="OrionAnaliseApp.set('corte', this.value)">${this.MESES.map((m, i) => op(i + 1, m.charAt(0) + m.slice(1).toLowerCase(), corte)).join("")}</select></div>
-        <div class="ofg-f"><label class="ml-emp-filter-label">Comparar com</label><div class="ofg-seg">${seg("base", "orcamento", "Orçado", this.base)}${seg("base", "forecast", "Forecast", this.base)}</div></div>
+        <div class="ofg-f"><label class="ml-emp-filter-label">Comparar com</label><select class="idx-select" onchange="OrionAnaliseApp.set('base', this.value)">${op("orcamento", "Orçado " + (Number(this.ano) + 1) + " (próximo ano)", this.base)}${op("forecast", "Forecast " + (Number(this.ano) + 1) + " (mesma versão)", this.base)}${op("orcamento_ano", "Orçado " + this.ano + " (mesmo ano)", this.base)}</select></div>
         <div class="ofg-f"><label class="ml-emp-filter-label">Versão do forecast</label><select class="idx-select" onchange="OrionAnaliseApp.set('versao', this.value)">${vs.map((v, i) => op(v.descricao, this.C().rotuloVersao(v.descricao, "forecast"), this.versao || (i === 0 ? v.descricao : ""))).join("") || "<option>sem forecast</option>"}</select></div>
         <div class="ofg-acao"><button type="button" class="btn btn-primary" ${this.carregando || !this.cabs.forecasts ? "disabled" : ""} onclick="OrionAnaliseApp.calcular()">${this.carregando ? "Calculando..." : "Calcular"}</button></div>
       </div>
