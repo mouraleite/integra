@@ -298,6 +298,7 @@ Object.assign(window.OrionOrcamentosApp, {
     e.linhas.forEach((l, i) => { if (!grupos.has(l.cc)) grupos.set(l.cc, []); grupos.get(l.cc).push(i); });
     let corpo = "";
     grupos.forEach((idx, cc) => {
+      if (this.passaFiltro && !idx.some((i) => this.passaFiltro(e.linhas[i]))) return; // painel Filtros das telas do Órion
       const g = C.somarLinhas(idx.map((i) => e.linhas[i]));
       const rec = !!e.recolhidos[cc];
       const nome = e.linhas[idx[0]].cc_nome || ((this.cadDep || {}).nomesCc || {})[cc] || "";
@@ -308,7 +309,7 @@ Object.assign(window.OrionOrcamentosApp, {
         const l = e.linhas[i];
         const b = base ? base.get(String(l.cc).replace(/\D/g, "") + "|" + String(l.plano).replace(/\D/g, "")) : null;
         const txt = `${l.cc} ${l.cc_nome} ${l.plano} ${l.plano_nome} ${l.obs || ""}`.toLowerCase();
-        const oculto = rec || (q && txt.indexOf(q) < 0);
+        const oculto = rec || (q && txt.indexOf(q) < 0) || (this.passaFiltro && !this.passaFiltro(l));
         corpo += `<tr data-linha="${i}" style="${oculto ? "display:none" : ""}">
           <td style="padding-left:18px;white-space:normal">${this.esc(l.plano)} ${this.esc(l.plano_nome)}${base && !b ? ' <span style="font-size:0.65rem;color:#a16207">(nova)</span>' : ""}</td>
           ${l.m.map((v, mi) => {
@@ -406,7 +407,7 @@ Object.assign(window.OrionOrcamentosApp, {
     const dis = (mi) => (trav.indexOf(mi + 1) >= 0 ? ' disabled title="mês travado"' : "");
     const aba = e.abaVendas || "vendas", oc = e.ocultos || {};
     const q = String(e.buscaVendas || "").trim().toLowerCase();
-    const casa = (l) => !q || `${l.cc} ${l.cc_nome} ${l.plano_venda}`.toLowerCase().indexOf(q) >= 0;
+    const casa = (l) => (!q || `${l.cc} ${l.cc_nome} ${l.plano_venda}`.toLowerCase().indexOf(q) >= 0) && (!this.passaFiltro || this.passaFiltro(l));
     const f = (c) => C.fmtReais(c, true);
     let corpo = "";
     if (aba === "liquidas") {
