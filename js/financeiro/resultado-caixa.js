@@ -3237,16 +3237,21 @@ const ResultadoCaixaApp = {
     if (lado === "saidas") {
       const pack = this.linhasSaida();
       const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
-      const todos = pack.rows.filter(vivo).sort((a, b) => ((Number(a.acum && a.acum.real) || 0) - (Number(b.acum && b.acum.real) || 0))
-        || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+      // Saídas em valor positivo (como no slide); as 7 maiores pelo realizado acumulado e o resto em OUTROS.
+      const abs = (b) => ({ ant: Math.abs(Number(b.ant) || 0), orc: Math.abs(Number(b.orc) || 0), real: Math.abs(Number(b.real) || 0) });
+      const todos = pack.rows.filter(vivo).map((r) => ({ nome: r.nome, mensal: abs(r.mensal), acum: abs(r.acum) }))
+        .sort((a, b) => (b.acum.real - a.acum.real) || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+      const top = todos.slice(0, 7);
+      const resto = todos.slice(7);
       return {
         titulo: "Saídas por Conta",
         rotulo: "CONTA",
-        rows: todos,
-        outros: null,
+        rows: top,
+        outros: resto.length ? { nome: "OUTROS", mensal: this.somaBloco(resto, "mensal"), acum: this.somaBloco(resto, "acum") } : null,
         total: this.somaBloco(todos, "mensal"),
         totalA: this.somaBloco(todos, "acum"),
-        ordem: "real"
+        ordem: "real",
+        saida: true
       };
     }
     const pack = this.linhasTabela("entradas");
@@ -3430,13 +3435,17 @@ const ResultadoCaixaApp = {
       txt(total ? "TOTAL" : recortar(String(r.nome || "").toUpperCase(), X[1] - 12), 6, y + RH / 2, { peso, tam: 14 });
       [[r.mensal, 1, false], [r.acum, 6, true]].forEach(([b, ini, acum]) => {
         const v = b.real - b.orc;
-        const corVar = acum && !total ? (v > 0.5 ? COR.pos : (v < -0.5 ? COR.neg : COR.texto)) : COR.texto;
+        // Entradas: realizar acima do orçado é bom (verde). Saídas: gastar acima do orçado é ruim (vermelho).
+        const bom = d.saida ? v < -0.5 : v > 0.5;
+        const ruim = d.saida ? v > 0.5 : v < -0.5;
+        const corVar = acum && !total ? (bom ? COR.pos : (ruim ? COR.neg : COR.texto)) : COR.texto;
         const pesoVar = acum ? "bold" : peso;
+        // Saídas já chegam em valor positivo (dadosImagemPpt); a variação mantém o sinal, como no slide:
+        // gastou menos que o orçado = negativo (verde), gastou mais = positivo (vermelho).
         const mag = (x) => lado === "saidas" ? Math.abs(Number(x) || 0) : x;
         const pRaw = this.pct(mag(b.real), mag(b.orc));
-        const pShow = pRaw == null ? null : (lado === "saidas" ? Math.abs(pRaw) : pRaw);
-        const pctTxt = pShow == null ? "—" : pShow.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
-        const cel = [n2(mag(b.ant)), n2(mag(b.orc)), n2(mag(b.real)), n2(mag(v)), pctTxt];
+        const pctTxt = pRaw == null ? "—" : pRaw.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+        const cel = [n2(mag(b.ant)), n2(mag(b.orc)), n2(mag(b.real)), n2(mag(b.real) - mag(b.orc)), pctTxt];
         cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
       });
     });
