@@ -2455,8 +2455,9 @@ const ResultadoCaixaApp = {
     return { pos, neg, outros };
   },
 
-  fmt(n) {
+  fmt(n, absoluto) {
     let v = Number(n) || 0;
+    if (absoluto) v = Math.abs(v);
     if (this.escala === "milhoes") v = v / 1000000;
     return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   },
@@ -2509,13 +2510,14 @@ const ResultadoCaixaApp = {
     const bom = v > 0.5;
     const cls = ruim ? "is-neg" : (bom ? "is-pos" : "");
     const p = this.pct(real, orc);
-    const pTxt = p == null ? "—" : (p.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
-    return `<td class="rcx-num ${cls}">${this.fmt(v)}</td><td class="rcx-num ${cls}">${pTxt}</td>`;
+    const pNum = saida && p != null ? Math.abs(p) : p;
+    const pTxt = pNum == null ? "—" : (pNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
+    return `<td class="rcx-num ${cls}">${this.fmt(v, saida)}</td><td class="rcx-num ${cls}">${pTxt}</td>`;
   },
 
   blocoNums(b, saida) {
-    const ant = this.fmt(b.ant);
-    return `<td class="rcx-num rcx-sep rcx-ant">${ant}</td><td class="rcx-num">${this.fmt(b.orc)}</td><td class="rcx-num rcx-real">${this.fmt(b.real)}</td>${this.celVar(b.real, b.orc, saida)}`;
+    const ant = this.fmt(b.ant, saida);
+    return `<td class="rcx-num rcx-sep rcx-ant">${ant}</td><td class="rcx-num">${this.fmt(b.orc, saida)}</td><td class="rcx-num rcx-real">${this.fmt(b.real, saida)}</td>${this.celVar(b.real, b.orc, saida)}`;
   },
 
   somaBloco(lista, qual) {
@@ -2688,7 +2690,7 @@ const ResultadoCaixaApp = {
   },
 
   /** Barras do mês selecionado: realizado do ano anterior, orçado e realizado do ano atual. */
-  graficoMesHtml(total) {
+  graficoMesHtml(total, saida) {
     const atual = this.anoAtual();
     const antN = atual > 1900 ? atual - 1 : 0;
     const nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
@@ -2706,7 +2708,7 @@ const ResultadoCaixaApp = {
           const h = b.espera ? 0 : Math.abs(Number(b.valor) || 0) / maior * 100;
           return `<div class="rcx-graf-col ${b.cls}">
             <div class="rcx-graf-track">
-              <span class="rcx-graf-val" style="bottom:${h.toFixed(2)}%">${b.espera ? "…" : this.fmt(b.valor)}</span>
+              <span class="rcx-graf-val" style="bottom:${h.toFixed(2)}%">${b.espera ? "…" : this.fmt(b.valor, saida)}</span>
               <div class="rcx-graf-bar" style="height:${h.toFixed(2)}%"></div>
             </div>
           </div>`;
@@ -2754,7 +2756,7 @@ const ResultadoCaixaApp = {
           const h = (c.total / maior * 100).toFixed(2);
           return `<div class="rcx-graf-col ${c.cls}">
           <div class="rcx-graf-track">
-          <span class="rcx-graf-val" style="bottom:${h}%">${this.fmt(c.rotuloValor)}${c.marca ? " *" : ""}</span>
+          <span class="rcx-graf-val" style="bottom:${h}%">${this.fmt(c.rotuloValor, lado === "saidas")}${c.marca ? " *" : ""}</span>
           <div class="rcx-tot-pilha" style="height:${h}%" title="${caixaEsc(c.rotulo)}: ${this.fmt(c.escuro)} até ${mesCurto} + ${this.fmt(c.claro)} até dezembro">
             ${pedaco(c.claro, c.total, "is-claro")}${pedaco(c.escuro, c.total, "is-escuro")}
           </div></div>
@@ -2943,7 +2945,8 @@ const ResultadoCaixaApp = {
     if (realN != null && orcN != null && Math.abs(orcN) > 0.5) {
       const p = (realN - orcN) / Math.abs(orcN) * 100;
       const bom = lado === "saidas" ? realN - orcN <= 0 : realN - orcN >= 0;
-      dif = `<div class="rcx-ln-tip-dif ${bom ? "is-pos" : "is-neg"}">${m <= pack.sel ? "Realizado" : "Forecast"} x orçado: ${this.fmt(realN - orcN)} (${p.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</div>`;
+      const pTxt = (lado === "saidas" ? Math.abs(p) : p).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      dif = `<div class="rcx-ln-tip-dif ${bom ? "is-pos" : "is-neg"}">${m <= pack.sel ? "Realizado" : "Forecast"} x orçado: ${this.fmt(realN - orcN, lado === "saidas")} (${pTxt}%)</div>`;
     }
     tip.innerHTML = `<div class="rcx-ln-tip-tit">${caixaEsc((this.MESES[i] || "") + "/" + (pack.ano || ""))}</div>`
       + linha("is-ant", pack.nomes.ant, val(s.ant))
@@ -3268,10 +3271,6 @@ const ResultadoCaixaApp = {
     const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
     const mi = (v) => (Number(v) || 0) / 1000000;
     const n2 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const p1 = (real, orc) => {
-      const p = this.pct(real, orc);
-      return p == null ? "—" : p.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
-    };
 
     // Medidas em "px de slide" (96 por polegada); a imagem sai 3x maior para ficar nítida no projetor.
     const W = 861;
@@ -3420,7 +3419,11 @@ const ResultadoCaixaApp = {
         const v = b.real - b.orc;
         const corVar = acum && !total ? (v > 0.5 ? COR.pos : (v < -0.5 ? COR.neg : COR.texto)) : COR.texto;
         const pesoVar = acum ? "bold" : peso;
-        const cel = [n2(b.ant), n2(b.orc), n2(b.real), n2(v), p1(b.real, b.orc)];
+        const mag = (x) => lado === "saidas" ? Math.abs(Number(x) || 0) : x;
+        const pRaw = this.pct(mag(b.real), mag(b.orc));
+        const pShow = pRaw == null ? null : (lado === "saidas" ? Math.abs(pRaw) : pRaw);
+        const pctTxt = pShow == null ? "—" : pShow.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+        const cel = [n2(mag(b.ant)), n2(mag(b.orc)), n2(mag(b.real)), n2(mag(v)), pctTxt];
         cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
       });
     });
@@ -3498,7 +3501,7 @@ const ResultadoCaixaApp = {
     }).join("");
     const total = this.somaBloco(todos, "mensal");
     const totalA = this.somaBloco(todos, "acum");
-    return `<div class="rcx-topo">${this.graficoMesHtml(total)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
+    return `<div class="rcx-topo">${this.graficoMesHtml(total, true)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
       + this.gradeHtml("Conta", corpo, total, totalA, true, true)
       + this.matrizDfcHtml("saidas");
   },
@@ -3508,7 +3511,7 @@ const ResultadoCaixaApp = {
     if (!k) return;
     if (!this.matrizAbertos) this.matrizAbertos = {};
     this.matrizAbertos[k] = !this.matrizAbertos[k];
-    this.render();
+    this.renderMantendoScroll();
   },
 
   ordenarMatriz(campo) {
@@ -3561,11 +3564,33 @@ const ResultadoCaixaApp = {
             if (!vivo(o, r)) return;
             slot.orc += o;
             slot.real += r;
-            const cc = g.ccs[ccId] || (g.ccs[ccId] = { id: ccId, nome: bloco.nome || "", porEmp: {} });
+            const cc = g.ccs[ccId] || (g.ccs[ccId] = { id: ccId, nome: bloco.nome || "", porEmp: {}, planos: {} });
             if (!cc.nome && bloco.nome) cc.nome = bloco.nome;
+            if (!cc.planos) cc.planos = {};
             const cel = cc.porEmp[key] || (cc.porEmp[key] = { orc: 0, real: 0 });
             cel.orc += o;
             cel.real += r;
+            const fontePlano = (arq.planosPorCc && arq.planosPorCc[ccId] && arq.planosPorCc[ccId].contas) || {};
+            Object.keys(fontePlano).forEach((code) => {
+              const info = fontePlano[code] || {};
+              if (!this.casaNo(info.node, g.def)) return;
+              let po = 0;
+              let pr = 0;
+              for (let m = 1; m <= mes; m++) {
+                const celPlano = (info.meses || {})[String(m)];
+                if (!celPlano) continue;
+                po += Number(celPlano.o) || 0;
+                pr += Number(celPlano.r) || 0;
+              }
+              po *= pct;
+              pr *= pct;
+              if (!vivo(po, pr)) return;
+              const pl = cc.planos[code] || (cc.planos[code] = { code: code, nome: info.nome || "", porEmp: {} });
+              if (info.nome && !pl.nome) pl.nome = info.nome;
+              const pcel = pl.porEmp[key] || (pl.porEmp[key] = { orc: 0, real: 0 });
+              pcel.orc += po;
+              pcel.real += pr;
+            });
           });
         } else if (arq.contas && !(filtro && filtro.ccs)) {
           slot.orc += this.somaCodigos(arq.contas, g.def, mes, "o", true) * pct;
@@ -3579,7 +3604,17 @@ const ResultadoCaixaApp = {
       .sort((x, y) => x.nome.localeCompare(y.nome, "pt"));
     const linhas = grupos
       .map((g) => {
-        const ccs = Object.keys(g.ccs).map((id) => g.ccs[id]).filter((cc) => {
+        const ccs = Object.keys(g.ccs).map((id) => {
+          const cc = g.ccs[id];
+          const planos = Object.keys(cc.planos || {}).map((code) => cc.planos[code]).filter((pl) => {
+            return cols.some((e) => {
+              const cel = pl.porEmp[e.id];
+              return cel && vivo(cel.orc, cel.real);
+            });
+          }).sort((x, y) => String(x.code || "").localeCompare(String(y.code || ""), "pt", { numeric: true }));
+          cc.planos = planos;
+          return cc;
+        }).filter((cc) => {
           return cols.some((e) => {
             const cel = cc.porEmp[e.id];
             return cel && vivo(cel.orc, cel.real);
@@ -3643,7 +3678,7 @@ const ResultadoCaixaApp = {
   matrizCelulas(orc, real, sep, saida) {
     const o = Number(orc) || 0;
     const r = Number(real) || 0;
-    return `<td class="rcx-num${sep ? " rcx-sep" : ""}">${this.fmt(o)}</td><td class="rcx-num">${this.fmt(r)}</td>${this.celVar(r, o, !!saida)}`;
+    return `<td class="rcx-num${sep ? " rcx-sep" : ""}">${this.fmt(o, saida)}</td><td class="rcx-num">${this.fmt(r, saida)}</td>${this.celVar(r, o, !!saida)}`;
   },
 
   matrizDfcHtml(lado) {
