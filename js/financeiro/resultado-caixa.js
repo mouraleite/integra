@@ -2643,6 +2643,9 @@ const ResultadoCaixaApp = {
           </div>
         </div>
         <div class="cc-toolbar-actions">
+          ${(lado === "entradas" || lado === "saidas") && Object.keys(this.anos || {}).length ? `<button type="button" class="rcx-arq-btn" title="Copia os gráficos e a tabela no padrão do slide do conselho. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+            <i data-lucide="image"></i> Copiar para o PowerPoint
+          </button>` : ""}
           <button type="button" class="rcx-arq-btn${this.arqsAberto ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleArqs()">
             <i data-lucide="files"></i> Arquivos <span class="ml-tab-count">${qtdArq}</span>
             <i data-lucide="${this.arqsAberto ? "chevron-up" : "chevron-down"}"></i>
@@ -2891,8 +2894,13 @@ const ResultadoCaixaApp = {
       { k: "forecast", cls: "is-fc", nome: "Forecast" },
       { k: "real", cls: "is-real", nome: ano ? String(ano) : "Realizado" }
     ];
-    const pontos = series.map((se) => s[se.k].map((v, i) => (v == null || (se.k === "forecast" && i + 1 <= sel)) ? ""
-      : `<circle cx="${x(i + 1).toFixed(1)}" cy="${y(v).toFixed(1)}" r="7" class="rcx-ln-hit"><title>${se.nome} · ${this.MESES[i]}: ${this.fmt(v)}</title></circle>`).join("")).join("");
+    // Tooltip por mês: a faixa inteira do mês responde ao mouse e mostra ano anterior, orçado, realizado e forecast.
+    this._lnSerie = this._lnSerie || {};
+    this._lnSerie[lado] = { s: s, nomes: { ant: series[0].nome, real: series[3].nome }, ano: ano, sel: sel };
+    const larg = (W - L - R) / 12;
+    const pontos = `<line x1="0" x2="0" y1="${T}" y2="${H - B}" class="rcx-ln-guia" style="display:none"></line>`
+      + letras.map((l, i) => `<rect x="${(L + i * larg).toFixed(1)}" y="${T}" width="${larg.toFixed(1)}" height="${H - T - B}" class="rcx-ln-faixa"`
+        + ` onmouseenter="ResultadoCaixaApp.lnTip(this,'${lado}',${i + 1},${x(i + 1).toFixed(1)})" onmouseleave="ResultadoCaixaApp.lnTipFechar(this)"></rect>`).join("");
     const legenda = series.filter((se) => s[se.k].some((v) => v != null)).map((se) => `<span class="rcx-ln-leg ${se.cls}"><i></i>${caixaEsc(se.nome)}</span>`).join("");
     const nomesMes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     let nota = "";
@@ -2909,7 +2917,61 @@ const ResultadoCaixaApp = {
       </svg>
       <div class="rcx-ln-legenda">${legenda}</div>
       ${nota ? `<div class="rcx-ln-nota">${caixaEsc(nota)}</div>` : ""}
+      <div class="rcx-ln-tip" role="tooltip" hidden></div>
     </div>`;
+  },
+
+  /** Mostra o quadro do mês no gráfico de evolução mensal. */
+  lnTip(faixa, lado, m, cx) {
+    const pack = this._lnSerie && this._lnSerie[lado];
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (!pack || !tip) return;
+    const s = pack.s;
+    const i = m - 1;
+    const val = (arr) => (arr && arr[i] != null ? this.fmt(arr[i]) : "—");
+    const fc = m > pack.sel ? val(s.forecast) : "—";
+    const real = m <= pack.sel ? val(s.real) : "—";
+    const linha = (cls, nome, v) => `<div class="rcx-ln-tip-l"><span class="rcx-ln-leg ${cls}"><i></i>${caixaEsc(nome)}</span><b>${v}</b></div>`;
+    const v = (arr) => (arr && arr[i] != null ? Number(arr[i]) : null);
+    let dif = "";
+    const realN = m <= pack.sel ? v(s.real) : v(s.forecast);
+    const orcN = v(s.orc);
+    if (realN != null && orcN != null && Math.abs(orcN) > 0.5) {
+      const p = (realN - orcN) / Math.abs(orcN) * 100;
+      const bom = lado === "saidas" ? realN - orcN <= 0 : realN - orcN >= 0;
+      dif = `<div class="rcx-ln-tip-dif ${bom ? "is-pos" : "is-neg"}">${m <= pack.sel ? "Realizado" : "Forecast"} x orçado: ${this.fmt(realN - orcN)} (${p.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</div>`;
+    }
+    tip.innerHTML = `<div class="rcx-ln-tip-tit">${caixaEsc((this.MESES[i] || "") + "/" + (pack.ano || ""))}</div>`
+      + linha("is-ant", pack.nomes.ant, val(s.ant))
+      + linha("is-orc", "Orçado", val(s.orc))
+      + linha("is-real", "Realizado", real)
+      + linha("is-fc", "Forecast", fc)
+      + dif;
+    tip.hidden = false;
+    const svg = faixa.ownerSVGElement;
+    const guia = svg && svg.querySelector(".rcx-ln-guia");
+    if (guia) {
+      guia.setAttribute("x1", cx);
+      guia.setAttribute("x2", cx);
+      guia.style.display = "";
+    }
+    const rb = box.getBoundingClientRect();
+    const rf = faixa.getBoundingClientRect();
+    const meio = rf.left - rb.left + rf.width / 2;
+    const largTip = tip.offsetWidth || 190;
+    let left = meio + 14;
+    if (left + largTip > rb.width - 6) left = meio - largTip - 14;
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = Math.max(4, rf.top - rb.top + 6) + "px";
+  },
+
+  lnTipFechar(faixa) {
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (tip) tip.hidden = true;
+    const guia = faixa && faixa.ownerSVGElement && faixa.ownerSVGElement.querySelector(".rcx-ln-guia");
+    if (guia) guia.style.display = "none";
   },
 
   gradeHtml(rotulo, body, total, totalA, saida, ordemAcumReal) {
@@ -3080,6 +3142,269 @@ const ResultadoCaixaApp = {
       + `<div class="rcx-topo">${this.graficoMesHtml(total)}${this.graficoLinhasHtml("entradas")}${this.graficoTotaisHtml("entradas")}</div>`
       + this.gradeHtml("Produto", corpo, total, totalA, false)
       + this.matrizDfcHtml("entradas");
+  },
+
+  /* ===== Imagem para o PowerPoint =====
+   * Desenha os gráficos e a tabela no mesmo padrão do slide "Entradas/Saídas consolidadas"
+   * (tabela estilo Excel: cabeçalho cinza, variação acumulada verde/vermelha, total cinza) e copia como PNG.
+   * Medidas tiradas do slide: o bloco ocupa ~22,8 cm de largura, na proporção ~1,46 : 1 (com 8 linhas + Outros + Total).
+   */
+  dadosImagemPpt(lado) {
+    if (lado === "saidas") {
+      const pack = this.linhasSaida();
+      const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
+      const todos = pack.rows.filter(vivo).sort((a, b) => ((Number(a.acum && a.acum.real) || 0) - (Number(b.acum && b.acum.real) || 0))
+        || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+      return {
+        titulo: "Saídas por Conta",
+        rotulo: "CONTA",
+        rows: todos,
+        outros: null,
+        total: this.somaBloco(todos, "mensal"),
+        totalA: this.somaBloco(todos, "acum"),
+        ordem: "real"
+      };
+    }
+    const pack = this.linhasTabela("entradas");
+    const vista = this.destacar(pack.rows);
+    const rows = vista.pos.concat(vista.neg);
+    const outros = vista.outros.length
+      ? { nome: "OUTROS", mensal: this.somaBloco(vista.outros, "mensal"), acum: this.somaBloco(vista.outros, "acum") }
+      : null;
+    return {
+      titulo: "Entradas por Empreendimento",
+      rotulo: "PRODUTO",
+      rows: rows,
+      outros: outros,
+      total: this.somaBloco(pack.rows, "mensal"),
+      totalA: this.somaBloco(pack.rows, "acum"),
+      ordem: "var"
+    };
+  },
+
+  desenharImagemPpt(lado) {
+    const d = this.dadosImagemPpt(lado);
+    const serie = lado === "saidas" ? this.serieSaidas() : this.serieEntradas();
+    if (lado === "saidas") {
+      ["ant", "orc", "real", "forecast"].forEach((k) => { serie[k] = (serie[k] || []).map((v) => (v == null ? null : Math.abs(v))); });
+    }
+    const ano = this.anoAtual();
+    const antN = ano > 1900 ? ano - 1 : 0;
+    const sel = Number(this.mes) || 1;
+    const MES = ["JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"];
+    const COR = {
+      verdeTit: "#1E5E3E", cinza: "#A6A6A6", cinzaClaro: "#D9D9D9", laranja: "#ED7D31", laranjaClaro: "#F8CBAD",
+      verde: "#0E4B2E", verdeClaro: "#CDEBD6", verdeFc: "#00B050", texto: "#000000", textoSuave: "#595959",
+      pos: "#00B050", neg: "#FF0000", cabec: "#D9D9D9", linhaTab: "#7F7F7F"
+    };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n2 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const p1 = (real, orc) => {
+      const p = this.pct(real, orc);
+      return p == null ? "—" : p.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+    };
+
+    // Medidas em "px de slide" (96 por polegada); a imagem sai 3x maior para ficar nítida no projetor.
+    const W = 861;
+    const RH = 25;
+    const linhasTab = d.rows.length + (d.outros ? 1 : 0) + 1;
+    const TOPO_TAB = 297;
+    const H = TOPO_TAB + 47 + linhasTab * RH + 4;
+    const S = 3;
+    const cv = document.createElement("canvas");
+    cv.width = W * S;
+    cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF";
+    g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 14) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto;
+      g.textAlign = o.al || "left";
+      g.textBaseline = o.base || "middle";
+      g.fillText(t, x, y);
+    };
+
+    // 1) Mês: três barras
+    const total = d.total;
+    txt(MES[sel - 1] + "/" + ano, 97, 16, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const barras = [
+      { v: Math.abs(mi(total.ant)), rot: String(antN || "Ano ant."), cor: COR.cinza, corVal: COR.textoSuave, txt: n2(Math.abs(total.ant)) },
+      { v: Math.abs(mi(total.orc)), rot: "Orçado", cor: COR.laranja, corVal: COR.laranja, txt: n2(Math.abs(total.orc)) },
+      { v: Math.abs(mi(total.real)), rot: String(ano || "Atual"), cor: COR.verde, corVal: COR.verde, txt: n2(Math.abs(total.real)) }
+    ];
+    const maiorMes = Math.max(...barras.map((b) => b.v), 0.0001);
+    const BASE = 205;
+    [49, 107, 171].forEach((cx, i) => {
+      const b = barras[i];
+      const h = b.v / maiorMes * 112;
+      g.fillStyle = b.cor;
+      g.fillRect(cx - 27, BASE - h, 54, h);
+      txt(b.txt, cx, BASE - h - 10, { peso: "bold", tam: 14, cor: b.corVal, al: "center" });
+      txt(b.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 2) Evolução mensal: linhas
+    const PX0 = 277, PX1 = 576, PY0 = 22, PY1 = 171;
+    const vals = [].concat(serie.ant, serie.orc, serie.real, serie.forecast).filter((v) => v != null).map(mi);
+    const passo = this.passoEixo((Math.max(...vals, 0.0001)) / 5);
+    const topo = Math.max(passo * 6, Math.ceil(Math.max(...vals, 0.0001) / passo) * passo);
+    const yDe = (v) => PY1 - (v / topo) * (PY1 - PY0);
+    const xDe = (i) => PX0 + (i + 0.5) * ((PX1 - PX0) / 12);
+    for (let v = 0; v <= topo + 1e-9; v += passo) {
+      txt(v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), PX0 - 8, yDe(v), { tam: 9, cor: COR.textoSuave, al: "right" });
+    }
+    g.strokeStyle = "#D9D9D9";
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(PX0, PY1 + 0.5); g.lineTo(PX1, PY1 + 0.5); g.stroke();
+    ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"].forEach((l, i) => txt(l, xDe(i), 189, { tam: 10, cor: COR.textoSuave, al: "center" }));
+    const linha = (arr, cor, larg, ate) => {
+      g.strokeStyle = cor;
+      g.lineWidth = larg;
+      g.lineJoin = "round";
+      g.beginPath();
+      let aberto = false;
+      arr.forEach((v, i) => {
+        if (v == null || (ate && i + 1 > ate)) { aberto = false; return; }
+        const x = xDe(i), y = yDe(mi(v));
+        if (!aberto) { g.moveTo(x, y); aberto = true; } else g.lineTo(x, y);
+      });
+      g.stroke();
+    };
+    linha(serie.ant, "#BFBFBF", 2.2);
+    linha(serie.orc, COR.laranja, 2.4);
+    const fc = serie.forecast.map((v, i) => (i + 1 >= sel ? v : null));
+    if (sel < 12) linha(fc, COR.verdeFc, 2.4);
+    linha(serie.real, COR.verde, 2.6, sel);
+    const legenda = [["Orçado", COR.laranja], [String(ano || ""), COR.verde], ["Forecast", COR.verdeFc]];
+    g.font = "normal 13px " + FONTE;
+    const largs = legenda.map(([t]) => 26 + g.measureText(t).width + 16);
+    let lx = 426 - largs.reduce((a, b) => a + b, 0) / 2;
+    legenda.forEach(([t, cor], i) => {
+      g.strokeStyle = cor; g.lineWidth = 2.6;
+      g.beginPath(); g.moveTo(lx, 215); g.lineTo(lx + 20, 215); g.stroke();
+      txt(t, lx + 26, 215, { tam: 13, cor: COR.textoSuave });
+      lx += largs[i];
+    });
+
+    // 3) Totais: colunas empilhadas (escuro = jan até o mês; claro = até dezembro)
+    txt("TOTAIS", 729, 30, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const soma = (s, de, ate) => (s || []).slice(de - 1, ate).reduce((t, v) => t + (Number(v) || 0), 0);
+    const cols = [
+      { rot: String(antN || "Ano ant."), e: soma(serie.ant, 1, sel), c: soma(serie.ant, sel + 1, 12), ce: COR.cinza, cc: COR.cinzaClaro, cv: COR.textoSuave },
+      { rot: "Orçado", e: soma(serie.orc, 1, sel), c: soma(serie.orc, sel + 1, 12), ce: COR.laranja, cc: COR.laranjaClaro, cv: COR.laranja },
+      { rot: "Forecast", e: soma(serie.real, 1, sel), c: sel < 12 ? soma(serie.forecast, sel + 1, 12) : 0, ce: COR.verde, cc: COR.verdeClaro, cv: COR.verdeFc,
+        marca: sel < 12 && (!this.forecast || (serie.semForecast || []).length) }
+    ];
+    const maiorTot = Math.max(...cols.map((c) => Math.abs(mi(c.e)) + Math.abs(mi(c.c))), 0.0001);
+    [657, 729, 801].forEach((cx, i) => {
+      const c = cols[i];
+      const he = Math.abs(mi(c.e)) / maiorTot * 136;
+      const hc = Math.abs(mi(c.c)) / maiorTot * 136;
+      g.fillStyle = c.ce; g.fillRect(cx - 32, BASE - he, 64, he);
+      g.fillStyle = c.cc; g.fillRect(cx - 32, BASE - he - hc, 64, hc);
+      if (he >= 16) txt(n2(Math.abs(c.e)), cx, BASE - he / 2, { peso: "bold", tam: 10, cor: "#FFFFFF", al: "center" });
+      if (hc >= 16) txt(n2(Math.abs(c.c)), cx, BASE - he - hc / 2, { peso: "bold", tam: 10, cor: "#404040", al: "center" });
+      txt(n2(Math.abs(c.e) + Math.abs(c.c)) + (c.marca ? " *" : ""), cx, BASE - he - hc - 10, { peso: "bold", tam: 14, cor: c.cv, al: "center" });
+      txt(c.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 4) Tabela no padrão Excel do slide
+    txt(d.titulo, W / 2, 273, { peso: "bold", tam: 19, cor: COR.verdeTit, al: "center" });
+    const X = [0, 241];
+    for (let i = 0; i < 5; i++) X.push(241 + (i + 1) * 59.2);
+    for (let i = 0; i < 5; i++) X.push(537 + (i + 1) * 64.8);
+    const yH1 = TOPO_TAB, yH2 = TOPO_TAB + 23, yB = TOPO_TAB + 47;
+    g.fillStyle = COR.cabec;
+    g.fillRect(0, yH1, W, 47);
+    txt(d.rotulo, X[1] / 2, yH1 + 23.5, { peso: "bold", tam: 14, al: "center" });
+    txt("MENSAL", (X[1] + X[6]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    txt("ACUMULADO", (X[6] + X[11]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    const sub = [String(antN || "Ano ant."), "Orç.", "Real", "Var. R$", "Var. %"];
+    [1, 6].forEach((ini, bloco) => {
+      sub.forEach((s, j) => {
+        let rot = s;
+        if (bloco === 1 && d.ordem === "var" && j === 3) rot = s + " ↓";
+        if (bloco === 1 && d.ordem === "real" && j === 2) rot = s + " ↓";
+        txt(rot, X[ini + j + 1] - 6, yH2 + 12, { peso: "bold", tam: 14, al: "right" });
+      });
+    });
+    const linhas = d.rows.map((r) => ({ r, tipo: "" }));
+    if (d.outros) linhas.push({ r: d.outros, tipo: "outros" });
+    linhas.push({ r: { nome: "TOTAL", mensal: d.total, acum: d.totalA }, tipo: "total" });
+    const recortar = (t, max) => {
+      let s = String(t || "");
+      g.font = "normal 14px " + FONTE;
+      if (g.measureText(s).width <= max) return s;
+      while (s.length > 1 && g.measureText(s + "…").width > max) s = s.slice(0, -1);
+      return s + "…";
+    };
+    linhas.forEach(({ r, tipo }, i) => {
+      const y = yB + i * RH;
+      const total = tipo === "total";
+      if (total) { g.fillStyle = COR.cabec; g.fillRect(0, y, W, RH); }
+      const peso = total ? "bold" : "normal";
+      txt(total ? "TOTAL" : recortar(String(r.nome || "").toUpperCase(), X[1] - 12), 6, y + RH / 2, { peso, tam: 14 });
+      [[r.mensal, 1, false], [r.acum, 6, true]].forEach(([b, ini, acum]) => {
+        const v = b.real - b.orc;
+        const corVar = acum && !total ? (v > 0.5 ? COR.pos : (v < -0.5 ? COR.neg : COR.texto)) : COR.texto;
+        const pesoVar = acum ? "bold" : peso;
+        const cel = [n2(b.ant), n2(b.orc), n2(b.real), n2(v), p1(b.real, b.orc)];
+        cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
+      });
+    });
+    // Linhas da tabela: separadores dos blocos e borda do cabeçalho
+    g.strokeStyle = COR.linhaTab;
+    g.lineWidth = 1;
+    const fimTab = yB + linhas.length * RH;
+    [X[1], X[6]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, yH1); g.lineTo(x + 0.5, fimTab); g.stroke(); });
+    g.beginPath(); g.moveTo(X[1], yH2 + 0.5); g.lineTo(W, yH2 + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, yB + 0.5); g.lineTo(W, yB + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, fimTab - RH + 0.5); g.lineTo(W, fimTab - RH + 0.5); g.stroke();
+    return cv;
+  },
+
+  /** Botão "Copiar para o PowerPoint": copia a imagem; sem permissão de área de transferência, baixa o PNG. */
+  copiarImagemPpt(btn) {
+    const lado = this.aba === "saidas" ? "saidas" : "entradas";
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let canvas;
+    try {
+      canvas = this.desenharImagemPpt(lado);
+    } catch (e) {
+      console.error("[Resultado de caixa] Imagem:", e);
+      alert("Não consegui montar a imagem: " + ((e && e.message) || e));
+      return;
+    }
+    const nome = (lado === "saidas" ? "saidas" : "entradas") + "-" + this.chaveMes(this.anoAtual(), this.mes) + ".png";
+    const baixar = () => {
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = nome;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      avisar("Imagem baixada");
+    };
+    const blob = new Promise((ok, erro) => canvas.toBlob((b) => (b ? ok(b) : erro(new Error("PNG vazio"))), "image/png"));
+    if (navigator.clipboard && typeof navigator.clipboard.write === "function" && typeof window.ClipboardItem === "function") {
+      navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+        .then(() => avisar("Copiado! Cole no PowerPoint (Ctrl+V)"))
+        .catch((e) => {
+          console.warn("[Resultado de caixa] Área de transferência:", e);
+          baixar();
+        });
+    } else {
+      baixar();
+    }
   },
 
   saidasHtml() {
