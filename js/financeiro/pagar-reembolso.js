@@ -905,7 +905,8 @@ const PagarReembolsoApp = {
   tituloPago(bill) {
     if (!bill || typeof bill !== "object") return false;
     const blob = this.fold([bill.status, bill.situation, bill.consistencyStatus, bill.installmentStatus, bill.paid].filter((v) => v != null && v !== "").join(" "));
-    if (/pago|paid|quit|liquid|settl|baixad/.test(blob)) return true;
+    // O Sienge devolve a parcela como "Totalmente paga" (feminino). "Parcialmente paga" e "Não paga" não contam.
+    if (!/parcial|nao pag|em aberto/.test(blob) && /\bpag[oa]\b|paid|quit|liquid|settl|baixad/.test(blob)) return true;
     const saldo = bill.balanceAmount != null ? Number(bill.balanceAmount) : (bill.openBalance != null ? Number(bill.openBalance) : null);
     return saldo != null && Number.isFinite(saldo) && saldo <= 0.004;
   },
@@ -932,18 +933,31 @@ const PagarReembolsoApp = {
   },
 
   async completarSituacao(itens) {
-    const alvos = (itens || []).filter((item) => item && item.billId && item.reemPago == null);
-    await Promise.all(alvos.map(async (item) => {
-      try {
-        const info = await this.lerTitulo(item.billId);
-        item.reemPago = !!info.pago;
-        item.pagoEm = info.pagoEm || "";
-        if (!item.dueDate && info.dueDate) item.dueDate = info.dueDate;
-      } catch (e) {
-        item.reemPago = false;
-        item.pagoEm = "";
+    // reemPago === true já vem gravado pelo batimento das 7h; os demais são conferidos no Sienge.
+    const alvos = (itens || []).filter((item) => item && item.billId && item.reemPago !== true);
+    const fc = this.fb();
+    let pos = 0;
+    // Poucas consultas por vez: com tudo em paralelo o Sienge devolvia 429 e o título ficava "Programado".
+    const trabalhar = async () => {
+      while (pos < alvos.length) {
+        const item = alvos[pos++];
+        try {
+          const info = await this.lerTitulo(item.billId);
+          item.reemPago = !!info.pago;
+          item.pagoEm = info.pagoEm || (info.pago ? (item.pagoEm || "") : "");
+          if (!item.dueDate && info.dueDate) item.dueDate = info.dueDate;
+          if (info.pago && fc && item.id) {
+            const dados = { reemPago: true, reemConferidoEm: new Date().toISOString() };
+            if (info.pagoEm) dados.pagoEm = info.pagoEm;
+            fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), dados, { merge: true }).catch(() => {});
+          }
+        } catch (e) {
+          item.reemPago = false;
+          item.pagoEm = "";
+        }
       }
-    }));
+    };
+    await Promise.all([1, 2, 3, 4].map(trabalhar));
   },
 
   async exportExcel() {
