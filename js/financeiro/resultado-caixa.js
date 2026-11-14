@@ -3242,7 +3242,7 @@ const ResultadoCaixaApp = {
       const b = barras[i];
       const h = b.v / maiorMes * 112;
       g.fillStyle = b.cor;
-      g.fillRect(cx - 27, BASE - h, 54, h);
+      g.fillRect(cx - 21, BASE - h, 42, h);
       txt(b.txt, cx, BASE - h - 10, { peso: "bold", tam: 14, cor: b.corVal, al: "center" });
       txt(b.rot, cx, 223, { tam: 14, al: "center" });
     });
@@ -3304,8 +3304,8 @@ const ResultadoCaixaApp = {
       const c = cols[i];
       const he = Math.abs(mi(c.e)) / maiorTot * 136;
       const hc = Math.abs(mi(c.c)) / maiorTot * 136;
-      g.fillStyle = c.ce; g.fillRect(cx - 32, BASE - he, 64, he);
-      g.fillStyle = c.cc; g.fillRect(cx - 32, BASE - he - hc, 64, hc);
+      g.fillStyle = c.ce; g.fillRect(cx - 23, BASE - he, 46, he);
+      g.fillStyle = c.cc; g.fillRect(cx - 23, BASE - he - hc, 46, hc);
       if (he >= 16) txt(n2(Math.abs(c.e)), cx, BASE - he / 2, { peso: "bold", tam: 10, cor: "#FFFFFF", al: "center" });
       if (hc >= 16) txt(n2(Math.abs(c.c)), cx, BASE - he - hc / 2, { peso: "bold", tam: 10, cor: "#404040", al: "center" });
       txt(n2(Math.abs(c.e) + Math.abs(c.c)) + (c.marca ? " *" : ""), cx, BASE - he - hc - 10, { peso: "bold", tam: 14, cor: c.cv, al: "center" });
