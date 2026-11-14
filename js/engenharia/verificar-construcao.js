@@ -98,6 +98,12 @@ function _vcRotuloPedido(docObj) {
         return { statusLabel: 'Pedido da ficha', statusColor: 'color:#0369a1; font-weight:600;', solicitadoHa: _vcHaPedido(docObj) };
     }
     if (docObj.status === 'aguardando_fotos') {
+        // Enviada para o app de vistoria: mostra com quem está, em vez de "Link Enviado".
+        if (docObj.app && docObj.app.responsavelEmail) {
+            const quem = String(docObj.app.responsavelNome || docObj.app.responsavelEmail).split(' ')[0];
+            const ha = _vcHaPedido(docObj);
+            return { statusLabel: 'No app – Aguardando Fotos', statusColor: 'color: #d97706; font-weight: 600;', solicitadoHa: 'Com ' + quem + (ha ? ' · ' + ha : '') };
+        }
         return { statusLabel: 'Link Enviado – Aguardando Fotos', statusColor: 'color: #d97706; font-weight: 600;', solicitadoHa: _vcHaPedido(docObj) };
     }
     if (docObj.status === 'aguardando_validacao') {
@@ -1052,9 +1058,14 @@ window.VerificarConstrucaoApp = {
                         </label>
                     </div>
                     <div class="cc-toolbar-actions">
+                        ${this.modo === 'app' ? `
+                        <div id="vc-app-vistoriador" class="vc-app-vist"></div>
+                        <button type="button" class="btn btn-primary vc-wpp" onclick="window.VerificarConstrucaoApp.enviarParaApp()" id="btn-solicitar-wpp" disabled>
+                            <i data-lucide="smartphone"></i> Enviar para o app
+                        </button>` : `
                         <button type="button" class="btn btn-primary vc-wpp" onclick="window.VerificarConstrucaoApp.solicitarWhatsApp()" id="btn-solicitar-wpp" disabled>
                             <i data-lucide="message-circle"></i> Solicitar Vistoria (WhatsApp)
-                        </button>
+                        </button>`}
                     </div>
                 </div>
 
@@ -1107,6 +1118,7 @@ window.VerificarConstrucaoApp = {
         `;
 
         this._ensureModals();
+        if (this.modo === 'app') this._pintarVistoriadorApp();
         const subCb = document.getElementById('vc-include-subjudice');
         if (subCb) subCb.checked = !!this.includeSubjudice;
         const subLabel = document.getElementById('vc-include-subjudice-label');
@@ -1711,7 +1723,7 @@ window.VerificarConstrucaoApp = {
         box.innerHTML = kpi('Unidades', rows.length)
             + kpi('Pendentes de vistoria', conta('Pendente de Vistoria'), 'is-neg')
             + kpi('Pedidos da ficha', conta('Pedido da ficha'), 'is-alerta')
-            + kpi('Aguardando fotos', conta('Link Enviado – Aguardando Fotos'), 'is-alerta')
+            + kpi('Aguardando fotos', conta('Link Enviado – Aguardando Fotos') + conta('No app – Aguardando Fotos'), 'is-alerta')
             + kpi('Aguardando validação', conta('Aguardando Validação'))
             + kpi('Selecionadas', document.querySelectorAll('.vc-row-checkbox:checked').length, 'is-pos', 'vc-kpi-sel');
     },
@@ -1870,6 +1882,147 @@ window.VerificarConstrucaoApp = {
             console.warn('[Vistoria] Não foi possível buscar coords KMZ:', e.message);
         }
         return null;
+    },
+
+    /* ===== Vistoria (app) =====
+     * Mesma lista e mesma regra da Vistoria (link). Em vez de gerar um link novo a cada envio,
+     * a vistoria é atribuída a um vistoriador e aparece no app dele (/vistoria-app/).
+     * O registro em "vistorias" é o mesmo do link: o app usa a mesma página de fotos e a validação não muda.
+     */
+    setModo(modo) {
+        this.modo = modo === 'app' ? 'app' : 'link';
+    },
+
+    _vistoriadoresApp() {
+        let users = [];
+        try {
+            users = typeof window.getCrmUsersList === 'function'
+                ? (window.getCrmUsersList() || [])
+                : (JSON.parse(localStorage.getItem('crm_users') || '[]') || []);
+        } catch (e) { users = []; }
+        const vistos = new Set();
+        return users.filter((u) => {
+            const email = String((u && u.email) || '').trim().toLowerCase();
+            if (!email || vistos.has(email)) return false;
+            const ativo = !u.status || String(u.status).toUpperCase() !== 'INATIVO';
+            if (!ativo || !u.check_construction) return false;
+            vistos.add(email);
+            return true;
+        }).map((u) => ({
+            id: String(u.email).trim().toLowerCase(),
+            label: String(u.name || u.email).toUpperCase(),
+            nome: String(u.name || u.email),
+            phone: u.phone || '',
+            cidades: Array.isArray(u.const_cities) ? u.const_cities : []
+        })).sort((a, b) => a.label.localeCompare(b.label, 'pt'));
+    },
+
+    _pintarVistoriadorApp() {
+        const wrap = document.getElementById('vc-app-vistoriador');
+        if (!wrap || !window.MlSelectUnico) return;
+        const itens = this._vistoriadoresApp();
+        if (this._vistoriadorApp && !itens.some((i) => i.id === this._vistoriadorApp)) this._vistoriadorApp = '';
+        wrap.innerHTML = MlSelectUnico.html({
+            id: 'vc-app-vist',
+            items: itens.map((i) => ({ id: i.id, label: i.label })),
+            selectedId: this._vistoriadorApp || '',
+            semId: true,
+            placeholder: itens.length ? 'Vistoriador' : 'Nenhum vistoriador cadastrado',
+            largura: '260px'
+        });
+        MlSelectUnico.bind('vc-app-vist', { onSelect: (id) => { this._vistoriadorApp = String(id || ''); } });
+    },
+
+    async enviarParaApp() {
+        if (!this.renderedRows) return;
+        const vistoriador = this._vistoriadoresApp().find((v) => v.id === this._vistoriadorApp);
+        if (!vistoriador) {
+            alert('Escolha o vistoriador que vai receber as vistorias no app.');
+            return;
+        }
+        const cbs = document.querySelectorAll('.vc-row-checkbox:checked');
+        const selected = Array.from(cbs).map(c => this.renderedRows[parseInt(c.value, 10)]).filter(Boolean);
+        const internos = this.renderedRows.filter((r) => r.vistoriaAtiva && r.vistoriaAtiva.status === 'solicitada');
+        const lista = [];
+        const vistos = new Set();
+        internos.concat(selected).forEach((r) => {
+            // Já com fotos enviadas, esperando validação: não volta para o app.
+            if (r.vistoriaAtiva && r.vistoriaAtiva.status === 'aguardando_validacao') return;
+            const chave = (r.vistoriaAtiva && r.vistoriaAtiva.id) || (String(r.titulo || '') + '|' + String(r.unidade || ''));
+            if (vistos.has(chave)) return;
+            vistos.add(chave);
+            lista.push(r);
+        });
+        if (!lista.length) {
+            alert('Selecione os lotes que vão para o app.');
+            return;
+        }
+        const quem = (window.AppState && AppState.currentUser) || {};
+        const atribuicao = {
+            responsavelEmail: vistoriador.id,
+            responsavelNome: vistoriador.nome,
+            atribuidoEm: new Date().toISOString(),
+            atribuidoPor: String(quem.name || quem.email || '')
+        };
+        const btn = document.getElementById('btn-solicitar-wpp');
+        if (btn) { btn.disabled = true; btn.innerHTML = 'Enviando para o app...'; }
+        try {
+            const { collection, addDoc, doc, updateDoc, serverTimestamp } = window.firebaseCollections;
+            for (const r of lista) {
+                let vId = r.vistoriaAtiva ? r.vistoriaAtiva.id : null;
+                const loteCoords = await this._fetchLoteCoords(r.costCenterId);
+                const contractKeys = Array.isArray(r.contractKeys) && r.contractKeys.length ? [...r.contractKeys] : [String(r.contractId)];
+                if (r.titulo) contractKeys.push(String(r.titulo));
+                if (r.tituloKey) contractKeys.push(String(r.tituloKey));
+                if (r.contractNumberStr) contractKeys.push(String(r.contractNumberStr));
+                if (r.realSaleIdStr) contractKeys.push(String(r.realSaleIdStr));
+                if (!vId) {
+                    const docRef = await addDoc(collection(window.firebaseDb, 'vistorias'), {
+                        customerId: r.customerId,
+                        contractId: r.contractId,
+                        contractKeys: [...new Set(contractKeys.map(String))],
+                        tituloKey: r.tituloKey || r.titulo || '',
+                        titulo: r.titulo || '',
+                        clienteName: r.clienteName || '',
+                        cidade: r.cidade,
+                        empreendimento: r.empreendimento,
+                        costCenterId: r.costCenterId,
+                        unidade: r.unidade,
+                        status: 'aguardando_fotos',
+                        loteCoords: loteCoords || null,
+                        createdAt: serverTimestamp(),
+                        app: atribuicao
+                    });
+                    vId = docRef.id;
+                } else {
+                    const patch = { status: 'aguardando_fotos', app: atribuicao };
+                    if (loteCoords) patch.loteCoords = loteCoords;
+                    await updateDoc(doc(window.firebaseDb, 'vistorias', vId), patch);
+                }
+            }
+            const qtd = lista.length;
+            const fone = String(vistoriador.phone || '').replace(/\D/g, '');
+            const foneWpp = fone.length === 10 || fone.length === 11 ? '55' + fone : fone;
+            const avisar = foneWpp && confirm(`${qtd} vistoria(s) enviada(s) para o app de ${vistoriador.nome}.\n\nAvisar pelo WhatsApp?`);
+            if (avisar) {
+                const appUrl = window.location.origin + '/vistoria-app/';
+                const msg = `Olá! Você tem ${qtd} nova(s) vistoria(s) no app de vistorias:\n${appUrl}`;
+                window.open(`https://api.whatsapp.com/send?phone=${foneWpp}&text=${encodeURIComponent(msg)}`, '_blank');
+            } else if (!foneWpp) {
+                alert(`${qtd} vistoria(s) enviada(s) para o app de ${vistoriador.nome}.`);
+            }
+            await this.loadData();
+        } catch (err) {
+            console.error('[Vistoria app] Erro ao enviar:', err);
+            alert('Erro ao enviar para o app: ' + err.message);
+        } finally {
+            const b = document.getElementById('btn-solicitar-wpp');
+            if (b) {
+                b.innerHTML = '<i data-lucide="smartphone"></i> Enviar para o app';
+                if (window.lucide) lucide.createIcons();
+            }
+            this.updateBtn();
+        }
     },
 
     async solicitarWhatsApp() {

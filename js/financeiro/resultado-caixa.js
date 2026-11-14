@@ -25,6 +25,7 @@ const ResultadoCaixaApp = {
   mlAbertos: {},
   matrizAbertos: {},
   matrizSort: null,
+  filtroLinha: null,
   mlFatia: "",
   mlDados: null,
   mlLendo: false,
@@ -2608,8 +2609,10 @@ const ResultadoCaixaApp = {
     const base = "Orçado e realizado de " + (atual || "—") + " vêm do arquivo mais recente de cada empresa, até " + mesNomeFaixa + ". A coluna de " + (antN || "o ano anterior") + " é o realizado do arquivo mais recente dessa empresa, de janeiro até o mês escolhido, no mesmo % Consolidação.";
     const nota = lado === "entradas"
       ? base + " Livia, Livia I e Livia II aparecem como Central Parque. Empreendimentos com o mesmo nome ganham a sigla da cidade. MLDU aparece como Corporativo. Os quatro maiores desvios positivos e os quatro negativos do acumulado ficam à vista; o restante abre ao clicar em Outros."
+        + " Clique num produto para ver só os centros de custo dele na tabela de baixo; clique de novo para ver todas as empresas."
         + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC (Receitas e receitas financeiras)." + agrupa
       : base + " As saídas são as contas da visão DFC, da maior saída para a menor pelo realizado acumulado. Gastar acima do orçado fica em vermelho."
+        + " Clique numa conta para ver só ela na tabela de baixo; clique de novo para ver todas."
         + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC das saídas." + agrupa;
     const avisoRateio = lado === "saidas" && this.faltaCentroNasSaidas()
       ? `<div class="rcx-erro">Para aplicar o % Consolidação nas saídas destes arquivos, suba o Excel de novo. O arquivo que já estava salvo não guarda o centro de custo de cada conta.</div>`
@@ -3012,12 +3015,67 @@ const ResultadoCaixaApp = {
     return `<i data-lucide="${this.outrosAberto ? "chevron-down" : "chevron-right"}"></i> Outros <span class="rcx-qtd">${qtd}</span>`;
   },
 
-  linhaPronta(r, cls, nomeHtml, click, saida) {
+  linhaPronta(r, cls, nomeHtml, click, saida, dica) {
+    const title = dica ? (r.nome + " — " + dica) : r.nome;
     return `<tr class="${cls || ""}"${click ? ` onclick="${click}"` : ""}>
-      <td class="rcx-nome" title="${caixaEsc(r.nome)}">${nomeHtml || caixaEsc(r.nome)}</td>
+      <td class="rcx-nome" title="${caixaEsc(title)}">${nomeHtml || caixaEsc(r.nome)}</td>
       ${this.blocoNums(r.mensal, saida)}
       ${this.blocoNums(r.acum, saida)}
     </tr>`;
+  },
+
+  selecionarLinha(lado, chaveEnc) {
+    let chave = "";
+    try { chave = decodeURIComponent(String(chaveEnc || "")); } catch (e) { chave = String(chaveEnc || ""); }
+    if (!chave) return;
+    const atual = this.filtroLinha;
+    if (atual && atual.lado === lado && atual.chave === chave) this.filtroLinha = null;
+    else this.filtroLinha = { lado: lado, chave: chave, nome: this.nomeDaLinha(lado, chave) };
+    this.renderMantendoScroll();
+  },
+
+  limparFiltroLinha() {
+    if (!this.filtroLinha) return;
+    this.filtroLinha = null;
+    this.renderMantendoScroll();
+  },
+
+  nomeDaLinha(lado, chave) {
+    if (lado === "saidas") {
+      const def = this.contasSaida().find((d) => d.id === chave);
+      return (def && def.nome) || chave;
+    }
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === chave);
+    return (row && row.nome) || chave;
+  },
+
+  filtroMatriz(lado) {
+    const f = this.filtroLinha;
+    if (!f || f.lado !== lado) return null;
+    if (lado === "saidas") return { conta: f.chave, nome: f.nome || this.nomeDaLinha(lado, f.chave), ccs: null };
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === f.chave);
+    const ccs = new Set();
+    if (row) (row.ids || []).forEach((id) => {
+      const s = String(id);
+      ccs.add(s);
+      const d = s.replace(/\D/g, "");
+      if (d) ccs.add(d);
+    });
+    return { conta: "", nome: (row && row.nome) || f.nome || "", ccs: ccs };
+  },
+
+  ccNoConjunto(set, ccId) {
+    if (!set) return true;
+    const s = String(ccId);
+    if (set.has(s)) return true;
+    const d = s.replace(/\D/g, "");
+    return !!(d && set.has(d));
+  },
+
+  botaoVerTodas() {
+    return `<button type="button" class="rcx-matriz-limpar" onclick="ResultadoCaixaApp.limparFiltroLinha()">Ver todas</button>`;
   },
 
   somaCodigos(contas, def, mes, campo, ate) {
@@ -3125,9 +3183,19 @@ const ResultadoCaixaApp = {
     if (!Object.keys(this.anos || {}).length) return faixa;
     if (lado === "saidas") return faixa + this.saidasHtml();
     const pack = this.linhasTabela(lado);
+    this._packEntrada = pack;
+    if (this.filtroLinha && this.filtroLinha.lado === "entradas" && !pack.rows.some((r) => this.fold(r.nome) === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
     if (!pack.rows.length) return faixa + `<p class="rcx-vazio">Nenhum valor nesse mês para os grupos desta aba.</p>`;
     const vista = this.destacar(pack.rows);
-    const linha = (r, cls) => this.linhaPronta(r, cls || "", "", "", false);
+    const linha = (r, cls) => {
+      const chave = this.fold(r.nome);
+      const sel = this.filtroLinha && this.filtroLinha.lado === "entradas" && this.filtroLinha.chave === chave;
+      const click = `ResultadoCaixaApp.selecionarLinha('entradas','${encodeURIComponent(chave)}')`;
+      const dica = sel ? "Clique para ver todas as empresas de novo" : "Clique para ver só este produto na tabela de baixo";
+      return this.linhaPronta(r, ((cls || "") + " rcx-clicavel" + (sel ? " is-sel" : "")).trim(), "", click, false, dica);
+    };
     let corpo = "";
     if (vista.pos.length) corpo += this.secaoHtml("trending-up", "Acima do orçado no acumulado", "is-pos") + vista.pos.map((r) => linha(r)).join("");
     if (vista.neg.length) corpo += this.secaoHtml("trending-down", "Abaixo do orçado no acumulado", "is-neg") + vista.neg.map((r) => linha(r)).join("");
@@ -3419,7 +3487,15 @@ const ResultadoCaixaApp = {
       if (d) return d;
       return String(a.nome || "").localeCompare(String(b.nome || ""), "pt");
     });
-    const corpo = todos.map((r) => this.linhaPronta(r, "", "", "", true)).join("");
+    if (this.filtroLinha && this.filtroLinha.lado === "saidas" && !todos.some((r) => r.key === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
+    const corpo = todos.map((r) => {
+      const sel = this.filtroLinha && this.filtroLinha.lado === "saidas" && this.filtroLinha.chave === r.key;
+      const click = `ResultadoCaixaApp.selecionarLinha('saidas','${encodeURIComponent(r.key)}')`;
+      const dica = sel ? "Clique para ver todas as contas de novo" : "Clique para ver só esta conta na tabela de baixo";
+      return this.linhaPronta(r, "rcx-clicavel" + (sel ? " is-sel" : ""), "", click, true, dica);
+    }).join("");
     const total = this.somaBloco(todos, "mensal");
     const totalA = this.somaBloco(todos, "acum");
     return `<div class="rcx-topo">${this.graficoMesHtml(total)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
@@ -3453,7 +3529,9 @@ const ResultadoCaixaApp = {
     if (!a || this.semContas(ano)) return null;
     const cat = this.catalogoEmpresas();
     const empresas = {};
-    const defs = saida ? this.contasSaida() : this.defsEntradaPowerBi();
+    const filtro = this.filtroMatriz(saida ? "saidas" : "entradas");
+    let defs = saida ? this.contasSaida() : this.defsEntradaPowerBi();
+    if (filtro && filtro.conta) defs = defs.filter((def) => def.id === filtro.conta);
     const grupos = defs.map((def) => ({ def: def, porEmp: {}, ccs: {} }));
     const vivo = (o, r) => Math.abs(o) > 0.5 || Math.abs(r) > 0.5;
     Object.keys(a.arquivos || {}).forEach((nome) => {
@@ -3476,6 +3554,7 @@ const ResultadoCaixaApp = {
         const slot = g.porEmp[key] || (g.porEmp[key] = { orc: 0, real: 0 });
         if (temCc) {
           Object.keys(porCc).forEach((ccId) => {
+            if (filtro && filtro.ccs && !this.ccNoConjunto(filtro.ccs, ccId)) return;
             const bloco = porCc[ccId] || {};
             const o = this.somaCodigos(bloco.contas || {}, g.def, mes, "o", true) * pct;
             const r = this.somaCodigos(bloco.contas || {}, g.def, mes, "r", true) * pct;
@@ -3488,7 +3567,7 @@ const ResultadoCaixaApp = {
             cel.orc += o;
             cel.real += r;
           });
-        } else if (arq.contas) {
+        } else if (arq.contas && !(filtro && filtro.ccs)) {
           slot.orc += this.somaCodigos(arq.contas, g.def, mes, "o", true) * pct;
           slot.real += this.somaCodigos(arq.contas, g.def, mes, "r", true) * pct;
         }
@@ -3532,8 +3611,12 @@ const ResultadoCaixaApp = {
         }
         return String(a.def.nome || "").localeCompare(String(b.def.nome || ""), "pt");
       });
-    if (!cols.length || !linhas.length) return null;
-    return { cols: cols, linhas: linhas, mes: mes, lado: saida ? "saidas" : "entradas" };
+    const ladoMatriz = saida ? "saidas" : "entradas";
+    if (!cols.length || !linhas.length) {
+      if (filtro) return { cols: [], linhas: [], mes: mes, lado: ladoMatriz, filtro: filtro, vazio: true };
+      return null;
+    }
+    return { cols: cols, linhas: linhas, mes: mes, lado: ladoMatriz, filtro: filtro || null };
   },
 
   totalMatriz(porEmp, cols) {
@@ -3568,6 +3651,16 @@ const ResultadoCaixaApp = {
     const dados = this.matrizDfcDados(saida ? "saidas" : "entradas");
     if (!dados) return "";
     const mesNome = (this.MESES[dados.mes - 1] || "").toLowerCase();
+    const tituloBloco = saida ? "Saídas do DFC por empresa" : "Entradas do DFC por empresa";
+    const filtro = dados.filtro;
+    const tituloFiltro = filtro && filtro.nome ? `${tituloBloco} — ${caixaEsc(filtro.nome)}` : tituloBloco;
+    if (dados.vazio) {
+      const quem = filtro && filtro.nome ? caixaEsc(filtro.nome) : "esta linha";
+      return `<div class="rcx-matriz-bloco">
+        <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+        <div class="rcx-matriz-sub">Nenhum valor de ${quem} nesta tabela. ${this.botaoVerTodas()}</div>
+      </div>`;
+    }
     const abertos = this.matrizAbertos || {};
     const cabEmp = dados.cols.map((e) => {
       const pct = e.pctLabel ? `<span class="rcx-matriz-pct">${caixaEsc(e.pctLabel)}</span>` : "";
@@ -3622,11 +3715,16 @@ const ResultadoCaixaApp = {
       return html;
     }).join("");
     const totCells = dados.cols.map((e) => this.matrizCelulas(totEmp[e.id].orc, totEmp[e.id].real, true, saida)).join("");
-    const tituloBloco = saida ? "Saídas do DFC por empresa" : "Entradas do DFC por empresa";
     const pctNota = this.agrupar ? " Cada empresa entra no consolidado pelo % Consolidação." : "";
+    const recorte = filtro && filtro.nome
+      ? (saida
+        ? ` Só a conta ${caixaEsc(filtro.nome)}.`
+        : ` Só os centros de custo de ${caixaEsc(filtro.nome)}.`)
+      : "";
+    const limpar = filtro ? " " + this.botaoVerTodas() : "";
     return `<div class="rcx-matriz-bloco">
-      <div class="rcx-matriz-titulo">${tituloBloco}</div>
-      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}. Clique no grupo para abrir os centros de custo.${pctNota}</div>
+      <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}.${recorte} Clique no grupo para abrir os centros de custo.${pctNota}${limpar}</div>
       <div class="rcx-scroll rcx-matriz-scroll">
         <table class="rcx-grid rcx-matriz">
           <thead>
@@ -4248,6 +4346,24 @@ const ResultadoCaixaApp = {
       </table></div>
       ${painel}
       ${caixaContas}`;
+  },
+
+  renderMantendoScroll() {
+    const se = document.scrollingElement || document.documentElement;
+    const win = se ? se.scrollTop : 0;
+    const boxes = Array.from(document.querySelectorAll("#resultado-caixa-root .rcx-scroll")).map((el) => ({
+      top: el.scrollTop,
+      left: el.scrollLeft
+    }));
+    this.render();
+    if (se) se.scrollTop = win;
+    const novos = document.querySelectorAll("#resultado-caixa-root .rcx-scroll");
+    novos.forEach((el, i) => {
+      const g = boxes[i];
+      if (!g) return;
+      el.scrollTop = g.top;
+      el.scrollLeft = g.left;
+    });
   },
 
   render() {

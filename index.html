@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=8a5ddb5505">
+  <link rel="stylesheet" href="css/style.css?v=7685541ea0">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -978,11 +978,20 @@
           </ul>
         </li>
         <!-- 3 - VISTORIA -->
-        <li class="nav-item" data-tab="vistoria" data-module="mod_vistoria">
-          <a onclick="switchTab('vistoria', 'Vistoria')" title="Vistoria">
+        <li class="nav-item nav-group" data-module="mod_vistoria">
+          <a onclick="toggleNavMenu(event, 'submenu-vistoria')" title="Vistoria">
             <i data-lucide="camera"></i>
             <span>Vistoria</span>
+            <i data-lucide="chevron-down" class="nav-chevron"></i>
           </a>
+          <ul class="nav-submenu" id="submenu-vistoria" style="display: none;">
+            <li data-tab="vistoria" data-module="mod_vistoria">
+              <a onclick="switchTab('vistoria', 'Vistoria (link)')">Vistoria (link)</a>
+            </li>
+            <li data-tab="vistoria-app" data-module="mod_vistoria">
+              <a onclick="switchTab('vistoria-app', 'Vistoria (app)')">Vistoria (app)</a>
+            </li>
+          </ul>
         </li>
         <!-- 4 - COMPRAS -->
         <li class="nav-item nav-group" data-module="mod_compras">
@@ -1440,7 +1449,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2154 &nbsp;&middot;&nbsp; 14/11/2026
+            v1.0.2155 &nbsp;&middot;&nbsp; 14/11/2026
           </span>
         </div>
       </div>
@@ -1510,6 +1519,10 @@
       <!-- TAB: VISTORIA / VERIFICAR CONSTRUÇÃO -->
       <section id="tab-vistoria" class="tab-pane" style="display: none; background: var(--bg);">
         <div id="verificar-construcao-root" style="height: 100%; padding: 10px 12px;"></div>
+      </section>
+      <!-- Vistoria (app): a mesma tela da Vistoria é trazida para cá, no modo "Enviar para o app" -->
+      <section id="tab-vistoria-app" class="tab-pane" style="display: none; background: var(--bg);">
+        <div id="vistoria-app-host" style="height: 100%;"></div>
       </section>
 
       <!-- TAB: CONTAS A PAGAR -->
@@ -8638,14 +8651,14 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2154"></script>
+  <script defer src="js/nucleo/data.js?v=2155"></script>
   <script defer src="js/nucleo/sienge-api.js?v=1d7ed0a8f7"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=3b5263ea20"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=2b68534227"></script>
+  <script defer src="js/nucleo/app.js?v=95dcf9fce7"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=5c605a8ce3"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
@@ -8719,7 +8732,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-slides.js?v=7d6dccf9d1"></script>
   <script defer src="js/financeiro/caixa-diario.js?v=abfdade485"></script>
   <script type="text/x-sob-demanda" data-grupo="mutuo" data-src="js/financeiro/mutuo.js?v=58de946e11"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=4edb6d2cea"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=0486e673e9"></script>
   <script defer src="js/cobranca/relatorio-honorarios.js?v=aa553c2b1d"></script>
   <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
   <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
@@ -8732,7 +8745,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/fiscal/fiscal-enviar-nota.js?v=fbbe582aef"></script>
   <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
   <script defer src="js/nucleo/indexadores.js?v=0adcce7721"></script>
-  <script defer src="js/engenharia/verificar-construcao.js?v=42e231416d"></script>
+  <script defer src="js/engenharia/verificar-construcao.js?v=45a891d287"></script>
   <script defer src="js/cobranca/financiamento.js?v=1347b8c00c"></script>
   <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
   <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>

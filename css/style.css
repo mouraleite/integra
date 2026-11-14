@@ -4694,6 +4694,11 @@ circle.donut-segment {
 .rcx-graf-eixo { display: flex; gap: 18px; padding: 6px 6px 0; }
 .rcx-graf-eixo span { flex: 1; text-align: center; font-size: 0.8rem; font-weight: 600; color: #334155; }
 .rcx-outros { cursor: pointer; }
+.rcx-grid tbody tr.rcx-clicavel { cursor: pointer; }
+.rcx-grid tbody tr.rcx-clicavel.is-sel td { background: #d8f3e4; }
+.rcx-grid tbody tr.rcx-clicavel.is-sel:hover td { background: #c9ecd3; }
+.rcx-grid tbody tr.rcx-clicavel.is-sel td:first-child { box-shadow: inset 3px 0 0 #105436; }
+.rcx-matriz-limpar { margin-left: 8px; border: 0; background: transparent; padding: 0; color: #105436; font: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
 .rcx-grid tbody tr.rcx-outros td { background: #f1f5f9; font-weight: 800; }
 .rcx-grid tbody tr.rcx-outros:hover td { background: #e7f6ee; }
 .rcx-qtd { display: inline-block; min-width: 18px; padding: 0 6px; margin-left: 4px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 0.66rem; text-align: center; }
@@ -11037,6 +11042,10 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .vc-filtros .moura-switch { margin-left: 4px; }
 .vc-wpp { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; font-weight: 700; white-space: nowrap; }
 .vc-wpp:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Vistoria (app): vistoriador na mesma altura do botão "Enviar para o app" */
+.vc-app-vist .ml-sel-combo input,
+.vc-app-vist .ml-sel-seta { height: 36px; }
+.vc-app-vist .ml-sel-seta { width: 36px; }
 .vc-loading { display: flex; justify-content: center; padding: 8px 0 4px; }
 .vc-scroll { max-height: calc(100vh - 300px); }
 .cc-table.vc-table { font-size: 0.78rem; border-collapse: separate; border-spacing: 0; }

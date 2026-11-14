@@ -637,3 +637,26 @@ function calcCrow(lat1, lon1, lat2, lon2) {
 function toRad(Value) {
     return Value * Math.PI / 180;
 }
+
+// Aberta pelo app de vistoria (?app=1): "Voltar" leva para a lista do app.
+// Aberta pelo link do WhatsApp (sem ?app=1), nada muda.
+(function () {
+    if (new URLSearchParams(window.location.search).get('app') !== '1') return;
+    const irParaApp = (ev) => {
+        if (ev) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        window.location.href = '/vistoria-app/';
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+        const voltar = document.getElementById('btn-voltar');
+        if (voltar) voltar.addEventListener('click', irParaApp, true);
+        const voltarSucesso = document.getElementById('btn-voltar-sucesso');
+        if (voltarSucesso) {
+            voltarSucesso.style.display = 'inline-block';
+            voltarSucesso.textContent = 'Voltar para minhas vistorias';
+            voltarSucesso.addEventListener('click', irParaApp, true);
+        }
+        const fechar = document.getElementById('msg-fechar');
+        if (fechar) fechar.style.display = 'none';
+    });
+})();

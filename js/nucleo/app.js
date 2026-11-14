@@ -4047,6 +4047,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "relacionamento_quitacao": "Termo de quitação",
     "condicoes-pagamento": "Condições de Pagamento",
     "tabelas-vigentes": "Tabelas vigentes",
+    "vistoria": "Vistoria (link)",
+    "vistoria-app": "Vistoria (app)",
     "controle-comissao": "Controle de comissão",
     "compras-dashboard": "Dashboard",
     "compras-controle": "Controle financeiro",
@@ -4132,6 +4134,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "relacionamento_quitacao": "badge-check",
     "condicoes-pagamento": "file-text",
     "tabelas-vigentes": "table",
+    "vistoria": "camera",
+    "vistoria-app": "smartphone",
     "controle-comissao": "percent",
     "compras-dashboard": "bar-chart-3",
     "compras-controle": "wallet",
@@ -4295,8 +4299,16 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (window.CustoObraApp && typeof window.CustoObraApp.init === "function") window.CustoObraApp.init();
   } else if (tabId === "engenharia-acompanhamento") {
     if (window.AcompanhamentoObraApp && typeof window.AcompanhamentoObraApp.init === "function") window.AcompanhamentoObraApp.init();
-  } else if (tabId === "vistoria") {
+  } else if (tabId === "vistoria" || tabId === "vistoria-app") {
     try {
+      // Vistoria (link) e Vistoria (app) usam a mesma tela; muda só o botão final (WhatsApp x app).
+      const modoVistoria = tabId === "vistoria-app" ? "app" : "link";
+      const hostVistoria = document.getElementById(modoVistoria === "app" ? "vistoria-app-host" : "tab-vistoria");
+      const rootVistoria = document.getElementById("verificar-construcao-root");
+      if (hostVistoria && rootVistoria && rootVistoria.parentElement !== hostVistoria) hostVistoria.appendChild(rootVistoria);
+      if (window.VerificarConstrucaoApp && typeof window.VerificarConstrucaoApp.setModo === "function") {
+        window.VerificarConstrucaoApp.setModo(modoVistoria);
+      }
       if (window.VerificarConstrucaoApp && typeof window.VerificarConstrucaoApp.init === "function") {
         window.VerificarConstrucaoApp.init();
       } else {
