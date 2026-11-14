@@ -3859,6 +3859,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
       return;
     }
   }
+  // Módulo Teste removido: link antigo para a aba "teste" cai na Home.
   if (tabId === 'teste') {
     tabId = 'construcao-home';
     titleOverride = 'Home';
@@ -4065,7 +4066,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "marketing-budget": "Budget",
     "marketing-config": "Configurações",
     suporte: "Suporte",
-    teste: "Teste",
     auditoria: "Auditoria do Sistema",
     "auditoria-login": "Auditoria do Login Sienge",
     "consumo-api": "Consumo de API",
@@ -4153,7 +4153,6 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "marketing-budget": "wallet",
     "marketing-config": "settings",
     suporte: "headphones",
-    teste: "flask-conical",
     auditoria: "shield",
     "auditoria-login": "log-in",
     "fiscal-inserir-nota": "clipboard-check",
