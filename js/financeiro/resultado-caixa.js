@@ -3238,8 +3238,10 @@ const ResultadoCaixaApp = {
       const pack = this.linhasSaida();
       const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
       // Saídas em valor positivo (como no slide); as 7 maiores pelo realizado acumulado e o resto em OUTROS.
-      const abs = (b) => ({ ant: Math.abs(Number(b.ant) || 0), orc: Math.abs(Number(b.orc) || 0), real: Math.abs(Number(b.real) || 0) });
-      const todos = pack.rows.filter(vivo).map((r) => ({ nome: r.nome, mensal: abs(r.mensal), acum: abs(r.acum) }))
+      // Inverte o sinal (saída = positivo; estorno/devolução dentro da conta = negativo) em vez de tirar o sinal:
+      // assim OUTROS e TOTAL abatem o que voltou, igual à tela.
+      const giro = (b) => ({ ant: -(Number(b.ant) || 0), orc: -(Number(b.orc) || 0), real: -(Number(b.real) || 0) });
+      const todos = pack.rows.filter(vivo).map((r) => ({ nome: r.nome, mensal: giro(r.mensal), acum: giro(r.acum) }))
         .sort((a, b) => (b.acum.real - a.acum.real) || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
       const top = todos.slice(0, 7);
       const resto = todos.slice(7);
@@ -3442,10 +3444,9 @@ const ResultadoCaixaApp = {
         const pesoVar = acum ? "bold" : peso;
         // Saídas já chegam em valor positivo (dadosImagemPpt); a variação mantém o sinal, como no slide:
         // gastou menos que o orçado = negativo (verde), gastou mais = positivo (vermelho).
-        const mag = (x) => lado === "saidas" ? Math.abs(Number(x) || 0) : x;
-        const pRaw = this.pct(mag(b.real), mag(b.orc));
+        const pRaw = this.pct(b.real, b.orc);
         const pctTxt = pRaw == null ? "—" : pRaw.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
-        const cel = [n2(mag(b.ant)), n2(mag(b.orc)), n2(mag(b.real)), n2(mag(b.real) - mag(b.orc)), pctTxt];
+        const cel = [n2(b.ant), n2(b.orc), n2(b.real), n2(v), pctTxt];
         cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
       });
     });
