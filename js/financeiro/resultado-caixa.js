@@ -1896,7 +1896,9 @@ const ResultadoCaixaApp = {
         const meses = {};
         Object.keys(info.meses || {}).forEach((mm) => {
           const o = Math.round((Number(info.meses[mm].o) || 0) * 100) / 100;
-          if (Math.abs(o) >= 0.005) meses[mm] = o;
+          const r = Math.round((Number(info.meses[mm].r) || 0) * 100) / 100;
+          if (Math.abs(o) < 0.005 && Math.abs(r) < 0.005) return;
+          meses[mm] = Math.abs(r) >= 0.005 ? [o, r] : o;
         });
         if (Object.keys(meses).length) contas[code] = { nome: info.nome || "", node: info.node || "", meses: meses };
       });
@@ -1916,8 +1918,19 @@ const ResultadoCaixaApp = {
         const info = dono.contas[code] || {};
         const meses = {};
         Object.keys(info.meses || {}).forEach((mm) => {
-          const o = Number(info.meses[mm]) || 0;
-          if (Math.abs(o) >= 0.005) meses[mm] = { o: o, r: 0 };
+          const cru = info.meses[mm];
+          let o = 0;
+          let r = 0;
+          if (Array.isArray(cru)) {
+            o = Number(cru[0]) || 0;
+            r = Number(cru[1]) || 0;
+          } else if (cru && typeof cru === "object") {
+            o = Number(cru.o) || 0;
+            r = Number(cru.r) || 0;
+          } else {
+            o = Number(cru) || 0;
+          }
+          if (Math.abs(o) >= 0.005 || Math.abs(r) >= 0.005) meses[mm] = { o: o, r: r };
         });
         if (Object.keys(meses).length) contas[code] = { nome: info.nome || code, node: info.node || "", meses: meses };
       });
@@ -3438,9 +3451,181 @@ const ResultadoCaixaApp = {
     return cv;
   },
 
+  /**
+   * Caixa ML no padrão do slide "Fluxo de caixa MLDU": cartões Orçamento/Forecast e a tabela
+   * (acumulado, mês, meses seguintes em forecast, total orçado e total forecast).
+   * Saldo inicial de janeiro = contas correntes marcadas; cada coluna começa no saldo final da anterior.
+   * Medidas do slide: bloco ~32 cm de largura, proporção ~1,96 : 1.
+   */
+  desenharImagemCaixaPpt() {
+    const dados = this.mlDados;
+    if (!dados || !(dados.linhas || []).length) throw new Error("Abra a aba Caixa ML e espere carregar antes de copiar.");
+    const sel = Number(this.mes) || 1;
+    const MES = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+    const COR = { verde: "#1D5A36", verdeTxt: "#1E6B3A", laranja: "#E26B0A", cinzaNum: "#595959", linhaClara: "#F2F2F2",
+      cinzaFcf: "#C9C9C9", cinzaSaldo: "#D9D9D9", pos: "#00A651", neg: "#FF0000", texto: "#000000", borda: "#1D5A36" };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n3 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    const m1 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M";
+    const soma = (meses, de, ate, k) => { let t = 0; for (let i = de; i <= ate; i++) t += Number((meses[i - 1] || {})[k]) || 0; return t; };
+
+    // Linhas: grupos de 1º nível do DFC (a variação de caixa vai no rodapé)
+    const varLinha = (dados.linhas || []).find((l) => l.id === "g_12");
+    const grupos = (dados.linhas || []).filter((l) => l.level === 0 && l.id !== "g_12");
+    const escolhidas = new Set(this.mlSelecionadas(dados).map(String));
+    const abertura = (dados.contas || []).filter((c) => escolhidas.has(String(c.numero))).reduce((s, c) => s + (Number(c.abertura) || 0), 0);
+    const vm = (varLinha && varLinha.meses) || Array.from({ length: 12 }, () => ({ o: 0, r: 0, f: 0 }));
+
+    // Colunas
+    const cols = [];
+    if (sel > 1) cols.push({ tipo: "acum", rot: "ACUMULADO JAN - " + MES[sel - 2], sub: true });
+    cols.push({ tipo: "mes", rot: MES[sel - 1], sub: true });
+    const futuros = [];
+    for (let m = sel + 1; m <= 12; m++) futuros.push(m);
+    // Saldos: orçado em cadeia pelo orçado; realizado em cadeia pelo realizado e, depois do mês, pelo forecast
+    const ini = { acumO: abertura, acumR: abertura };
+    const varAcumO = sel > 1 ? soma(vm, 1, sel - 1, "o") : 0;
+    const varAcumR = sel > 1 ? soma(vm, 1, sel - 1, "r") : 0;
+    const iniMesO = abertura + varAcumO, iniMesR = abertura + varAcumR;
+    const varMesO = Number(vm[sel - 1].o) || 0, varMesR = Number(vm[sel - 1].r) || 0;
+    let corrente = iniMesR + varMesR;
+    const fut = futuros.map((m) => { const i0 = corrente; const v = Number(vm[m - 1].f) || 0; corrente = i0 + v; return { m, ini: i0, fim: corrente, v }; });
+    const totOrcVar = soma(vm, 1, 12, "o");
+    const totFcVar = soma(vm, 1, sel, "r") + soma(vm, sel + 1, 12, "f");
+
+    // Medidas em px de slide (96/pol.), imagem 3x para nitidez
+    const W = 1218, S = 3;
+    const CW = { conta: 277, n: 66.5, tOrc: 70, tFc: 98 };
+    const nNum = (sel > 1 ? 3 : 0) + 3 + futuros.length;
+    const TW = CW.conta + nNum * CW.n + CW.tOrc + CW.tFc;
+    const X0 = Math.max(0, (W - TW) / 2);
+    const RH = 26.4, HDR = 53, TOPO = 183, GAP = 9;
+    const nLinhas = grupos.length + 3;
+    const H = Math.ceil(TOPO + HDR + nLinhas * RH + 2 * GAP + 4);
+    const cv = document.createElement("canvas");
+    cv.width = W * S; cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 13) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto; g.textAlign = o.al || "left"; g.textBaseline = "middle";
+      g.fillText(t, x, y);
+    };
+    const caixaArred = (x, y, w, h, r) => {
+      g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+      g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+    };
+    const seta = (x, y, sobe, cor) => {
+      g.fillStyle = cor; g.beginPath();
+      if (sobe) { g.moveTo(x, y - 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y + 7); g.lineTo(x + 2.5, y + 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      else { g.moveTo(x, y + 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y - 7); g.lineTo(x + 2.5, y - 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      g.closePath(); g.fill();
+    };
+
+    // 1) Cartões Orçamento / Forecast
+    const cartao = (x0, titulo, varTotal) => {
+      const w = 596, h = 158;
+      caixaArred(x0 + 0.5, 0.5, w - 1, h - 1, 22);
+      g.strokeStyle = COR.borda; g.lineWidth = 1.2; g.stroke();
+      txt(titulo, x0 + w / 2, 18, { peso: "bold", tam: 21, cor: COR.verde, al: "center" });
+      const fim = abertura + varTotal;
+      const pct = Math.abs(abertura) > 0.5 ? (fim / abertura - 1) * 100 : 0;
+      const terco = w / 3;
+      [1, 2].forEach((k) => { g.strokeStyle = COR.borda; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0 + terco * k, 40); g.lineTo(x0 + terco * k, 145); g.stroke(); });
+      const cx = (k) => x0 + terco * k + terco / 2;
+      txt("Saldo inicial", cx(0), 49, { tam: 14, al: "center" });
+      txt("Variação de Caixa", cx(1), 49, { tam: 14, al: "center" });
+      txt("Saldo Final", cx(2), 49, { tam: 14, al: "center" });
+      txt(m1(abertura), cx(0), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt(m1(varTotal), cx(1), 92, { peso: "bold", tam: 44, cor: varTotal >= 0 ? COR.pos : COR.neg, al: "center" });
+      txt(m1(fim), cx(2), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt("100%", cx(0), 132, { peso: "bold", tam: 18, cor: COR.cinzaNum, al: "center" });
+      const pctTxt = Math.round(pct).toLocaleString("pt-BR") + "%";
+      const corPct = pct >= 0 ? COR.pos : COR.neg;
+      g.font = "bold 18px " + FONTE;
+      const lw = g.measureText(pctTxt).width;
+      seta(cx(2) - lw / 2 - 14, 132, pct >= 0, corPct);
+      txt(pctTxt, cx(2) + 6, 132, { peso: "bold", tam: 18, cor: corPct, al: "center" });
+    };
+    cartao(0, "ORÇAMENTO", totOrcVar);
+    cartao(W - 596, "FORECAST", totFcVar);
+
+    // 2) Tabela
+    const xs = [X0, X0 + CW.conta];
+    for (let i = 0; i < nNum; i++) xs.push(xs[xs.length - 1] + CW.n);
+    xs.push(xs[xs.length - 1] + CW.tOrc);
+    xs.push(xs[xs.length - 1] + CW.tFc);
+    const iFut = 1 + (sel > 1 ? 3 : 0) + 3;          // índice em xs onde começam os meses futuros
+    const iTot = iFut + futuros.length;               // TOTAL ORÇ.
+    const y0 = TOPO;
+    g.fillStyle = COR.verde; g.fillRect(xs[0], y0, xs[iFut] - xs[0], HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iFut], y0, xs[iTot] - xs[iFut], HDR);
+    g.fillStyle = COR.verde; g.fillRect(xs[iTot], y0, CW.tOrc, HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iTot + 1], y0, CW.tFc, HDR);
+    const branco = { peso: "bold", tam: 12.5, cor: "#FFFFFF", al: "center" };
+    txt("Conta", xs[0] + 4, y0 + 40, Object.assign({}, branco, { al: "left" }));
+    let k = 1;
+    if (sel > 1) {
+      txt(cols[0].rot, (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+      ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+      k += 3;
+    }
+    txt(MES[sel - 1], (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+    ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+    futuros.forEach((m, j) => txt(MES[m - 1], (xs[iFut + j] + xs[iFut + j + 1]) / 2, y0 + 15, branco));
+    txt("TOTAL", xs[iTot] + CW.tOrc / 2, y0 + 15, branco);
+    txt("ORÇ.", xs[iTot] + CW.tOrc / 2, y0 + 40, branco);
+    txt("TOTAL", xs[iTot + 1] + CW.tFc / 2, y0 + 15, branco);
+    txt("FORECAST", xs[iTot + 1] + CW.tFc / 2, y0 + 40, branco);
+
+    const valores = (meses) => {
+      const out = [];
+      if (sel > 1) { const o = soma(meses, 1, sel - 1, "o"), r = soma(meses, 1, sel - 1, "r"); out.push(o, r, r - o); }
+      const o = Number(meses[sel - 1].o) || 0, r = Number(meses[sel - 1].r) || 0;
+      out.push(o, r, r - o);
+      futuros.forEach((m) => out.push(Number(meses[m - 1].f) || 0));
+      out.push(soma(meses, 1, 12, "o"), soma(meses, 1, sel, "r") + soma(meses, sel + 1, 12, "f"));
+      return out;
+    };
+    let y = y0 + HDR;
+    const linha = (nome, vals, estilo) => {
+      if (estilo.fundo) { g.fillStyle = estilo.fundo; g.fillRect(xs[0], y, xs[xs.length - 1] - xs[0], RH); }
+      txt(nome, xs[0] + 4, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNome || COR.texto });
+      vals.forEach((v, j) => txt(n3(v), xs[j + 2] - 5, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNum || COR.texto, al: "right" }));
+      y += RH;
+    };
+    grupos.forEach((l, i) => {
+      const fcf = l.tipo === "formula";
+      linha(String(l.nome || "").toUpperCase(), valores(l.meses || []), fcf
+        ? { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt }
+        : { fundo: i % 2 ? "" : COR.linhaClara });
+    });
+    y += GAP;
+    const saldoIni = [];
+    const saldoFim = [];
+    if (sel > 1) { saldoIni.push(ini.acumO, ini.acumR, ini.acumR - ini.acumO); saldoFim.push(iniMesO, iniMesR, iniMesR - iniMesO); }
+    saldoIni.push(iniMesO, iniMesR, iniMesR - iniMesO);
+    saldoFim.push(iniMesO + varMesO, iniMesR + varMesR, (iniMesR + varMesR) - (iniMesO + varMesO));
+    fut.forEach((f) => { saldoIni.push(f.ini); saldoFim.push(f.fim); });
+    saldoIni.push(abertura, abertura);
+    saldoFim.push(abertura + totOrcVar, abertura + totFcVar);
+    linha("SALDO INICIAL", saldoIni, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    linha("SALDO FINAL", saldoFim, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    y += GAP;
+    const varVals = saldoFim.map((v, j) => v - saldoIni[j]);
+    linha("VARIAÇÃO DE CAIXA", varVals, { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt });
+    // Separadores verticais antes do TOTAL ORÇ. e do TOTAL FORECAST
+    g.strokeStyle = "#000000"; g.lineWidth = 1;
+    [xs[iTot], xs[iTot + 1]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, y0); g.lineTo(x + 0.5, y); g.stroke(); });
+    return cv;
+  },
+
   /** Botão "Copiar para o PowerPoint": copia a imagem; sem permissão de área de transferência, baixa o PNG. */
   copiarImagemPpt(btn) {
-    const lado = this.aba === "saidas" ? "saidas" : "entradas";
+    const lado = this.aba === "caixa" ? "caixa" : (this.aba === "saidas" ? "saidas" : "entradas");
     const original = btn ? btn.innerHTML : "";
     const avisar = (texto) => {
       if (!btn) return;
@@ -3449,13 +3634,13 @@ const ResultadoCaixaApp = {
     };
     let canvas;
     try {
-      canvas = this.desenharImagemPpt(lado);
+      canvas = lado === "caixa" ? this.desenharImagemCaixaPpt() : this.desenharImagemPpt(lado);
     } catch (e) {
       console.error("[Resultado de caixa] Imagem:", e);
       alert("Não consegui montar a imagem: " + ((e && e.message) || e));
       return;
     }
-    const nome = (lado === "saidas" ? "saidas" : "entradas") + "-" + this.chaveMes(this.anoAtual(), this.mes) + ".png";
+    const nome = lado + "-" + this.chaveMes(this.anoAtual(), this.mes) + ".png";
     const baixar = () => {
       const a = document.createElement("a");
       a.href = canvas.toDataURL("image/png");
@@ -3738,13 +3923,33 @@ const ResultadoCaixaApp = {
         html += g.ccs.map((cc) => {
           const jaTemId = cc.nome && cc.id && String(cc.nome).indexOf(String(cc.id)) === 0;
           const rot = jaTemId ? cc.nome : ((cc.id ? cc.id + " - " : "") + (cc.nome || "Centro de custo"));
+          const chavePlano = "cc:" + g.def.id + ":" + String(cc.id || "").replace(/[^A-Za-z0-9_-]/g, "");
+          const abertoPlano = !!abertos[chavePlano];
+          const planos = cc.planos || [];
+          const nomeCc = planos.length
+            ? `<button type="button" class="rcx-matriz-abre" onclick="ResultadoCaixaApp.toggleMatriz('${chavePlano}')"><i data-lucide="${abertoPlano ? "chevron-down" : "chevron-right"}"></i>${caixaEsc(rot)}</button>`
+            : caixaEsc(rot);
           const ccCells = dados.cols.map((e) => {
             const cel = cc.porEmp[e.id] || { orc: 0, real: 0 };
             return this.matrizCelulas(cel.orc, cel.real, true, saida);
           }).join("");
           const o = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].orc) || 0), 0);
           const r = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].real) || 0), 0);
-          return `<tr class="rcx-filho rcx-matriz-cc"><td class="rcx-nome">${caixaEsc(rot)}</td>${ccCells}${this.matrizCelulas(o, r, true, saida)}</tr>`;
+          let linhaCc = `<tr class="rcx-filho rcx-matriz-cc"><td class="rcx-nome">${nomeCc}</td>${ccCells}${this.matrizCelulas(o, r, true, saida)}</tr>`;
+          if (abertoPlano) {
+            linhaCc += planos.map((pl) => {
+              const jaTemCodigo = pl.nome && pl.code && String(pl.nome).indexOf(String(pl.code)) === 0;
+              const rotPlano = jaTemCodigo ? pl.nome : ((pl.code ? pl.code + " - " : "") + (pl.nome || "Conta"));
+              const plCells = dados.cols.map((e) => {
+                const cel = pl.porEmp[e.id] || { orc: 0, real: 0 };
+                return this.matrizCelulas(cel.orc, cel.real, true, saida);
+              }).join("");
+              const po = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].orc) || 0), 0);
+              const pr = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].real) || 0), 0);
+              return `<tr class="rcx-matriz-plano"><td class="rcx-nome" title="${caixaEsc(rotPlano)}">${caixaEsc(rotPlano)}</td>${plCells}${this.matrizCelulas(po, pr, true, saida)}</tr>`;
+            }).join("");
+          }
+          return linhaCc;
         }).join("");
       }
       return html;
@@ -3759,7 +3964,7 @@ const ResultadoCaixaApp = {
     const limpar = filtro ? " " + this.botaoVerTodas() : "";
     return `<div class="rcx-matriz-bloco">
       <div class="rcx-matriz-titulo">${tituloFiltro}</div>
-      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}.${recorte} Clique no grupo para abrir os centros de custo.${pctNota}${limpar}</div>
+      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}.${recorte} Clique no grupo para abrir os centros de custo e no centro para abrir o plano financeiro.${pctNota}${limpar}</div>
       <div class="rcx-scroll rcx-matriz-scroll">
         <table class="rcx-grid rcx-matriz">
           <thead>
@@ -4217,6 +4422,9 @@ const ResultadoCaixaApp = {
         <span class="moura-switch-text">Mostrar forecast</span>
       </label>
       <button type="button" class="rcx-arq-btn" onclick="ResultadoCaixaApp.carregarMl(true)">Atualizar</button>
+      ${this.mlDados && !this.mlLendo ? `<button type="button" class="rcx-arq-btn" title="Copia os cartões e a tabela no padrão do slide Fluxo de caixa MLDU. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+        <i data-lucide="image"></i> Copiar para o PowerPoint
+      </button>` : ""}
     </div>
     <p class="rcx-ajuda">Empresa 1, exercício ${ano}. Até ${this.MESES[sel - 1]} o realizado sai do Sienge, só desta empresa. O acumulado anterior compara o orçado da empresa 1 com esse realizado. Os meses seguintes comparam o orçado com o forecast da empresa 1.</p>`;
     if (this.mlLendo) return barra + this.loaderHtml();
