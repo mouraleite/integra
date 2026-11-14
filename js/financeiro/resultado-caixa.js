@@ -2663,6 +2663,9 @@ const ResultadoCaixaApp = {
         <div class="cc-toolbar-actions">
           ${(lado === "entradas" || lado === "saidas") && Object.keys(this.anos || {}).length ? `<button type="button" class="rcx-arq-btn" title="Copia os gráficos e a tabela no padrão do slide do conselho. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
             <i data-lucide="image"></i> Copiar para o PowerPoint
+          </button>
+          <button type="button" class="rcx-arq-btn" title="Copia as linhas da tabela (só os valores) para colar no relatório em Excel: clique na célula B da primeira linha e Ctrl+V." onclick="ResultadoCaixaApp.copiarExcel(this)">
+            <i data-lucide="sheet"></i> Copiar para o Excel
           </button>` : ""}
           <button type="button" class="rcx-arq-btn${this.arqsAberto ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleArqs()">
             <i data-lucide="files"></i> Arquivos <span class="ml-tab-count">${qtdArq}</span>
@@ -3631,6 +3634,53 @@ const ResultadoCaixaApp = {
     g.strokeStyle = "#000000"; g.lineWidth = 1;
     [xs[iTot], xs[iTot + 1]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, y0); g.lineTo(x + 0.5, y); g.stroke(); });
     return cv;
+  },
+
+  /**
+   * Botão "Copiar para o Excel": copia as linhas da tabela (as mesmas da imagem) como texto em colunas,
+   * no layout do relatório "Principais entradas / saídas": B = nome, C:E vazias, F:J mensal, K:O acumulado.
+   * Só valores: a formatação, as bolinhas e as cores do relatório continuam as da planilha.
+   */
+  copiarExcel(btn) {
+    const lado = this.aba === "saidas" ? "saidas" : "entradas";
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let d;
+    try { d = this.dadosImagemPpt(lado); } catch (e) {
+      alert("Não consegui montar a tabela: " + ((e && e.message) || e));
+      return;
+    }
+    const num = (v) => (Math.round((Number(v) || 0) / 10000) / 100).toFixed(2).replace(".", ",");
+    const pct = (real, orc) => {
+      const p = this.pct(real, orc);
+      return p == null ? "" : Math.round(p) + "%";
+    };
+    const bloco = (b) => [num(b.ant), num(b.orc), num(b.real), num(b.real - b.orc), pct(b.real, b.orc)];
+    const linhas = d.rows.map((r) => ({ nome: String(r.nome || "").toUpperCase(), mensal: r.mensal, acum: r.acum }));
+    if (d.outros) linhas.push({ nome: "OUTROS", mensal: d.outros.mensal, acum: d.outros.acum });
+    linhas.push({ nome: "TOTAL", mensal: d.total, acum: d.totalA });
+    const tsv = linhas.map((l) => [l.nome, "", "", ""].concat(bloco(l.mensal), bloco(l.acum)).join("\t")).join("\r\n");
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = tsv;
+      ta.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      ta.remove();
+      if (ok) avisar("Copiado! Cole no Excel (Ctrl+V)");
+      else alert("O navegador não deixou copiar. Tente de novo.");
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      navigator.clipboard.writeText(tsv).then(() => avisar("Copiado! Cole no Excel (Ctrl+V)")).catch(fallback);
+    } else {
+      fallback();
+    }
   },
 
   /** Botão "Copiar para o PowerPoint": copia a imagem; sem permissão de área de transferência, baixa o PNG. */

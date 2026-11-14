@@ -982,7 +982,18 @@ const OrcamentoDfcApp = {
         const novos = await fluxo.buscarMovimentos(inicio, ate, buscar);
         movs = movs.concat(novos || []);
       } catch (e) {
-        publicar((e && e.message) || "Não consegui completar a leitura. O que já estava salvo continua na tela.");
+        const bruto = String((e && e.message) || "");
+        const limite = /\b429\b|rate limit|too many/i.test(bruto);
+        const motivo = limite
+          ? "O Sienge está limitando as consultas de caixa e banco agora (muitas requisições ao mesmo tempo). Aguarde alguns minutos e abra a tela de novo."
+          : (bruto || "Não consegui completar a leitura do caixa e banco.");
+        publicar(motivo);
+        // Sem nada salvo para mostrar: aparece o motivo, e não "não devolveu movimento".
+        if (!(this._lancamentos2026 || []).length) {
+          this._caixaEstado = "erro";
+          this._caixaErro = motivo;
+          if (document.getElementById("orc-dfc-body")) this.paintBody();
+        }
         return;
       }
     }

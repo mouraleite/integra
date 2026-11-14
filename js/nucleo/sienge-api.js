@@ -1203,7 +1203,51 @@ window.fetch = async function(...args) {
 // -----------------------------------------------
 // Fetch base com CORS handling
 // -----------------------------------------------
+/*
+ * Fila única do bulk-data do Sienge (caixa e banco, extratos, inadimplência...).
+ * O Sienge limita essas consultas: telas como o DFC disparavam várias empresas x vários períodos
+ * ao mesmo tempo e recebiam 429 em quase todas. Aqui passam no máximo 2 por vez, com um intervalo
+ * curto entre elas, e quando o Sienge responde 429 a fila inteira espera o tempo pedido.
+ */
+const _siengeBulkFila = { ativos: 0, max: 2, intervalo: 600, ultimo: 0, pausaAte: 0, espera: [] };
+
+function siengeBulkPausar(ms) {
+  const ate = Date.now() + Math.max(0, Number(ms) || 0);
+  if (ate > _siengeBulkFila.pausaAte) _siengeBulkFila.pausaAte = ate;
+}
+
+async function siengeBulkNaFila(fn) {
+  const f = _siengeBulkFila;
+  await new Promise((entrar) => {
+    const tentar = () => {
+      if (f.ativos < f.max) { f.ativos += 1; entrar(); } else f.espera.push(tentar);
+    };
+    tentar();
+  });
+  try {
+    for (;;) {
+      const agora = Date.now();
+      const falta = Math.max(f.pausaAte - agora, f.ultimo + f.intervalo - agora);
+      if (falta <= 0) break;
+      await new Promise((r) => setTimeout(r, falta));
+    }
+    f.ultimo = Date.now();
+    return await fn();
+  } finally {
+    f.ativos -= 1;
+    const prox = f.espera.shift();
+    if (prox) prox();
+  }
+}
+
 async function siengeFetch(endpoint) {
+  if (s_apiMode !== "simulado" && String(endpoint || "").startsWith("/bulk-data/")) {
+    return siengeBulkNaFila(() => siengeFetchDireto(endpoint));
+  }
+  return siengeFetchDireto(endpoint);
+}
+
+async function siengeFetchDireto(endpoint) {
   if (s_apiMode === "simulado") {
     throw new Error("Chamada de API em Modo Simulado. Use os métodos simulados.");
   }
@@ -1353,6 +1397,8 @@ async function siengeFetchWithRetry(endpoint, retries = 6) {
       const misdirected = Number(err.status) === 421;
       if ((isSiengeRateLimitError(err) || invalidJson || serverFail || misdirected) && attempt < retries - 1) {
         const waitMs = siengeRateLimitWaitMs(attempt, err.retryAfter);
+        // 429 no bulk-data: segura a fila toda, para as outras consultas não insistirem junto.
+        if (isSiengeRateLimitError(err) && String(endpoint || "").startsWith("/bulk-data/")) siengeBulkPausar(waitMs);
         console.warn(`[Sienge] ${invalidJson ? "JSON inválido" : (err.status || "erro")} — aguardando ${waitMs / 1000}s (tentativa ${attempt + 2}/${retries})...`);
         await new Promise(r => setTimeout(r, waitMs));
       } else {
