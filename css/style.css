@@ -12443,6 +12443,7 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .pobra-grade { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .pobra-grade .pobra-card { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: center; column-gap: 24px; row-gap: 10px; }
 .pobra-grade .pobra-alerta { grid-column: 1 / -1; }
+.pobra-grade .pobra-card.is-sem-topo { grid-template-columns: minmax(0, 1fr); padding: 16px 24px; }
 .pobra-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
 .pobra-card:hover { transform: translateY(-3px); border-color: #1b8253; box-shadow: 0 0 0 1px #1b8253, 0 10px 24px rgba(16, 84, 54, .16); }
 @media (max-width: 1000px) { .pobra-grade .pobra-card { grid-template-columns: 1fr; } }

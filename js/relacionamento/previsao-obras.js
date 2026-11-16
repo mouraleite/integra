@@ -129,7 +129,8 @@
         </div>`;
     },
 
-    cartao(linha) {
+    /** semTopo: dentro da lista o nome já está na linha de cima, então o cartão mostra só as datas. */
+    cartao(linha, semTopo) {
       const r = this.rotulo(linha);
       const mud = this.ultimaMudanca(linha);
       let alerta = "";
@@ -147,14 +148,14 @@
         </div>`;
       }
       return `
-        <article class="pobra-card">
-          <header class="pobra-card-topo">
+        <article class="pobra-card${semTopo ? " is-sem-topo" : ""}">
+          ${semTopo ? "" : `<header class="pobra-card-topo">
             <span class="pobra-id">${this.esc(linha.id)}</span>
             <div class="pobra-nome">
               <strong title="${this.esc(r.nome)}">${this.esc(r.nome)}</strong>
               ${r.cidade ? `<span>${this.esc(r.cidade)}</span>` : ""}
             </div>
-          </header>
+          </header>`}
           <div class="pobra-tempo">
             ${MARCOS.map((m, i) => this.marco(i + 1, m.titulo, this.iso(linha[m.key]), !!(mud && mud.mudou.indexOf(m.key) >= 0))).join("")}
           </div>
@@ -194,7 +195,7 @@
               </button>
             </td>
           </tr>
-          ${aberto ? `<tr class="pobra-det"><td colspan="3"><div class="pobra-grade">${this.cartao(l)}</div></td></tr>` : ""}`;
+          ${aberto ? `<tr class="pobra-det"><td colspan="3"><div class="pobra-grade">${this.cartao(l, true)}</div></td></tr>` : ""}`;
       }).join("");
       return `
         <div class="cc-scroll pobra-scroll">
@@ -210,8 +211,8 @@
 
     alternar(id) {
       const k = String(id);
-      if (this.abertos[k]) delete this.abertos[k];
-      else this.abertos[k] = true;
+      // Um por vez: abrir outro fecha o que estava aberto.
+      this.abertos = this.abertos[k] ? {} : { [k]: true };
       const alvo = document.getElementById("pobra-corpo");
       if (alvo) alvo.innerHTML = this.corpoHtml();
       if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
