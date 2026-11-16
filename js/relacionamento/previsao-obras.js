@@ -8,10 +8,10 @@
   const MARCOS = [
     { key: "cliente", titulo: "Previsão término de obra", curto: "término de obra",
       legenda: "Término de obra — Atestado de Conclusão de Obras (Sabesp).",
-      texto: "A Sabesp emite esse documento depois de vistoriar e aceitar as redes de água e esgoto. Ele confirma que o sistema está apto a operar e que as ligações podem ser liberadas. É o primeiro marco, porque a Prefeitura precisa dele para emitir o TVO." },
+      texto: "A Sabesp emite esse documento depois de vistoriar e aceitar as redes de água e esgoto. É o primeiro marco, porque a Prefeitura precisa dele para emitir o TVO." },
     { key: "tvoCliente", titulo: "Previsão TVO", curto: "TVO",
       legenda: "TVO — Termo de Verificação de Obras (Prefeitura Municipal).",
-      texto: "Depois do aceite da Sabesp e das demais concessionárias, a Prefeitura vistoria a infraestrutura do loteamento e emite o TVO, atestando que as obras foram executadas conforme o projeto aprovado. Com o TVO emitido, o cliente já pode protocolar a aprovação do projeto da casa na Prefeitura e começar a construir." },
+      texto: "Com o TVO emitido, o cliente já pode protocolar a aprovação do projeto da casa na Prefeitura e começar a construir." },
     { key: "lo", titulo: "Previsão LO", curto: "LO",
       legenda: "LO — Licença de Operação.",
       texto: "Com a LO emitida, o loteamento está regularizado para ser ocupado, ou seja, o cliente pode mudar-se para o local." },
