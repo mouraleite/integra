@@ -48133,6 +48133,99 @@ window.kmzFecharClassificacao = function(ok, geracao) {
   setTimeout(() => { const ainda = mesma(); if (ainda) ainda.remove(); }, 280);
 };
 
+/* Indício de construção pela imagem de satélite (js/nucleo/satelite-construcao.js). */
+window.kmzTipComSatelite = function(mark) {
+  const base = mark._kmzTipBase || "";
+  const s = mark._kmzSat;
+  if (!s || !s.r) return base;
+  const texto = s.r === "C" ? "indício de construção" : (s.r === "V" ? "sem indício de construção" : "imagem inconclusiva");
+  const linha = '<div class="kmz-tip-sat">Satélite (raio de 4 m): <b>' + texto + "</b></div>";
+  return base.replace(/<\/div>\s*$/, linha + "</div>");
+};
+
+window.kmzControleSatelite = function(map, empId, marcas, kmzAt) {
+  const Sat = window.SatConstrucao;
+  const pintar = (resultado) => {
+    const cont = { C: 0, V: 0, Q: 0 };
+    marcas.forEach((item) => {
+      const s = resultado[item.nome] || null;
+      item.mark._kmzSat = s;
+      const el = item.mark.getElement && item.mark.getElement();
+      const box = el && el.querySelector(".kmz-lote");
+      if (box) {
+        let tag = box.querySelector(".kmz-lote-sat");
+        if (s && s.r) {
+          const cls = s.r === "?" ? "Q" : s.r;
+          cont[cls]++;
+          if (!tag) {
+            tag = document.createElement("i");
+            box.insertBefore(tag, box.querySelector(".kmz-lote-nome"));
+          }
+          tag.className = "kmz-lote-sat is-" + cls;
+        } else if (tag) tag.remove();
+      }
+      if (item.mark._kmzTipBase && item.mark.getTooltip && item.mark.getTooltip()) {
+        item.mark.getTooltip().setContent(window.kmzTipComSatelite(item.mark));
+      }
+    });
+    return cont;
+  };
+  const Controle = L.Control.extend({
+    options: { position: "topright" },
+    onAdd: function() {
+      const div = L.DomUtil.create("div", "kmz-sat");
+      div.innerHTML = '<button type="button">Indício de construção</button>'
+        + '<p class="kmz-sat-info">Analisa a imagem de satélite num raio de 4 m de cada ponto. É indício, não substitui a vistoria.</p>';
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      const btn = div.querySelector("button");
+      const info = div.querySelector(".kmz-sat-info");
+      const resumo = (cont, quando, salvo) => {
+        info.innerHTML = '<div><i class="kmz-lote-sat is-C"></i>' + cont.C + " com indício de construção</div>"
+          + '<div><i class="kmz-lote-sat is-V"></i>' + cont.V + " sem indício (vazio ou terraplanagem)</div>"
+          + '<div><i class="kmz-lote-sat is-Q"></i>' + cont.Q + " imagem inconclusiva</div>"
+          + "<p>" + (salvo ? "Análise de " : "Analisado em ") + quando + ". A data da foto do satélite pode ser antiga. Laje lisa que cobre todo o raio pode sair como sem indício."
+          + ' <a class="kmz-sat-refazer">Analisar de novo</a></p>';
+        const refazer = info.querySelector(".kmz-sat-refazer");
+        if (refazer) refazer.onclick = () => rodar(true);
+      };
+      const rodar = async (forcar) => {
+        btn.disabled = true;
+        try {
+          if (!forcar) {
+            const salvo = await Sat.lerSalvo(empId);
+            if (salvo && String(salvo.kmzAt || "") === String(kmzAt || "")) {
+              const quando = salvo.em ? new Date(salvo.em).toLocaleDateString("pt-BR") : "";
+              resumo(pintar(Sat.abrirSalvo(salvo)), quando, true);
+              btn.textContent = "Indício de construção";
+              btn.disabled = false;
+              return;
+            }
+          }
+          const lotes = marcas.map((item) => {
+            const ll = item.mark.getLatLng();
+            return { nome: item.nome, lat: ll.lat, lng: ll.lng };
+          });
+          btn.textContent = "Analisando 0 de " + lotes.length + "…";
+          const resultado = await Sat.analisarLotes(lotes, (feitos, total) => {
+            btn.textContent = "Analisando " + feitos + " de " + total + "…";
+          });
+          resumo(pintar(resultado), new Date().toLocaleDateString("pt-BR"), false);
+          Sat.salvar(empId, resultado, kmzAt);
+        } catch (e) {
+          console.warn("[Satélite]", e);
+          info.textContent = "Não consegui ler a imagem de satélite agora. Tente de novo.";
+        }
+        btn.textContent = "Indício de construção";
+        btn.disabled = false;
+      };
+      btn.onclick = () => rodar(false);
+      return div;
+    }
+  });
+  map.addControl(new Controle());
+};
+
 window.abrirMapaKmz = async function(empId) {
   const id = String(empId || "");
   const modal = document.getElementById("map-modal-overlay");
@@ -48242,7 +48335,16 @@ window.abrirMapaKmz = async function(empId) {
         + ".kmz-legenda div{display:flex;align-items:center;gap:6px;margin-top:3px;}"
         + ".kmz-legenda i{width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 0 1px rgba(15,23,42,.2);}"
         + ".kmz-legenda .is-q{background:#94a3b8;}.kmz-legenda .is-a{background:#16a34a;}.kmz-legenda .is-i{background:#dc2626;}.kmz-legenda .is-n{background:#f8fafc;box-shadow:0 0 0 1px #94a3b8;}"
-        + ".kmz-legenda p{margin:6px 0 0;color:#64748b;font-size:.7rem;}";
+        + ".kmz-legenda p{margin:6px 0 0;color:#64748b;font-size:.7rem;}"
+        + ".kmz-lote-sat{width:9px;height:9px;border-radius:2px;flex:none;box-shadow:0 0 0 1px #fff,0 0 0 2px rgba(15,23,42,.35);}"
+        + ".kmz-lote-sat.is-C{background:#c2410c;}.kmz-lote-sat.is-V{background:#bef264;}.kmz-lote-sat.is-Q{background:#facc15;}"
+        + ".kmz-sat{background:rgba(255,255,255,.96);border-radius:10px;padding:8px 10px;box-shadow:0 4px 14px rgba(0,0,0,.16);font-size:.75rem;color:#0f172a;max-width:250px;line-height:1.35;}"
+        + ".kmz-sat button{border:0;border-radius:6px;background:#105436;color:#fff;font-weight:700;font-size:.74rem;padding:6px 10px;cursor:pointer;width:100%;}"
+        + ".kmz-sat button:disabled{opacity:.6;cursor:wait;}"
+        + ".kmz-sat div{display:flex;align-items:center;gap:6px;margin-top:3px;}"
+        + ".kmz-sat p{margin:6px 0 0;color:#64748b;font-size:.7rem;}"
+        + ".kmz-sat a{color:#105436;font-weight:700;cursor:pointer;text-decoration:underline;}"
+        + ".leaflet-tooltip.kmz-lote-tip .kmz-tip-sat{margin-top:4px;padding-top:4px;border-top:1px solid #e2e8f0;font-size:.72rem;color:#334155;}";
     const marcas = [];
     const pontosLote = [];
     const centroDe = (pts) => {
@@ -48308,6 +48410,7 @@ window.abrirMapaKmz = async function(empId) {
       }
     });
     map.addControl(new Legenda());
+    if (window.SatConstrucao) window.kmzControleSatelite(map, id, marcas, data.updatedAt || "");
     const geracao = (window._kmzMapaGeracao = (window._kmzMapaGeracao || 0) + 1);
     const painelClassifica = document.getElementById("kmz-classifica");
     if (painelClassifica) painelClassifica.setAttribute("data-geracao", String(geracao));
@@ -48324,7 +48427,8 @@ window.abrirMapaKmz = async function(empId) {
           box.classList.add(info ? ("is-" + info.status) : "is-neutro");
         }
         item.mark.unbindTooltip();
-        item.mark.bindTooltip(window.kmzHtmlResumo(item.etiqueta, info), { direction: "top", opacity: 1, className: "kmz-lote-tip", offset: [10, -6] });
+        item.mark._kmzTipBase = window.kmzHtmlResumo(item.etiqueta, info);
+        item.mark.bindTooltip(window.kmzTipComSatelite(item.mark), { direction: "top", opacity: 1, className: "kmz-lote-tip", offset: [10, -6] });
       });
       const status = document.getElementById("kmz-legenda-status");
       if (status) status.textContent = "Passe o mouse para o resumo. Clique para abrir a ficha.";
