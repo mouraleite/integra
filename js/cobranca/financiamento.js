@@ -10,6 +10,7 @@ const FinanciamentoState = {
 
 const FIN_PROC_KEY = "crm_moura_financiamentos_proc";
 const FIN_TERMO_STAGE_ID = "fin-01";
+const FIN_DECLARACAO_STAGE_ID = "fin-05";
 const FIN_TERMO_TEMPLATE_URL = "assets/termos/termo-simulacao-saldo-devedor.docx?v=2176";
 const FIN_DECLARACAO_TEMPLATE_URL = "assets/termos/declaracao-saldo-devedor-interveniente-quitante.docx?v=2183";
 const FIN_TERMO_SIENGE_TAG = "TERMO DE SIMULAÇÃO DO SALDO DEVEDOR";
@@ -2161,6 +2162,7 @@ const FinanciamentoApp = {
   },
 
   ehEtapaDeclaracaoSaldo(stageId, index) {
+    if (String(stageId) === FIN_DECLARACAO_STAGE_ID) return true;
     if (Number.isInteger(index)) return index === 3;
     return this.folhasEtapa(this.catalogoEtapas())
       .findIndex((etapa) => String(etapa.id) === String(stageId)) === 3;
