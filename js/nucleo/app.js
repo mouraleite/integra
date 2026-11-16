@@ -11469,6 +11469,10 @@ window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloud
     if (localPadrao && cloud.length && !window.etapasFinanciamentoSaoPadrao(cloud)) chosen = pack(cloud, 0, "cloud");
     else chosen = pack(local, 0, "local");
   }
+  const migrada = typeof window.migrarEtapasFinanciamentoPadrao === "function"
+    ? window.migrarEtapasFinanciamentoPadrao(chosen.list)
+    : null;
+  if (migrada) chosen = pack(migrada, Date.now(), "local");
   if (cloudCheia.length !== cloud.length) {
     chosen.list = window.finEtapasSemExcluidas(chosen.list, tomb);
     chosen.at = Date.now();
@@ -44952,7 +44956,7 @@ window.removerEtapaJudicial = function(id) {
   }
 };
 
-window.ETAPAS_FINANCIAMENTO_PADRAO = [
+window.ETAPAS_FINANCIAMENTO_PADRAO_ANTERIOR = [
   { id: "fin-01", nome: "Enviar Termo de Simulação para financiamento", dias: 1, descricao: "Envio ao cliente do termo contendo as condições preliminares e simulação do financiamento para análise." },
   { id: "fin-02", nome: "Aguardar retorno do cliente", dias: 15, descricao: "Período destinado à manifestação do cliente quanto ao interesse e aceitação das condições apresentadas." },
   { id: "fin-03", nome: "Validar projeto aprovado", dias: 3, descricao: "Conferência da aprovação do projeto e dos documentos necessários para prosseguimento do financiamento." },
@@ -44964,6 +44968,38 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
   { id: "fin-11", nome: "Realizar quitação do contrato", dias: 1, descricao: "Baixa financeira e quitação do contrato do cliente após o recebimento dos recursos do financiamento." },
   { id: "fin-12", nome: "Emitir Termo de Quitação para Financiamento", dias: 2, descricao: "Emissão do documento formal que comprove a quitação das obrigações contratuais pela operação de financiamento." }
 ];
+
+window.ETAPAS_FINANCIAMENTO_PADRAO = [
+  { id: "fin-01", nome: "Termo de simulação do saldo devedor para efeito de Interveniente Quitante", dias: 1, descricao: "Envio ao cliente do termo contendo as condições preliminares e a simulação do financiamento para análise. Termo enviado pelo time de relacionamento." },
+  { id: "fin-02", nome: "Aguardar retorno do cliente", dias: 15, descricao: "Período destinado à manifestação do cliente quanto ao interesse e aceitação das condições apresentadas." },
+  { id: "fin-03", nome: "Validar projeto aprovado", dias: 3, descricao: "Conferência da aprovação do projeto e dos documentos necessários para prosseguimento do financiamento." },
+  { id: "fin-05", nome: "Declaração do Saldo Devedor para efeitos de Interveniente Quitante", dias: 3, descricao: "Emissão da declaração do saldo devedor para efeitos de interveniente quitante e envio ao cliente e à instituição financeira." },
+  { id: "fin-06", nome: "Aguardar análise", dias: 30, descricao: "Período destinado à análise da documentação pela instituição financeira." },
+  { id: "fin-07", nome: "Análise da Minuta de Financiamento", dias: 2, descricao: "Análise e conferência da minuta recebida, verificando informações, valores e condições contratuais." },
+  { id: "fin-08", nome: "Assinatura de Contrato (Diretoria/Procuradores)", dias: 1, descricao: "Coleta das assinaturas do contrato pela diretoria e pelos procuradores responsáveis." },
+  { id: "fin-10", nome: "Acompanhar desbloqueio do crédito", dias: 20, descricao: "Monitoramento da liberação dos recursos financeiros pela instituição financiadora." },
+  { id: "fin-11", nome: "Realizar quitação do contrato", dias: 1, descricao: "Baixa financeira e quitação do contrato do cliente após o recebimento dos recursos do financiamento." },
+  { id: "fin-12", nome: "Emitir Termo de quitação por financiamento bancário", dias: 2, descricao: "Emissão do documento formal que comprove a quitação das obrigações contratuais pela operação de financiamento bancário." }
+];
+
+window.migrarEtapasFinanciamentoPadrao = function(lista) {
+  const anterior = window.ETAPAS_FINANCIAMENTO_PADRAO_ANTERIOR || [];
+  if (!Array.isArray(lista) || lista.length !== anterior.length) return null;
+  const corresponde = anterior.every((padrao, i) => {
+    const etapa = lista[i];
+    return !!(etapa
+      && String(etapa.id) === String(padrao.id)
+      && String(etapa.nome || "") === String(padrao.nome)
+      && (parseInt(etapa.dias, 10) || 0) === (parseInt(padrao.dias, 10) || 0)
+      && String(etapa.descricao || "") === String(padrao.descricao)
+      && (etapa.parentId == null || etapa.parentId === ""));
+  });
+  if (!corresponde) return null;
+  return window.ETAPAS_FINANCIAMENTO_PADRAO.map((etapa, i) => Object.assign({}, etapa, {
+    parentId: null,
+    order: typeof lista[i].order === "number" ? lista[i].order : (i + 1) * 10
+  }));
+};
 
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
