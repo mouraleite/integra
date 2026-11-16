@@ -12429,25 +12429,25 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 
 /* Relacionamento > Previsão de obras (resumo do Acompanhamento de obra da Engenharia) */
 .pobra-page { display: flex; flex-direction: column; gap: 16px; }
-.pobra-legenda { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.pobra-legenda { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pobra-legenda-item { display: flex; gap: 10px; align-items: flex-start; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; }
 .pobra-legenda-item p { margin: 0; font-size: 0.74rem; line-height: 1.45; color: #475569; }
 .pobra-legenda-item strong { display: block; color: #105436; font-size: 0.8rem; margin-bottom: 3px; }
 .pobra-marco-n { position: relative; z-index: 1; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: #105436; color: #fff; font-size: 0.74rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
 .pobra-filtro { display: flex; }
-.pobra-grade { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.pobra-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .pobra-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
 .pobra-card:hover { transform: translateY(-3px); border-color: #1b8253; box-shadow: 0 0 0 1px #1b8253, 0 10px 24px rgba(16, 84, 54, .16); }
-@media (max-width: 1200px) { .pobra-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 700px) { .pobra-grade { grid-template-columns: 1fr; } }
+@media (max-width: 1000px) { .pobra-grade { grid-template-columns: 1fr; } }
+@media (max-width: 1300px) { .pobra-legenda { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .pobra-card-topo { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .pobra-id { flex: 0 0 auto; background: #e7f6ee; color: #105436; font-weight: 800; font-size: 0.74rem; padding: 4px 8px; border-radius: 6px; }
 .pobra-nome { display: flex; flex-direction: column; min-width: 0; }
 .pobra-nome strong { font-size: 0.86rem; color: #1c2e24; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pobra-nome span { font-size: 0.7rem; color: #64748b; font-weight: 600; }
-.pobra-tempo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pobra-tempo { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .pobra-marco { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; }
-.pobra-marco:first-child::after { content: ""; position: absolute; top: 11px; left: calc(50% + 16px); width: calc(100% - 20px); height: 2px; background: #86b59a; }
+.pobra-marco:not(:last-child)::after { content: ""; position: absolute; top: 11px; left: calc(50% + 16px); width: calc(100% - 20px); height: 2px; background: #86b59a; }
 .pobra-marco-titulo { margin-top: 4px; min-height: 2.5em; display: flex; align-items: center; font-size: 0.68rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .02em; }
 .pobra-marco-mes { font-size: 1.25rem; font-weight: 800; color: #105436; line-height: 1.1; }
 .pobra-marco-data { font-size: 0.74rem; color: #1c2e24; font-weight: 600; }

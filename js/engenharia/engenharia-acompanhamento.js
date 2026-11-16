@@ -240,6 +240,8 @@
       const fx = window.firebaseCollections;
       const db = window.firebaseDb;
       if (!this.podeEditar() || !fx || !db || typeof fx.setDoc !== "function") return;
+      // Sem ter lido a nuvem, não grava por cima (evita apagar as obras com uma cópia local vazia ou antiga).
+      if (this.nuvemEstado !== "ok") return;
       try {
         await fx.setDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc), { linhas: this.linhas, savedAt: at || Date.now() });
       } catch (e) {
@@ -247,27 +249,47 @@
       }
     },
 
+    /* Estado da leitura da nuvem: "" (ainda não leu), "lendo", "ok" ou "erro".
+       Antes a tela desistia depois de 10 s sem Firebase e mostrava "Nenhuma obra informada" até recarregar a página. */
+    nuvemEstado: "",
+
     async carregarNuvem(tentativa) {
+      const n = tentativa || 0;
+      if (n === 0) {
+        if (this.nuvemEstado === "lendo" || this.nuvemEstado === "ok") return;
+        this.nuvemEstado = "lendo";
+      }
       const fx = window.firebaseCollections;
       const db = window.firebaseDb;
       if (!fx || !db || typeof fx.getDoc !== "function") {
-        if ((tentativa || 0) < 20) setTimeout(() => this.carregarNuvem((tentativa || 0) + 1), 500);
+        if (n < 120) setTimeout(() => this.carregarNuvem(n + 1), 500);
+        else this.falhaNuvem(new Error("Firebase não ficou pronto"));
         return;
       }
       let snap;
-      try {
-        snap = await fx.getDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc));
-      } catch (e) {
-        console.warn("[Acompanhamento de obra] Não foi possível ler da nuvem:", e);
+      let erro = null;
+      for (let i = 0; i < 3 && !snap; i++) {
+        try {
+          snap = await fx.getDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc));
+        } catch (e) {
+          erro = e;
+          await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+        }
+      }
+      if (!snap) {
+        this.falhaNuvem(erro);
         return;
       }
+      this.nuvemEstado = "ok";
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
       const data = existe && typeof snap.data === "function" ? snap.data() : null;
       const local = this.localAt();
       if (data && Array.isArray(data.linhas)) {
         const nuvemAt = Number(data.savedAt) || 0;
-        if (nuvemAt >= local || !this.linhas.length) {
-          this.linhas = data.linhas.filter((r) => r && r.id);
+        const daNuvem = data.linhas.filter((r) => r && r.id);
+        // Só manda a cópia local para a nuvem se ela for mais nova E não tiver menos obras que a nuvem.
+        if (nuvemAt >= local || !this.linhas.length || this.linhas.length < daNuvem.length) {
+          this.linhas = daNuvem;
           this.gravarLocal(nuvemAt);
         } else {
           this.salvarNuvem(local);
@@ -280,6 +302,12 @@
         if (this.podeEditar()) this.gravar();
       }
       this.garantirInserido();
+      if (!this.modalAberto()) this.render();
+    },
+
+    falhaNuvem(e) {
+      console.warn("[Acompanhamento de obra] Não foi possível ler da nuvem:", e);
+      this.nuvemEstado = "erro";
       if (!this.modalAberto()) this.render();
     },
 
@@ -313,6 +341,8 @@
       this.ordem = "id";
       this.direcao = "asc";
       this.carregar();
+      // Abriu a aba e a nuvem ainda não respondeu (ou falhou antes): tenta de novo.
+      if (this.nuvemEstado !== "ok") this.carregarNuvem();
       this.render();
       this.listaEmpreendimentos().then(() => {
         const mudou = this.completarNomes();
@@ -343,7 +373,11 @@
               </button>` : ""}</td>
           </tr>`;
         }).join("")
-        : `<tr><td colspan="8" style="text-align:center;padding:28px;color:#64748b;">Nenhuma obra informada.</td></tr>`;
+        : `<tr><td colspan="8" style="text-align:center;padding:28px;color:${this.nuvemEstado === "erro" ? "#b91c1c" : "#64748b"};">${
+          this.nuvemEstado === "ok" ? "Nenhuma obra informada."
+            : this.nuvemEstado === "erro"
+              ? `Não consegui ler as obras agora. <a href="#" onclick="AcompanhamentoObraApp.nuvemEstado='';AcompanhamentoObraApp.carregarNuvem();AcompanhamentoObraApp.render();return false;">Tentar de novo</a>`
+              : "Carregando as obras…"}</td></tr>`;
       root.innerHTML = `
         <div class="cc-page">
           <div class="cc-toolbar">

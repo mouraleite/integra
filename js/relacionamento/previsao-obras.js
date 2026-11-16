@@ -4,6 +4,21 @@
 (function () {
   const NUVEM = { colecao: "engenharia_acompanhamento", doc: "obras" };
   const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  /* Campos do Acompanhamento de obra da Engenharia, na ordem da linha do tempo. */
+  const MARCOS = [
+    { key: "cliente", titulo: "Previsão término de obra", curto: "término de obra",
+      legenda: "Término de obra — Atestado de Conclusão de Obras (Sabesp).",
+      texto: "A Sabesp emite esse documento depois de vistoriar e aceitar as redes de água e esgoto. Ele confirma que o sistema está apto a operar e que as ligações podem ser liberadas. É o primeiro marco, porque a Prefeitura precisa dele para emitir o TVO." },
+    { key: "tvoCliente", titulo: "Previsão TVO", curto: "TVO",
+      legenda: "TVO — Termo de Verificação de Obras (Prefeitura Municipal).",
+      texto: "Depois do aceite da Sabesp e das demais concessionárias, a Prefeitura vistoria a infraestrutura do loteamento e emite o TVO, atestando que as obras foram executadas conforme o projeto aprovado. Com o TVO emitido, o cliente já pode protocolar a aprovação do projeto da casa na Prefeitura e começar a construir." },
+    { key: "lo", titulo: "Previsão LO", curto: "LO",
+      legenda: "LO — Licença de Operação.",
+      texto: "Com a LO emitida, o loteamento está regularizado para ser ocupado, ou seja, o cliente pode mudar-se para o local." },
+    { key: "tvoContrato", titulo: "Prazo máximo legal (TVO contrato)", curto: "prazo máximo do TVO (contrato)",
+      legenda: "Prazo máximo legal — TVO (contrato).",
+      texto: "É o prazo que consta no contrato do cliente para que o TVO seja liberado." }
+  ];
 
   const PrevisaoObrasApp = {
     linhas: [],
@@ -54,15 +69,18 @@
      * historico guarda as versões anteriores, da mais antiga para a mais nova; a linha é a versão atual.
      */
     ultimaMudanca(linha) {
-      const versoes = (Array.isArray(linha.historico) ? linha.historico : [])
-        .map((h) => ({ em: Number(h.em) || 0, cliente: this.iso(h.cliente), tvo: this.iso(h.tvoCliente) }));
-      versoes.push({ em: Number(linha.inseridoEm) || 0, cliente: this.iso(linha.cliente), tvo: this.iso(linha.tvoCliente) });
+      const foto = (h) => {
+        const f = { em: Number(h.em != null ? h.em : h.inseridoEm) || 0 };
+        MARCOS.forEach((m) => { f[m.key] = this.iso(h[m.key]); });
+        return f;
+      };
+      const versoes = (Array.isArray(linha.historico) ? linha.historico : []).map(foto);
+      versoes.push(foto(Object.assign({}, linha, { em: linha.inseridoEm })));
       for (let i = versoes.length - 1; i > 0; i--) {
         const atual = versoes[i];
         const antes = versoes[i - 1];
-        if (atual.cliente !== antes.cliente || atual.tvo !== antes.tvo) {
-          return { em: atual.em, cliente: antes.cliente, tvo: antes.tvo, mudouObra: atual.cliente !== antes.cliente, mudouTvo: atual.tvo !== antes.tvo };
-        }
+        const mudou = MARCOS.filter((m) => atual[m.key] !== antes[m.key]);
+        if (mudou.length) return { em: atual.em, antes: antes, mudou: mudou.map((m) => m.key) };
       }
       return null;
     },
@@ -90,7 +108,7 @@
         const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
         const data = existe ? (snap.data() || {}) : {};
         this.linhas = (Array.isArray(data.linhas) ? data.linhas : [])
-          .filter((r) => r && r.id && (this.iso(r.cliente) || this.iso(r.tvoCliente)))
+          .filter((r) => r && r.id && MARCOS.some((m) => this.iso(r[m.key])))
           .sort((a, b) => (this.iso(a.cliente) || "9999").localeCompare(this.iso(b.cliente) || "9999")
             || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
         this.estado = "pronto";
@@ -114,16 +132,20 @@
     cartao(linha) {
       const r = this.rotulo(linha);
       const mud = this.ultimaMudanca(linha);
-      const obra = this.iso(linha.cliente);
-      const tvo = this.iso(linha.tvoCliente);
-      const alerta = mud ? `
+      let alerta = "";
+      if (mud) {
+        const partes = MARCOS.filter((m) => mud.mudou.indexOf(m.key) >= 0)
+          .map((m) => m.curto + " " + this.dataBr(mud.antes[m.key]));
+        const lista = partes.length > 1 ? partes.slice(0, -1).join(", ") + " e " + partes[partes.length - 1] : partes[0];
+        alerta = `
         <div class="pobra-alerta" role="note">
           <i data-lucide="alert-triangle"></i>
           <div>
             <strong>Previsões alteradas${mud.em ? " em " + this.esc(this.quando(mud.em)) : ""}.</strong>
-            <span>Antes: término de obra ${this.esc(this.dataBr(mud.cliente))} e TVO ${this.esc(this.dataBr(mud.tvo))}.</span>
+            <span>Antes: ${this.esc(lista)}.</span>
           </div>
-        </div>` : "";
+        </div>`;
+      }
       return `
         <article class="pobra-card">
           <header class="pobra-card-topo">
@@ -134,8 +156,7 @@
             </div>
           </header>
           <div class="pobra-tempo">
-            ${this.marco(1, "Previsão término de obra", obra, mud && mud.mudouObra)}
-            ${this.marco(2, "Previsão TVO", tvo, mud && mud.mudouTvo)}
+            ${MARCOS.map((m, i) => this.marco(i + 1, m.titulo, this.iso(linha[m.key]), !!(mud && mud.mudou.indexOf(m.key) >= 0))).join("")}
           </div>
           ${alerta}
         </article>`;
@@ -183,16 +204,11 @@
         <div class="cc-page pobra-page">
           ${this.filtroHtml()}
           <section class="pobra-legenda" aria-label="O que significa cada data">
+            ${MARCOS.map((m, i) => `
             <div class="pobra-legenda-item">
-              <span class="pobra-marco-n">1</span>
-              <p><strong>Término de obra — Atestado de Conclusão de Obras (Sabesp).</strong>
-              A Sabesp emite esse documento depois de vistoriar e aceitar as redes de água e esgoto. Ele confirma que o sistema está apto a operar e que as ligações podem ser liberadas. É o primeiro marco, porque a Prefeitura precisa dele para emitir o TVO.</p>
-            </div>
-            <div class="pobra-legenda-item">
-              <span class="pobra-marco-n">2</span>
-              <p><strong>TVO — Termo de Verificação de Obras (Prefeitura Municipal).</strong>
-              Depois do aceite da Sabesp e das demais concessionárias, a Prefeitura vistoria a infraestrutura do loteamento e emite o TVO, atestando que as obras foram executadas conforme o projeto aprovado. Com o TVO emitido, o cliente já pode protocolar a aprovação do projeto da casa na Prefeitura e começar a construir.</p>
-            </div>
+              <span class="pobra-marco-n">${i + 1}</span>
+              <p><strong>${this.esc(m.legenda)}</strong>${this.esc(m.texto)}</p>
+            </div>`).join("")}
           </section>
           ${corpo}
         </div>`;
