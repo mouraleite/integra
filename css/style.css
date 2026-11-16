@@ -12435,6 +12435,11 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .pobra-legenda-item strong { display: block; color: #105436; font-size: 0.8rem; margin-bottom: 3px; }
 .pobra-marco-n { position: relative; z-index: 1; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: #105436; color: #fff; font-size: 0.74rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
 .pobra-filtro { display: flex; }
+.pobra-scroll { max-height: none; }
+.pobra-table tbody tr.pobra-linha.is-aberta td { background: #e7f6ee; color: #105436; font-weight: 700; }
+.pobra-table tbody tr.pobra-det td,
+.pobra-table tbody tr.pobra-det:hover td { white-space: normal; overflow: visible; padding: 10px 12px 14px; background: #f3f8f5; color: inherit; }
+.pobra-table .pobra-selo-mudou { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 99px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 0.66rem; font-weight: 700; vertical-align: middle; }
 .pobra-grade { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .pobra-grade .pobra-card { display: grid; grid-template-columns: 300px minmax(0, 1fr); align-items: center; column-gap: 24px; row-gap: 10px; }
 .pobra-grade .pobra-alerta { grid-column: 1 / -1; }

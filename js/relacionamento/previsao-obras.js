@@ -176,7 +176,45 @@
       let lista = this.filtro === "TODOS" ? this.linhas : this.linhas.filter((l) => String(l.id) === this.filtro);
       if (termo) lista = lista.filter((l) => norm(l.id + " " + (l.nome || "")).indexOf(termo) >= 0);
       if (!lista.length) return `<p class="pobra-vazio">Nenhum empreendimento encontrado.</p>`;
-      return `<div class="pobra-grade">${lista.map((l) => this.cartao(l)).join("")}</div>`;
+      // Lista em ordem crescente de ID, no padrão da tabela de centros de custo. O olho abre o cartão logo abaixo.
+      const ordenada = lista.slice().sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
+      const linhas = ordenada.map((l) => {
+        const id = String(l.id);
+        const aberto = !!this.abertos[id];
+        const mud = this.ultimaMudanca(l);
+        const selo = mud ? `<span class="pobra-selo-mudou" title="Previsões alteradas">Alterada${mud.em ? " em " + this.esc(this.quando(mud.em)) : ""}</span>` : "";
+        return `
+          <tr class="${aberto ? "pobra-linha is-aberta" : "pobra-linha"}">
+            <td><strong>${this.esc(id)}</strong></td>
+            <td class="cc-nome" title="${this.esc(l.nome || "")}">${this.esc(l.nome || "—")} ${selo}</td>
+            <td class="is-center">
+              <button type="button" class="tvig-ico" title="${aberto ? "Fechar previsões" : "Ver previsões"}" aria-expanded="${aberto}"
+                onclick="PrevisaoObrasApp.alternar('${this.esc(id)}')">
+                <i data-lucide="${aberto ? "eye-off" : "eye"}" style="width:15px;height:15px;"></i>
+              </button>
+            </td>
+          </tr>
+          ${aberto ? `<tr class="pobra-det"><td colspan="3"><div class="pobra-grade">${this.cartao(l)}</div></td></tr>` : ""}`;
+      }).join("");
+      return `
+        <div class="cc-scroll pobra-scroll">
+          <table class="cc-table pobra-table">
+            <colgroup><col style="width:90px"><col><col style="width:80px"></colgroup>
+            <thead><tr><th>ID</th><th>Empreendimento</th><th class="is-center">Ver</th></tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>`;
+    },
+
+    abertos: {},
+
+    alternar(id) {
+      const k = String(id);
+      if (this.abertos[k]) delete this.abertos[k];
+      else this.abertos[k] = true;
+      const alvo = document.getElementById("pobra-corpo");
+      if (alvo) alvo.innerHTML = this.corpoHtml();
+      if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
     },
 
     filtroHtml() {
