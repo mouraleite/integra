@@ -8,6 +8,9 @@ const FinanciamentoState = {
 };
 
 const FIN_PROC_KEY = "crm_moura_financiamentos_proc";
+const FIN_TERMO_STAGE_ID = "fin-01";
+const FIN_TERMO_TEMPLATE_URL = "assets/termos/termo-simulacao-saldo-devedor.docx?v=2176";
+const FIN_TERMO_SIENGE_TAG = "TERMO DE SIMULAÇÃO DO SALDO DEVEDOR";
 
 const FinanciamentoApp = {
   esc(s) {
@@ -1696,6 +1699,543 @@ const FinanciamentoApp = {
     return linhas + arquivos;
   },
 
+  ehEtapaTermoSaldo(stageId, index) {
+    if (String(stageId) === FIN_TERMO_STAGE_ID) return true;
+    if (Number.isInteger(index)) return index === 0;
+    const folhas = this.folhasEtapa(this.catalogoEtapas());
+    return folhas.findIndex((etapa) => String(etapa.id) === String(stageId)) === 0;
+  },
+
+  termoGerarHtml(stageId) {
+    const sid = String(stageId).replace(/[^a-zA-Z0-9_-]/g, "");
+    return `<div class="fin-termo-gerar">
+      <button type="button" class="btn btn-outline btn-sm" id="fin-termo-gerar-${sid}" onclick="FinanciamentoApp.gerarTermoSaldoDevedor('${sid}')">Gerar termo</button>
+      <span id="fin-termo-st-${sid}" class="fin-termo-st" role="status">O PDF será salvo nesta etapa; depois poderá ser enviado ao Sienge.</span>
+    </div>`;
+  },
+
+  termosEtapaHtml(proc, stageId) {
+    if (!this.ehEtapaTermoSaldo(stageId)) return "";
+    const lista = proc && proc.termos && proc.termos[stageId];
+    if (!Array.isArray(lista) || !lista.length) return "";
+    const itens = lista.slice().reverse().map((termo) => {
+      if (!termo || !/^[a-zA-Z0-9_-]+$/.test(String(termo.id || ""))) return "";
+      const url = this.urlStorageTermo(termo.url);
+      const baixar = url
+        ? `<a class="btn btn-outline btn-sm" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer">Abrir PDF</a>`
+        : `<span class="fin-termo-st">PDF salvo no armazenamento.</span>`;
+      const envio = termo.siengeSentAt
+        ? `<span class="fin-termo-enviado">Enviado ao Sienge em ${this.esc(this.fmtDate(termo.siengeSentAt))}</span>`
+        : `<button type="button" class="btn btn-primary btn-sm" id="fin-termo-env-${this.esc(termo.id)}" onclick="FinanciamentoApp.enviarTermoSienge('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')">Enviar para o Sienge</button>`;
+      return `<div class="fin-termo-item">
+        <div><strong>${this.esc(termo.fileName || "Termo de simulação do saldo devedor.pdf")}</strong><span>Gerado em ${this.esc(this.fmtDate(termo.documentDate || termo.generatedAt))} · validade até ${this.esc(this.fmtDate(termo.validUntil))}</span></div>
+        <div class="fin-termo-acoes">${baixar}${envio}<span id="fin-termo-send-st-${this.esc(termo.id)}" class="fin-termo-st" role="status"></span></div>
+      </div>`;
+    }).join("");
+    return itens ? `<div class="fin-termos-lista"><strong>Termos desta etapa</strong>${itens}</div>` : "";
+  },
+
+  urlStorageTermo(raw) {
+    try {
+      const url = new URL(String(raw || ""), window.location.href);
+      if (url.protocol !== "https:" && url.origin !== window.location.origin) return "";
+      if (url.origin !== window.location.origin
+        && url.hostname !== "firebasestorage.googleapis.com"
+        && url.hostname !== "storage.googleapis.com") return "";
+      return url.href;
+    } catch (e) {
+      return "";
+    }
+  },
+
+  carregarScriptTermo(src, disponivel, nome) {
+    if (disponivel()) return Promise.resolve();
+    this._scriptsTermo = this._scriptsTermo || {};
+    if (!this._scriptsTermo[src]) {
+      this._scriptsTermo[src] = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.async = true;
+        script.onload = () => disponivel()
+          ? resolve()
+          : reject(new Error("A biblioteca " + nome + " carregou sem disponibilizar sua API."));
+        script.onerror = () => reject(new Error("Não foi possível carregar a biblioteca " + nome + "."));
+        document.head.appendChild(script);
+      }).catch((e) => {
+        delete this._scriptsTermo[src];
+        throw e;
+      });
+    }
+    return this._scriptsTermo[src];
+  },
+
+  substituirTextoTermo(xmlDoc, procurado, valor) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const textos = Array.from(xmlDoc.getElementsByTagNameNS(ns, "t"));
+    let encontrados = 0;
+    textos.forEach((no) => {
+      const atual = no.textContent || "";
+      if (atual.indexOf(procurado) < 0) return;
+      no.textContent = atual.replace(procurado, String(valor == null ? "" : valor));
+      encontrados += 1;
+    });
+    if (!encontrados) throw new Error("O modelo Word não contém o campo esperado: " + procurado);
+  },
+
+  substituirPreambuloTermo(xmlDoc, preambulo) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const paragrafo = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"))
+      .find((p) => (p.textContent || "").indexOf("[Preambulo]") >= 0);
+    if (!paragrafo || !paragrafo.parentNode) throw new Error("O modelo Word não contém o campo do preâmbulo.");
+    const blocos = String(preambulo || "").split(/\n+/).map((texto) => texto.trim()).filter(Boolean);
+    if (!blocos.length) throw new Error("O preâmbulo cadastrado para o empreendimento está vazio.");
+    const pai = paragrafo.parentNode;
+    blocos.forEach((bloco) => {
+      const copia = paragrafo.cloneNode(true);
+      const texto = Array.from(copia.getElementsByTagNameNS(ns, "t"))
+        .find((no) => (no.textContent || "").indexOf("[Preambulo]") >= 0);
+      if (!texto) throw new Error("Não foi possível preencher o preâmbulo no modelo Word.");
+      texto.textContent = texto.textContent.replace("[Preambulo]", bloco);
+      pai.insertBefore(copia, paragrafo);
+    });
+    pai.removeChild(paragrafo);
+  },
+
+  async montarDocxTermoSaldo(dados) {
+    await this.carregarScriptTermo(
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+      () => !!window.JSZip,
+      "JSZip"
+    );
+    const response = await fetch(FIN_TERMO_TEMPLATE_URL);
+    if (!response.ok) throw new Error("Não foi possível abrir o modelo Word do termo (HTTP " + response.status + ").");
+    const zip = await window.JSZip.loadAsync(await response.arrayBuffer());
+    const arquivoXml = zip.file("word/document.xml");
+    if (!arquivoXml) throw new Error("O modelo Word está incompleto: documento principal não encontrado.");
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(await arquivoXml.async("string"), "application/xml");
+    if (xmlDoc.getElementsByTagName("parsererror").length) throw new Error("Não foi possível interpretar o modelo Word.");
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    this.substituirPreambuloTermo(xmlDoc, dados.preambulo);
+    const paragrafos = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"));
+    const holders = dados.titulares || [];
+    if (holders.length < 2) {
+      const segundo = paragrafos.find((p) => (p.textContent || "").indexOf("2º TITULAR") >= 0);
+      if (segundo && segundo.parentNode) segundo.parentNode.removeChild(segundo);
+    }
+    if (holders.length < 3) {
+      const adicionais = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"))
+        .find((p) => (p.textContent || "").indexOf("[INCLUIR TODOS OS TITULARES DO CONTRATO]") >= 0);
+      if (adicionais && adicionais.parentNode) adicionais.parentNode.removeChild(adicionais);
+    }
+    const extras = holders.slice(2).map((pessoa, i) =>
+      (i + 3) + "º TITULAR - " + pessoa.nome + " - CPF/CNPJ: " + pessoa.documento
+    ).join("; ");
+    const campos = [
+      ["[NOME DO EMPREENDIMENTO]", dados.empreendimento],
+      ["QUADRA/LOTE", dados.unidade],
+      ["1º TITULAR", holders[0].nome],
+      ["Nº CPF TITULAR", holders[0].documento],
+      ["VALOR COMERCIAL (POR EXTENSO)", dados.valorComercialTexto],
+      ["SALDO DEVEDOR PRESENTE (POR EXTENSO)", dados.saldoPresenteTexto],
+      ["ÚLTIMO", dados.validadeExtenso],
+      [" DIA DO MÊS VIGENTE", ""],
+      ["XXXXXXXXX", dados.mesEmissao],
+      ["XXXX", dados.anoEmissao],
+      ["XX", dados.diaEmissao]
+    ];
+    if (holders.length >= 2) {
+      campos.push(["2º TITULAR - ", holders[1].nome + " - "]);
+      campos.push(["Nº CPF 2º TITULAR", holders[1].documento]);
+    }
+    if (holders.length >= 3) campos.push(["[INCLUIR TODOS OS TITULARES DO CONTRATO]", extras]);
+    campos.forEach(([campo, valor]) => this.substituirTextoTermo(xmlDoc, campo, valor));
+    const destaques = Array.from(xmlDoc.getElementsByTagNameNS(ns, "highlight"));
+    destaques.forEach((no) => { if (no.parentNode) no.parentNode.removeChild(no); });
+    const textoFinal = Array.from(xmlDoc.getElementsByTagNameNS(ns, "t")).map((no) => no.textContent || "").join("");
+    const pendentes = [
+      "[Preambulo]", "[NOME DO EMPREENDIMENTO]", "QUADRA/LOTE", "1º TITULAR", "Nº CPF TITULAR",
+      "2º TITULAR", "Nº CPF 2º TITULAR", "[INCLUIR TODOS OS TITULARES DO CONTRATO]",
+      "VALOR COMERCIAL (POR EXTENSO)", "SALDO DEVEDOR PRESENTE (POR EXTENSO)",
+      "DIA DO MÊS VIGENTE", "XXXXXXXXX"
+    ].filter((campo) => textoFinal.indexOf(campo) >= 0);
+    if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo: " + pendentes.join(", "));
+    zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
+    return zip.generateAsync({
+      type: "arraybuffer",
+      compression: "DEFLATE",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    });
+  },
+
+  async converterDocxTermoParaPdf(buffer) {
+    await this.carregarScriptTermo(
+      "https://cdn.jsdelivr.net/npm/docx-preview@0.3.6/dist/docx-preview.min.js",
+      () => !!(window.docx && typeof window.docx.renderAsync === "function"),
+      "visualizador do Word"
+    );
+    if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+      throw new Error("O gerador de PDF não está disponível. Atualize a página e tente novamente.");
+    }
+    const container = document.createElement("div");
+    container.style.cssText = "position:fixed;left:-12000px;top:0;z-index:-1;background:#fff;";
+    document.body.appendChild(container);
+    try {
+      await window.docx.renderAsync(buffer, container, document.head, {
+        className: "docx",
+        inWrapper: true,
+        ignoreWidth: false,
+        ignoreHeight: false,
+        breakPages: true,
+        ignoreLastRenderedPageBreak: false,
+        renderHeaders: true,
+        renderFooters: true
+      });
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
+      if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
+      const { jsPDF } = window.jspdf;
+      let pdf = null;
+      for (let i = 0; i < paginas.length; i++) {
+        const pagina = paginas[i];
+        const rect = pagina.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) throw new Error("Uma página do termo ficou sem dimensões.");
+        const canvas = await window.html2canvas(pagina, {
+          backgroundColor: "#ffffff",
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          width: Math.ceil(rect.width),
+          height: Math.ceil(rect.height)
+        });
+        const larguraMm = rect.width * 25.4 / 96;
+        const alturaMm = rect.height * 25.4 / 96;
+        if (!pdf) {
+          pdf = new jsPDF({
+            orientation: larguraMm > alturaMm ? "landscape" : "portrait",
+            unit: "mm",
+            format: [larguraMm, alturaMm],
+            compress: true
+          });
+        } else {
+          pdf.addPage([larguraMm, alturaMm], larguraMm > alturaMm ? "landscape" : "portrait");
+        }
+        pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, larguraMm, alturaMm);
+      }
+      const blob = pdf.output("blob");
+      if (!blob || !blob.size) throw new Error("O PDF gerado está vazio.");
+      return blob;
+    } finally {
+      container.remove();
+    }
+  },
+
+  async obterTitularesTermo(sale, customerFallback) {
+    const svc = window.SiengeApiService;
+    const raw = Array.isArray(sale.salesContractCustomers) ? sale.salesContractCustomers
+      : (Array.isArray(sale.customers) ? sale.customers : []);
+    const lista = [];
+    const vistos = new Set();
+    const adicionar = async (item, fallback) => {
+      if (!item || typeof item !== "object") return;
+      const nested = item.customer && typeof item.customer === "object" ? item.customer : item;
+      const id = item.customerId || nested.customerId || nested.id || item.id || "";
+      let pessoa = Object.assign({}, nested);
+      if (id && svc && typeof svc.getCustomer === "function") {
+        const detalhe = await svc.getCustomer(id);
+        if (detalhe) pessoa = Object.assign({}, pessoa, detalhe);
+      }
+      if (!pessoa.name && fallback && fallback.name) pessoa.name = fallback.name;
+      if (!(pessoa.cpfCnpj || pessoa.cpf || pessoa.cnpj) && fallback) {
+        pessoa.cpfCnpj = fallback.cpfCnpj || fallback.cpf || fallback.cnpj || "";
+      }
+      const nome = String(pessoa.name || pessoa.customerName || "").trim();
+      const documentoRaw = String(pessoa.cpfCnpj || pessoa.cpf || pessoa.cnpj || "").trim();
+      const documento = typeof window.formatCpfCnpj === "function" ? window.formatCpfCnpj(documentoRaw) : documentoRaw;
+      const chave = String(documentoRaw.replace(/\D/g, "") || id || nome).toLowerCase();
+      if (nome && documentoRaw && !vistos.has(chave)) {
+        vistos.add(chave);
+        lista.push({ nome: nome, documento: documento });
+      }
+    };
+    const principal = (item) => item && (item.main === true || item.main === "true" || item.main === 1);
+    const ordenados = raw.slice().sort((a, b) => Number(principal(b)) - Number(principal(a)));
+    for (let i = 0; i < ordenados.length; i++) {
+      const item = ordenados[i];
+      const fallback = String(item.customerId || (item.customer && item.customer.id) || item.id || "") === String(customerFallback && customerFallback.id || "")
+        ? customerFallback : null;
+      await adicionar(item, fallback);
+    }
+    if (customerFallback && customerFallback.id && !vistos.has(String(customerFallback.id).toLowerCase())) {
+      await adicionar(customerFallback, customerFallback);
+    }
+    if (!lista.length && customerFallback) await adicionar(customerFallback, customerFallback);
+    if (!lista.length) throw new Error("Não encontrei titulares com nome e CPF/CNPJ no contrato do Sienge.");
+    return lista;
+  },
+
+  async obterDadosTermoSaldo(proc) {
+    const selecionado = FinanciamentoState.selected || {};
+    let sale = String(selecionado.contractId || "") === String(proc.contractId)
+      ? Object.assign({}, selecionado.contract || {})
+      : {};
+    const svc = window.SiengeApiService;
+    if (svc && typeof svc.getSales === "function") {
+      const vendas = await svc.getSales(proc.customerId);
+      const encontrada = (Array.isArray(vendas) ? vendas : []).find((c) =>
+        String(c.id || c.contractId || "") === String(proc.contractId)
+      );
+      if (encontrada) sale = Object.assign({}, sale, encontrada);
+    }
+    if (typeof window.siengeFetchWithRetry === "function") {
+      const detalhe = await window.siengeFetchWithRetry("/sales-contracts/" + encodeURIComponent(proc.contractId));
+      if (detalhe && typeof detalhe === "object") sale = Object.assign({}, sale, detalhe);
+    }
+    const unidades = Array.isArray(sale.salesContractUnits) ? sale.salesContractUnits : [];
+    const unidadeRaw = unidades.find((u) => u && (u.main === true || u.main === "true")) || unidades[0] || {};
+    const unidadeNome = String(unidadeRaw.name || sale.unitName || sale.unityName || proc.unitName || proc.unit || "").trim();
+    const centroCusto = String(sale.enterpriseId || sale.costCenterId || proc.costCenterId || proc.empId || "").trim();
+    if (!unidadeNome) throw new Error("Não encontrei a unidade do contrato para preencher o termo.");
+    if (!centroCusto) throw new Error("Não encontrei o empreendimento/centro de custo do contrato.");
+    const unit = {
+      id: unidadeRaw.id || sale.siengeUnitId || "",
+      name: unidadeNome,
+      unitName: unidadeNome,
+      costCenterId: centroCusto,
+      enterpriseId: centroCusto,
+      companyId: sale.companyId || proc.companyId || ""
+    };
+    const empreendimento = typeof window.resolveLoteamentoName === "function"
+      ? String(window.resolveLoteamentoName(unit, sale) || "").trim()
+      : String(this.obraDoProc(proc).empreendimento || "").trim();
+    if (!empreendimento || empreendimento === "—" || empreendimento === "____") throw new Error("Não encontrei o nome do empreendimento para preencher o termo.");
+    if (typeof window.getPreambleForContract !== "function") throw new Error("A busca de preâmbulos por empreendimento não está disponível.");
+    const preambuloRaw = String(window.getPreambleForContract(unit, sale) || "");
+    if (!preambuloRaw || /PREÂMBULO NÃO CADASTRADO/i.test(preambuloRaw)) {
+      throw new Error("Não há preâmbulo cadastrado para o empreendimento deste contrato.");
+    }
+    const divTexto = document.createElement("div");
+    const preambuloHtml = preambuloRaw
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(?:p|div|li|h[1-6])\s*>/gi, "\n")
+      .replace(/<[^>]*>/g, "");
+    divTexto.innerHTML = preambuloHtml;
+    const preambulo = String(divTexto.textContent || "")
+      .replace(/\r/g, "")
+      .replace(/[ \t\u00a0]*\n[ \t\u00a0]*/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (!preambulo) throw new Error("O preâmbulo cadastrado para o empreendimento está vazio.");
+    const contratoValor = [sale.totalSellingValue, sale.contractValue, sale.value, sale.updatedContractValue]
+      .map((v) => Number(v))
+      .find((v) => Number.isFinite(v) && v > 0);
+    if (contratoValor == null) throw new Error("O valor comercial do contrato não está disponível no Sienge.");
+    const titulares = await this.obterTitularesTermo(sale, FinanciamentoState.customer || selecionado.customer);
+    const billId = String(proc.titulo || sale.receivableBillId || sale.billReceivableId || "").trim();
+    if (!billId || billId === "—" || billId === "N/D") throw new Error("O título a receber associado ao contrato não foi encontrado.");
+    const titularPrincipal = titulares[0];
+    const cpfPrincipal = String(titularPrincipal.documento || "").replace(/\D/g, "");
+    let saldoPresente = null;
+    if (svc && typeof svc.getTotalCurrentDebitBalance === "function" && cpfPrincipal.length >= 11) {
+      const resposta = await svc.getTotalCurrentDebitBalance(cpfPrincipal, billId);
+      if (typeof window.mapaJuridicoParseQuitacao === "function") {
+        saldoPresente = window.mapaJuridicoParseQuitacao(resposta);
+      } else if (resposta) {
+        const total = resposta.results && resposta.results[0] && resposta.results[0].totalCurrentDebitBalanceValue;
+        const valor = total != null ? total : (resposta.totalCurrentDebitBalanceValue != null
+          ? resposta.totalCurrentDebitBalanceValue : resposta.presentValue);
+        if (valor != null) saldoPresente = Number(valor);
+      }
+    }
+    if (!Number.isFinite(saldoPresente) && svc && typeof svc.getCustomerDebtBalance === "function") {
+      const resposta = await svc.getCustomerDebtBalance(billId, { companyId: sale.companyId || proc.companyId });
+      const rows = resposta && (Array.isArray(resposta.data) ? resposta.data : (Array.isArray(resposta.results) ? resposta.results : []));
+      const valores = rows.map((r) => Number(r && r.presentValue)).filter(Number.isFinite);
+      if (rows.length && valores.length === rows.length) saldoPresente = valores.reduce((total, valor) => total + valor, 0);
+    }
+    if (!Number.isFinite(saldoPresente)) throw new Error("Não foi possível obter o saldo devedor presente do título no Sienge.");
+    if (typeof window.valorPorExtensoBRL !== "function") throw new Error("A conversão dos valores por extenso não está disponível.");
+    const agora = new Date();
+    const ano = agora.getFullYear();
+    const mes = agora.getMonth() + 1;
+    const dia = agora.getDate();
+    const emissao = ano + "-" + String(mes).padStart(2, "0") + "-" + String(dia).padStart(2, "0");
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const validade = ano + "-" + String(mes).padStart(2, "0") + "-" + String(ultimoDia).padStart(2, "0");
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const validadeExtenso = ultimoDia + " de " + meses[mes - 1] + " de " + ano;
+    const emReais = (valor) => Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const valorComercialTexto = emReais(contratoValor) + " (" + window.valorPorExtensoBRL(contratoValor) + ")";
+    const saldoPresenteTexto = emReais(saldoPresente) + " (" + window.valorPorExtensoBRL(saldoPresente) + ")";
+    return {
+      sale: sale,
+      unit: unit,
+      empreendimento: empreendimento,
+      unidade: this.formatUnidade(unidadeNome),
+      preambulo: preambulo,
+      titulares: titulares,
+      billId: billId,
+      valorComercial: contratoValor,
+      saldoPresente: saldoPresente,
+      valorComercialTexto: valorComercialTexto,
+      saldoPresenteTexto: saldoPresenteTexto,
+      emissao: emissao,
+      validade: validade,
+      validadeExtenso: validadeExtenso,
+      diaEmissao: String(dia),
+      mesEmissao: meses[mes - 1],
+      anoEmissao: String(ano)
+    };
+  },
+
+  async guardarTermoSaldo(proc, stageId, blob, dados) {
+    const fc = window.firebaseCollections;
+    if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) {
+      throw new Error("O armazenamento do PDF não está disponível.");
+    }
+    const numero = String(proc.contractNumber || proc.contractId).replace(/[^\w.-]+/g, "-");
+    const nome = "termo-simulacao-saldo-devedor-" + numero + "-" + dados.emissao + ".pdf";
+    const id = "termo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    const path = "financiamentos/" + encodeURIComponent(String(proc.customerId))
+      + "/" + encodeURIComponent(String(proc.contractId))
+      + "/etapas/" + encodeURIComponent(String(stageId)) + "/" + id + ".pdf";
+    const storageRef = fc.ref(window.firebaseStorage, path);
+    let uploaded = false;
+    try {
+      await fc.uploadBytes(storageRef, blob, { contentType: "application/pdf" });
+      uploaded = true;
+      const url = await fc.getDownloadURL(storageRef);
+      const termo = {
+        id: id,
+        tipo: "simulacao-saldo-devedor",
+        fileName: nome,
+        storagePath: path,
+        url: url,
+        documentDate: dados.emissao,
+        validUntil: dados.validade,
+        generatedAt: new Date().toISOString(),
+        valorComercial: dados.valorComercial,
+        saldoPresente: dados.saldoPresente,
+        siengeUnitId: dados.unit && dados.unit.id ? String(dados.unit.id) : "",
+        costCenterId: dados.unit && dados.unit.costCenterId ? String(dados.unit.costCenterId) : "",
+        unitName: dados.unit && dados.unit.name ? String(dados.unit.name) : ""
+      };
+      proc.termos = proc.termos || {};
+      proc.termos[stageId] = (Array.isArray(proc.termos[stageId]) ? proc.termos[stageId] : []).concat(termo);
+      proc.updatedAt = termo.generatedAt;
+      this.saveProcess(proc);
+      FinanciamentoState.process = proc;
+      return termo;
+    } catch (e) {
+      if (uploaded && fc.deleteObject) {
+        try { await fc.deleteObject(storageRef); } catch (cleanupError) {
+          console.warn("[Financiamento] limpeza do termo incompleto", cleanupError);
+        }
+      }
+      throw e;
+    }
+  },
+
+  async gerarTermoSaldoDevedor(stageId) {
+    const proc = FinanciamentoState.process;
+    const btn = document.getElementById("fin-termo-gerar-" + stageId);
+    const status = document.getElementById("fin-termo-st-" + stageId);
+    if (!proc || String(proc.currentStageId || "") !== String(stageId) || !this.ehEtapaTermoSaldo(stageId)) return false;
+    if (this._gerandoTermo) return false;
+    this._gerandoTermo = true;
+    if (btn) { btn.disabled = true; btn.textContent = "Gerando…"; }
+    if (status) status.textContent = "Buscando os dados do contrato…";
+    try {
+      const dados = await this.obterDadosTermoSaldo(proc);
+      if (status) status.textContent = "Preenchendo o modelo Word…";
+      const docxBuffer = await this.montarDocxTermoSaldo(dados);
+      if (status) status.textContent = "Gerando o PDF…";
+      const pdf = await this.converterDocxTermoParaPdf(docxBuffer);
+      if (status) status.textContent = "Salvando o PDF nesta etapa…";
+      await this.guardarTermoSaldo(proc, stageId, pdf, dados);
+      this.render();
+      return true;
+    } catch (e) {
+      if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar o termo.";
+      console.error("[Financiamento] geração do termo", e);
+      return false;
+    } finally {
+      this._gerandoTermo = false;
+      const atual = document.getElementById("fin-termo-gerar-" + stageId);
+      if (atual) { atual.disabled = false; atual.textContent = "Gerar termo"; }
+    }
+  },
+
+  async enviarTermoSienge(stageId, termoId) {
+    const proc = FinanciamentoState.process;
+    const lista = proc && proc.termos && proc.termos[stageId];
+    const termo = Array.isArray(lista) ? lista.find((item) => String(item && item.id) === String(termoId)) : null;
+    const btn = document.getElementById("fin-termo-env-" + termoId);
+    if (!proc || !termo || termo.siengeSentAt) return false;
+    this._enviosTermo = this._enviosTermo || new Set();
+    if (this._enviosTermo.has(String(termoId))) return false;
+    if (typeof window.anexosUploadUnitAttachment !== "function") {
+      const status = document.getElementById("fin-termo-send-st-" + termoId);
+      if (status) status.textContent = "O envio de anexos para o Sienge não está disponível.";
+      return false;
+    }
+    this._enviosTermo.add(String(termoId));
+    if (btn) { btn.disabled = true; btn.textContent = "Enviando…"; }
+    try {
+      const fc = window.firebaseCollections;
+      let url = this.urlStorageTermo(termo.url);
+      if (!url && termo.storagePath && fc && fc.ref && fc.getDownloadURL) {
+        url = this.urlStorageTermo(await fc.getDownloadURL(fc.ref(window.firebaseStorage, termo.storagePath)));
+      }
+      if (!url) throw new Error("Não encontrei o PDF salvo para enviar ao Sienge.");
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Não foi possível ler o PDF salvo (HTTP " + response.status + ").");
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("O PDF salvo está vazio.");
+      const file = new File([blob], termo.fileName, { type: "application/pdf", lastModified: Date.now() });
+      const costCenterId = termo.costCenterId || proc.costCenterId || proc.empId;
+      const unitName = termo.unitName || proc.unitName || proc.unit;
+      const sale = {
+        customerId: proc.customerId,
+        id: proc.contractId,
+        contractId: proc.contractId,
+        contractNumber: proc.contractNumber,
+        receivableBillId: proc.titulo,
+        unitId: termo.siengeUnitId || "",
+        costCenterId: costCenterId,
+        enterpriseId: costCenterId,
+        unitName: unitName
+      };
+      const resultado = await window.anexosUploadUnitAttachment({
+        file: file,
+        tagLabel: FIN_TERMO_SIENGE_TAG,
+        dateIso: termo.documentDate,
+        costCenterId: costCenterId,
+        unitName: unitName,
+        sale: sale,
+        context: "financiamento"
+      });
+      termo.siengeSentAt = new Date().toISOString();
+      termo.siengeFileName = resultado.fileName || file.name;
+      termo.siengeUnitId = resultado.unitId || "";
+      termo.siengeTag = FIN_TERMO_SIENGE_TAG;
+      proc.updatedAt = termo.siengeSentAt;
+      this.saveProcess(proc);
+      FinanciamentoState.process = proc;
+      this.render();
+      return true;
+    } catch (e) {
+      const status = document.getElementById("fin-termo-send-st-" + termoId);
+      if (status) status.textContent = (e && e.message) || "Não foi possível enviar o termo ao Sienge.";
+      console.error("[Financiamento] envio do termo ao Sienge", e);
+      return false;
+    } finally {
+      this._enviosTermo.delete(String(termoId));
+      const atual = document.getElementById("fin-termo-env-" + termoId);
+      if (atual && atual.textContent === "Enviando…") { atual.disabled = false; atual.textContent = "Enviar para o Sienge"; }
+    }
+  },
+
   salvarNota(stageId) {
     if (this._notaTimer) clearTimeout(this._notaTimer);
     this.persistirRascunho(stageId);
@@ -1780,6 +2320,16 @@ const FinanciamentoApp = {
             #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
             #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
+            #financiamento-root .fin-termo-gerar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+            #financiamento-root .fin-termo-st { color:#64748b; font-size:0.78rem; }
+            #financiamento-root .fin-termos-lista { display:flex; flex-direction:column; gap:8px; margin:10px 0; }
+            #financiamento-root .fin-termos-lista > strong { color:#334155; font-size:0.78rem; }
+            #financiamento-root .fin-termo-item { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:9px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; }
+            #financiamento-root .fin-termo-item > div:first-child { display:flex; flex-direction:column; gap:3px; min-width:180px; }
+            #financiamento-root .fin-termo-item strong { color:#0f172a; font-size:0.8rem; }
+            #financiamento-root .fin-termo-item span { color:#64748b; font-size:0.73rem; }
+            #financiamento-root .fin-termo-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+            #financiamento-root .fin-termo-enviado { color:#166534 !important; font-weight:700; }
           </style>
           <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
           ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
@@ -1795,6 +2345,7 @@ const FinanciamentoApp = {
             const notasEtapa = this.listaNotas(proc, s.id);
             const rascunho = notasEtapa.filter((n) => n.rascunho).pop() || {};
             const historico = this.historicoHtml(proc, s.id);
+            const termoGerado = this.termosEtapaHtml(proc, s.id);
             const classe = passada && !atual ? "is-feita" : (atual ? "is-atual" : "is-espera");
             if (!atual) {
               const quando = concluidaEm || (proc.done && proc.done[s.id]) || "";
@@ -1809,12 +2360,16 @@ const FinanciamentoApp = {
                   </div>
                 </div>
                 ${passada ? historico : ""}
+                ${termoGerado}
               </div>`;
             }
             const iniciada = String(proc.currentStageId || "") === String(s.id);
             const desde = iniciada && proc.done && proc.done[s.id] ? " · desde " + this.fmtDate(proc.done[s.id]) : "";
+            const termoGerar = this.ehEtapaTermoSaldo(s.id, idx) ? this.termoGerarHtml(sid) : "";
             const corpo = iniciada ? `<div class="fin-etapa-corpo">
               ${historico}
+              ${termoGerar}
+              ${termoGerado}
               <div class="fin-nota">
                 <label for="fin-nota-${sid}">Nota interna</label>
                 <textarea id="fin-nota-${sid}" rows="2" placeholder="Ex.: aguardando carta para confirmar o valor">${this.esc(rascunho.texto || "")}</textarea>
