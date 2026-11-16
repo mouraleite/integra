@@ -1893,12 +1893,14 @@ const FinanciamentoApp = {
     return Number.isFinite(numero) && numero > 0 ? numero : null;
   },
 
-  justificarParagrafosTermo(xmlDoc) {
+  justificarParagrafosTermo(xmlDoc, preambulo) {
     const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const titulos = /^(TERMO DE SIMULAÇÃO|IDENTIFICAÇÃO DO CONTRATO|VALORES DE REFERÊNCIA|FINALIDADE E LIMITES|DISPOSIÇÕES FINAIS|BOTUCATU,|MOURA LEITE|📞 CANAIS DE ATENDIMENTO)/i;
+    const normalizar = (valor) => String(valor || "").replace(/\s+/g, " ").trim();
+    const blocosPreambulo = new Set(String(preambulo || "").split(/\n+/).map(normalizar).filter(Boolean));
     Array.from(xmlDoc.getElementsByTagNameNS(ns, "p")).forEach((paragrafo) => {
-      const texto = String(paragrafo.textContent || "").replace(/\s+/g, " ").trim();
-      if (texto.length < 70 || titulos.test(texto)) return;
+      const texto = normalizar(paragrafo.textContent);
+      if ((texto.length < 70 && !blocosPreambulo.has(texto)) || titulos.test(texto)) return;
       let propriedades = Array.from(paragrafo.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
       if (!propriedades) {
         propriedades = xmlDoc.createElementNS(ns, "w:pPr");
@@ -2059,7 +2061,7 @@ const FinanciamentoApp = {
       "DIA DO MÊS VIGENTE", "XXXXXXXXX"
     ].filter((campo) => textoFinal.indexOf(campo) >= 0);
     if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo: " + pendentes.join(", "));
-    this.justificarParagrafosTermo(xmlDoc);
+    this.justificarParagrafosTermo(xmlDoc, dados.preambulo);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
       type: "arraybuffer",
