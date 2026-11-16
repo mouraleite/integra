@@ -1,6 +1,7 @@
 const FinanciamentoState = {
   view: "busca",
-  painel: "pesquisa",
+  painel: "dashboard",
+  dashboardPeriodo: "",
   customer: null,
   contracts: [],
   selected: null,
@@ -10,7 +11,9 @@ const FinanciamentoState = {
 const FIN_PROC_KEY = "crm_moura_financiamentos_proc";
 const FIN_TERMO_STAGE_ID = "fin-01";
 const FIN_TERMO_TEMPLATE_URL = "assets/termos/termo-simulacao-saldo-devedor.docx?v=2176";
+const FIN_DECLARACAO_TEMPLATE_URL = "assets/termos/declaracao-saldo-devedor-interveniente-quitante.docx?v=2183";
 const FIN_TERMO_SIENGE_TAG = "TERMO DE SIMULAÇÃO DO SALDO DEVEDOR";
+const FIN_DECLARACAO_SIENGE_TAG = "DECLARAÇÃO DE SALDO DEVEDOR PARA EFEITOS DE INTERVENIENTE QUITANTE";
 
 const FinanciamentoApp = {
   esc(s) {
@@ -44,6 +47,10 @@ const FinanciamentoApp = {
   },
 
   init() {
+    if (!FinanciamentoState.dashboardPeriodo) {
+      const agora = new Date();
+      FinanciamentoState.dashboardPeriodo = agora.getFullYear() + "-" + String(agora.getMonth() + 1).padStart(2, "0");
+    }
     this.render();
     this.populateEmpreendimentos();
     this.puxarNuvem();
@@ -93,10 +100,11 @@ const FinanciamentoApp = {
     const root = document.getElementById("financiamento-root");
     if (!root) return;
     const noFluxo = FinanciamentoState.view === "fluxo";
-    const painel = ["esteira", "concluidos"].indexOf(FinanciamentoState.painel) >= 0
-      ? FinanciamentoState.painel : "pesquisa";
-    const corpo = painel === "esteira" ? this.esteiraHtml()
-      : (painel === "concluidos" ? this.concluidosHtml() : this.buscaHtml());
+    const painel = ["dashboard", "esteira", "concluidos", "pesquisa"].indexOf(FinanciamentoState.painel) >= 0
+      ? FinanciamentoState.painel : "dashboard";
+    const corpo = painel === "dashboard" ? this.dashboardHtml()
+      : (painel === "esteira" ? this.esteiraHtml()
+        : (painel === "concluidos" ? this.concluidosHtml() : this.buscaHtml()));
     if (noFluxo) this.carregarSaldoQuitacao(FinanciamentoState.process);
     root.innerHTML = noFluxo ? this.fluxoHtml() : (this.abasHtml(painel) + corpo);
     if (window.lucide) lucide.createIcons();
@@ -109,21 +117,234 @@ const FinanciamentoApp = {
 
   setPainel(id) {
     if (FinanciamentoState.process) this.saveProcess(FinanciamentoState.process);
-    FinanciamentoState.painel = ["esteira", "concluidos"].indexOf(id) >= 0 ? id : "pesquisa";
+    FinanciamentoState.painel = ["dashboard", "esteira", "concluidos", "pesquisa"].indexOf(id) >= 0 ? id : "dashboard";
     FinanciamentoState.view = "busca";
     this.render();
-    if (FinanciamentoState.painel === "esteira") this.puxarNuvem();
-    else if (FinanciamentoState.painel === "concluidos") this.puxarNuvem();
+    this.puxarNuvem();
   },
 
   abasHtml(painel) {
     const n = this.listOpenProcesses().length;
     const concluidos = this.listCompletedProcesses().length;
     return `<div class="ml-tabs fin-abas" role="tablist">
+      <button type="button" role="tab" aria-selected="${painel === "dashboard"}" class="ml-tab ${painel === "dashboard" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('dashboard')"><i data-lucide="chart-no-axes-combined"></i> Dashboard</button>
       <button type="button" role="tab" aria-selected="${painel === "pesquisa"}" class="ml-tab ${painel === "pesquisa" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('pesquisa')"><i data-lucide="search"></i> Pesquisar</button>
       <button type="button" role="tab" aria-selected="${painel === "esteira"}" class="ml-tab ${painel === "esteira" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('esteira')"><i data-lucide="columns-3"></i> Esteira <span class="ml-tab-count">${n}</span></button>
       <button type="button" role="tab" aria-selected="${painel === "concluidos"}" class="ml-tab ${painel === "concluidos" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('concluidos')"><i data-lucide="circle-check-big"></i> Concluídos <span class="ml-tab-count">${concluidos}</span></button>
     </div>`;
+  },
+
+  dataInicioDashboard(proc) {
+    if (!proc) return "";
+    if (proc.startedAt || proc.createdAt) return String(proc.startedAt || proc.createdAt).slice(0, 10);
+    const datasEtapa = Object.values(proc.done || {}).map((data) => String(data || "").slice(0, 10))
+      .filter((data) => /^\d{4}-\d{2}-\d{2}$/.test(data)).sort();
+    return datasEtapa[0] || String(proc.updatedAt || "").slice(0, 10);
+  },
+
+  saldoDeclaradoDashboard(proc) {
+    if (!proc || proc.saldoDevedorDeclarado == null || String(proc.saldoDevedorDeclarado).trim() === "") return null;
+    const valor = typeof proc.saldoDevedorDeclarado === "number"
+      ? proc.saldoDevedorDeclarado : this.parseValorComercialTermo(proc.saldoDevedorDeclarado);
+    return Number.isFinite(valor) && valor >= 0 ? valor : null;
+  },
+
+  dadosDashboard(periodo) {
+    const unicos = new Map();
+    this.listOpenProcesses().concat(this.listCompletedProcesses()).forEach(({ key, proc }) => unicos.set(String(key), proc));
+    const processos = Array.from(unicos.values()).filter((proc) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
+    const abertos = processos.filter((proc) => this.isProcessoAberto(proc));
+    const concluidos = processos.filter((proc) => this.isProcessoConcluido(proc));
+    const etapas = this.folhasEtapa(this.catalogoEtapas());
+    const etapasComContagem = etapas.map((etapa) => ({
+      id: String(etapa.id),
+      nome: etapa.label || etapa.nome || String(etapa.id),
+      quantidade: abertos.filter((proc) => String(proc.currentStageId || "") === String(etapa.id)).length
+    }));
+    const semEtapa = abertos.filter((proc) => !proc.currentStageId
+      || !etapas.some((etapa) => String(etapa.id) === String(proc.currentStageId))).length;
+    if (semEtapa) etapasComContagem.unshift({ id: "", nome: "Aguardando definição da etapa", quantidade: semEtapa });
+    const saldos = processos.map((proc) => ({ proc: proc, saldo: this.saldoDeclaradoDashboard(proc) }))
+      .filter((item) => item.saldo != null);
+    const valorTotal = saldos.reduce((total, item) => total + item.saldo, 0);
+    const divergencias = processos.map((proc) => {
+      const declarado = this.saldoDeclaradoDashboard(proc);
+      const caixa = Number(proc.valorLiberadoCaixa);
+      if (declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)) return null;
+      return { proc: proc, declarado: declarado, caixa: caixa, diferenca: Math.abs(caixa - declarado) };
+    }).filter((item) => item && item.diferenca > 0.01).sort((a, b) => b.diferenca - a.diferenca);
+    const diferencaTotal = processos.reduce((total, proc) => {
+      const declarado = this.saldoDeclaradoDashboard(proc);
+      const caixa = Number(proc.valorLiberadoCaixa);
+      return declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)
+        ? total : total + Math.abs(caixa - declarado);
+    }, 0);
+    const ano = Number(String(periodo || "").slice(0, 4));
+    const mes = Number(String(periodo || "").slice(5, 7));
+    const periodoLabel = Number.isInteger(ano) && Number.isInteger(mes) && mes >= 1 && mes <= 12
+      ? new Date(ano, mes - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })
+      : "Período inválido";
+    return {
+      periodoLabel: periodoLabel,
+      processos: processos,
+      abertos: abertos,
+      concluidos: concluidos,
+      etapas: etapasComContagem,
+      saldosDeclarados: saldos.length,
+      saldosPendentes: processos.length - saldos.length,
+      valorTotal: valorTotal,
+      divergencias: divergencias,
+      diferencaTotal: diferencaTotal
+    };
+  },
+
+  dashboardHtml() {
+    const periodo = /^\d{4}-\d{2}$/.test(FinanciamentoState.dashboardPeriodo)
+      ? FinanciamentoState.dashboardPeriodo
+      : (new Date().getFullYear() + "-" + String(new Date().getMonth() + 1).padStart(2, "0"));
+    FinanciamentoState.dashboardPeriodo = periodo;
+    const dados = this.dadosDashboard(periodo);
+    const totalAbertos = dados.abertos.length;
+    const estagios = dados.etapas.map((etapa) => {
+      const percentual = totalAbertos ? Math.round(etapa.quantidade / totalAbertos * 100) : 0;
+      return `<article class="fin-dash-etapa">
+        <div><strong>${this.esc(etapa.nome)}</strong><span>${etapa.quantidade}</span></div>
+        <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
+      </article>`;
+    }).join("");
+    const divergencias = dados.divergencias.map(({ proc, declarado, caixa, diferenca }) => `
+      <tr>
+        <td class="fin-dash-cliente">${this.esc(proc.customerName || proc.customerId || "—")}</td>
+        <td>${this.esc(proc.titulo || "—")}</td>
+        <td>${this.esc(this.etapaLabel(proc))}</td>
+        <td class="is-right">${this.esc(this.fmtMoney(declarado))}</td>
+        <td class="is-right">${this.esc(this.fmtMoney(caixa))}</td>
+        <td class="is-right fin-dash-diferenca">${this.esc(this.fmtMoney(diferenca))}</td>
+      </tr>`).join("");
+    return `<section class="fin-dashboard">
+      <div class="fin-dash-filtros">
+        <label for="fin-dashboard-periodo">Mês e ano de início do processo</label>
+        <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
+        <button type="button" class="btn btn-primary" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
+        <span id="fin-dashboard-pdf-status" role="status"></span>
+      </div>
+      <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
+        <header class="fin-dash-cabecalho">
+          <div><span class="fin-dash-marca">INTEGR.A · FINANCIAMENTO</span><h2>Dashboard de financiamentos</h2></div>
+          <p>Período: ${this.esc(dados.periodoLabel)} · contratos iniciados no período</p>
+        </header>
+        <div class="fin-dash-indicadores">
+          <article class="fin-dash-kpi fin-dash-kpi-verde"><span>Contratos em andamento</span><strong>${totalAbertos}</strong><small>Na etapa atual</small></article>
+          <article class="fin-dash-kpi fin-dash-kpi-laranja"><span>Concluídos</span><strong>${dados.concluidos.length}</strong><small>Finalizados no processo</small></article>
+          <article class="fin-dash-kpi"><span>Valor de financiamento</span><strong>${this.esc(this.fmtMoney(dados.valorTotal))}</strong><small>${dados.saldosDeclarados} com saldo declarado · ${dados.saldosPendentes} pendentes</small></article>
+          <article class="fin-dash-kpi"><span>Diferença dos clientes</span><strong>${this.esc(this.fmtMoney(dados.diferencaTotal))}</strong><small>${dados.divergencias.length} com divergência · soma das diferenças absolutas</small></article>
+        </div>
+        <section class="fin-dash-bloco">
+          <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento</span></div>
+          <div class="fin-dash-etapas">${estagios || '<p class="fin-dash-vazio">Etapas de financiamento não cadastradas.</p>'}</div>
+        </section>
+        <section class="fin-dash-bloco">
+          <div class="fin-dash-titulo"><h3>Divergências por cliente</h3><span>Valor absoluto entre a declaração e a Carta SIOPI</span></div>
+          <div class="cc-scroll">
+            <table class="cc-table fin-dash-tabela">
+              <colgroup><col><col style="width:100px"><col style="width:230px"><col style="width:130px"><col style="width:130px"><col style="width:130px"></colgroup>
+              <thead><tr><th>Cliente</th><th>Título</th><th>Etapa</th><th class="is-right">Declarado</th><th class="is-right">CAIXA / SIOPI</th><th class="is-right">Diferença</th></tr></thead>
+              <tbody>${divergencias || '<tr><td colspan="6" style="text-align:center;padding:24px;">Não há divergências registradas neste período.</td></tr>'}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <style>
+        #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-laranja:#f37021; }
+        #financiamento-root .fin-dash-filtros { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+        #financiamento-root .fin-dash-filtros label { display:flex; flex-direction:column; gap:5px; color:#475569; font-size:0.75rem; font-weight:700; }
+        #financiamento-root .fin-dash-filtros input { width:190px; height:40px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:6px; padding:0 10px; font:inherit; }
+        #financiamento-root .fin-dash-filtros .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
+        #financiamento-root #fin-dashboard-pdf-status { color:#105436; font-size:0.78rem; font-weight:700; }
+        #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; }
+        #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; padding:18px 20px; border-radius:12px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
+        #financiamento-root .fin-dash-marca { font-size:0.7rem; font-weight:800; letter-spacing:0.08em; opacity:.85; }
+        #financiamento-root .fin-dash-cabecalho h2 { margin:4px 0 0; font-size:1.35rem; }
+        #financiamento-root .fin-dash-cabecalho p { margin:0; font-size:0.82rem; font-weight:700; }
+        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+        #financiamento-root .fin-dash-kpi { min-width:0; display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #e2e8f0; border-top:4px solid #105436; border-radius:10px; background:#fff; box-shadow:0 2px 6px rgba(15,23,42,.04); }
+        #financiamento-root .fin-dash-kpi-verde { border-top-color:#105436; }
+        #financiamento-root .fin-dash-kpi-laranja { border-top-color:#f37021; }
+        #financiamento-root .fin-dash-kpi > span { color:#64748b; font-size:0.76rem; font-weight:800; }
+        #financiamento-root .fin-dash-kpi > strong { color:#0f3d27; font-size:1.35rem; line-height:1.2; overflow-wrap:anywhere; }
+        #financiamento-root .fin-dash-kpi > small { color:#64748b; font-size:0.7rem; line-height:1.35; }
+        #financiamento-root .fin-dash-bloco { padding:14px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
+        #financiamento-root .fin-dash-titulo { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:10px; }
+        #financiamento-root .fin-dash-titulo h3 { margin:0; color:#105436; font-size:0.95rem; }
+        #financiamento-root .fin-dash-titulo span { color:#64748b; font-size:0.72rem; }
+        #financiamento-root .fin-dash-etapas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; }
+        #financiamento-root .fin-dash-etapa { min-width:0; padding:8px 10px; border:1px solid #eef2f7; border-radius:8px; background:#f8fafc; }
+        #financiamento-root .fin-dash-etapa > div:first-child { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; color:#334155; font-size:0.76rem; }
+        #financiamento-root .fin-dash-etapa strong { font-weight:700; line-height:1.35; }
+        #financiamento-root .fin-dash-etapa span { flex:0 0 auto; color:#105436; font-weight:800; font-variant-numeric:tabular-nums; }
+        #financiamento-root .fin-dash-barra { height:6px; margin-top:7px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
+        #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
+        #financiamento-root .fin-dash-vazio { grid-column:1/-1; margin:6px 0; color:#64748b; font-size:0.8rem; }
+        #financiamento-root .fin-dash-tabela { min-width:900px; }
+        #financiamento-root .fin-dash-tabela .fin-dash-cliente { white-space:normal; }
+        #financiamento-root .fin-dash-tabela .fin-dash-diferenca { color:#b45309; font-weight:800; }
+        @media (max-width:900px) { #financiamento-root .fin-dash-indicadores { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+        @media (max-width:600px) {
+          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas { grid-template-columns:1fr; }
+          #financiamento-root .fin-dash-cabecalho { align-items:flex-start; flex-direction:column; }
+          #financiamento-root .fin-dash-titulo { align-items:flex-start; flex-direction:column; }
+        }
+      </style>
+    </section>`;
+  },
+
+  atualizarDashboard(periodo) {
+    if (periodo && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(periodo))) return;
+    FinanciamentoState.dashboardPeriodo = String(periodo || "");
+    this.render();
+  },
+
+  async exportarDashboardPdf() {
+    const conteudo = document.getElementById("fin-dashboard-conteudo");
+    const btn = document.querySelector("#fin-dashboard-periodo") && document.querySelector(".fin-dash-filtros .btn");
+    const status = document.getElementById("fin-dashboard-pdf-status");
+    if (!conteudo) return false;
+    if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+      if (status) status.textContent = "Exportação em PDF indisponível nesta página.";
+      return false;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = "Preparando PDF…"; }
+    if (status) status.textContent = "Preparando o dashboard para exportação…";
+    try {
+      const canvas = await window.html2canvas(conteudo, { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false });
+      if (!canvas.width || !canvas.height) throw new Error("O dashboard não pôde ser convertido para PDF.");
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF("l", "mm", "a4");
+      const margem = 10;
+      const largura = pdf.internal.pageSize.getWidth() - margem * 2;
+      const alturaPagina = pdf.internal.pageSize.getHeight() - margem * 2;
+      const alturaImagem = canvas.height * largura / canvas.width;
+      const imagem = canvas.toDataURL("image/jpeg", 0.95);
+      let deslocamento = 0;
+      let restante = alturaImagem;
+      while (restante > 0) {
+        if (deslocamento) pdf.addPage();
+        pdf.addImage(imagem, "JPEG", margem, margem - deslocamento, largura, alturaImagem);
+        restante -= alturaPagina;
+        deslocamento += alturaPagina;
+      }
+      const periodo = FinanciamentoState.dashboardPeriodo || "periodo";
+      pdf.save("dashboard-financiamento-" + periodo + ".pdf");
+      if (status) status.textContent = "PDF exportado.";
+      return true;
+    } catch (e) {
+      console.error("[Financiamento] exportação do dashboard", e);
+      if (status) status.textContent = (e && e.message) || "Não foi possível exportar o dashboard.";
+      return false;
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF'; }
+      if (window.lucide) window.lucide.createIcons();
+    }
   },
 
   buscaHtml() {
@@ -1863,17 +2084,32 @@ const FinanciamentoApp = {
     return linhas + arquivos;
   },
 
+  notasEtapaHtml(proc, stageId) {
+    const notas = this.listaNotas(proc, stageId).filter((nota) => !nota.rascunho).slice().reverse();
+    if (!notas.length) return "";
+    const itens = notas.map((nota) => `
+      <article class="fin-nota-historico-item">
+        <time>${this.esc(nota.data ? this.fmtDate(nota.data) : this.fmtDate(nota.em))}</time>
+        <p>${this.esc(nota.texto || "Anotação sem texto.")}</p>
+      </article>`).join("");
+    return `<section class="fin-nota-historico" aria-label="Histórico das anotações desta etapa">
+      <strong>Histórico das anotações</strong>${itens}
+    </section>`;
+  },
+
   historicoProcessoHtml(proc, folhas, etapaAtualId) {
     const eventos = [];
     (folhas || []).forEach((etapa) => {
       const stageId = String(etapa.id);
       const nomeEtapa = etapa.label || etapa.nome || stageId;
-      this.listaNotas(proc, stageId).filter((nota) => !nota.rascunho).forEach((nota) => {
-        const texto = String(nota.texto || "").trim();
-        if (!texto && !nota.data) return;
-        const data = nota.data || nota.em || "";
-        eventos.push({ data: data, horario: Date.parse(data) || 0, etapa: nomeEtapa, tipo: "Nota", texto: texto });
-      });
+      this.listaNotas(proc, stageId)
+        .filter((nota) => !nota.rascunho && String(stageId) !== String(etapaAtualId || ""))
+        .forEach((nota) => {
+          const texto = String(nota.texto || "").trim();
+          if (!texto && !nota.data) return;
+          const data = nota.data || nota.em || "";
+          eventos.push({ data: data, horario: Date.parse(data) || 0, etapa: nomeEtapa, tipo: "Nota", texto: texto });
+        });
       const anexos = proc && proc.anexos && (proc.anexos[stageId] || proc.anexos[String(stageId)]);
       (Array.isArray(anexos) ? anexos : []).forEach((anexo) => {
         const texto = String(anexo && anexo.fileName || "").trim();
@@ -1910,12 +2146,293 @@ const FinanciamentoApp = {
     return folhas.findIndex((etapa) => String(etapa.id) === String(stageId)) === 0;
   },
 
-  termoGerarHtml(stageId) {
+  termoGerarHtml(stageId, tipo) {
     const sid = String(stageId).replace(/[^a-zA-Z0-9_-]/g, "");
+    const declaracao = tipo === "declaracao";
+    const botao = declaracao ? "Gerar declaração" : "Gerar termo";
+    const acao = declaracao ? "gerarDeclaracaoSaldo" : "gerarTermoSaldoDevedor";
+    const ajuda = declaracao
+      ? "Selecione as parcelas que ficarão abrangidas pelo congelamento temporário."
+      : "O PDF será salvo nesta etapa e poderá ser aberto sem sair da tela.";
     return `<div class="fin-termo-gerar">
-      <button type="button" class="btn btn-outline btn-sm" id="fin-termo-gerar-${sid}" onclick="FinanciamentoApp.gerarTermoSaldoDevedor('${sid}')">Gerar termo</button>
-      <span id="fin-termo-st-${sid}" class="fin-termo-st" role="status">Ao clicar, confirme o valor comercial do lote. O PDF será salvo nesta etapa e baixado.</span>
+      <button type="button" class="btn btn-outline btn-sm" id="fin-termo-gerar-${sid}" onclick="FinanciamentoApp.${acao}('${sid}')">${botao}</button>
+      <span id="fin-termo-st-${sid}" class="fin-termo-st" role="status">${ajuda}</span>
     </div>`;
+  },
+
+  ehEtapaDeclaracaoSaldo(stageId, index) {
+    if (Number.isInteger(index)) return index === 3;
+    return this.folhasEtapa(this.catalogoEtapas())
+      .findIndex((etapa) => String(etapa.id) === String(stageId)) === 3;
+  },
+
+  ehEtapaGeradoraDocumento(stageId) {
+    return this.ehEtapaTermoSaldo(stageId) || this.ehEtapaDeclaracaoSaldo(stageId);
+  },
+
+  declaracaoModalHtml(dados, parcelas) {
+    const valorInicial = dados.valorComercial == null
+      ? ""
+      : Number(dados.valorComercial).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const itens = parcelas.map((parcela, index) => `
+      <label class="fin-declaracao-parcela">
+        <input type="checkbox" value="${index}" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+        <span><strong>Parcela ${this.esc(parcela.numero)}</strong><small>Vencimento ${this.esc(this.fmtDate(parcela.vencimento))}</small></span>
+        <b>${this.esc(this.fmtMoney(parcela.saldo))}</b>
+      </label>`).join("");
+    return `<div class="fin-declaracao-overlay" id="fin-declaracao-modal">
+      <section class="fin-declaracao-dialog" role="dialog" aria-modal="true" aria-labelledby="fin-declaracao-titulo">
+        <header><div><span>ETAPA 4 · FINANCIAMENTO</span><h2 id="fin-declaracao-titulo">Gerar declaração de saldo devedor</h2></div>
+          <button type="button" class="fin-declaracao-fechar" aria-label="Fechar" onclick="FinanciamentoApp.fecharModalDeclaracaoSaldo()">×</button></header>
+        <div class="fin-declaracao-conteudo">
+          <p>Confirme o valor comercial e selecione as parcelas que ficarão abrangidas pelo congelamento temporário.</p>
+          <label class="fin-declaracao-valor" for="fin-declaracao-valor">Valor comercial de compra e venda (R$)
+            <input id="fin-declaracao-valor" type="text" inputmode="decimal" autocomplete="off" value="${this.esc(valorInicial)}" oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+          </label>
+          <div class="fin-declaracao-selecao">
+            <div class="fin-declaracao-lista-titulo"><strong>Parcelas em aberto no Sienge</strong><span>${parcelas.length} disponíveis</span></div>
+            <p class="fin-declaracao-ajuda">A seleção precisa formar um intervalo contínuo de vencimentos para corresponder ao texto da declaração.</p>
+            <div class="fin-declaracao-lista">${itens}</div>
+          </div>
+          <div class="fin-declaracao-resumo" id="fin-declaracao-resumo" aria-live="polite"></div>
+          <p class="fin-declaracao-status" id="fin-declaracao-status" role="status"></p>
+        </div>
+        <footer>
+          <button type="button" class="btn btn-outline" onclick="FinanciamentoApp.fecharModalDeclaracaoSaldo()">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="fin-declaracao-confirmar" onclick="FinanciamentoApp.confirmarDeclaracaoSaldo()" disabled>Gerar declaração</button>
+        </footer>
+      </section>
+      <style>
+        .fin-declaracao-overlay { position:fixed; inset:0; z-index:100000; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.58); }
+        .fin-declaracao-dialog { width:min(680px,100%); max-height:calc(100vh - 32px); display:flex; flex-direction:column; overflow:hidden; border-radius:14px; background:#fff; box-shadow:0 20px 60px rgba(15,23,42,.3); }
+        .fin-declaracao-dialog > header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:18px 20px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
+        .fin-declaracao-dialog > header span { font-size:.68rem; font-weight:800; letter-spacing:.08em; opacity:.85; }
+        .fin-declaracao-dialog > header h2 { margin:5px 0 0; font-size:1.05rem; }
+        .fin-declaracao-fechar { border:0; padding:0 4px; color:#fff; background:transparent; font-size:1.65rem; line-height:1; cursor:pointer; }
+        .fin-declaracao-conteudo { overflow:auto; padding:18px 20px; }
+        .fin-declaracao-conteudo > p:first-child { margin:0 0 14px; color:#475569; font-size:.82rem; }
+        .fin-declaracao-valor { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
+        .fin-declaracao-valor input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
+        .fin-declaracao-selecao { margin-top:18px; }
+        .fin-declaracao-lista-titulo { display:flex; justify-content:space-between; gap:10px; color:#105436; font-size:.8rem; }
+        .fin-declaracao-lista-titulo span { color:#64748b; font-weight:500; }
+        .fin-declaracao-ajuda { margin:6px 0 10px; color:#64748b; font-size:.72rem; }
+        .fin-declaracao-lista { max-height:280px; overflow:auto; border:1px solid #e2e8f0; border-radius:8px; }
+        .fin-declaracao-parcela { display:flex; align-items:center; gap:10px; min-height:48px; padding:7px 10px; border-bottom:1px solid #edf2ef; cursor:pointer; }
+        .fin-declaracao-parcela:last-child { border-bottom:0; }
+        .fin-declaracao-parcela:nth-child(even) { background:#f7faf8; }
+        .fin-declaracao-parcela input { accent-color:#1b8253; }
+        .fin-declaracao-parcela span { display:flex; flex:1; flex-direction:column; gap:3px; font-size:.76rem; }
+        .fin-declaracao-parcela small { color:#64748b; font-size:.7rem; }
+        .fin-declaracao-parcela > b { color:#105436; font-size:.76rem; font-variant-numeric:tabular-nums; }
+        .fin-declaracao-resumo { margin-top:12px; padding:10px; border-radius:7px; color:#105436; background:#e7f6ee; font-size:.76rem; font-weight:700; }
+        .fin-declaracao-status { min-height:18px; margin:8px 0 0; color:#b45309; font-size:.75rem; }
+        .fin-declaracao-dialog > footer { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid #e2e8f0; }
+        .fin-declaracao-dialog > footer .btn { display:inline-flex; align-items:center; justify-content:center; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; }
+        @media (max-width:560px) { .fin-declaracao-dialog > footer { flex-direction:column-reverse; } }
+      </style>
+    </div>`;
+  },
+
+  abrirModalDeclaracaoSaldo(stageId, dados, parcelas) {
+    this.fecharModalDeclaracaoSaldo();
+    const state = { stageId: String(stageId), dados: dados, parcelas: parcelas, gerando: false };
+    state.onKeyDown = (event) => {
+      if (event.key === "Escape" && !state.gerando) this.fecharModalDeclaracaoSaldo();
+    };
+    this._declaracaoModal = state;
+    document.body.insertAdjacentHTML("beforeend", this.declaracaoModalHtml(dados, parcelas));
+    const overlay = document.getElementById("fin-declaracao-modal");
+    if (overlay) {
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay && !state.gerando) this.fecharModalDeclaracaoSaldo();
+      });
+      document.addEventListener("keydown", state.onKeyDown);
+    }
+    this.atualizarSelecaoDeclaracao();
+    const input = document.getElementById("fin-declaracao-valor");
+    if (input) input.focus();
+  },
+
+  fecharModalDeclaracaoSaldo() {
+    const state = this._declaracaoModal;
+    if (state && state.gerando) return false;
+    if (state && state.onKeyDown) document.removeEventListener("keydown", state.onKeyDown);
+    const modal = document.getElementById("fin-declaracao-modal");
+    if (modal) modal.remove();
+    this._declaracaoModal = null;
+    return true;
+  },
+
+  dadosSelecaoDeclaracao() {
+    const state = this._declaracaoModal;
+    const modal = document.getElementById("fin-declaracao-modal");
+    if (!state || !modal) return { selecionadas: [], intervalo: [], continuo: false };
+    const selecionados = Array.from(modal.querySelectorAll(".fin-declaracao-parcela input:checked"))
+      .map((input) => state.parcelas[Number(input.value)])
+      .filter(Boolean)
+      .sort((a, b) => a.vencimento.localeCompare(b.vencimento) || a.indice - b.indice);
+    if (!selecionados.length) return { selecionadas: [], intervalo: [], continuo: false };
+    const inicio = selecionados[0].vencimento;
+    const fim = selecionados[selecionados.length - 1].vencimento;
+    const intervalo = state.parcelas.filter((parcela) => parcela.vencimento >= inicio && parcela.vencimento <= fim);
+    const ids = new Set(selecionados.map((parcela) => parcela.indice));
+    return {
+      selecionadas: selecionados,
+      intervalo: intervalo,
+      inicio: inicio,
+      fim: fim,
+      continuo: intervalo.length === selecionados.length && intervalo.every((parcela) => ids.has(parcela.indice))
+    };
+  },
+
+  atualizarSelecaoDeclaracao() {
+    const state = this._declaracaoModal;
+    const modal = document.getElementById("fin-declaracao-modal");
+    if (!state || !modal) return;
+    const selecao = this.dadosSelecaoDeclaracao();
+    const resumo = document.getElementById("fin-declaracao-resumo");
+    const status = document.getElementById("fin-declaracao-status");
+    const botao = document.getElementById("fin-declaracao-confirmar");
+    const inputValor = document.getElementById("fin-declaracao-valor");
+    const valor = this.parseValorComercialTermo(inputValor && inputValor.value);
+    if (resumo) {
+      resumo.textContent = selecao.selecionadas.length && selecao.continuo
+        ? "Período: " + this.fmtDate(selecao.inicio) + " a " + this.fmtDate(selecao.fim) + " · " + selecao.selecionadas.length + " parcela(s)"
+        : "Selecione um intervalo contínuo de parcelas em aberto.";
+    }
+    if (status && !state.gerando) {
+      status.textContent = !valor
+        ? "Informe um valor comercial válido, maior que zero."
+        : (selecao.selecionadas.length && !selecao.continuo
+          ? "Inclua todas as parcelas em aberto entre o primeiro e o último vencimento selecionado."
+          : "");
+    }
+    if (botao) botao.disabled = state.gerando || !valor || !selecao.selecionadas.length || !selecao.continuo;
+  },
+
+  async listarParcelasParaCongelamento(billId) {
+    if (typeof window.siengeFetchWithRetry !== "function") {
+      throw new Error("A consulta de parcelas no Sienge não está disponível.");
+    }
+    const response = await window.siengeFetchWithRetry(
+      "/accounts-receivable/receivable-bills/" + encodeURIComponent(billId) + "/installments?limit=200"
+    );
+    const rows = Array.isArray(response) ? response : ((response && (response.results || response.data)) || []);
+    const parcelas = rows.map((item, index) => {
+      const rawSaldo = item && (item.currentBalance != null ? item.currentBalance : item.balanceDue);
+      if (rawSaldo == null || String(rawSaldo).trim() === "") return null;
+      const numerico = Number(rawSaldo);
+      const saldo = Number.isFinite(numerico) ? numerico : this.parseValorComercialTermo(rawSaldo);
+      const vencimento = String(item.dueDate || item.originalDueDate || "").slice(0, 10);
+      if (!Number.isFinite(saldo) || saldo <= 0.009 || !/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return null;
+      return {
+        numero: item.installmentNumber || item.installmentId || index + 1,
+        id: item.installmentId || item.id || item.installmentNumber || String(index + 1),
+        vencimento: vencimento,
+        saldo: saldo,
+        indice: index
+      };
+    }).filter(Boolean).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || String(a.numero).localeCompare(String(b.numero), "pt-BR", { numeric: true }));
+    parcelas.forEach((parcela, index) => { parcela.indice = index; });
+    if (!parcelas.length) {
+      throw new Error("O Sienge não retornou parcelas em aberto com saldo e vencimento para este título.");
+    }
+    return parcelas;
+  },
+
+  async gerarDeclaracaoSaldo(stageId) {
+    const proc = FinanciamentoState.process;
+    const btn = document.getElementById("fin-termo-gerar-" + stageId);
+    const status = document.getElementById("fin-termo-st-" + stageId);
+    if (!proc || String(proc.currentStageId || "") !== String(stageId) || !this.ehEtapaDeclaracaoSaldo(stageId)) return false;
+    if (this._gerandoDeclaracao || this._declaracaoModal) return false;
+    this._gerandoDeclaracao = true;
+    if (btn) { btn.disabled = true; btn.textContent = "Carregando…"; }
+    if (status) status.textContent = "Buscando os dados do contrato e as parcelas em aberto no Sienge…";
+    try {
+      const dados = await this.obterDadosTermoSaldo(proc);
+      const parcelas = await this.listarParcelasParaCongelamento(dados.billId);
+      this.abrirModalDeclaracaoSaldo(stageId, dados, parcelas);
+      if (status) status.textContent = "Selecione as parcelas e confirme o valor comercial.";
+      return true;
+    } catch (e) {
+      if (status) status.textContent = (e && e.message) || "Não foi possível carregar os dados da declaração.";
+      console.error("[Financiamento] preparação da declaração", e);
+      return false;
+    } finally {
+      this._gerandoDeclaracao = false;
+      const atual = document.getElementById("fin-termo-gerar-" + stageId);
+      if (atual) { atual.disabled = false; atual.textContent = "Gerar declaração"; }
+    }
+  },
+
+  async confirmarDeclaracaoSaldo() {
+    const state = this._declaracaoModal;
+    const proc = FinanciamentoState.process;
+    const modal = document.getElementById("fin-declaracao-modal");
+    if (!state || !modal || !proc || state.gerando) return false;
+    const selecao = this.dadosSelecaoDeclaracao();
+    const inputValor = document.getElementById("fin-declaracao-valor");
+    const valorComercial = this.parseValorComercialTermo(inputValor && inputValor.value);
+    const status = document.getElementById("fin-declaracao-status");
+    const botao = document.getElementById("fin-declaracao-confirmar");
+    if (!valorComercial || !selecao.selecionadas.length || !selecao.continuo) {
+      this.atualizarSelecaoDeclaracao();
+      return false;
+    }
+    state.gerando = true;
+    if (botao) { botao.disabled = true; botao.textContent = "Gerando…"; }
+    if (status) status.textContent = "Preenchendo o modelo da declaração…";
+    try {
+      const dados = state.dados;
+      dados.valorComercial = valorComercial;
+      dados.valorComercialTexto = Number(valorComercial).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }) + " (" + window.valorPorExtensoBRL(valorComercial) + ")";
+      dados.parcelasCongeladas = selecao.selecionadas.map((parcela) => ({
+        id: parcela.id,
+        numero: parcela.numero,
+        vencimento: parcela.vencimento,
+        saldo: parcela.saldo
+      }));
+      dados.periodoCongelamento = {
+        inicio: selecao.inicio,
+        fim: selecao.fim,
+        quantidade: selecao.selecionadas.length
+      };
+      const validade = new Date(dados.emissao + "T12:00:00");
+      validade.setDate(validade.getDate() + 90);
+      dados.validade = validade.getFullYear() + "-" + String(validade.getMonth() + 1).padStart(2, "0") + "-" + String(validade.getDate()).padStart(2, "0");
+      if (status) status.textContent = "Gerando o PDF da declaração…";
+      const docxBuffer = await this.montarDocxDeclaracaoSaldo(dados);
+      const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
+      if (status) status.textContent = "Salvando a declaração nesta etapa…";
+      const numero = String(proc.contractNumber || proc.contractId).replace(/[^\w.-]+/g, "-");
+      const nome = "declaracao-saldo-devedor-interveniente-quitante-" + numero + "-" + dados.emissao + ".pdf";
+      await this.guardarTermoSaldo(proc, state.stageId, arquivoPdf.blob, dados, {
+        tipo: "declaracao-saldo-devedor",
+        fileName: nome,
+        siengeTag: FIN_DECLARACAO_SIENGE_TAG,
+        saldoDevedorDeclarado: dados.saldoPresente,
+        parcelasCongeladas: dados.parcelasCongeladas,
+        periodoCongelamento: dados.periodoCongelamento
+      });
+      this.atualizarTermosEtapa(state.stageId);
+      const stageStatus = document.getElementById("fin-termo-st-" + state.stageId);
+      if (stageStatus) stageStatus.textContent = "Declaração salva nesta etapa. Você pode abrir o PDF abaixo.";
+      state.gerando = false;
+      this.fecharModalDeclaracaoSaldo();
+      return true;
+    } catch (e) {
+      console.error("[Financiamento] geração da declaração", e);
+      if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar a declaração.";
+      state.gerando = false;
+      if (botao) { botao.disabled = false; botao.textContent = "Gerar declaração"; }
+      this.atualizarSelecaoDeclaracao();
+      return false;
+    }
   },
 
   parseValorComercialTermo(raw) {
@@ -1935,7 +2452,7 @@ const FinanciamentoApp = {
 
   justificarParagrafosTermo(xmlDoc) {
     const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    const titulos = /^(TERMO DE SIMULAÇÃO|IDENTIFICAÇÃO DO CONTRATO|VALORES DE REFERÊNCIA|FINALIDADE E LIMITES|DISPOSIÇÕES FINAIS|BOTUCATU,|MOURA LEITE|📞 CANAIS DE ATENDIMENTO)/i;
+    const titulos = /^(TERMO DE SIMULAÇÃO|DECLARAÇÃO DE SALDO DEVEDOR|IDENTIFICAÇÃO DO CONTRATO|VALORES DE REFERÊNCIA|FINALIDADE DA DECLARAÇÃO|CONGELAMENTO TEMPORÁRIO DAS PARCELAS|QUITAÇÃO E REPASSE|RELAÇÃO COM A INSTITUIÇÃO FINANCEIRA|FINALIDADE E LIMITES|DISPOSIÇÕES FINAIS|BOTUCATU,|MOURA LEITE|📞 CANAIS DE ATENDIMENTO)/i;
     const normalizar = (valor) => String(valor || "").replace(/\s+/g, " ").trim();
     Array.from(xmlDoc.getElementsByTagNameNS(ns, "p")).forEach((paragrafo) => {
       const texto = normalizar(paragrafo.textContent);
@@ -2027,7 +2544,7 @@ const FinanciamentoApp = {
   },
 
   termosEtapaHtml(proc, stageId) {
-    if (!this.ehEtapaTermoSaldo(stageId)) return "";
+    if (!this.ehEtapaGeradoraDocumento(stageId)) return "";
     const lista = proc && proc.termos && proc.termos[stageId];
     if (!Array.isArray(lista) || !lista.length) return "";
     const itens = lista.slice().reverse().map((termo) => {
@@ -2039,12 +2556,76 @@ const FinanciamentoApp = {
       const envio = termo.siengeSentAt
         ? `<span class="fin-termo-enviado">Enviado ao Sienge em ${this.esc(this.fmtDate(termo.siengeSentAt))}</span>`
         : `<button type="button" class="btn btn-primary btn-sm" id="fin-termo-env-${this.esc(termo.id)}" onclick="FinanciamentoApp.enviarTermoSienge('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')">Enviar para o Sienge</button>`;
+      const excluir = `<button type="button" class="btn btn-outline btn-sm fin-termo-excluir" id="fin-termo-del-${this.esc(termo.id)}" title="Excluir termo" aria-label="Excluir termo ${this.esc(termo.fileName || "")}" onclick="FinanciamentoApp.removerTermoSaldo('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
       return `<div class="fin-termo-item">
-        <div><strong>${this.esc(termo.fileName || "Termo de simulação do saldo devedor.pdf")}</strong><span>Gerado em ${this.esc(this.fmtDate(termo.documentDate || termo.generatedAt))} · validade até ${this.esc(this.fmtDate(termo.validUntil))}</span></div>
-        <div class="fin-termo-acoes">${baixar}${envio}<span id="fin-termo-send-st-${this.esc(termo.id)}" class="fin-termo-st" role="status"></span></div>
+        <div><strong>${this.esc(termo.fileName || "Documento de financiamento.pdf")}</strong><span>Gerado em ${this.esc(this.fmtDate(termo.documentDate || termo.generatedAt))} · validade até ${this.esc(this.fmtDate(termo.validUntil))}</span></div>
+        <div class="fin-termo-acoes">${baixar}${envio}${excluir}<span id="fin-termo-send-st-${this.esc(termo.id)}" class="fin-termo-st" role="status"></span></div>
       </div>`;
     }).join("");
-    return itens ? `<div class="fin-termos-lista"><strong>Termos desta etapa</strong>${itens}</div>` : "";
+    const sid = String(stageId).replace(/[^a-zA-Z0-9_-]/g, "");
+    return itens ? `<div class="fin-termos-lista" id="fin-termos-lista-${sid}"><strong>Documentos gerados nesta etapa</strong>${itens}</div>` : "";
+  },
+
+  atualizarTermosEtapa(stageId) {
+    const proc = FinanciamentoState.process;
+    const sid = String(stageId).replace(/[^a-zA-Z0-9_-]/g, "");
+    const listaAtual = document.getElementById("fin-termos-lista-" + sid);
+    const html = this.termosEtapaHtml(proc, stageId);
+    if (listaAtual) {
+      listaAtual.outerHTML = html;
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
+    const botaoGerar = document.getElementById("fin-termo-gerar-" + sid);
+    const gerador = botaoGerar && botaoGerar.closest(".fin-termo-gerar");
+    if (gerador && html) {
+      gerador.insertAdjacentHTML("afterend", html);
+      if (window.lucide) window.lucide.createIcons();
+    }
+  },
+
+  async removerTermoSaldo(stageId, termoId) {
+    const proc = FinanciamentoState.process;
+    const lista = proc && proc.termos && proc.termos[stageId];
+    const termo = Array.isArray(lista) ? lista.find((item) => String(item && item.id) === String(termoId)) : null;
+    const btn = document.getElementById("fin-termo-del-" + termoId);
+    if (!proc || !termo) return false;
+    this._removendoTermo = this._removendoTermo || new Set();
+    if (this._removendoTermo.has(String(termoId))) return false;
+    this._removendoTermo.add(String(termoId));
+    if (btn) { btn.disabled = true; btn.setAttribute("aria-label", "Excluindo termo"); }
+    const status = document.getElementById("fin-termo-send-st-" + termoId);
+    try {
+      const msg = termo.siengeSentAt
+        ? "Este termo já foi enviado ao Sienge. A exclusão removerá o termo e o PDF do armazenamento do CRM, mas não apagará o anexo no Sienge. Deseja continuar?"
+        : "Excluir este termo e apagar o PDF salvo no armazenamento do CRM? Esta ação não pode ser desfeita.";
+      const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : window.confirm(msg);
+      if (!ok) return false;
+      const fc = window.firebaseCollections;
+      const storageLocation = termo.storagePath || termo.url;
+      if (!window.firebaseStorage || !fc || !fc.ref || !fc.deleteObject || !storageLocation) {
+        throw new Error("Não foi possível localizar o PDF para excluí-lo do armazenamento.");
+      }
+      const storageRef = fc.ref(window.firebaseStorage, storageLocation);
+      await fc.deleteObject(storageRef);
+      proc.termos[stageId] = lista.filter((item) => String(item && item.id) !== String(termoId));
+      if (!proc.termos[stageId].length) delete proc.termos[stageId];
+      proc.updatedAt = new Date().toISOString();
+      this.saveProcess(proc);
+      FinanciamentoState.process = proc;
+      this.atualizarTermosEtapa(stageId);
+      const status = document.getElementById("fin-termo-st-" + String(stageId).replace(/[^a-zA-Z0-9_-]/g, ""));
+      if (status) status.textContent = "Termo e PDF removidos desta ficha.";
+      return true;
+    } catch (e) {
+      console.error("[Financiamento] exclusão do termo", e);
+      if (status) status.textContent = (e && e.message) || "Não foi possível excluir o termo.";
+      return false;
+    } finally {
+      this._removendoTermo.delete(String(termoId));
+      const atual = document.getElementById("fin-termo-del-" + termoId);
+      if (atual) { atual.disabled = false; atual.setAttribute("aria-label", "Excluir termo"); }
+    }
   },
 
   urlStorageTermo(raw) {
@@ -2094,10 +2675,11 @@ const FinanciamentoApp = {
     if (!encontrados) throw new Error("O modelo Word não contém o campo esperado: " + procurado);
   },
 
-  substituirPreambuloTermo(xmlDoc, preambulo) {
+  substituirPreambuloTermo(xmlDoc, preambulo, token) {
     const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const campo = token || "[Preambulo]";
     const paragrafo = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"))
-      .find((p) => (p.textContent || "").indexOf("[Preambulo]") >= 0);
+      .find((p) => (p.textContent || "").indexOf(campo) >= 0);
     if (!paragrafo || !paragrafo.parentNode) throw new Error("O modelo Word não contém o campo do preâmbulo.");
     const blocos = String(preambulo || "").split(/\n+/).map((texto) => texto.trim()).filter(Boolean);
     if (!blocos.length) throw new Error("O preâmbulo cadastrado para o empreendimento está vazio.");
@@ -2105,9 +2687,9 @@ const FinanciamentoApp = {
     blocos.forEach((bloco) => {
       const copia = paragrafo.cloneNode(true);
       const texto = Array.from(copia.getElementsByTagNameNS(ns, "t"))
-        .find((no) => (no.textContent || "").indexOf("[Preambulo]") >= 0);
+        .find((no) => (no.textContent || "").indexOf(campo) >= 0);
       if (!texto) throw new Error("Não foi possível preencher o preâmbulo no modelo Word.");
-      texto.textContent = texto.textContent.replace("[Preambulo]", bloco);
+      texto.textContent = texto.textContent.replace(campo, bloco);
       pai.insertBefore(copia, paragrafo);
     });
     pai.removeChild(paragrafo);
@@ -2175,6 +2757,77 @@ const FinanciamentoApp = {
     this.numerarDisposicoesFinaisTermo(xmlDoc);
     this.justificarParagrafosTermo(xmlDoc);
     this.destacarAlertaTermo(xmlDoc);
+    zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
+    return zip.generateAsync({
+      type: "arraybuffer",
+      compression: "DEFLATE",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    });
+  },
+
+  async montarDocxDeclaracaoSaldo(dados) {
+    await this.carregarScriptTermo(
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+      () => !!window.JSZip,
+      "JSZip"
+    );
+    const response = await fetch(FIN_DECLARACAO_TEMPLATE_URL);
+    if (!response.ok) throw new Error("Não foi possível abrir o modelo Word da declaração (HTTP " + response.status + ").");
+    const zip = await window.JSZip.loadAsync(await response.arrayBuffer());
+    const arquivoXml = zip.file("word/document.xml");
+    if (!arquivoXml) throw new Error("O modelo Word da declaração está incompleto: documento principal não encontrado.");
+    const xmlDoc = new DOMParser().parseFromString(await arquivoXml.async("string"), "application/xml");
+    if (xmlDoc.getElementsByTagName("parsererror").length) throw new Error("Não foi possível interpretar o modelo Word da declaração.");
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const holders = dados.titulares || [];
+    if (!holders.length) throw new Error("Não encontrei titulares para preencher a declaração.");
+    this.substituirPreambuloTermo(xmlDoc, dados.preambulo, "[PREAMBULO]");
+    const paragrafos = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"));
+    if (holders.length < 2) {
+      const segundo = paragrafos.find((p) => (p.textContent || "").indexOf("2º TITULAR") >= 0);
+      if (segundo && segundo.parentNode) segundo.parentNode.removeChild(segundo);
+    }
+    if (holders.length < 3) {
+      const adicionais = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"))
+        .find((p) => (p.textContent || "").indexOf("[INCLUIR TODOS OS TITULARES DO CONTRATO]") >= 0);
+      if (adicionais && adicionais.parentNode) adicionais.parentNode.removeChild(adicionais);
+    }
+    const extras = holders.slice(2).map((pessoa, index) =>
+      (index + 3) + "º TITULAR - " + pessoa.nome + " - CPF/CNPJ: " + pessoa.documento
+    ).join("; ");
+    const periodo = dados.periodoCongelamento || {};
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const [ano, mes, dia] = String(dados.emissao || "").split("-").map(Number);
+    if (!ano || !mes || !dia) throw new Error("A data de emissão da declaração é inválida.");
+    const campos = [
+      ["[NOME DO EMPREENDIMENTO]", dados.empreendimento],
+      ["QUADRA/LOTE", dados.unidade],
+      ["1º TITULAR", holders[0].nome],
+      ["Nº CPF TITULAR", holders[0].documento],
+      ["VALOR COMERCIAL (POR EXTENSO)", dados.valorComercialTexto],
+      ["SALDO DEVEDOR PRESENTE (POR EXTENSO)", dados.saldoPresenteTexto],
+      ["[data inicial]", this.fmtDate(periodo.inicio)],
+      ["[data final]", this.fmtDate(periodo.fim)],
+      ["[quantidade]", periodo.quantidade],
+      ["XXXXXXXX", meses[mes - 1]],
+      ["XXXX", ano],
+      ["XX", dia]
+    ];
+    if (holders.length >= 2) {
+      campos.push(["2º TITULAR - ", holders[1].nome + " - "]);
+      campos.push(["Nº CPF 2º TITULAR", holders[1].documento]);
+    }
+    if (holders.length >= 3) campos.push(["[INCLUIR TODOS OS TITULARES DO CONTRATO]", extras]);
+    campos.forEach(([campo, valor]) => this.substituirTextoTermo(xmlDoc, campo, valor));
+    const textoFinal = Array.from(xmlDoc.getElementsByTagNameNS(ns, "t")).map((no) => no.textContent || "").join("");
+    const pendentes = [
+      "[PREAMBULO]", "[NOME DO EMPREENDIMENTO]", "QUADRA/LOTE", "1º TITULAR", "Nº CPF TITULAR",
+      "2º TITULAR", "Nº CPF 2º TITULAR", "[INCLUIR TODOS OS TITULARES DO CONTRATO]",
+      "VALOR COMERCIAL (POR EXTENSO)", "SALDO DEVEDOR PRESENTE (POR EXTENSO)",
+      "[data inicial]", "[data final]", "[quantidade]", "XXXXXXXX"
+    ].filter((campo) => textoFinal.indexOf(campo) >= 0);
+    if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo da declaração: " + pendentes.join(", "));
+    this.justificarParagrafosTermo(xmlDoc);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
       type: "arraybuffer",
@@ -2501,13 +3154,14 @@ const FinanciamentoApp = {
     };
   },
 
-  async guardarTermoSaldo(proc, stageId, blob, dados) {
+  async guardarTermoSaldo(proc, stageId, blob, dados, opcoes) {
+    const options = opcoes || {};
     const fc = window.firebaseCollections;
     if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) {
       throw new Error("O armazenamento do PDF não está disponível.");
     }
     const numero = String(proc.contractNumber || proc.contractId).replace(/[^\w.-]+/g, "-");
-    const nome = "termo-simulacao-saldo-devedor-" + numero + "-" + dados.emissao + ".pdf";
+    const nome = options.fileName || ("termo-simulacao-saldo-devedor-" + numero + "-" + dados.emissao + ".pdf");
     const id = "termo-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
     const path = "financiamentos/" + encodeURIComponent(String(proc.customerId))
       + "/" + encodeURIComponent(String(proc.contractId))
@@ -2520,7 +3174,7 @@ const FinanciamentoApp = {
       const url = await fc.getDownloadURL(storageRef);
       const termo = {
         id: id,
-        tipo: "simulacao-saldo-devedor",
+        tipo: options.tipo || "simulacao-saldo-devedor",
         fileName: nome,
         storagePath: path,
         url: url,
@@ -2531,10 +3185,17 @@ const FinanciamentoApp = {
         saldoPresente: dados.saldoPresente,
         siengeUnitId: dados.unit && dados.unit.id ? String(dados.unit.id) : "",
         costCenterId: dados.unit && dados.unit.costCenterId ? String(dados.unit.costCenterId) : "",
-        unitName: dados.unit && dados.unit.name ? String(dados.unit.name) : ""
+        unitName: dados.unit && dados.unit.name ? String(dados.unit.name) : "",
+        siengeTag: options.siengeTag || FIN_TERMO_SIENGE_TAG
       };
+      if (Array.isArray(options.parcelasCongeladas)) termo.parcelasCongeladas = options.parcelasCongeladas;
+      if (options.periodoCongelamento) termo.periodoCongelamento = options.periodoCongelamento;
       proc.termos = proc.termos || {};
       proc.termos[stageId] = (Array.isArray(proc.termos[stageId]) ? proc.termos[stageId] : []).concat(termo);
+      if (Number.isFinite(Number(options.saldoDevedorDeclarado))) {
+        proc.saldoDevedorDeclarado = Number(options.saldoDevedorDeclarado);
+        proc.saldoDevedorDeclaradoEm = dados.emissao;
+      }
       proc.updatedAt = termo.generatedAt;
       this.saveProcess(proc);
       FinanciamentoState.process = proc;
@@ -2546,22 +3207,6 @@ const FinanciamentoApp = {
         }
       }
       throw e;
-    }
-  },
-
-  baixarPdfTermo(blob, nome) {
-    if (!(blob instanceof Blob) || !blob.size) throw new Error("O PDF do termo está vazio.");
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = nome;
-    link.style.display = "none";
-    document.body.appendChild(link);
-    try {
-      link.click();
-    } finally {
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
   },
 
@@ -2601,12 +3246,8 @@ const FinanciamentoApp = {
       const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
       if (status) status.textContent = "Salvando o PDF nesta etapa…";
       const termo = await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
-      if (status) status.textContent = "PDF salvo; iniciando o download…";
-      const scrollX = window.scrollX;
-      const scrollY = window.scrollY;
-      this.baixarPdfTermo(arquivoPdf.blob, termo.fileName);
-      this.render();
-      window.requestAnimationFrame(() => window.scrollTo(scrollX, scrollY));
+      this.atualizarTermosEtapa(stageId);
+      if (status) status.textContent = "Termo salvo nesta etapa. Você pode continuar o processo ou abrir o PDF abaixo.";
       return true;
     } catch (e) {
       if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar o termo.";
@@ -2659,9 +3300,10 @@ const FinanciamentoApp = {
         enterpriseId: costCenterId,
         unitName: unitName
       };
+      const siengeTag = termo.siengeTag || FIN_TERMO_SIENGE_TAG;
       const resultado = await window.anexosUploadUnitAttachment({
         file: file,
-        tagLabel: FIN_TERMO_SIENGE_TAG,
+        tagLabel: siengeTag,
         dateIso: termo.documentDate,
         costCenterId: costCenterId,
         unitName: unitName,
@@ -2671,7 +3313,7 @@ const FinanciamentoApp = {
       termo.siengeSentAt = new Date().toISOString();
       termo.siengeFileName = resultado.fileName || file.name;
       termo.siengeUnitId = resultado.unitId || "";
-      termo.siengeTag = FIN_TERMO_SIENGE_TAG;
+      termo.siengeTag = siengeTag;
       proc.updatedAt = termo.siengeSentAt;
       this.saveProcess(proc);
       FinanciamentoState.process = proc;
@@ -2691,24 +3333,18 @@ const FinanciamentoApp = {
 
   salvarNota(stageId) {
     if (this._notaTimer) clearTimeout(this._notaTimer);
-    this.persistirRascunho(stageId);
-    const st = document.getElementById("fin-nota-st-" + stageId);
-    if (st && !st.textContent) st.textContent = "Salvo nesta etapa.";
-  },
-
-  novaNota(stageId) {
-    if (this._notaTimer) clearTimeout(this._notaTimer);
     const gravou = this.fixarNota(stageId);
     if (!gravou) {
       const st = document.getElementById("fin-nota-st-" + stageId);
-      if (st) st.textContent = "Escreva a nota para incluir outra.";
+      if (st) st.textContent = "Escreva uma anotação antes de salvar.";
       return;
     }
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
     this.render();
     const st = document.getElementById("fin-nota-st-" + stageId);
-    if (st) st.textContent = "Nota gravada no histórico. O campo está livre para outra.";
-    const campo = document.getElementById("fin-nota-" + stageId);
-    if (campo) campo.focus();
+    if (st) st.textContent = "Anotação salva no histórico. Você pode registrar outra.";
+    window.requestAnimationFrame(() => window.scrollTo(scrollX, scrollY));
   },
 
   etapaFluxoHtml(proc, etapa, indice, encerrada) {
@@ -2759,7 +3395,10 @@ const FinanciamentoApp = {
     }
     const notasEtapa = this.listaNotas(proc, stageId);
     const rascunho = notasEtapa.filter((nota) => nota.rascunho).pop() || {};
-    const termoGerar = this.ehEtapaTermoSaldo(stageId, indice) ? this.termoGerarHtml(sid) : "";
+    const historicoNotas = this.notasEtapaHtml(proc, stageId);
+    const tipoGerador = this.ehEtapaDeclaracaoSaldo(stageId, indice) ? "declaracao"
+      : (this.ehEtapaTermoSaldo(stageId, indice) ? "termo" : "");
+    const termoGerar = tipoGerador ? this.termoGerarHtml(sid, tipoGerador) : "";
     const termoGerado = this.termosEtapaHtml(proc, stageId);
     return `<div class="fin-etapa ${classe}">
       ${cabecalho}
@@ -2776,12 +3415,15 @@ const FinanciamentoApp = {
               <input type="date" id="fin-nota-data-${sid}" value="${this.esc(String(rascunho.data || "").slice(0, 10))}">
             </div>
             <button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.salvarNota('${sid}')">Salvar nota</button>
-            <button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.novaNota('${sid}')">Nova nota</button>
             <p id="fin-nota-st-${sid}" class="fin-nota-st"></p>
           </div>
+          ${historicoNotas}
         </div>
         <div class="fin-anexo">
-          <input type="file" id="fin-arq-${sid}" multiple style="max-width:240px;font-size:0.8rem;">
+          <div class="fin-anexo-arquivo">
+            <label class="fin-anexo-label" for="fin-arq-${sid}">Anexar arquivo</label>
+            <input type="file" id="fin-arq-${sid}" multiple>
+          </div>
           <div id="fin-tag-box-${sid}" class="fin-tag-box"></div>
           <button type="button" class="btn btn-primary btn-sm" id="fin-env-${sid}" onclick="FinanciamentoApp.enviarAnexo('${sid}')">Enviar para a unidade</button>
           <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">É possível anexar vários documentos nesta etapa. Escolha os arquivos ou cole com Ctrl+V.</p>
@@ -2839,7 +3481,7 @@ const FinanciamentoApp = {
           <div>
             <h2>${this.esc(clienteNome)}</h2>
             <p>${this.esc(obra.empreendimento)} · Unidade ${this.esc(unidade)}</p>
-            <span class="fin-visao-contrato">Contrato ${this.esc(proc.contractNumber || "—")}</span>
+            <span class="fin-visao-contrato">Título ${this.esc(proc.titulo || "—")}</span>
           </div>
           <span class="fin-visao-status ${this.isProcessoConcluido(proc) ? "is-concluido" : "is-andamento"}">${this.isProcessoConcluido(proc) ? "Concluído" : "Em andamento"}</span>
         </div>
@@ -2961,7 +3603,7 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota-linha .btn,
             #financiamento-root .fin-anexo > .btn { display: inline-flex; align-items: center; justify-content: center; height: 40px; box-sizing: border-box; padding: 0 12px; margin: 0; line-height: 1; white-space: nowrap; }
             #financiamento-root .fin-nota-linha input[type="date"],
-            #financiamento-root .fin-anexo > input[type="file"] { height: 40px; box-sizing: border-box; }
+            #financiamento-root .fin-anexo-arquivo input[type="file"] { height: 40px; box-sizing: border-box; }
             #financiamento-root .fin-etapa-nota { margin: 0; padding: 0 12px 6px; color: #334155; font-size: 0.78rem; white-space: pre-wrap; line-height: 1.4; }
             #financiamento-root .fin-etapa-corpo { padding: 0 12px 12px; }
             #financiamento-root .fin-grupo { margin: 14px 0 6px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #64748b; }
@@ -2969,10 +3611,19 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font: inherit; background: #fff; min-height: 52px; resize: vertical; }
             #financiamento-root .fin-nota-linha { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
             #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+            #financiamento-root .fin-anexo-arquivo { display:flex; flex:0 1 260px; flex-direction:column; min-width:220px; max-width:260px; }
+            #financiamento-root .fin-anexo-label { display:block; margin-bottom:6px; color:#64748b; font-size:0.7rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }
+            #financiamento-root .fin-anexo-arquivo input[type="file"] { width:100%; max-width:none; padding:0; font-size:0.8rem; }
             #financiamento-root .fin-tag-box { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
             #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
-            #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
+            #financiamento-root .fin-tag-box .ml-emp-filter-btn { height:40px; min-height:40px; box-sizing:border-box; }
+            #financiamento-root .fin-nota input[type="date"] { height: 40px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
+            #financiamento-root .fin-nota-historico { display:flex; flex-direction:column; gap:8px; margin-top:12px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; }
+            #financiamento-root .fin-nota-historico > strong { color:#334155; font-size:0.78rem; }
+            #financiamento-root .fin-nota-historico-item { display:grid; grid-template-columns:minmax(90px,120px) minmax(0,1fr); gap:8px; padding:8px 0; border-top:1px solid #eef2f7; }
+            #financiamento-root .fin-nota-historico-item time { color:#64748b; font-size:0.75rem; font-weight:700; }
+            #financiamento-root .fin-nota-historico-item p { margin:0; color:#334155; font-size:0.8rem; line-height:1.4; white-space:pre-wrap; overflow-wrap:anywhere; }
             #financiamento-root .fin-termo-gerar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0; }
             #financiamento-root .fin-termo-st { color:#64748b; font-size:0.78rem; }
             #financiamento-root .fin-termos-lista { display:flex; flex-direction:column; gap:8px; margin:10px 0; }
@@ -2983,6 +3634,8 @@ const FinanciamentoApp = {
             #financiamento-root .fin-termo-item span { color:#64748b; font-size:0.73rem; }
             #financiamento-root .fin-termo-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
             #financiamento-root .fin-termo-enviado { color:#166534 !important; font-weight:700; }
+            #financiamento-root .fin-termo-excluir { color:#b91c1c; border-color:#fecaca; }
+            #financiamento-root .fin-termo-excluir:hover { color:#991b1b; border-color:#fca5a5; background:#fef2f2; }
             @media (max-width: 900px) { #financiamento-root .fin-visao-valores { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
             @media (max-width: 560px) {
               #financiamento-root .fin-visao-geral { padding: 10px; }
