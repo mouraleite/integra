@@ -93,8 +93,12 @@ const FinanciamentoApp = {
     const root = document.getElementById("financiamento-root");
     if (!root) return;
     const noFluxo = FinanciamentoState.view === "fluxo";
-    const painel = FinanciamentoState.painel === "esteira" ? "esteira" : "pesquisa";
-    root.innerHTML = noFluxo ? this.fluxoHtml() : (this.abasHtml(painel) + (painel === "esteira" ? this.esteiraHtml() : this.buscaHtml()));
+    const painel = ["esteira", "concluidos"].indexOf(FinanciamentoState.painel) >= 0
+      ? FinanciamentoState.painel : "pesquisa";
+    const corpo = painel === "esteira" ? this.esteiraHtml()
+      : (painel === "concluidos" ? this.concluidosHtml() : this.buscaHtml());
+    if (noFluxo) this.carregarSaldoQuitacao(FinanciamentoState.process);
+    root.innerHTML = noFluxo ? this.fluxoHtml() : (this.abasHtml(painel) + corpo);
     if (window.lucide) lucide.createIcons();
     if (!noFluxo && painel === "pesquisa") this.restoreBuscaUi();
     if (noFluxo) {
@@ -105,17 +109,20 @@ const FinanciamentoApp = {
 
   setPainel(id) {
     if (FinanciamentoState.process) this.saveProcess(FinanciamentoState.process);
-    FinanciamentoState.painel = id === "esteira" ? "esteira" : "pesquisa";
+    FinanciamentoState.painel = ["esteira", "concluidos"].indexOf(id) >= 0 ? id : "pesquisa";
     FinanciamentoState.view = "busca";
     this.render();
     if (FinanciamentoState.painel === "esteira") this.puxarNuvem();
+    else if (FinanciamentoState.painel === "concluidos") this.puxarNuvem();
   },
 
   abasHtml(painel) {
     const n = this.listOpenProcesses().length;
+    const concluidos = this.listCompletedProcesses().length;
     return `<div class="ml-tabs fin-abas" role="tablist">
       <button type="button" role="tab" aria-selected="${painel === "pesquisa"}" class="ml-tab ${painel === "pesquisa" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('pesquisa')"><i data-lucide="search"></i> Pesquisar</button>
       <button type="button" role="tab" aria-selected="${painel === "esteira"}" class="ml-tab ${painel === "esteira" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('esteira')"><i data-lucide="columns-3"></i> Esteira <span class="ml-tab-count">${n}</span></button>
+      <button type="button" role="tab" aria-selected="${painel === "concluidos"}" class="ml-tab ${painel === "concluidos" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('concluidos')"><i data-lucide="circle-check-big"></i> Concluídos <span class="ml-tab-count">${concluidos}</span></button>
     </div>`;
   },
 
@@ -630,7 +637,8 @@ const FinanciamentoApp = {
   isProcessoAberto(proc) {
     if (!proc) return false;
     const st = String(proc.status || "").toLowerCase();
-    if (st === "concluido" || st === "encerrado" || st === "cancelado" || st === "closed") return false;
+    if (st === "concluido" || st === "concluída" || st === "completed" || st === "complete"
+      || st === "encerrado" || st === "cancelado" || st === "cancelada" || st === "closed") return false;
     if (proc.closedAt || proc.finishedAt) return false;
     return true;
   },
@@ -651,6 +659,33 @@ const FinanciamentoApp = {
       if (!this.isProcessoAberto(proc)) return null;
       return { key, proc };
     }).filter(Boolean).sort((a, b) => String(b.proc.updatedAt || b.proc.startedAt || "").localeCompare(String(a.proc.updatedAt || a.proc.startedAt || "")));
+  },
+
+  isProcessoConcluido(proc) {
+    if (!proc) return false;
+    const status = String(proc.status || "").toLowerCase();
+    if (status === "cancelado" || status === "cancelada" || status === "closed" || status === "encerrado") return false;
+    return status === "concluido" || status === "concluída" || status === "completed" || status === "complete"
+      || (!!proc.finishedAt && !proc.closedAt);
+  },
+
+  listCompletedProcesses() {
+    const all = this.loadAllProcesses();
+    const mem = FinanciamentoState.process;
+    if (mem && mem.customerId && mem.contractId) {
+      const key = this.procKey(mem.customerId, mem.contractId);
+      const saved = all[key];
+      const tm = Date.parse(mem.updatedAt || mem.finishedAt || 0) || 0;
+      const ts = Date.parse((saved && (saved.updatedAt || saved.finishedAt)) || 0) || 0;
+      if (!saved || tm >= ts) all[key] = mem;
+    }
+    return Object.keys(all).map((key) => {
+      const proc = all[key];
+      if (!proc || typeof proc !== "object" || !this.isProcessoConcluido(proc)) return null;
+      return { key, proc };
+    }).filter(Boolean).sort((a, b) =>
+      String((b.proc.finishedAt || b.proc.updatedAt) || "").localeCompare(String((a.proc.finishedAt || a.proc.updatedAt) || ""))
+    );
   },
 
   etapaLabel(proc) {
@@ -904,6 +939,54 @@ const FinanciamentoApp = {
     </style>
     ${resumo}${vazioEtapas}
     <div class="fin-esteira">${colunas.map((col) => this.colunaHtml(col)).join("")}</div>`;
+  },
+
+  concluidosHtml() {
+    const processos = this.listCompletedProcesses();
+    const linhas = processos.length ? processos.map(({ key, proc }) => {
+      const chave = String(key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const saldo = proc.saldoQuitacaoSistema != null && String(proc.saldoQuitacaoSistema).trim() !== "" && Number.isFinite(Number(proc.saldoQuitacaoSistema))
+        ? Number(proc.saldoQuitacaoSistema) : null;
+      const credito = proc.valorLiberadoCaixa != null && String(proc.valorLiberadoCaixa).trim() !== "" && Number.isFinite(Number(proc.valorLiberadoCaixa))
+        ? Number(proc.valorLiberadoCaixa) : null;
+      const diferenca = saldo != null && credito != null ? saldo - credito : null;
+      const unidade = this.formatUnidade(proc.unit || proc.unitName || "—");
+      const obra = this.obraDoProc(proc);
+      return `<tr>
+        <td title="${this.esc(proc.customerName || "—")}">${this.esc(proc.customerName || "—")}</td>
+        <td title="${this.esc(proc.contractNumber || proc.contractId || "—")}">${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
+        <td title="${this.esc(obra.empreendimento + " · " + unidade)}" class="fin-concluido-unidade">${this.esc(obra.empreendimento)} · ${this.esc(unidade)}</td>
+        <td class="is-right fin-concluido-valor">${saldo == null ? "—" : this.esc(this.fmtMoney(saldo))}</td>
+        <td class="is-right fin-concluido-valor">${credito == null ? "—" : this.esc(this.fmtMoney(credito))}</td>
+        <td class="is-right fin-concluido-valor">${diferenca == null ? "—" : this.esc(this.fmtMoney(diferenca))}</td>
+        <td class="is-center">${this.esc(this.fmtDate(proc.finishedAt || proc.updatedAt))}</td>
+        <td class="is-center"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.abrirAberto('${chave}')">Abrir</button></td>
+      </tr>`;
+    }).join("") : '<tr><td colspan="8" style="text-align:center;padding:30px;">Nenhum financiamento concluído para exibir.</td></tr>';
+    return `<section class="fin-concluidos" aria-label="Financiamentos concluídos">
+      <p class="fin-esteira-resumo">${processos.length} financiamento${processos.length === 1 ? "" : "s"} concluído${processos.length === 1 ? "" : "s"}.</p>
+      <div class="cc-scroll">
+        <table class="cc-table fin-concluidos-table" aria-label="Lista de financiamentos concluídos">
+          <colgroup>
+            <col style="width:190px"><col style="width:115px"><col>
+            <col style="width:125px"><col style="width:125px"><col style="width:125px">
+            <col style="width:95px"><col style="width:75px">
+          </colgroup>
+          <thead><tr>
+            <th>Cliente</th><th>Contrato</th><th>Empreendimento / unidade</th>
+            <th class="is-right">Saldo quitação</th><th class="is-right">Crédito CAIXA</th>
+            <th class="is-right">Diferença</th><th class="is-center">Concluído</th><th class="is-center">Ação</th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>
+    </section>
+    <style>
+      #financiamento-root .fin-concluidos-table { min-width: 900px; }
+      #financiamento-root .fin-concluidos-table .fin-concluido-valor { font-variant-numeric: tabular-nums; }
+      #financiamento-root .fin-concluidos-table .fin-concluido-unidade { white-space: normal; }
+      #financiamento-root .fin-concluidos-table tbody tr { cursor: default; }
+    </style>`;
   },
 
   colunaHtml(col) {
@@ -1250,6 +1333,57 @@ const FinanciamentoApp = {
     st.textContent = nomes.join(", ") + " — clique em Enviar para a unidade.";
   },
 
+  ehCartaSiopi(file, tag, quantidade) {
+    const nomeSiopi = /siopi/i.test(String(file && file.name || ""));
+    const tagSiopi = /siopi/i.test(String(tag || ""));
+    const pdf = !!(file && (file.type === "application/pdf" || /\.pdf$/i.test(String(file.name || ""))));
+    return nomeSiopi || (tagSiopi && pdf && quantidade === 1);
+  },
+
+  async extrairValorCaixaCartaSiopi(file) {
+    const pdfjs = window["pdfjs-dist/build/pdf"] || window.pdfjsLib;
+    if (!pdfjs || typeof pdfjs.getDocument !== "function") throw new Error("O leitor de PDF não está disponível nesta página.");
+    if (!file || !(file.type === "application/pdf" || /\.pdf$/i.test(String(file.name || "")))) {
+      throw new Error("A Carta SIOPI precisa estar em PDF para leitura automática.");
+    }
+    const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    try {
+      let texto = "";
+      for (let pagina = 1; pagina <= pdf.numPages; pagina++) {
+        const conteudo = await pdf.getPage(pagina);
+        const itens = await conteudo.getTextContent();
+        texto += (itens.items || []).map((item) => String(item.str || "")).join(" ") + " ";
+      }
+      const normalizado = texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .toUpperCase().replace(/\s+([.,])/g, "$1").replace(/([.,])\s+/g, "$1").replace(/\s+/g, " ");
+      const valorRegex = "((?:\\d{1,3}(?:\\.\\d{3})+|\\d+),\\d{2})";
+      const rotulos = [
+        /VALOR\s+LIBERADO(?:\s+PELA\s+CAIXA)?/,
+        /VALOR\s+(?:TOTAL\s+)?DO\s+FINANCIAMENTO/,
+        /VALOR\s+DE\s+FINANCIAMENTO/,
+        /VALOR\s+(?:TOTAL\s+)?DO\s+CREDITO/,
+        /VALOR\s+DE\s+CREDITO/,
+        /CREDITO\s+CONCEDIDO/
+      ];
+      for (let i = 0; i < rotulos.length; i++) {
+        const regex = new RegExp("\\b" + rotulos[i].source + "\\b\\s*(?:[:=\\-]\\s*)?(?:R\\$\\s*)?" + valorRegex, "g");
+        const valores = [];
+        let match;
+        while ((match = regex.exec(normalizado)) !== null) {
+          const valor = Number(match[1].replace(/\./g, "").replace(",", "."));
+          if (Number.isFinite(valor) && valor > 0) valores.push(valor);
+        }
+        const unicos = Array.from(new Set(valores));
+        if (unicos.length > 1) throw new Error("A Carta SIOPI contém mais de um valor possível de financiamento; confira o documento.");
+        if (unicos.length === 1) return unicos[0];
+      }
+      if (!normalizado.trim()) throw new Error("Não foi possível ler texto no PDF da Carta SIOPI; o arquivo pode ser digitalizado como imagem.");
+      throw new Error("Não identifiquei o valor liberado/financiado na Carta SIOPI.");
+    } finally {
+      if (typeof pdf.destroy === "function") await pdf.destroy();
+    }
+  },
+
   ligarEtapa() {
     const root = document.getElementById("financiamento-root");
     if (!root || root.dataset.finLigado === "1") return;
@@ -1319,6 +1453,20 @@ const FinanciamentoApp = {
     if (st) st.textContent = "";
     const restam = [];
     let falha = "";
+    const pdfs = files.filter((file) => file && (file.type === "application/pdf" || /\.pdf$/i.test(String(file.name || ""))));
+    const cartaSiopi = files.find((file) => /siopi/i.test(String(file && file.name || "")))
+      || pdfs.find((file) => this.ehCartaSiopi(file, tag, pdfs.length));
+    let creditoCaixaCarta = null;
+    let erroLeituraCarta = "";
+    if (cartaSiopi) {
+      if (st) st.textContent = "Lendo a Carta SIOPI para identificar o valor liberado pela CAIXA…";
+      try {
+        creditoCaixaCarta = await this.extrairValorCaixaCartaSiopi(cartaSiopi);
+      } catch (e) {
+        erroLeituraCarta = (e && e.message) || "Não consegui identificar o valor na Carta SIOPI.";
+      }
+    }
+    let cartaSiopiEnviada = false;
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -1349,6 +1497,17 @@ const FinanciamentoApp = {
             unitId: resp.unitId || ""
           });
           proc.anexos[stageId] = lista;
+          if (file === cartaSiopi) {
+            cartaSiopiEnviada = true;
+            if (creditoCaixaCarta != null) {
+              proc.valorLiberadoCaixa = creditoCaixaCarta;
+              proc.valorLiberadoCaixaAtualizadoEm = new Date().toISOString();
+              proc.valorLiberadoCaixaArquivo = file.name || resp.fileName || "";
+              proc.valorLiberadoCaixaErro = "";
+            } else {
+              proc.valorLiberadoCaixaErro = erroLeituraCarta || "Não consegui identificar o valor na Carta SIOPI.";
+            }
+          }
         } catch (e) {
           restam.push(file);
           falha = (e && e.message) ? e.message : "Não consegui enviar o anexo para a unidade.";
@@ -1362,7 +1521,11 @@ const FinanciamentoApp = {
       this.render();
       const st2 = document.getElementById("fin-st-" + stageId);
       const btn2 = document.getElementById("fin-env-" + stageId);
-      if (falha && st2) st2.textContent = falha;
+      if (cartaSiopiEnviada && st2) {
+        st2.textContent = creditoCaixaCarta != null
+          ? "Carta SIOPI anexada; crédito CAIXA atualizado para " + this.fmtMoney(creditoCaixaCarta) + "."
+          : "Carta SIOPI anexada, mas " + (erroLeituraCarta || "não consegui identificar o valor liberado pela CAIXA.");
+      } else if (falha && st2) st2.textContent = falha;
       if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
       return !restam.length;
     } finally {
@@ -1615,7 +1778,8 @@ const FinanciamentoApp = {
     proc.updatedAt = quando;
     this.saveProcess(proc);
     FinanciamentoState.process = proc;
-    this.render();
+    if (proxima) this.render();
+    else this.setPainel("concluidos");
   },
 
   async desfazerAvanco() {
@@ -1710,8 +1874,43 @@ const FinanciamentoApp = {
     const sid = String(stageId).replace(/[^a-zA-Z0-9_-]/g, "");
     return `<div class="fin-termo-gerar">
       <button type="button" class="btn btn-outline btn-sm" id="fin-termo-gerar-${sid}" onclick="FinanciamentoApp.gerarTermoSaldoDevedor('${sid}')">Gerar termo</button>
-      <span id="fin-termo-st-${sid}" class="fin-termo-st" role="status">O PDF será salvo nesta etapa; depois poderá ser enviado ao Sienge.</span>
+      <span id="fin-termo-st-${sid}" class="fin-termo-st" role="status">Ao clicar, confirme o valor comercial do lote. O PDF será salvo nesta etapa e baixado.</span>
     </div>`;
+  },
+
+  parseValorComercialTermo(raw) {
+    let valor = String(raw == null ? "" : raw).trim().replace(/^R\$\s*/i, "").replace(/\s/g, "");
+    if (!valor || !/^[\d.,]+$/.test(valor)) return null;
+    if (valor.indexOf(",") >= 0) {
+      if (!/^\d+(?:\.\d{3})*(?:,\d{1,2})?$/.test(valor)) return null;
+      valor = valor.replace(/\./g, "").replace(",", ".");
+    } else if (/^\d{1,3}(?:\.\d{3})+$/.test(valor)) {
+      valor = valor.replace(/\./g, "");
+    } else if (!/^\d+(?:\.\d{1,2})?$/.test(valor)) {
+      return null;
+    }
+    const numero = Number(valor);
+    return Number.isFinite(numero) && numero > 0 ? numero : null;
+  },
+
+  justificarParagrafosTermo(xmlDoc) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const titulos = /^(TERMO DE SIMULAÇÃO|IDENTIFICAÇÃO DO CONTRATO|VALORES DE REFERÊNCIA|FINALIDADE E LIMITES|DISPOSIÇÕES FINAIS|BOTUCATU,|MOURA LEITE|📞 CANAIS DE ATENDIMENTO)/i;
+    Array.from(xmlDoc.getElementsByTagNameNS(ns, "p")).forEach((paragrafo) => {
+      const texto = String(paragrafo.textContent || "").replace(/\s+/g, " ").trim();
+      if (texto.length < 70 || titulos.test(texto)) return;
+      let propriedades = Array.from(paragrafo.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
+      if (!propriedades) {
+        propriedades = xmlDoc.createElementNS(ns, "w:pPr");
+        paragrafo.insertBefore(propriedades, paragrafo.firstChild);
+      }
+      let alinhamento = propriedades.getElementsByTagNameNS(ns, "jc")[0];
+      if (!alinhamento) {
+        alinhamento = xmlDoc.createElementNS(ns, "w:jc");
+        propriedades.appendChild(alinhamento);
+      }
+      alinhamento.setAttributeNS(ns, "w:val", "both");
+    });
   },
 
   termosEtapaHtml(proc, stageId) {
@@ -1860,6 +2059,7 @@ const FinanciamentoApp = {
       "DIA DO MÊS VIGENTE", "XXXXXXXXX"
     ].filter((campo) => textoFinal.indexOf(campo) >= 0);
     if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo: " + pendentes.join(", "));
+    this.justificarParagrafosTermo(xmlDoc);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
       type: "arraybuffer",
@@ -1924,7 +2124,7 @@ const FinanciamentoApp = {
       }
       const blob = pdf.output("blob");
       if (!blob || !blob.size) throw new Error("O PDF gerado está vazio.");
-      return blob;
+      return { pdf: pdf, blob: blob };
     } finally {
       container.remove();
     }
@@ -1972,6 +2172,120 @@ const FinanciamentoApp = {
     if (!lista.length && customerFallback) await adicionar(customerFallback, customerFallback);
     if (!lista.length) throw new Error("Não encontrei titulares com nome e CPF/CNPJ no contrato do Sienge.");
     return lista;
+  },
+
+  async consultarSaldoDevedorPresente(svc, documento, billId, companyId) {
+    const doc = String(documento || "").replace(/\D/g, "");
+    let saldo = null;
+    if (svc && typeof svc.getTotalCurrentDebitBalance === "function" && doc.length >= 11) {
+      const resposta = await svc.getTotalCurrentDebitBalance(doc, billId);
+      if (resposta) {
+        const total = resposta.results && resposta.results[0] && resposta.results[0].totalCurrentDebitBalanceValue;
+        const valor = total != null ? total : (resposta.totalCurrentDebitBalanceValue != null
+          ? resposta.totalCurrentDebitBalanceValue : resposta.presentValue);
+        if (valor != null && String(valor).trim() !== "") {
+          saldo = typeof window.mapaJuridicoParseQuitacao === "function"
+            ? window.mapaJuridicoParseQuitacao(resposta) : Number(valor);
+        }
+      }
+    }
+    if (!Number.isFinite(saldo) && svc && typeof svc.getCustomerDebtBalance === "function") {
+      const resposta = await svc.getCustomerDebtBalance(billId, { companyId: companyId });
+      const rows = resposta && (Array.isArray(resposta.data) ? resposta.data : (Array.isArray(resposta.results) ? resposta.results : []));
+      const valores = rows.map((r) => {
+        const valor = r && r.presentValue;
+        return valor == null || String(valor).trim() === "" ? NaN : Number(valor);
+      }).filter(Number.isFinite);
+      if (rows.length && valores.length === rows.length) saldo = valores.reduce((total, valor) => total + valor, 0);
+    }
+    if (!Number.isFinite(saldo)) throw new Error("Não foi possível obter o saldo devedor presente do título no Sienge.");
+    return saldo;
+  },
+
+  async obterSaldoQuitacaoSistema(proc) {
+    const svc = window.SiengeApiService;
+    if (!svc) throw new Error("A conexão com o Sienge não está disponível.");
+    const selecionado = FinanciamentoState.selected || {};
+    let sale = String(selecionado.contractId || "") === String(proc.contractId)
+      ? Object.assign({}, selecionado.contract || {})
+      : {};
+    if (typeof svc.getSales === "function") {
+      const vendas = await svc.getSales(proc.customerId);
+      const encontrada = (Array.isArray(vendas) ? vendas : []).find((c) =>
+        String(c.id || c.contractId || "") === String(proc.contractId)
+      );
+      if (encontrada) sale = Object.assign({}, sale, encontrada);
+    }
+    let customer = String((FinanciamentoState.customer && FinanciamentoState.customer.id) || "") === String(proc.customerId)
+      ? FinanciamentoState.customer : (selecionado.customer || null);
+    const docDe = (pessoa) => String(pessoa && (pessoa.cpfCnpj || pessoa.cpf || pessoa.cnpj || pessoa.document) || "");
+    if (!docDe(customer) && typeof svc.getCustomer === "function") customer = await svc.getCustomer(proc.customerId);
+    let documento = docDe(customer);
+    if (!documento && (sale.salesContractCustomers || sale.customers)) {
+      const titulares = await this.obterTitularesTermo(sale, customer);
+      documento = titulares[0] && titulares[0].documento;
+    }
+    const billId = String(proc.titulo || sale.receivableBillId || sale.billReceivableId || "").trim();
+    if (!billId || billId === "—" || billId === "N/D") throw new Error("O título a receber associado ao contrato não foi encontrado.");
+    if (String(documento || "").replace(/\D/g, "").length < 11) {
+      throw new Error("Não encontrei o CPF/CNPJ do titular para consultar o saldo no Sienge.");
+    }
+    return this.consultarSaldoDevedorPresente(svc, documento, billId, sale.companyId || proc.companyId);
+  },
+
+  carregarSaldoQuitacao(proc, forcar) {
+    if (!proc || !proc.customerId || !proc.contractId) return Promise.resolve(null);
+    const key = this.procKey(proc.customerId, proc.contractId);
+    this._saldoQuitacaoPromises = this._saldoQuitacaoPromises || {};
+    if (this._saldoQuitacaoPromises[key]) return this._saldoQuitacaoPromises[key];
+    const atualizado = Date.parse(proc.saldoQuitacaoAtualizadoEm || "") || 0;
+    const tentado = Number(proc.saldoQuitacaoTentadoEm) || 0;
+    if (!forcar && proc.saldoQuitacaoSistema != null && String(proc.saldoQuitacaoSistema).trim() !== ""
+      && Number.isFinite(Number(proc.saldoQuitacaoSistema))
+      && atualizado && Date.now() - atualizado < 5 * 60 * 1000) return Promise.resolve(proc.saldoQuitacaoSistema);
+    if (!forcar && tentado && Date.now() - tentado < 60 * 1000) return Promise.resolve(null);
+    proc.saldoQuitacaoCarregando = true;
+    const promise = (async () => {
+      try {
+        const valor = await this.obterSaldoQuitacaoSistema(proc);
+        const salvo = this.getProcess(proc.customerId, proc.contractId) || proc;
+        salvo.saldoQuitacaoSistema = valor;
+        salvo.saldoQuitacaoAtualizadoEm = new Date().toISOString();
+        salvo.saldoQuitacaoTentadoEm = Date.now();
+        salvo.saldoQuitacaoErro = "";
+        salvo.updatedAt = new Date().toISOString();
+        this.saveProcess(salvo);
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = salvo;
+        }
+        return valor;
+      } catch (e) {
+        const salvo = this.getProcess(proc.customerId, proc.contractId) || proc;
+        salvo.saldoQuitacaoErro = (e && e.message) || "Não foi possível consultar o saldo de quitação.";
+        salvo.saldoQuitacaoTentadoEm = Date.now();
+        this.saveProcess(salvo);
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = salvo;
+        }
+        console.error("[Financiamento] consulta do saldo de quitação", e);
+        return null;
+      } finally {
+        const atual = this.getProcess(proc.customerId, proc.contractId) || proc;
+        atual.saldoQuitacaoCarregando = false;
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = atual;
+          this.render();
+        }
+      }
+    })();
+    this._saldoQuitacaoPromises[key] = promise;
+    return promise.finally(() => {
+      if (this._saldoQuitacaoPromises[key] === promise) delete this._saldoQuitacaoPromises[key];
+    });
+  },
+
+  atualizarSaldoQuitacao() {
+    return this.carregarSaldoQuitacao(FinanciamentoState.process, true);
   },
 
   async obterDadosTermoSaldo(proc) {
@@ -2027,33 +2341,14 @@ const FinanciamentoApp = {
       .trim();
     if (!preambulo) throw new Error("O preâmbulo cadastrado para o empreendimento está vazio.");
     const contratoValor = [sale.totalSellingValue, sale.contractValue, sale.value, sale.updatedContractValue]
-      .map((v) => Number(v))
-      .find((v) => Number.isFinite(v) && v > 0);
-    if (contratoValor == null) throw new Error("O valor comercial do contrato não está disponível no Sienge.");
+      .map((v) => this.parseValorComercialTermo(v))
+      .find((v) => v != null);
     const titulares = await this.obterTitularesTermo(sale, FinanciamentoState.customer || selecionado.customer);
     const billId = String(proc.titulo || sale.receivableBillId || sale.billReceivableId || "").trim();
     if (!billId || billId === "—" || billId === "N/D") throw new Error("O título a receber associado ao contrato não foi encontrado.");
-    const titularPrincipal = titulares[0];
-    const cpfPrincipal = String(titularPrincipal.documento || "").replace(/\D/g, "");
-    let saldoPresente = null;
-    if (svc && typeof svc.getTotalCurrentDebitBalance === "function" && cpfPrincipal.length >= 11) {
-      const resposta = await svc.getTotalCurrentDebitBalance(cpfPrincipal, billId);
-      if (typeof window.mapaJuridicoParseQuitacao === "function") {
-        saldoPresente = window.mapaJuridicoParseQuitacao(resposta);
-      } else if (resposta) {
-        const total = resposta.results && resposta.results[0] && resposta.results[0].totalCurrentDebitBalanceValue;
-        const valor = total != null ? total : (resposta.totalCurrentDebitBalanceValue != null
-          ? resposta.totalCurrentDebitBalanceValue : resposta.presentValue);
-        if (valor != null) saldoPresente = Number(valor);
-      }
-    }
-    if (!Number.isFinite(saldoPresente) && svc && typeof svc.getCustomerDebtBalance === "function") {
-      const resposta = await svc.getCustomerDebtBalance(billId, { companyId: sale.companyId || proc.companyId });
-      const rows = resposta && (Array.isArray(resposta.data) ? resposta.data : (Array.isArray(resposta.results) ? resposta.results : []));
-      const valores = rows.map((r) => Number(r && r.presentValue)).filter(Number.isFinite);
-      if (rows.length && valores.length === rows.length) saldoPresente = valores.reduce((total, valor) => total + valor, 0);
-    }
-    if (!Number.isFinite(saldoPresente)) throw new Error("Não foi possível obter o saldo devedor presente do título no Sienge.");
+    const saldoPresente = await this.consultarSaldoDevedorPresente(
+      svc, titulares[0].documento, billId, sale.companyId || proc.companyId
+    );
     if (typeof window.valorPorExtensoBRL !== "function") throw new Error("A conversão dos valores por extenso não está disponível.");
     const agora = new Date();
     const ano = agora.getFullYear();
@@ -2065,7 +2360,9 @@ const FinanciamentoApp = {
     const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const validadeExtenso = ultimoDia + " de " + meses[mes - 1] + " de " + ano;
     const emReais = (valor) => Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const valorComercialTexto = emReais(contratoValor) + " (" + window.valorPorExtensoBRL(contratoValor) + ")";
+    const valorComercialTexto = contratoValor == null
+      ? ""
+      : emReais(contratoValor) + " (" + window.valorPorExtensoBRL(contratoValor) + ")";
     const saldoPresenteTexto = emReais(saldoPresente) + " (" + window.valorPorExtensoBRL(saldoPresente) + ")";
     return {
       sale: sale,
@@ -2147,12 +2444,33 @@ const FinanciamentoApp = {
     if (status) status.textContent = "Buscando os dados do contrato…";
     try {
       const dados = await this.obterDadosTermoSaldo(proc);
+      if (status) status.textContent = "Confirme o valor comercial do lote.";
+      const valorInicial = dados.valorComercial == null
+        ? ""
+        : Number(dados.valorComercial).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const valorInformado = typeof window.mouraPrompt === "function"
+        ? await window.mouraPrompt("Informe o valor comercial de compra e venda do lote (R$). Confirme ou ajuste o valor sugerido.", valorInicial)
+        : window.prompt("Informe o valor comercial de compra e venda do lote (R$).", valorInicial);
+      if (valorInformado == null) {
+        if (status) status.textContent = "Geração do termo cancelada.";
+        return false;
+      }
+      const valorComercial = this.parseValorComercialTermo(valorInformado);
+      if (valorComercial == null) throw new Error("Informe um valor comercial válido, maior que zero.");
+      if (typeof window.valorPorExtensoBRL !== "function") throw new Error("A conversão dos valores por extenso não está disponível.");
+      dados.valorComercial = valorComercial;
+      dados.valorComercialTexto = Number(valorComercial).toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }) + " (" + window.valorPorExtensoBRL(valorComercial) + ")";
       if (status) status.textContent = "Preenchendo o modelo Word…";
       const docxBuffer = await this.montarDocxTermoSaldo(dados);
       if (status) status.textContent = "Gerando o PDF…";
-      const pdf = await this.converterDocxTermoParaPdf(docxBuffer);
+      const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
       if (status) status.textContent = "Salvando o PDF nesta etapa…";
-      await this.guardarTermoSaldo(proc, stageId, pdf, dados);
+      const termo = await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
+      if (status) status.textContent = "PDF salvo; baixando o termo…";
+      arquivoPdf.pdf.save(termo.fileName);
       this.render();
       return true;
     } catch (e) {
@@ -2270,45 +2588,143 @@ const FinanciamentoApp = {
     }));
     const folhas = this.folhasEtapa(etapas);
     const ativoIdx = this.indiceAtivo(proc, folhas);
+    const saldo = proc.saldoQuitacaoSistema != null && String(proc.saldoQuitacaoSistema).trim() !== "" && Number.isFinite(Number(proc.saldoQuitacaoSistema))
+      ? Number(proc.saldoQuitacaoSistema) : null;
+    const credito = proc.valorLiberadoCaixa != null && String(proc.valorLiberadoCaixa).trim() !== "" && Number.isFinite(Number(proc.valorLiberadoCaixa))
+      ? Number(proc.valorLiberadoCaixa) : null;
+    const diferenca = saldo != null && credito != null ? saldo - credito : null;
+    const concluidas = ativoIdx < 0 ? folhas.length : ativoIdx;
+    const etapaAtual = ativoIdx >= 0 ? (folhas[ativoIdx].label || folhas[ativoIdx].nome) : (this.isProcessoConcluido(proc) ? "Financiamento concluído" : "Aguardando primeira etapa");
+    const progresso = folhas.map((etapa, idx) => {
+      const estado = ativoIdx < 0 || idx < ativoIdx ? "is-feita" : (idx === ativoIdx ? "is-atual" : "is-espera");
+      const sinal = estado === "is-feita" ? "✓" : (estado === "is-atual" ? "●" : "○");
+      return `<span class="fin-stage-chip ${estado}"><span aria-hidden="true">${sinal}</span>${this.esc(etapa.nome || etapa.label)}</span>`;
+    }).join("");
+    const clienteNome = customer.name || customer.nome || proc.customerName || "—";
+    const unidade = this.formatUnidade(proc.unit || proc.unitName || "—");
+    const responsavel = proc.responsavelNome || proc.responsavel || proc.assignedToName || proc.assignedTo || "Não informado";
     return `
       <div style="margin-bottom:16px;">
         <button type="button" class="btn btn-outline" onclick="FinanciamentoApp.voltarBusca()">
           <i data-lucide="arrow-left" style="width:14px;height:14px;"></i> ${FinanciamentoState.painel === "esteira" ? "Voltar à esteira" : "Voltar à pesquisa"}
         </button>
       </div>
-      <div class="crm-card" style="margin-bottom:16px;">
-        <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
-          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do contrato</h3>
+      <section class="fin-visao-geral" aria-label="Resumo do financiamento">
+        <div class="fin-visao-identificacao">
+          <div>
+            <h2>${this.esc(clienteNome)}</h2>
+            <p>${this.esc(obra.empreendimento)} · Unidade ${this.esc(unidade)}</p>
+            <span class="fin-visao-contrato">Contrato ${this.esc(proc.contractNumber || "—")}</span>
+          </div>
+          <span class="fin-visao-status ${this.isProcessoConcluido(proc) ? "is-concluido" : "is-andamento"}">${this.isProcessoConcluido(proc) ? "Concluído" : "Em andamento"}</span>
         </div>
-        <div class="crm-card-content">
-          <div class="cessao-customer-grid">
-            <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empresa)}"><span class="cessao-lbl">Empresa</span><span class="cessao-val">${this.esc(obra.empresa)}</span></div>
-            <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empreendimento)}"><span class="cessao-lbl">Empreendimento</span><span class="cessao-val">${this.esc(obra.empreendimento)}</span></div>
-            <div class="cessao-customer-field" title="${this.esc(proc.contractNumber || "—")}"><span class="cessao-lbl">Contrato</span><span class="cessao-val">${this.esc(proc.contractNumber || "—")}</span></div>
-            <div class="cessao-customer-field" title="${this.esc(proc.titulo || "—")}"><span class="cessao-lbl">Título</span><span class="cessao-val">${this.esc(proc.titulo || "—")}</span></div>
-            <div class="cessao-customer-field" title="${this.esc(this.formatUnidade(proc.unit || "—"))}"><span class="cessao-lbl">Unidade</span><span class="cessao-val">${this.esc(this.formatUnidade(proc.unit || "—"))}</span></div>
+        <div class="fin-visao-valores">
+          <article class="fin-visao-kpi">
+            <span>Saldo de quitação</span>
+            <strong>${saldo == null ? (proc.saldoQuitacaoCarregando ? "Consultando…" : "—") : this.esc(this.fmtMoney(saldo))}</strong>
+            <small>${saldo != null ? "Consultado no Sienge" : this.esc(proc.saldoQuitacaoErro || "Valor presente do título")}</small>
+            ${proc.saldoQuitacaoErro ? '<button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.atualizarSaldoQuitacao()">Tentar novamente</button>' : ""}
+          </article>
+          <article class="fin-visao-kpi">
+            <span>Crédito liberado pela CAIXA</span>
+            <strong>${credito == null ? "Aguardando Carta SIOPI" : this.esc(this.fmtMoney(credito))}</strong>
+            <small>${credito != null ? "Identificado na Carta SIOPI" : this.esc(proc.valorLiberadoCaixaErro || "Será preenchido ao anexar a Carta SIOPI")}</small>
+          </article>
+          <article class="fin-visao-kpi">
+            <span>Diferença</span>
+            <strong>${diferenca == null ? "—" : this.esc(this.fmtMoney(diferenca))}</strong>
+            <small>Saldo de quitação menos crédito CAIXA</small>
+          </article>
+          <article class="fin-visao-kpi fin-visao-etapa">
+            <span>Etapa atual</span>
+            <strong>${this.esc(etapaAtual)}</strong>
+            <small>Responsável: ${this.esc(responsavel)}</small>
+          </article>
+        </div>
+        <div class="fin-visao-fluxo">
+          <div class="fin-visao-fluxo-titulo"><strong>Progresso das etapas</strong><span>${concluidas} de ${folhas.length} concluídas</span></div>
+          <div class="fin-stage-chips">${progresso || '<span class="fin-stage-chip is-espera">Etapas não cadastradas</span>'}</div>
+        </div>
+      </section>
+      <details class="fin-dados-completos">
+        <summary>Ver dados completos do contrato e do cliente</summary>
+        <div class="fin-dados-completos-conteudo">
+          <div class="crm-card" style="margin-bottom:16px;">
+            <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
+              <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do contrato</h3>
+            </div>
+            <div class="crm-card-content">
+              <div class="cessao-customer-grid">
+                <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empresa)}"><span class="cessao-lbl">Empresa</span><span class="cessao-val">${this.esc(obra.empresa)}</span></div>
+                <div class="cessao-customer-field cessao-customer-field--wide" title="${this.esc(obra.empreendimento)}"><span class="cessao-lbl">Empreendimento</span><span class="cessao-val">${this.esc(obra.empreendimento)}</span></div>
+                <div class="cessao-customer-field" title="${this.esc(proc.contractNumber || "—")}"><span class="cessao-lbl">Contrato</span><span class="cessao-val">${this.esc(proc.contractNumber || "—")}</span></div>
+                <div class="cessao-customer-field" title="${this.esc(proc.titulo || "—")}"><span class="cessao-lbl">Título</span><span class="cessao-val">${this.esc(proc.titulo || "—")}</span></div>
+                <div class="cessao-customer-field" title="${this.esc(unidade)}"><span class="cessao-lbl">Unidade</span><span class="cessao-val">${this.esc(unidade)}</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="crm-card">
+            <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
+              <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do cliente</h3>
+            </div>
+            <div class="crm-card-content">${this.customerCardHtml(customer)}</div>
           </div>
         </div>
-      </div>
-      <div class="crm-card" style="margin-bottom:16px;">
-        <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
-          <h3 style="margin:0;font-size:1.1rem;color:var(--color-primary);">Dados do cliente</h3>
-        </div>
-        <div class="crm-card-content">${this.customerCardHtml(customer)}</div>
-      </div>
+      </details>
       <div class="crm-card">
         <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
           <h3 style="margin:0;font-size:1.05rem;color:var(--color-primary);">Etapas do financiamento</h3>
         </div>
         <div class="crm-card-content">
           <style>
+            #financiamento-root .fin-visao-geral { background: #f1f5f4; border: 1px solid #e2e8f0; border-radius: 16px; padding: 14px; margin-bottom: 16px; }
+            #financiamento-root .fin-visao-identificacao { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 4px 4px 14px; }
+            #financiamento-root .fin-visao-identificacao h2 { margin: 0; color: #0f172a; font-size: 1.15rem; }
+            #financiamento-root .fin-visao-identificacao p { margin: 4px 0; color: #334155; font-size: 0.88rem; font-weight: 700; }
+            #financiamento-root .fin-visao-contrato { color: #64748b; font-size: 0.75rem; }
+            #financiamento-root .fin-visao-status { flex: 0 0 auto; border-radius: 999px; padding: 5px 10px; font-size: 0.72rem; font-weight: 800; }
+            #financiamento-root .fin-visao-status.is-andamento { background: #fef3c7; color: #92400e; }
+            #financiamento-root .fin-visao-status.is-concluido { background: #dcfce7; color: #166534; }
+            #financiamento-root .fin-visao-valores { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+            #financiamento-root .fin-visao-kpi { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; min-height: 88px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+            #financiamento-root .fin-visao-kpi > span { color: #64748b; font-size: 0.72rem; font-weight: 700; }
+            #financiamento-root .fin-visao-kpi > strong { color: #0f172a; font-size: 1rem; line-height: 1.25; overflow-wrap: anywhere; }
+            #financiamento-root .fin-visao-kpi > small { color: #64748b; font-size: 0.69rem; line-height: 1.35; overflow-wrap: anywhere; }
+            #financiamento-root .fin-visao-kpi > .btn { margin-top: 3px; }
+            #financiamento-root .fin-visao-etapa > strong { color: #a16207; }
+            #financiamento-root .fin-visao-fluxo { margin-top: 12px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+            #financiamento-root .fin-visao-fluxo-titulo { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; color: #334155; font-size: 0.75rem; }
+            #financiamento-root .fin-visao-fluxo-titulo span { color: #64748b; }
+            #financiamento-root .fin-stage-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+            #financiamento-root .fin-stage-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; line-height: 1.2; }
+            #financiamento-root .fin-stage-chip > span { flex: 0 0 auto; font-size: 0.75rem; }
+            #financiamento-root .fin-stage-chip.is-feita { background: #dcfce7; color: #166534; }
+            #financiamento-root .fin-stage-chip.is-atual { background: #fef3c7; color: #92400e; box-shadow: inset 0 0 0 1px #f59e0b; }
+            #financiamento-root .fin-stage-chip.is-espera { background: #e2e8f0; color: #475569; }
+            #financiamento-root .fin-dados-completos { margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+            #financiamento-root .fin-dados-completos > summary { padding: 11px 14px; color: #334155; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+            #financiamento-root .fin-dados-completos-conteudo { padding: 0 12px 12px; }
             #financiamento-root .fin-etapa { border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 6px; background: #fff; }
-            #financiamento-root .fin-etapa.is-atual { border-color: #86efac; background: #f8fafc; }
-            #financiamento-root .fin-etapa.is-feita { background: #f8fafc; }
-            #financiamento-root .fin-etapa.is-espera { opacity: 0.72; }
+            #financiamento-root .fin-etapa.is-atual { border-color: #f59e0b; background: #fffbeb; box-shadow: inset 4px 0 0 #f59e0b; }
+            #financiamento-root .fin-etapa.is-feita { border-color: #86efac; background: #f0fdf4; box-shadow: inset 4px 0 0 #22c55e; }
+            #financiamento-root .fin-etapa.is-espera { background: #f8fafc; }
             #financiamento-root .fin-etapa-linha { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; }
+            #financiamento-root .fin-etapa-titulo { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+            #financiamento-root .fin-etapa-sinal { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 21px; height: 21px; margin-top: 1px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 0.74rem; font-weight: 800; }
+            #financiamento-root .fin-etapa.is-feita .fin-etapa-sinal { background: #22c55e; color: #fff; }
+            #financiamento-root .fin-etapa.is-atual .fin-etapa-sinal { background: #f59e0b; color: #fff; }
             #financiamento-root .fin-etapa-nome { font-weight: 700; color: #0f172a; font-size: 0.9rem; }
             #financiamento-root .fin-etapa-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+            #financiamento-root .fin-etapa-status { flex: 0 0 auto; border-radius: 999px; padding: 3px 8px; font-size: 0.65rem; font-weight: 800; }
+            #financiamento-root .fin-etapa-status.is-feita { background: #dcfce7; color: #166534; }
+            #financiamento-root .fin-etapa-status.is-atual { background: #fef3c7; color: #92400e; }
+            #financiamento-root .fin-etapa-status.is-espera { background: #e2e8f0; color: #475569; }
+            #financiamento-root .fin-etapa-acoes { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+            #financiamento-root .fin-etapa-acoes .btn,
+            #financiamento-root .fin-nota-linha .btn,
+            #financiamento-root .fin-anexo > .btn { display: inline-flex; align-items: center; justify-content: center; height: 40px; box-sizing: border-box; padding: 0 12px; margin: 0; line-height: 1; white-space: nowrap; }
+            #financiamento-root .fin-nota-linha input[type="date"],
+            #financiamento-root .fin-anexo > input[type="file"] { height: 40px; box-sizing: border-box; }
             #financiamento-root .fin-etapa-nota { margin: 0; padding: 0 12px 6px; color: #334155; font-size: 0.78rem; white-space: pre-wrap; line-height: 1.4; }
             #financiamento-root .fin-etapa-corpo { padding: 0 12px 12px; }
             #financiamento-root .fin-grupo { margin: 14px 0 6px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; color: #64748b; }
@@ -2330,6 +2746,14 @@ const FinanciamentoApp = {
             #financiamento-root .fin-termo-item span { color:#64748b; font-size:0.73rem; }
             #financiamento-root .fin-termo-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
             #financiamento-root .fin-termo-enviado { color:#166534 !important; font-weight:700; }
+            @media (max-width: 900px) { #financiamento-root .fin-visao-valores { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+            @media (max-width: 560px) {
+              #financiamento-root .fin-visao-geral { padding: 10px; }
+              #financiamento-root .fin-visao-identificacao { flex-direction: column; }
+              #financiamento-root .fin-visao-valores { grid-template-columns: 1fr; }
+              #financiamento-root .fin-etapa-linha { align-items: flex-start; flex-direction: column; }
+              #financiamento-root .fin-etapa-linha > div:last-child { flex-wrap: wrap; }
+            }
           </style>
           <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
           ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
@@ -2352,12 +2776,17 @@ const FinanciamentoApp = {
               const meta = passada
                 ? (quando ? ("Concluída em " + this.fmtDate(quando)) : "Concluída")
                 : "Aguardando a etapa anterior";
+              const statusClasse = passada ? "is-feita" : "is-espera";
               return `<div class="fin-etapa ${classe}">
                 <div class="fin-etapa-linha">
-                  <div>
-                    <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
-                    <div class="fin-etapa-meta">${this.esc(meta)}</div>
+                  <div class="fin-etapa-titulo">
+                    <span class="fin-etapa-sinal" aria-hidden="true">${passada ? "✓" : "○"}</span>
+                    <div>
+                      <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
+                      <div class="fin-etapa-meta">${this.esc(meta)}</div>
+                    </div>
                   </div>
+                  <span class="fin-etapa-status ${statusClasse}">${passada ? "Concluída" : "Aguardando"}</span>
                 </div>
                 ${passada ? historico : ""}
                 ${termoGerado}
@@ -2399,11 +2828,15 @@ const FinanciamentoApp = {
               : "";
             return `<div class="fin-etapa is-atual">
               <div class="fin-etapa-linha">
-                <div>
-                  <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
-                  <div class="fin-etapa-meta">${s.dias || 0} dias${this.esc(desde)}</div>
+                <div class="fin-etapa-titulo">
+                  <span class="fin-etapa-sinal" aria-hidden="true">●</span>
+                  <div>
+                    <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
+                    <div class="fin-etapa-meta">${s.dias || 0} dias${this.esc(desde)}</div>
+                  </div>
                 </div>
-                <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">${desfazer}${acao}</div>
+                <span class="fin-etapa-status is-atual">Etapa atual</span>
+                <div class="fin-etapa-acoes">${desfazer}${acao}</div>
               </div>
               ${corpo}
             </div>`;
