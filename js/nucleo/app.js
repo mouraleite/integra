@@ -24996,6 +24996,11 @@ function generateAgreementPDF() {
   if (typeof window.enrichCustomerForLegalDocs === "function" && g_renegCustomer) {
     g_renegCustomer = await window.enrichCustomerForLegalDocs(g_renegCustomer);
   }
+  // Título com mais de um cliente: todos qualificados e assinando o termo.
+  let renegCustomerDoc = g_renegCustomer;
+  if (typeof window.legalDocAnexarCompradores === "function" && g_renegCustomer) {
+    try { renegCustomerDoc = await window.legalDocAnexarCompradores(g_renegCustomer, g_renegSale); } catch (e) {}
+  }
 
   const unit = AppState.units[g_renegSale.unitId] || {};
   const preambleText = (typeof window.getPreambleForContract === "function")
@@ -25028,7 +25033,7 @@ function generateAgreementPDF() {
 
   const extraMap = buildRenegAgreementExtraMap(results);
   const legalMap = window.buildLegalDocVarMap
-    ? window.buildLegalDocVarMap(g_renegCustomer, g_renegSale, unit, { preambleText, map: extraMap })
+    ? window.buildLegalDocVarMap(renegCustomerDoc, g_renegSale, unit, { preambleText, map: extraMap })
     : extraMap;
   textTemplate = applyDistratoTemplateVars(textTemplate, legalMap);
   if (modo === "proposta") {
@@ -28915,6 +28920,10 @@ function applyDistratoTemplateVars(text, map) {
   if (typeof window.expandPromitenteVendedorSignatures === "function" && Array.isArray(signers) && signers.length) {
     s = window.expandPromitenteVendedorSignatures(s, signers);
   }
+  const compradores = map && map._COMPRADORES;
+  if (Array.isArray(compradores) && compradores.length > 1 && typeof window.expandirCompradoresNoModelo === "function") {
+    s = window.expandirCompradoresNoModelo(s, compradores);
+  }
   const lookup = {};
   Object.keys(map || {}).forEach(k => {
     if (String(k).charAt(0) === "_") return;
@@ -29188,6 +29197,117 @@ window.enrichCustomerForLegalDocs = async function(customer) {
   return c;
 };
 
+/* Título com mais de um cliente (salesContractCustomers do contrato no Sienge, ex.: 15418).
+   Devolve uma cópia do cliente com _compradores = os OUTROS compradores, com cadastro completo,
+   para TCD, distrato, aditamento, autorizações e permuta saírem com todos qualificados e assinando.
+   O cônjuge do cliente que também é comprador não entra de novo: ele já sai no bloco {{#SE_CONJUGE}}. */
+window.legalDocAnexarCompradores = async function(customer, sale) {
+  const c = Object.assign({}, customer || {});
+  c._compradores = [];
+  const s = sale || {};
+  const svc = window.SiengeApiService;
+  const pessoas = (lst) => (typeof window.salesContractPeople === "function"
+    ? window.salesContractPeople({ salesContractCustomers: Array.isArray(lst) ? lst : [] })
+    : []);
+  let lista = pessoas(s.salesContractCustomers || s.customers);
+  const contratoId = s.id || s.contractId || s.salesContractId;
+  if (lista.length < 2 && contratoId && svc && typeof svc.getContractRaw === "function") {
+    try {
+      const raw = await svc.getContractRaw(contratoId);
+      if (raw) lista = pessoas(raw.salesContractCustomers || raw.customers);
+    } catch (e) {}
+  }
+  if (lista.length < 2) return c;
+  const meuId = String(c.id || c.customerId || "");
+  if (!lista.some((p) => String(p.id) === meuId)) return c;
+  const soDig = (v) => String(v || "").replace(/\D/g, "");
+  const norm = (v) => String(v || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+  const conj = window.legalSpouseRecord ? window.legalSpouseRecord(c) : null;
+  const conjCpf = soDig((conj && (conj.cpf || conj.cpfCnpj)) || c.spouseCpf);
+  const conjNome = norm(conj && conj.name);
+  const outros = lista.filter((p) => String(p.id) !== meuId).sort((a, b) => (b.main ? 1 : 0) - (a.main ? 1 : 0));
+  for (const p of outros) {
+    let full = { id: p.id, name: p.name, cpfCnpj: p.cpfCnpj };
+    try { full = await window.enrichCustomerForLegalDocs(full); } catch (e) {}
+    const cpf = soDig(full.cpfCnpj || full.cpf);
+    if ((conjCpf && cpf && conjCpf === cpf) || (conjNome && norm(full.name) === conjNome)) continue;
+    c._compradores.push(full);
+  }
+  return c;
+};
+
+/* Campos de pessoa que se repetem por comprador na qualificação e na assinatura. */
+window.LEGAL_DOC_CAMPOS_PESSOA = ["NOME_CLIENTE", "CPF_CNPJ", "CPF_CLIENTE", "RG_CLIENTE", "NACIONALIDADE_CLIENTE",
+  "ESTADO_CIVIL", "PROFISSAO_CLIENTE", "ENDERECO_CLIENTE", "CIDADE_CLIENTE"];
+
+/**
+ * Com mais de um comprador, repete no modelo (antes de trocar os {{...}}):
+ * - a qualificação: na linha que tem {{NOME_CLIENTE}} e CPF/RG, o trecho da pessoa vira "A, ...; e B, ...";
+ * - a assinatura: a linha ____ + {{NOME_CLIENTE}} (+ papel) vira um bloco por comprador.
+ */
+window.expandirCompradoresNoModelo = function(text, pessoas) {
+  if (!Array.isArray(pessoas) || pessoas.length < 2) return String(text || "");
+  const CAMPOS = window.LEGAL_DOC_CAMPOS_PESSOA;
+  const chave = (inner) => String(inner || "").replace(/<[^>]+>/g, "").replace(/[\s ]+/g, "").toUpperCase();
+  const visivel = (l) => String(l || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+  const ehBarra = (l) => {
+    const t = visivel(l);
+    return /_{5,}/.test(t) && !/[A-Za-zÀ-ú0-9]/.test(t.replace(/_/g, ""));
+  };
+  const soNome = (l) => {
+    const m = visivel(l).match(/^\{\{([^}]+)\}\}$/);
+    return !!(m && chave(m[1]) === "NOME_CLIENTE");
+  };
+  const ehPapel = (l) => {
+    const t = visivel(l);
+    return !!t && !ehBarra(l) && t.length <= 60 && !/\{\{/.test(t)
+      && /comprador|devedor|confitente|promitente|permutante|cliente|contratante|outorgante|aditante|anuente/i.test(t);
+  };
+  const preencher = (seg, p) => String(seg).replace(/\{\{([^}]+)\}\}/g, (full, inner) => {
+    const k = chave(inner);
+    if (CAMPOS.indexOf(k) < 0) return full;
+    return p[k] == null ? "" : String(p[k]);
+  });
+  const juntar = (partes) => partes.length < 2 ? partes.join("")
+    : partes.slice(0, -1).join("; ") + "; e " + partes[partes.length - 1];
+  const linhas = String(text || "").split("\n");
+  const out = [];
+  for (let i = 0; i < linhas.length; i++) {
+    const ln = linhas[i];
+    if (ehBarra(ln) && i + 1 < linhas.length && soNome(linhas[i + 1])) {
+      const temPapel = i + 2 < linhas.length && ehPapel(linhas[i + 2]);
+      pessoas.forEach((p, idx) => {
+        if (idx) out.push("");
+        out.push(ln, preencher(linhas[i + 1], p));
+        if (temPapel) out.push(linhas[i + 2]);
+      });
+      i += temPapel ? 2 : 1;
+      continue;
+    }
+    const toks = [];
+    let fimConjuge = -1;
+    ln.replace(/\{\{([^}]+)\}\}/g, (full, inner, pos) => {
+      const k = chave(inner);
+      if (CAMPOS.indexOf(k) >= 0) toks.push({ k: k, ini: pos, fim: pos + full.length });
+      else if (/_CONJUGE$/.test(k)) fimConjuge = Math.max(fimConjuge, pos + full.length);
+      return full;
+    });
+    const qualifica = toks.some((t) => t.k === "NOME_CLIENTE")
+      && toks.some((t) => t.k === "CPF_CNPJ" || t.k === "CPF_CLIENTE" || t.k === "RG_CLIENTE");
+    if (qualifica) {
+      const ini = toks[0].ini;
+      const fim = toks[toks.length - 1].fim;
+      // Cônjuge na mesma linha (ex.: aditamento): fica junto do cliente principal, não do último comprador.
+      const fimPrincipal = fimConjuge > fim ? fimConjuge : fim;
+      const partes = pessoas.map((p, idx) => preencher(ln.slice(ini, idx === 0 ? fimPrincipal : fim), p));
+      out.push(ln.slice(0, ini) + juntar(partes) + ln.slice(fimPrincipal));
+      continue;
+    }
+    out.push(ln);
+  }
+  return out.join("\n");
+};
+
 window.buildLegalDocVarMap = function(customer, sale, unit, extras) {
   extras = extras || {};
   const saleObj = sale || {};
@@ -29328,6 +29448,26 @@ window.buildLegalDocVarMap = function(customer, sale, unit, extras) {
   }
   out._PREAMBLE_SIGNERS = signers;
   out._HAS_CONJUGE = !!spouse;
+  const outrosCompradores = Array.isArray(cust._compradores) ? cust._compradores : [];
+  if (outrosCompradores.length) {
+    const pessoa = (p) => {
+      const civ = [p.maritalStatus || p.civilStatus, p.matrimonialRegime].filter(v => !isBlankLegalField(v)).join(" - ");
+      return {
+        NOME_CLIENTE: p.name || "",
+        CPF_CNPJ: mask(p.cpfCnpj || p.cpf || p.cnpj || ""),
+        CPF_CLIENTE: mask(p.cpfCnpj || p.cpf || p.cnpj || ""),
+        RG_CLIENTE: window.pickCustomerRg(p) || "____",
+        NACIONALIDADE_CLIENTE: window.formatLegalNationality(p.nationality),
+        ESTADO_CIVIL: civ,
+        PROFISSAO_CLIENTE: window.formatLegalProfession(p.profession || p.occupation),
+        ENDERECO_CLIENTE: window.formatLegalCustomerAddress(p),
+        CIDADE_CLIENTE: p.city || ""
+      };
+    };
+    const principal = {};
+    window.LEGAL_DOC_CAMPOS_PESSOA.forEach((k) => { principal[k] = out[k]; });
+    out._COMPRADORES = [principal].concat(outrosCompradores.map(pessoa));
+  }
   return out;
 };
 
@@ -29546,7 +29686,28 @@ window.centerSimpleDocSignature = function(html) {
     }
   }
   if (signIdx < 0) return s;
-  let nameIdx = signIdx + 1;
+  // Título com mais de um cliente: várias assinaturas seguidas (linha + nome + papel opcional) antes da última.
+  const ehBarraAss = (line) => {
+    const t = visible(line);
+    return /_{5,}/.test(t) && !/[A-Za-zÀ-ú0-9]/.test(t.replace(/_/g, ""));
+  };
+  const barras = [signIdx];
+  for (let cur = signIdx; ;) {
+    let k = cur - 1;
+    let textos = 0;
+    while (k >= 0 && !ehBarraAss(lines[k])) {
+      if (visible(lines[k])) textos++;
+      if (textos > 2) break;
+      k--;
+    }
+    if (k >= 0 && ehBarraAss(lines[k]) && textos >= 1 && textos <= 2) {
+      barras.unshift(k);
+      cur = k;
+    } else break;
+  }
+  const extrasAss = barras.slice(0, -1).map((b, idx) => lines.slice(b + 1, barras[idx + 1]).filter((l) => visible(l)));
+  if (barras.length > 1) signIdx = barras[0];
+  let nameIdx = barras[barras.length - 1] + 1;
   while (nameIdx < lines.length && !visible(lines[nameIdx])) nameIdx++;
   const nameLine = nameIdx < lines.length ? lines[nameIdx] : "";
   const afterRest = lines.slice(nameIdx + 1).join("\n").replace(/^\s+/, "");
@@ -29574,7 +29735,10 @@ window.centerSimpleDocSignature = function(html) {
   const dateHtml = dateLines.map((ln) => `<div>${ln}</div>`).join("");
   const centered = `<div class="pdf-sign-keep" style="page-break-inside:avoid;break-inside:avoid;text-align:center;margin-top:2.6em;white-space:normal;">
   ${dateHtml}
-  <div style="margin:${dateHtml ? "2.1em" : "1.2em"} auto 0;max-width:340px;">
+  ${extrasAss.map((ls, idx) => `<div style="margin:${idx === 0 ? (dateHtml ? "2.1em" : "1.2em") : "2.6em"} auto 0;max-width:340px;">
+    <div style="border-top:1px solid #111;padding-top:10px;font-weight:700;">${ls[0] || ""}</div>${ls.slice(1).map((l) => `<div>${l}</div>`).join("")}
+  </div>`).join("")}
+  <div style="margin:${extrasAss.length ? "2.6em" : (dateHtml ? "2.1em" : "1.2em")} auto 0;max-width:340px;">
     <div style="border-top:1px solid #111;padding-top:10px;font-weight:700;">${nameLine}</div>
   </div>
 </div>`;
@@ -29815,6 +29979,11 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
   if (typeof window.enrichCustomerForLegalDocs === "function") {
     g_distCustomer = await window.enrichCustomerForLegalDocs(g_distCustomer);
   }
+  // Título com mais de um cliente: todos qualificados e assinando o distrato.
+  let distCustomerDoc = g_distCustomer;
+  if (typeof window.legalDocAnexarCompradores === "function" && g_distCustomer) {
+    try { distCustomerDoc = await window.legalDocAnexarCompradores(g_distCustomer, g_distSale); } catch (e) {}
+  }
 
   const isPermuta = !!(results.isPermuta || (document.getElementById("dist-permuta-toggle") && document.getElementById("dist-permuta-toggle").checked));
   const comissaoEl = document.getElementById("dist-comissao");
@@ -30047,7 +30216,7 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
     clausesReady = (typeof window.upgradeCredorPlaceholdersToPreamble === "function")
       ? window.upgradeCredorPlaceholdersToPreamble(clausesReady)
       : clausesReady;
-    const legalBase = window.buildLegalDocVarMap(g_distCustomer, g_distSale, unit, {
+    const legalBase = window.buildLegalDocVarMap(distCustomerDoc, g_distSale, unit, {
       preambleText,
       empName,
       cidadeLote,
@@ -45912,6 +46081,9 @@ async function previewDocPadrao(tipo) {
     }
     if (typeof window.enrichCustomerForLegalDocs === 'function' && (customer.id || customer.customerId)) {
       customer = await window.enrichCustomerForLegalDocs(customer);
+    }
+    if (typeof window.legalDocAnexarCompradores === 'function' && (customer.id || customer.customerId) && sale && (sale.id || sale.salesContractCustomers)) {
+      try { customer = await window.legalDocAnexarCompradores(customer, sale); } catch (e) {}
     }
     let preambleText = '';
     if (typeof window.getPreambleForContract === 'function') {

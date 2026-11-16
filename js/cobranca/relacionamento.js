@@ -3412,6 +3412,10 @@ const RelacionamentoApp = {
         if (typeof window.enrichCustomerForLegalDocs === "function") {
           customer = await window.enrichCustomerForLegalDocs(customer);
         }
+        // Título com mais de um cliente: todos qualificados e assinando a autorização.
+        if (typeof window.legalDocAnexarCompradores === "function") {
+          customer = await window.legalDocAnexarCompradores(customer, sale);
+        }
       } catch (e) {}
       const unitParts = String(sale.unitId || "").split("-");
       const unitName = unitParts.slice(2).join("-");

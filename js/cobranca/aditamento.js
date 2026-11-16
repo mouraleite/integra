@@ -1078,7 +1078,14 @@
         await this._carregarUnidadeCompleta(ctx);
         const w1 = this._adiTestemunhaEscolhida(ctx, 1) || {};
         const w2 = this._adiTestemunhaEscolhida(ctx, 2) || {};
-        const { legalBase, quadraLote, titulo, preambleText } = this._escDocBase(ctx, {
+        // Título com mais de um cliente: todos qualificados e assinando. Cópia do ctx para não afetar a quitação.
+        let ctxDoc = ctx;
+        if (typeof window.legalDocAnexarCompradores === "function" && ctx.customer) {
+          try {
+            ctxDoc = Object.assign({}, ctx, { customer: await window.legalDocAnexarCompradores(ctx.customer, ctx.sale) });
+          } catch (e) { ctxDoc = ctx; }
+        }
+        const { legalBase, quadraLote, titulo, preambleText } = this._escDocBase(ctxDoc, {
           MOTIVO_ADITAMENTO: this._adiTextoMotivo(ctx),
           NOVAS_CONDICOES: this._adiTextoCondicoes(ctx),
           REAJUSTE_JUROS_ADITAMENTO: this._adiTextoReajusteJuros(ctx),
