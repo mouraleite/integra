@@ -1483,6 +1483,9 @@ function renderAnexosModule(opts) {
             </label>
           </div>
           <div class="anexos-toolbar-actions">
+            <button type="button" class="btn btn-outline anexos-ctrl" onclick="AnexosApp.solicitarTag()">
+              <i data-lucide="tag" style="width:16px;"></i> Solicitar Nova TAG
+            </button>
             ${AnexosState.contexto !== 'Cliente' ? `
             <button type="button" class="btn btn-outline anexos-ctrl anexos-btn-periodo" onclick="AnexosApp.togglePeriodoPanel()">
               <i data-lucide="calendar-range" style="width:16px;"></i> Vendas do período
@@ -1667,7 +1670,6 @@ function renderAnexosModule(opts) {
           <div id="anexos-preparados-section" style="display: ${AnexosState.files.length > 0 ? 'block' : 'none'};">
             <div class="anexos-files-head">
               <h4 style="margin: 0;">Arquivos ${isModal ? 'Encontrados' : 'Preparados'} (${AnexosState.files.length})</h4>
-              ${isModal ? '' : `<button class="btn btn-outline" onclick="AnexosApp.solicitarTag()"><i data-lucide="tag" style="width:16px"></i> Solicitar Nova TAG</button>`}
             </div>
             <div id="anexos-files-list" class="anexos-files-list">
               <!-- Renderizado dinamicamente -->

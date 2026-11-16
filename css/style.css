@@ -12469,3 +12469,41 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .pobra-vazio { text-align: center; padding: 30px; color: #64748b; font-size: 0.8rem; }
 .pobra-vazio.is-erro { color: #b91c1c; }
 @media (max-width: 760px) { .pobra-legenda { grid-template-columns: 1fr; } }
+
+/* Contas a Pagar > Consultar título */
+.ctit-busca { display: flex; flex-direction: column; gap: 4px; }
+.ctit-label { font-size: 0.72rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: .02em; }
+.ctit-linha { display: flex; gap: 10px; align-items: center; }
+.ctit-input { width: 220px; height: 36px; }
+.ctit-load .loading-progress-bar { width: 8%; animation: kmz-carga 4s ease-out forwards; }
+.ctit-vazio { text-align: center; padding: 30px; color: #64748b; font-size: 0.85rem; }
+.ctit-vazio.is-erro { color: #b91c1c; }
+.ctit-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.ctit-kpi { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.ctit-kpi span { font-size: 0.72rem; color: #64748b; font-weight: 600; }
+.ctit-kpi strong { font-size: 1.05rem; color: #1c2e24; }
+.ctit-kpi.is-pago { border-color: #86c9a3; background: #f0faf4; }
+.ctit-kpi.is-pago strong { color: #105436; }
+.ctit-kpi.is-parcial { border-color: #f5c27a; background: #fffaf0; }
+.ctit-kpi.is-parcial strong { color: #b45309; }
+.ctit-kpi.is-aberto { border-color: #fbb4b4; background: #fff5f5; }
+.ctit-kpi.is-aberto strong { color: #b91c1c; }
+.ctit-bloco { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+.ctit-bloco h3 { margin: 0 0 10px; font-size: 0.9rem; color: #105436; }
+.ctit-bloco h4 { margin: 12px 0 8px; font-size: 0.8rem; color: #334155; }
+.ctit-grade { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 16px; }
+.ctit-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ctit-item span { font-size: 0.7rem; color: #64748b; font-weight: 600; }
+.ctit-item strong { font-size: 0.82rem; color: #1c2e24; font-weight: 600; overflow-wrap: anywhere; }
+.ctit-obs { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e8eee9; }
+.ctit-obs span { font-size: 0.7rem; color: #64748b; font-weight: 600; }
+.ctit-obs p { margin: 4px 0 0; font-size: 0.82rem; color: #1c2e24; white-space: pre-wrap; }
+.ctit-scroll { max-height: 360px; }
+.ctit-table td, .ctit-table th { font-variant-numeric: tabular-nums; }
+.ctit-aviso { margin: 0; font-size: 0.8rem; color: #b45309; }
+.ctit-selo { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.68rem; font-weight: 700; }
+.ctit-selo.is-pago { background: #e7f6ee; color: #105436; }
+.ctit-selo.is-parcial { background: #fff4e0; color: #b45309; }
+.ctit-selo.is-aberto { background: #fdecec; color: #b91c1c; }
+@media (max-width: 1000px) { .ctit-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ctit-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .ctit-kpis, .ctit-grade { grid-template-columns: 1fr; } .ctit-input { width: 100%; } .ctit-linha { flex-wrap: wrap; } }

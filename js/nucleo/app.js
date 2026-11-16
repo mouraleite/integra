@@ -3730,7 +3730,7 @@ window.bootEngenhariaCaucao = function () {
     "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
     "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
     "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
-    "relacionamento_obras": "previsao-obras"
+    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo"
   };
   var grupoPronto = {};
   var grupoEmCurso = {};
@@ -3995,6 +3995,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "processo-contra": "Novo processo",
     "reintegracao-posse": "Reintegração de posse",
     "titulos-incompletos": "Títulos incompletos",
+    "consultar-titulo": "Consultar título",
     "config-tags": "Configuração de TAGs",
     "motivos-cancelamento": "Motivos de cancelamento",
     "config-users": "Configuração de Usuários",
@@ -4096,6 +4097,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "processo-contra": "scale",
     "reintegracao-posse": "key",
     "titulos-incompletos": "file-warning",
+    "consultar-titulo": "file-search",
     "config-tags": "tags",
     "motivos-cancelamento": "list",
     "config-users": "users",
@@ -7352,17 +7354,80 @@ window.crmBackOfficeReal = function() {
   return window.isCobrancaBackOfficeUser(rec || u);
 };
 
+/** Operador da régua (Atribuição por cidades) é o usuário? Comparação estrita, sem "todos". */
+window.crmOperadorDaReguaEhUsuario = function(op, user) {
+  if (!op || !user) return false;
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\./g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+  const o = norm(op);
+  if (!o || o === "TODOS") return false;
+  const nomes = [user.name, user.sienge_user].map(norm).filter(Boolean);
+  return nomes.some((n) => {
+    if (n === o) return true;
+    const tokOp = o.split(" ").filter((t) => t.length > 1);
+    const tokNome = n.split(" ");
+    return tokOp.length >= 2 && tokOp.every((t) => tokNome.indexOf(t) >= 0);
+  });
+};
+
+/** Terceirizadas que dividem alguma cidade com o operador interno logado (para ele acompanhar). */
+window.crmTerceirizadasAcompanhadas = function() {
+  if (window.crmAdministradorReal()) return [];
+  const real = window.AppState && AppState.currentUser;
+  if (!real) return [];
+  const eu = (typeof window.findCrmRegisteredUser === "function" && window.findCrmRegisteredUser(real))
+    || Object.assign({}, real, { name: window.crmNomeReal() });
+  const status = String(eu.status || "ATIVO").toUpperCase();
+  if (status === "INATIVO" || status === "PENDENTE") return [];
+  const ehTerc = (u) => typeof window.isOperadorCobrancaTerceirizadoProfile === "function"
+    && window.isOperadorCobrancaTerceirizadoProfile(u && u.profile_name);
+  if (ehTerc(eu)) return [];
+  const meuEmail = String(eu.email || real.email || "").toLowerCase();
+  const lista = typeof window.getCrmUsersList === "function" ? window.getCrmUsersList() : [];
+  const tercs = lista.filter((u) => u && ehTerc(u)
+    && String(u.status || "ATIVO").toUpperCase() !== "INATIVO"
+    && String(u.email || "").toLowerCase() !== meuEmail);
+  if (!tercs.length) return [];
+  const rules = (window.AppState && AppState.rules) || {};
+  const achadas = new Set();
+  Object.keys(rules).forEach((key) => {
+    if (String(key).indexOf("CID_") !== 0 || !rules[key]) return;
+    const ops = typeof window.mergeCityOperatorValues === "function"
+      ? window.mergeCityOperatorValues(rules[key].operator)
+      : [];
+    if (!ops.some((op) => window.crmOperadorDaReguaEhUsuario(op, eu))) return;
+    tercs.forEach((t) => {
+      if (ops.some((op) => window.crmOperadorDaReguaEhUsuario(op, t))) achadas.add(String(t.email || "").toLowerCase());
+    });
+  });
+  return tercs.filter((t) => achadas.has(String(t.email || "").toLowerCase()));
+};
+
+window.crmAcompanhaTerceirizada = function(alvo) {
+  const email = String((alvo && alvo.email) || alvo || "").toLowerCase();
+  if (!email) return false;
+  return window.crmTerceirizadasAcompanhadas().some((t) => String(t.email || "").toLowerCase() === email);
+};
+
+/** Quem não é administrador só pode abrir: advogados (back office) ou as terceirizadas das suas cidades. */
+window.crmPodeAbrirPerfil = function(alvo) {
+  if (!alvo) return false;
+  if (window.crmAdministradorReal()) return true;
+  if (window.crmBackOfficeReal()
+    && typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo)) return true;
+  return window.crmAcompanhaTerceirizada(alvo);
+};
+
 window.crmPodeVerOutrosPerfis = function() {
-  return window.crmAdministradorReal() || window.crmBackOfficeReal();
+  return window.crmAdministradorReal() || window.crmBackOfficeReal()
+    || window.crmTerceirizadasAcompanhadas().length > 0;
 };
 
 window.crmImpersonacaoAtual = function() {
-  const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
-  if (!admin && !back) return null;
   let raw = "";
   try { raw = sessionStorage.getItem(window.CRM_TESTE_CONTA_KEY) || ""; } catch (e) { raw = ""; }
   if (!raw) return null;
+  const admin = window.crmAdministradorReal();
   let salvo = null;
   try { salvo = JSON.parse(raw); } catch (e) { salvo = null; }
   const email = String((salvo && salvo.email) || "").toLowerCase();
@@ -7372,7 +7437,7 @@ window.crmImpersonacaoAtual = function() {
   if (!alvo || String(alvo.status || "ATIVO").toUpperCase() === "INATIVO") return null;
   const meu = String((AppState.currentUser && AppState.currentUser.email) || "").toLowerCase();
   if (meu && email === meu) return null;
-  if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo))) return null;
+  if (!admin && !window.crmPodeAbrirPerfil(alvo)) return null;
   return alvo;
 };
 
@@ -7433,13 +7498,9 @@ window.isCrmSuperAdmin = function() {
 };
 
 window.crmAbrirTesteConta = function(email) {
-  const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
-  if (!admin && !back) return;
   const lista = window.getCrmUsersList();
   const alvo = lista.find((u) => String((u && u.email) || "").toLowerCase() === String(email || "").toLowerCase());
-  if (!alvo) return;
-  if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo))) return;
+  if (!alvo || !window.crmPodeAbrirPerfil(alvo)) return;
   try {
     sessionStorage.setItem(window.CRM_TESTE_CONTA_KEY, JSON.stringify({
       email: alvo.email,
@@ -7499,7 +7560,9 @@ window.crmPintarTesteConta = function() {
   const menu = document.getElementById("teste-conta-menu");
   if (!widget || !btn || !menu) return;
   const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
+  const tercs = admin ? [] : window.crmTerceirizadasAcompanhadas();
+  const back = !admin && (window.crmBackOfficeReal() || tercs.length > 0);
+  const soTerc = back && !window.crmBackOfficeReal();
   widget.hidden = !(admin || back);
   if (!admin && !back) {
     menu.hidden = true;
@@ -7511,7 +7574,7 @@ window.crmPintarTesteConta = function() {
   btn.classList.toggle("is-teste", !!imp);
   btn.title = imp
     ? ("Acessos de " + (imp.name || imp.email) + ". Você continua " + (back ? "no seu perfil" : "administrador") + ".")
-    : (back ? "Ver outros perfis" : "Trocar de conta");
+    : (soTerc ? "Ver a terceirizada das suas cidades" : (back ? "Ver outros perfis" : "Trocar de conta"));
   btn.setAttribute("aria-label", btn.title);
   if (menu.hidden) return;
   const q = String(menu.dataset.q || "").trim().toLowerCase();
@@ -7519,7 +7582,7 @@ window.crmPintarTesteConta = function() {
   const lista = window.getCrmUsersList().filter((u) => {
     if (!u || String(u.status || "ATIVO").trim().toUpperCase() === "INATIVO") return false;
     if (String(u.email || "").toLowerCase().trim() === eu) return false;
-    if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(u))) return false;
+    if (back && !window.crmPodeAbrirPerfil(u)) return false;
     const blob = (String(u.name || "") + " " + String(u.email || "") + " " + String(u.profile_name || "")).toLowerCase();
     return !q || blob.indexOf(q) >= 0;
   }).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
@@ -7528,17 +7591,17 @@ window.crmPintarTesteConta = function() {
     ? (imp
       ? `<button type="button" class="btn btn-cancel btn-sm teste-conta-encerrar" id="teste-conta-encerrar">Encerrar teste</button>
          <p>Você continua <b>${nomeReal}</b> e está vendo as telas de <b>${imp.name || imp.email}</b>. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`
-      : `<p>Escolha um advogado de cobrança para ver as telas que esse perfil enxerga. Você continua no seu usuário. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`)
+      : `<p>Escolha ${soTerc ? "a terceirizada que divide cidades com você" : (tercs.length ? "um advogado de cobrança ou a terceirizada das suas cidades" : "um advogado de cobrança")} para ver as telas que esse perfil enxerga. Você continua no seu usuário. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`)
     : (imp
       ? `<button type="button" class="btn btn-cancel btn-sm teste-conta-encerrar" id="teste-conta-encerrar">Encerrar teste</button>
          <p>Você continua <b>${nomeReal}</b> e está com os acessos de <b>${imp.name || imp.email}</b>. O que for salvo fica como ${nomeReal} no usuário ${imp.name || imp.email}. Ao fechar o navegador, a próxima entrada volta a ser só administrador.</p>`
       : `<p>Escolha um operador para usar os acessos dele. Você continua administrador. Ao fechar o navegador, a próxima entrada volta a ser só administrador.</p>`);
   menu.innerHTML = aviso +
-    `<input class="form-control" id="teste-conta-busca" placeholder="${back ? "Buscar advogado" : "Buscar operador"}" value="${q.replace(/"/g, "&quot;")}">` +
+    `<input class="form-control" id="teste-conta-busca" placeholder="${soTerc ? "Buscar terceirizada" : (back ? (tercs.length ? "Buscar advogado ou terceirizada" : "Buscar advogado") : "Buscar operador")}" value="${q.replace(/"/g, "&quot;")}">` +
     (lista.length ? lista.map((u) => {
       const on = imp && String(imp.email || "").toLowerCase() === String(u.email || "").toLowerCase();
       return `<button type="button" class="teste-conta-item${on ? " is-on" : ""}" data-email="${String(u.email || "").replace(/"/g, "&quot;")}"><b>${String(u.name || u.email || "").replace(/</g, "")}</b><span>${String(u.profile_name || "Sem perfil").replace(/</g, "")}</span></button>`;
-    }).join("") : `<p>${back ? "Nenhum advogado de cobrança encontrado." : "Nenhum operador encontrado."}</p>`);
+    }).join("") : `<p>${soTerc ? "Nenhuma terceirizada encontrada." : (back ? "Nenhum advogado de cobrança encontrado." : "Nenhum operador encontrado.")}</p>`);
   const busca = document.getElementById("teste-conta-busca");
   if (busca) {
     busca.focus();
@@ -56139,6 +56202,9 @@ window.syncGlobalConfigFromFirebase = async function() {
                         }
                         if (typeof window.dedupeAccentCityRules === "function") {
                             window.dedupeAccentCityRules();
+                        }
+                        if (typeof window.crmPintarTesteConta === "function") {
+                            try { window.crmPintarTesteConta(); } catch (e) {}
                         }
                         const after = localStorage.getItem(k) || "";
                         if (after !== (globalData[k] || "") && window.forceUploadLocalConfig) {
