@@ -15092,7 +15092,14 @@ function syncCobrancaJudicialTabs(originIsSubjudice, isAdvogado, saleObj) {
   );
   const passedJuridico = hasPassedJuridicoHistory(AppState.selectedCustomerId);
   const integra = typeof window.fichaSubjudiceIntegraAtivo === "function" && window.fichaSubjudiceIntegraAtivo();
-  const show = !!(originIsSubjudice || isAdvogado || clientSub || passedJuridico || integra);
+  const acesso = (typeof window.crmUsuarioEfetivo === "function" && window.crmUsuarioEfetivo()) || AppState.currentUser;
+  const perfil = (typeof window.crmPerfilCadastrado === "function" && window.crmPerfilCadastrado(acesso))
+    || (acesso && (acesso.profile_name || acesso.profile))
+    || "";
+  const perms = perfil && typeof window.readCrmProfilePerms === "function" ? window.readCrmProfilePerms(perfil) : {};
+  const acessoJuridico = (typeof window.isCrmSuperAdmin === "function" && window.isCrmSuperAdmin())
+    || (typeof window.permCoversMenuKey === "function" && window.permCoversMenuKey(perms, "mod_juridico"));
+  const show = !!(originIsSubjudice || isAdvogado || clientSub || passedJuridico || integra || acessoJuridico);
   const cobrancaJudicialBtn = document.getElementById("btn-tab-cobranca-judicial");
   if (cobrancaJudicialBtn) cobrancaJudicialBtn.style.display = show ? "" : "none";
   const anexosJuridicoBtn = document.getElementById("btn-anexos-juridico");

@@ -5428,6 +5428,7 @@ window.anexosUploadUnitAttachment = async function(opts) {
   const o = opts || {};
   const file = o.file;
   if (!file) throw new Error("Arquivo não informado.");
+  const context = o.context || "unidade";
   const tag = String(o.tagLabel || "DOC").replace(/[\\/]+/g, " ").trim();
   const dateIso = String(o.dateIso || "").trim();
   let cc = String(o.costCenterId || "").trim();
@@ -5462,7 +5463,9 @@ window.anexosUploadUnitAttachment = async function(opts) {
   const extRaw = (file.name && file.name.includes(".")) ? file.name.split(".").pop() : (file.type === "application/pdf" ? "pdf" : "pdf");
   const extFinal = String(extRaw || "pdf").toLowerCase() === "jpeg" ? "jpg" : String(extRaw || "pdf").toLowerCase();
   const unitNameStr = String(unitName).replace(/-/g, " ");
-  const nomeFinalArquivo = anexosSafeFileName(`${cc} ${unitNameStr} - ${tag}${dataSuffix}.${extFinal}`);
+  const nomeOriginal = context === "financiamento" ? String(file.name || "").replace(/\.[^.]+$/, "").trim() : "";
+  const tagArquivo = nomeOriginal ? `${tag} - ${nomeOriginal}` : tag;
+  const nomeFinalArquivo = anexosSafeFileName(`${cc} ${unitNameStr} - ${tagArquivo}${dataSuffix}.${extFinal}`);
   const descricaoSienge = `${dataIsoDot} - ${tag}`.replace(/\s+/g, " ").trim();
   const apiUrl = anexosApiUrl(`/sienge-proxy/units/${encodeURIComponent(siengeUnitId)}/attachments?description=${encodeURIComponent(descricaoSienge)}`);
   const multipart = await anexosMultipartBody(file, nomeFinalArquivo);
@@ -5476,7 +5479,6 @@ window.anexosUploadUnitAttachment = async function(opts) {
     },
     body: multipart.body
   });
-  const context = o.context || "unidade";
   if (!res.ok) {
     if (typeof window.logCrmAudit === "function") {
       window.logCrmAudit({

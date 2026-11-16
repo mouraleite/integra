@@ -1224,7 +1224,19 @@ const FinanciamentoApp = {
   guardarPendentes(stageId, files) {
     this._pendentes = this._pendentes || {};
     const atual = this._pendentes[stageId] || [];
-    this._pendentes[stageId] = atual.concat(files || []);
+    const novos = [];
+    (files || []).forEach((file) => {
+      const duplicado = atual.concat(novos).some((pendente) =>
+        pendente === file || (
+          pendente.name === file.name
+          && pendente.size === file.size
+          && pendente.lastModified === file.lastModified
+          && pendente.type === file.type
+        )
+      );
+      if (!duplicado) novos.push(file);
+    });
+    this._pendentes[stageId] = atual.concat(novos);
     this.pintarPendentes(stageId);
   },
 
@@ -1288,6 +1300,9 @@ const FinanciamentoApp = {
     const files = listaForcada && listaForcada.length ? listaForcada : this.pendentesDe(stageId).slice();
     if (!proc) return false;
     if (String(proc.currentStageId || "") !== String(stageId)) return false;
+    this._enviosAnexo = this._enviosAnexo || new Set();
+    const stageKey = String(stageId);
+    if (this._enviosAnexo.has(stageKey)) return false;
     if (!files.length || !tag) {
       if (st) st.textContent = files.length ? "Escolha a tag da unidade para gravar o anexo." : "Escolha o arquivo, ou cole com Ctrl+V, e a tag da unidade.";
       return false;
@@ -1296,55 +1311,65 @@ const FinanciamentoApp = {
       if (st) st.textContent = "O envio de anexos da unidade não está disponível.";
       return false;
     }
+    this._enviosAnexo.add(stageKey);
     if (btn) { btn.disabled = true; btn.textContent = "Enviando…"; }
     if (st) st.textContent = "";
     const restam = [];
     let falha = "";
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const resp = await window.anexosUploadUnitAttachment({
-          file: file,
-          tagLabel: tag,
-          costCenterId: proc.costCenterId || proc.empId,
-          unitName: proc.unitName || proc.unit,
-          sale: {
-            customerId: proc.customerId,
-            id: proc.contractId,
-            contractId: proc.contractId,
-            contractNumber: proc.contractNumber,
-            receivableBillId: proc.titulo,
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          const resp = await window.anexosUploadUnitAttachment({
+            file: file,
+            tagLabel: tag,
             costCenterId: proc.costCenterId || proc.empId,
-            unitName: proc.unitName || proc.unit
-          },
-          context: "financiamento"
-        });
-        proc.anexos = proc.anexos || {};
-        const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
-        lista.push({
-          id: "a-" + Date.now() + "-" + i,
-          tag: tag,
-          fileName: resp.fileName || file.name,
-          em: new Date().toISOString(),
-          unitId: resp.unitId || ""
-        });
-        proc.anexos[stageId] = lista;
-      } catch (e) {
-        restam.push(file);
-        falha = (e && e.message) ? e.message : "Não consegui enviar o anexo para a unidade.";
+            unitName: proc.unitName || proc.unit,
+            sale: {
+              customerId: proc.customerId,
+              id: proc.contractId,
+              contractId: proc.contractId,
+              contractNumber: proc.contractNumber,
+              receivableBillId: proc.titulo,
+              costCenterId: proc.costCenterId || proc.empId,
+              unitName: proc.unitName || proc.unit
+            },
+            context: "financiamento"
+          });
+          proc.anexos = proc.anexos || {};
+          const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
+          lista.push({
+            id: "a-" + Date.now() + "-" + i,
+            tag: tag,
+            fileName: resp.fileName || file.name,
+            em: new Date().toISOString(),
+            unitId: resp.unitId || ""
+          });
+          proc.anexos[stageId] = lista;
+        } catch (e) {
+          restam.push(file);
+          falha = (e && e.message) ? e.message : "Não consegui enviar o anexo para a unidade.";
+        }
+      }
+      this._pendentes = this._pendentes || {};
+      this._pendentes[stageId] = restam;
+      proc.updatedAt = new Date().toISOString();
+      this.saveProcess(proc);
+      FinanciamentoState.process = proc;
+      this.render();
+      const st2 = document.getElementById("fin-st-" + stageId);
+      const btn2 = document.getElementById("fin-env-" + stageId);
+      if (falha && st2) st2.textContent = falha;
+      if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
+      return !restam.length;
+    } finally {
+      this._enviosAnexo.delete(stageKey);
+      const btnAtual = document.getElementById("fin-env-" + stageId);
+      if (btnAtual && btnAtual.textContent === "Enviando…") {
+        btnAtual.disabled = false;
+        btnAtual.textContent = "Enviar para a unidade";
       }
     }
-    this._pendentes = this._pendentes || {};
-    this._pendentes[stageId] = restam;
-    proc.updatedAt = new Date().toISOString();
-    this.saveProcess(proc);
-    FinanciamentoState.process = proc;
-    this.render();
-    const st2 = document.getElementById("fin-st-" + stageId);
-    const btn2 = document.getElementById("fin-env-" + stageId);
-    if (falha && st2) st2.textContent = falha;
-    if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
-    return !restam.length;
   },
 
   folhasEtapa(etapas) {
