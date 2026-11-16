@@ -107,7 +107,6 @@
           <span class="pobra-marco-n">${n}</span>
           <span class="pobra-marco-titulo">${this.esc(titulo)}</span>
           <span class="pobra-marco-mes">${this.esc(this.mesAno(iso))}</span>
-          <span class="pobra-marco-data">${this.esc(this.dataBr(iso))}</span>
           <span class="pobra-marco-prazo">${this.esc(this.prazo(iso))}</span>
         </div>`;
     },
@@ -143,6 +142,7 @@
     },
 
     filtro: "TODOS",
+    busca: "",
 
     corpoHtml() {
       if (this.estado === "carregando" || this.estado === "inicio") {
@@ -150,8 +150,11 @@
       }
       if (this.estado === "erro") return `<p class="pobra-vazio is-erro">${this.esc(this.erro)}</p>`;
       if (!this.linhas.length) return `<p class="pobra-vazio">Nenhuma previsão cadastrada pela Engenharia.</p>`;
-      const lista = this.filtro === "TODOS" ? this.linhas : this.linhas.filter((l) => String(l.id) === this.filtro);
-      if (!lista.length) return `<p class="pobra-vazio">Nenhuma previsão para este empreendimento.</p>`;
+      const norm = (v) => String(v || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      const termo = norm(this.busca).trim();
+      let lista = this.filtro === "TODOS" ? this.linhas : this.linhas.filter((l) => String(l.id) === this.filtro);
+      if (termo) lista = lista.filter((l) => norm(l.id + " " + (l.nome || "")).indexOf(termo) >= 0);
+      if (!lista.length) return `<p class="pobra-vazio">Nenhum empreendimento encontrado.</p>`;
       return `<div class="pobra-grade">${lista.map((l) => this.cartao(l)).join("")}</div>`;
     },
 
@@ -167,6 +170,7 @@
         items: itens,
         selectedId: this.filtro,
         todos: { id: "TODOS", label: "Todos os empreendimentos" },
+        placeholder: "Buscar empreendimento: ID, cidade ou nome…",
         largura: "420px"
       })}</div>`;
     },
@@ -193,14 +197,37 @@
           ${corpo}
         </div>`;
       if (document.getElementById("pobra-emp") && window.MlSelectUnico) {
+        const repintar = () => {
+          const alvo = document.getElementById("pobra-corpo");
+          if (alvo) alvo.innerHTML = this.corpoHtml();
+          if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+        };
         MlSelectUnico.bind("pobra-emp", {
           onSelect: (id) => {
             this.filtro = String(id || "TODOS");
-            const alvo = document.getElementById("pobra-corpo");
-            if (alvo) alvo.innerHTML = this.corpoHtml();
-            if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+            this.busca = "";
+            // "Todos" deixa o campo vazio, pronto para buscar.
+            if (this.filtro === "TODOS") {
+              const inp = document.getElementById("pobra-emp-input");
+              if (inp) { inp.value = ""; inp.title = ""; }
+            }
+            repintar();
           }
         });
+        const input = document.getElementById("pobra-emp-input");
+        if (input) {
+          // Campo de busca: os cartões filtram enquanto a pessoa digita.
+          if (this.filtro === "TODOS") input.value = this.busca || "";
+          input.addEventListener("input", () => {
+            this.filtro = "TODOS";
+            this.busca = input.value;
+            repintar();
+          });
+          // Ao sair do campo sem escolher na lista, mantém o que foi digitado (o componente voltaria para "Todos").
+          input.addEventListener("blur", () => setTimeout(() => {
+            if (this.filtro === "TODOS") input.value = this.busca || "";
+          }, 200));
+        }
       }
       if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
     },
