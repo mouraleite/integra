@@ -142,21 +142,42 @@
         </article>`;
     },
 
+    filtro: "TODOS",
+
+    corpoHtml() {
+      if (this.estado === "carregando" || this.estado === "inicio") {
+        return `<p class="pobra-vazio">Carregando as previsões…</p>`;
+      }
+      if (this.estado === "erro") return `<p class="pobra-vazio is-erro">${this.esc(this.erro)}</p>`;
+      if (!this.linhas.length) return `<p class="pobra-vazio">Nenhuma previsão cadastrada pela Engenharia.</p>`;
+      const lista = this.filtro === "TODOS" ? this.linhas : this.linhas.filter((l) => String(l.id) === this.filtro);
+      if (!lista.length) return `<p class="pobra-vazio">Nenhuma previsão para este empreendimento.</p>`;
+      return `<div class="pobra-grade">${lista.map((l) => this.cartao(l)).join("")}</div>`;
+    },
+
+    filtroHtml() {
+      if (this.estado !== "pronto" || !this.linhas.length || !window.MlSelectUnico) return "";
+      const itens = this.linhas.slice()
+        .sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }))
+        .map((l) => ({ id: String(l.id), label: String(l.nome || l.id) }));
+      if (this.filtro !== "TODOS" && !itens.some((i) => i.id === this.filtro)) this.filtro = "TODOS";
+      return `<div class="pobra-filtro">${MlSelectUnico.html({
+        id: "pobra-emp",
+        label: "Empreendimento",
+        items: itens,
+        selectedId: this.filtro,
+        todos: { id: "TODOS", label: "Todos os empreendimentos" },
+        largura: "420px"
+      })}</div>`;
+    },
+
     render() {
       const root = document.getElementById("relacionamento-obras-root");
       if (!root) return;
-      let corpo = "";
-      if (this.estado === "carregando" || this.estado === "inicio") {
-        corpo = `<p class="pobra-vazio">Carregando as previsões…</p>`;
-      } else if (this.estado === "erro") {
-        corpo = `<p class="pobra-vazio is-erro">${this.esc(this.erro)}</p>`;
-      } else if (!this.linhas.length) {
-        corpo = `<p class="pobra-vazio">Nenhuma previsão cadastrada pela Engenharia.</p>`;
-      } else {
-        corpo = `<div class="pobra-grade">${this.linhas.map((l) => this.cartao(l)).join("")}</div>`;
-      }
+      const corpo = `<div id="pobra-corpo">${this.corpoHtml()}</div>`;
       root.innerHTML = `
         <div class="cc-page pobra-page">
+          ${this.filtroHtml()}
           <section class="pobra-legenda" aria-label="O que significa cada data">
             <div class="pobra-legenda-item">
               <span class="pobra-marco-n">1</span>
@@ -171,6 +192,16 @@
           </section>
           ${corpo}
         </div>`;
+      if (document.getElementById("pobra-emp") && window.MlSelectUnico) {
+        MlSelectUnico.bind("pobra-emp", {
+          onSelect: (id) => {
+            this.filtro = String(id || "TODOS");
+            const alvo = document.getElementById("pobra-corpo");
+            if (alvo) alvo.innerHTML = this.corpoHtml();
+            if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+          }
+        });
+      }
       if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
     },
 
