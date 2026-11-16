@@ -550,6 +550,7 @@ const ConfigUsersApp = {
         { name: "Buscar Cliente", key: "sub_rel_busca", actions: [{ id: "buscar_cliente", label: "Buscar Cliente", permBase: "sub_rel_geral_buscar_cliente" }] },
         { name: "Documentos para assinar", key: "sub_rel_docs", actions: [{ id: "documentos_assinar", label: "Documentos para assinar", permBase: "sub_rel_geral_documentos_assinar" }] },
         { name: "Registro", key: "sub_rel_registro", actions: [{ id: "registro", label: "Registro", permBase: "sub_rel_geral_registro" }] },
+        { name: "Previsão de obras", key: "sub_rel_previsao_obras", actions: [{ id: "previsao_obras", label: "Previsão de obras", permBase: "sub_rel_geral_previsao_obras" }] },
         { name: "Imagem de Satélite", key: "sub_rel_satelite", actions: [{ id: "imagem_satelite", label: "Imagem de Satélite", permBase: "sub_rel_geral_imagem_satelite" }] }
       ]
     },

@@ -3729,7 +3729,8 @@ window.bootEngenhariaCaucao = function () {
     "marketing-config": "marketing", "prestacao-contas": "marketing",
     "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
     "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
-    "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra"
+    "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
+    "relacionamento_obras": "previsao-obras"
   };
   var grupoPronto = {};
   var grupoEmCurso = {};
@@ -4045,6 +4046,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "relacionamento_cessao": "Cessão de Direitos",
     "relacionamento_assinaturas": "Documentos para assinar",
     "relacionamento_registro": "Registro",
+    "relacionamento_obras": "Previsão de obras",
     "relacionamento_quitacao": "Termo de quitação",
     "condicoes-pagamento": "Condições de Pagamento",
     "tabelas-vigentes": "Tabelas vigentes",
@@ -4131,6 +4133,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "relacionamento_cessao": "handshake",
     "relacionamento_assinaturas": "pen-line",
     "relacionamento_registro": "scroll-text",
+    "relacionamento_obras": "hard-hat",
     "relacionamento_quitacao": "badge-check",
     "condicoes-pagamento": "file-text",
     "tabelas-vigentes": "table",
