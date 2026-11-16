@@ -47500,7 +47500,9 @@ function kmzDirectText(node, tag) {
 }
 
 function kmzLimparNome(name) {
-  return String(name || "").replace(/\u00a0/g, " ").replace(/\.kmz$/i, "").replace(/\.kml$/i, "").trim();
+  // Caracteres invis\u00edveis (ex.: "1\u200b4000-H-161" no Meus lugares) impediam reconhecer o lote.
+  return String(name || "").replace(/[\u200b-\u200d\u2060\ufeff\u00ad]/g, "").replace(/\u00a0/g, " ")
+    .replace(/\.kmz$/i, "").replace(/\.kml$/i, "").trim();
 }
 
 function kmzSemAcento(name) {
@@ -47623,7 +47625,7 @@ function kmzLerDocumento(xmlDoc, empDoArquivo, grupos, stats) {
       return;
     }
     if (!grupos[codigo]) grupos[codigo] = { lots: [], quadras: [] };
-    if (kmzEhLote(it.nome, codigo, it.pastaLotes)) grupos[codigo].lots.push({ name: it.nome, coords: it.coords });
+    if (kmzEhLote(it.nome, codigo, it.pastaLotes)) grupos[codigo].lots.push({ name: kmzLimparNome(it.nome), coords: it.coords });
     else grupos[codigo].quadras.push({ name: it.nome, coords: it.coords });
   });
 }
@@ -49760,6 +49762,7 @@ async function loadRenegotiationHistory(customerId, saleId) {
 /* Espaço entre o código do empreendimento e a unidade some. O zero à esquerda do lote também: 12400 - B-024 e 12400-b-24 são o mesmo lote. */
 window.normKmzLotKey = function(s) {
   return String(s || "")
+    .replace(/[​-‍⁠﻿­]/g, "")
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
