@@ -12435,6 +12435,7 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .pobra-legenda-item strong { display: block; color: #105436; font-size: 0.8rem; margin-bottom: 3px; }
 .pobra-marco-n { position: relative; z-index: 1; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: #105436; color: #fff; font-size: 0.74rem; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
 .pobra-filtro { display: flex; }
+.pobra-load .loading-progress-bar { width: 8%; animation: kmz-carga 4s ease-out forwards; }
 .pobra-scroll { max-height: none; }
 .pobra-table tbody tr.pobra-linha.is-aberta td { background: #e7f6ee; color: #105436; font-weight: 700; }
 .pobra-table tbody tr.pobra-det td,

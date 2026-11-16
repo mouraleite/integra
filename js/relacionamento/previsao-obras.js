@@ -168,7 +168,11 @@
 
     corpoHtml() {
       if (this.estado === "carregando" || this.estado === "inicio") {
-        return `<p class="pobra-vazio">Carregando as previsões…</p>`;
+        return `<div class="ml-load pobra-load" role="status" aria-live="polite">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div class="loading-status-text">Carregando as previsões…</div>
+          <div class="ml-load-track"><div class="loading-progress-bar"></div></div>
+        </div>`;
       }
       if (this.estado === "erro") return `<p class="pobra-vazio is-erro">${this.esc(this.erro)}</p>`;
       if (!this.linhas.length) return `<p class="pobra-vazio">Nenhuma previsão cadastrada pela Engenharia.</p>`;
