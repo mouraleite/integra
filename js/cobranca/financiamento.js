@@ -1863,6 +1863,46 @@ const FinanciamentoApp = {
     return linhas + arquivos;
   },
 
+  historicoProcessoHtml(proc, folhas, etapaAtualId) {
+    const eventos = [];
+    (folhas || []).forEach((etapa) => {
+      const stageId = String(etapa.id);
+      const nomeEtapa = etapa.label || etapa.nome || stageId;
+      this.listaNotas(proc, stageId).filter((nota) => !nota.rascunho).forEach((nota) => {
+        const texto = String(nota.texto || "").trim();
+        if (!texto && !nota.data) return;
+        const data = nota.data || nota.em || "";
+        eventos.push({ data: data, horario: Date.parse(data) || 0, etapa: nomeEtapa, tipo: "Nota", texto: texto });
+      });
+      const anexos = proc && proc.anexos && (proc.anexos[stageId] || proc.anexos[String(stageId)]);
+      (Array.isArray(anexos) ? anexos : []).forEach((anexo) => {
+        const texto = String(anexo && anexo.fileName || "").trim();
+        if (!texto) return;
+        const data = anexo.em || "";
+        eventos.push({ data: data, horario: Date.parse(data) || 0, etapa: nomeEtapa, tipo: "Documento anexado", texto: texto });
+      });
+    });
+    const linhas = eventos.sort((a, b) => b.horario - a.horario).map((evento) => `
+      <article class="fin-historico-item">
+        <div class="fin-historico-data">${this.esc(evento.data ? this.fmtDate(evento.data) : "Data não informada")}</div>
+        <div>
+          <div class="fin-historico-meta">${this.esc(evento.etapa)} · ${this.esc(evento.tipo)}</div>
+          <p>${this.esc(evento.texto)}</p>
+        </div>
+      </article>`).join("");
+    const termos = (folhas || []).filter((etapa) => String(etapa.id) !== String(etapaAtualId || ""))
+      .map((etapa) => this.termosEtapaHtml(proc, etapa.id))
+      .filter(Boolean)
+      .map((html) => `<div class="fin-historico-termos">${html}</div>`)
+      .join("");
+    if (!linhas && !termos) return "";
+    return `<section class="fin-historico" aria-label="Histórico do financiamento">
+      <h4>Histórico</h4>
+      ${linhas}
+      ${termos}
+    </section>`;
+  },
+
   ehEtapaTermoSaldo(stageId, index) {
     if (String(stageId) === FIN_TERMO_STAGE_ID) return true;
     if (Number.isInteger(index)) return index === 0;
@@ -1893,14 +1933,13 @@ const FinanciamentoApp = {
     return Number.isFinite(numero) && numero > 0 ? numero : null;
   },
 
-  justificarParagrafosTermo(xmlDoc, preambulo) {
+  justificarParagrafosTermo(xmlDoc) {
     const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const titulos = /^(TERMO DE SIMULAÇÃO|IDENTIFICAÇÃO DO CONTRATO|VALORES DE REFERÊNCIA|FINALIDADE E LIMITES|DISPOSIÇÕES FINAIS|BOTUCATU,|MOURA LEITE|📞 CANAIS DE ATENDIMENTO)/i;
     const normalizar = (valor) => String(valor || "").replace(/\s+/g, " ").trim();
-    const blocosPreambulo = new Set(String(preambulo || "").split(/\n+/).map(normalizar).filter(Boolean));
     Array.from(xmlDoc.getElementsByTagNameNS(ns, "p")).forEach((paragrafo) => {
       const texto = normalizar(paragrafo.textContent);
-      if ((texto.length < 70 && !blocosPreambulo.has(texto)) || titulos.test(texto)) return;
+      if (!texto || titulos.test(texto)) return;
       let propriedades = Array.from(paragrafo.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
       if (!propriedades) {
         propriedades = xmlDoc.createElementNS(ns, "w:pPr");
@@ -1912,6 +1951,78 @@ const FinanciamentoApp = {
         propriedades.appendChild(alinhamento);
       }
       alinhamento.setAttributeNS(ns, "w:val", "both");
+    });
+  },
+
+  numerarDisposicoesFinaisTermo(xmlDoc) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const paragrafos = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"));
+    const indiceTitulo = paragrafos.findIndex((paragrafo) =>
+      /^DISPOSIÇÕES FINAIS\b/i.test(String(paragrafo.textContent || "").replace(/\s+/g, " ").trim())
+    );
+    if (indiceTitulo < 0) throw new Error("O modelo Word não contém o item de disposições finais.");
+    const titulo = paragrafos[indiceTitulo];
+    const tituloProps = Array.from(titulo.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
+    const numTitulo = tituloProps && tituloProps.getElementsByTagNameNS(ns, "numId")[0];
+    const numId = numTitulo && numTitulo.getAttributeNS(ns, "val");
+    if (!numId) throw new Error("Não foi possível identificar a numeração das disposições finais.");
+    let item = 0;
+    for (let i = indiceTitulo + 1; i < paragrafos.length; i++) {
+      const paragrafo = paragrafos[i];
+      const texto = String(paragrafo.textContent || "").replace(/\s+/g, " ").trim();
+      if (!texto) continue;
+      const propriedades = Array.from(paragrafo.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
+      const numPr = propriedades && propriedades.getElementsByTagNameNS(ns, "numPr")[0];
+      const nivel = numPr && numPr.getElementsByTagNameNS(ns, "ilvl")[0];
+      const id = numPr && numPr.getElementsByTagNameNS(ns, "numId")[0];
+      if (!numPr || !nivel || nivel.getAttributeNS(ns, "val") !== "1"
+        || !id || id.getAttributeNS(ns, "val") !== numId) break;
+      const primeiroTexto = paragrafo.getElementsByTagNameNS(ns, "t")[0];
+      if (!primeiroTexto) throw new Error("Uma disposição final não contém texto para numerar.");
+      item += 1;
+      primeiroTexto.textContent = "4." + item + ". " + primeiroTexto.textContent;
+      primeiroTexto.setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
+      propriedades.removeChild(numPr);
+    }
+    if (!item) throw new Error("Não foram encontradas disposições para numerar no item 4.");
+  },
+
+  destacarAlertaTermo(xmlDoc) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const paragrafos = Array.from(xmlDoc.getElementsByTagNameNS(ns, "p"));
+    const alerta = paragrafos.find((paragrafo) =>
+      /^ATEN[ÇC]ÃO:/i.test(String(paragrafo.textContent || "").replace(/\s+/g, " ").trim())
+    );
+    if (!alerta) throw new Error("O modelo Word não contém a frase de alerta em vermelho.");
+    let propriedades = Array.from(alerta.childNodes).find((no) => no.namespaceURI === ns && no.localName === "pPr");
+    if (!propriedades) {
+      propriedades = xmlDoc.createElementNS(ns, "w:pPr");
+      alerta.insertBefore(propriedades, alerta.firstChild);
+    }
+    let alinhamento = propriedades.getElementsByTagNameNS(ns, "jc")[0];
+    if (!alinhamento) {
+      alinhamento = xmlDoc.createElementNS(ns, "w:jc");
+      propriedades.appendChild(alinhamento);
+    }
+    alinhamento.setAttributeNS(ns, "w:val", "center");
+    Array.from(alerta.getElementsByTagNameNS(ns, "r")).forEach((trecho) => {
+      let formatacao = Array.from(trecho.childNodes).find((no) => no.namespaceURI === ns && no.localName === "rPr");
+      if (!formatacao) {
+        formatacao = xmlDoc.createElementNS(ns, "w:rPr");
+        trecho.insertBefore(formatacao, trecho.firstChild);
+      }
+      let negrito = formatacao.getElementsByTagNameNS(ns, "b")[0];
+      if (!negrito) {
+        negrito = xmlDoc.createElementNS(ns, "w:b");
+        formatacao.appendChild(negrito);
+      }
+      negrito.setAttributeNS(ns, "w:val", "1");
+      let cor = formatacao.getElementsByTagNameNS(ns, "color")[0];
+      if (!cor) {
+        cor = xmlDoc.createElementNS(ns, "w:color");
+        formatacao.appendChild(cor);
+      }
+      cor.setAttributeNS(ns, "w:val", "EE0000");
     });
   },
 
@@ -2039,8 +2150,8 @@ const FinanciamentoApp = {
       ["Nº CPF TITULAR", holders[0].documento],
       ["VALOR COMERCIAL (POR EXTENSO)", dados.valorComercialTexto],
       ["SALDO DEVEDOR PRESENTE (POR EXTENSO)", dados.saldoPresenteTexto],
-      ["ÚLTIMO", dados.validadeExtenso],
-      [" DIA DO MÊS VIGENTE", ""],
+      ["ÚLTIMO", dados.validadeExtenso + " - "],
+      [" DIA DO MÊS VIGENTE)", dados.validadeNumerica + ")"],
       ["XXXXXXXXX", dados.mesEmissao],
       ["XXXX", dados.anoEmissao],
       ["XX", dados.diaEmissao]
@@ -2061,7 +2172,9 @@ const FinanciamentoApp = {
       "DIA DO MÊS VIGENTE", "XXXXXXXXX"
     ].filter((campo) => textoFinal.indexOf(campo) >= 0);
     if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo: " + pendentes.join(", "));
-    this.justificarParagrafosTermo(xmlDoc, dados.preambulo);
+    this.numerarDisposicoesFinaisTermo(xmlDoc);
+    this.justificarParagrafosTermo(xmlDoc);
+    this.destacarAlertaTermo(xmlDoc);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
       type: "arraybuffer",
@@ -2381,6 +2494,7 @@ const FinanciamentoApp = {
       emissao: emissao,
       validade: validade,
       validadeExtenso: validadeExtenso,
+      validadeNumerica: this.fmtDate(validade),
       diaEmissao: String(dia),
       mesEmissao: meses[mes - 1],
       anoEmissao: String(ano)
@@ -2435,6 +2549,22 @@ const FinanciamentoApp = {
     }
   },
 
+  baixarPdfTermo(blob, nome) {
+    if (!(blob instanceof Blob) || !blob.size) throw new Error("O PDF do termo está vazio.");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = nome;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+  },
+
   async gerarTermoSaldoDevedor(stageId) {
     const proc = FinanciamentoState.process;
     const btn = document.getElementById("fin-termo-gerar-" + stageId);
@@ -2471,9 +2601,12 @@ const FinanciamentoApp = {
       const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
       if (status) status.textContent = "Salvando o PDF nesta etapa…";
       const termo = await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
-      if (status) status.textContent = "PDF salvo; baixando o termo…";
-      arquivoPdf.pdf.save(termo.fileName);
+      if (status) status.textContent = "PDF salvo; iniciando o download…";
+      const scrollX = window.scrollX;
+      const scrollY = window.scrollY;
+      this.baixarPdfTermo(arquivoPdf.blob, termo.fileName);
       this.render();
+      window.requestAnimationFrame(() => window.scrollTo(scrollX, scrollY));
       return true;
     } catch (e) {
       if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar o termo.";
@@ -2578,6 +2711,86 @@ const FinanciamentoApp = {
     if (campo) campo.focus();
   },
 
+  etapaFluxoHtml(proc, etapa, indice, encerrada) {
+    if (!etapa) return '<p style="color:#64748b;">Nenhuma etapa cadastrada. Cadastre em Financiamento → Configurações.</p>';
+    const stageId = String(etapa.id);
+    const sid = stageId.replace(/[^a-zA-Z0-9_-]/g, "");
+    const atual = !encerrada && String(proc.currentStageId || "") === stageId;
+    const numero = etapa.prefix || String(indice + 1);
+    const nome = etapa.nome || etapa.label || "Etapa";
+    const config = (window.EtapasFinanciamentoState || []).find((item) => String(item.id) === stageId) || {};
+    const descricao = String(config.descricao || config.explicacao || etapa.descricao || "").trim();
+    const orientacao = `<div class="fin-etapa-orientacao">
+      <strong>Informações desta etapa</strong>
+      <p>${this.esc(descricao || "Registre as informações na nota interna e anexe os documentos necessários para esta etapa.")}</p>
+    </div>`;
+    const status = encerrada ? "Financiamento concluído" : (atual ? "Etapa atual" : "A iniciar");
+    const statusClasse = encerrada ? "is-feita" : (atual ? "is-atual" : "is-espera");
+    const dataConclusao = this.concluidaEm(proc, stageId) || (proc.done && proc.done[stageId]) || "";
+    const desde = atual && proc.done && proc.done[stageId] ? " · desde " + this.fmtDate(proc.done[stageId]) : "";
+    const desfazer = (atual || encerrada) && this.podeDesfazer(proc)
+      ? `<button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button>`
+      : "";
+    const acao = atual
+      ? `<button type="button" class="btn btn-primary btn-sm" id="fin-concluir-${sid}" onclick="FinanciamentoApp.concluirEtapa('${sid}')">Concluir etapa</button>`
+      : (encerrada ? "" : `<button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.iniciarEtapa('${sid}')">Iniciar etapa</button>`);
+    const classe = encerrada ? "is-feita" : (atual ? "is-atual" : "is-espera");
+    const cabecalho = `<div class="fin-etapa-linha">
+      <div class="fin-etapa-titulo">
+        <span class="fin-etapa-sinal" aria-label="Etapa ${this.esc(numero)}">${this.esc(numero)}</span>
+        <div>
+          <div class="fin-etapa-nome">${this.esc(nome)}</div>
+          <div class="fin-etapa-meta">${encerrada
+            ? this.esc(dataConclusao ? "Concluída em " + this.fmtDate(dataConclusao) : "Etapa concluída")
+            : this.esc((etapa.dias || 0) + " dias" + desde)}</div>
+        </div>
+      </div>
+      <span class="fin-etapa-status ${statusClasse}">${status}</span>
+      <div class="fin-etapa-acoes">${desfazer}${acao}</div>
+    </div>`;
+    if (!atual) {
+      return `<div class="fin-etapa ${classe}">
+        ${cabecalho}
+        <div class="fin-etapa-corpo">
+          ${orientacao}
+          ${encerrada ? "" : '<p class="fin-etapa-aguardando">Inicie esta etapa para registrar notas e anexar documentos.</p>'}
+        </div>
+      </div>`;
+    }
+    const notasEtapa = this.listaNotas(proc, stageId);
+    const rascunho = notasEtapa.filter((nota) => nota.rascunho).pop() || {};
+    const termoGerar = this.ehEtapaTermoSaldo(stageId, indice) ? this.termoGerarHtml(sid) : "";
+    const termoGerado = this.termosEtapaHtml(proc, stageId);
+    return `<div class="fin-etapa ${classe}">
+      ${cabecalho}
+      <div class="fin-etapa-corpo">
+        ${orientacao}
+        ${termoGerar}
+        ${termoGerado}
+        <div class="fin-nota">
+          <label for="fin-nota-${sid}">Nota interna</label>
+          <textarea id="fin-nota-${sid}" rows="2" placeholder="Registre a informação desta etapa">${this.esc(rascunho.texto || "")}</textarea>
+          <div class="fin-nota-linha">
+            <div>
+              <label for="fin-nota-data-${sid}">Data</label>
+              <input type="date" id="fin-nota-data-${sid}" value="${this.esc(String(rascunho.data || "").slice(0, 10))}">
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.salvarNota('${sid}')">Salvar nota</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.novaNota('${sid}')">Nova nota</button>
+            <p id="fin-nota-st-${sid}" class="fin-nota-st"></p>
+          </div>
+        </div>
+        <div class="fin-anexo">
+          <input type="file" id="fin-arq-${sid}" multiple style="max-width:240px;font-size:0.8rem;">
+          <div id="fin-tag-box-${sid}" class="fin-tag-box"></div>
+          <button type="button" class="btn btn-primary btn-sm" id="fin-env-${sid}" onclick="FinanciamentoApp.enviarAnexo('${sid}')">Enviar para a unidade</button>
+          <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">É possível anexar vários documentos nesta etapa. Escolha os arquivos ou cole com Ctrl+V.</p>
+          <p id="fin-st-${sid}" style="margin:0;flex-basis:100%;color:#b45309;font-size:0.78rem;"></p>
+        </div>
+      </div>
+    </div>`;
+  },
+
   fluxoHtml() {
     const proc = FinanciamentoState.process || {};
     const customer = (FinanciamentoState.selected && FinanciamentoState.selected.customer) || FinanciamentoState.customer || {};
@@ -2597,10 +2810,20 @@ const FinanciamentoApp = {
     const diferenca = saldo != null && credito != null ? saldo - credito : null;
     const concluidas = ativoIdx < 0 ? folhas.length : ativoIdx;
     const etapaAtual = ativoIdx >= 0 ? (folhas[ativoIdx].label || folhas[ativoIdx].nome) : (this.isProcessoConcluido(proc) ? "Financiamento concluído" : "Aguardando primeira etapa");
+    const etapaExibidaIdx = ativoIdx >= 0 ? ativoIdx : folhas.length - 1;
+    const etapaExibida = etapaExibidaIdx >= 0 ? folhas[etapaExibidaIdx] : null;
+    const etapaAtualId = ativoIdx >= 0 && etapaExibida
+      && String(proc.currentStageId || "") === String(etapaExibida.id) ? etapaExibida.id : "";
+    const etapaHtml = this.etapaFluxoHtml(proc, etapaExibida, etapaExibidaIdx, ativoIdx < 0);
+    const historicoProcesso = this.historicoProcessoHtml(proc, folhas, etapaAtualId);
     const progresso = folhas.map((etapa, idx) => {
       const estado = ativoIdx < 0 || idx < ativoIdx ? "is-feita" : (idx === ativoIdx ? "is-atual" : "is-espera");
-      const sinal = estado === "is-feita" ? "✓" : (estado === "is-atual" ? "●" : "○");
-      return `<span class="fin-stage-chip ${estado}"><span aria-hidden="true">${sinal}</span>${this.esc(etapa.nome || etapa.label)}</span>`;
+      const numero = etapa.prefix || String(idx + 1);
+      const estadoTexto = estado === "is-feita" ? "concluída" : (estado === "is-atual" ? "atual" : "aguardando");
+      return `<span class="fin-stage-chip ${estado}" title="Etapa ${this.esc(numero)} · ${estadoTexto}" aria-label="Etapa ${this.esc(numero)} ${estadoTexto}">
+        <span class="fin-stage-chip-num" aria-hidden="true">${this.esc(numero)}</span>
+        ${this.esc(etapa.nome || etapa.label)}
+      </span>`;
     }).join("");
     const clienteNome = customer.name || customer.nome || proc.customerName || "—";
     const unidade = this.formatUnidade(proc.unit || proc.unitName || "—");
@@ -2675,7 +2898,7 @@ const FinanciamentoApp = {
       </details>
       <div class="crm-card">
         <div class="crm-card-header" style="background:#f3f4f6;padding:12px 20px;border-bottom:1px solid #e5e7eb;border-radius:8px 8px 0 0;">
-          <h3 style="margin:0;font-size:1.05rem;color:var(--color-primary);">Etapas do financiamento</h3>
+          <h3 style="margin:0;font-size:1.05rem;color:var(--color-primary);">Etapa atual do financiamento</h3>
         </div>
         <div class="crm-card-content">
           <style>
@@ -2698,11 +2921,23 @@ const FinanciamentoApp = {
             #financiamento-root .fin-visao-fluxo-titulo { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 10px; color: #334155; font-size: 0.75rem; }
             #financiamento-root .fin-visao-fluxo-titulo span { color: #64748b; }
             #financiamento-root .fin-stage-chips { display: flex; flex-wrap: wrap; gap: 7px; }
-            #financiamento-root .fin-stage-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; line-height: 1.2; }
-            #financiamento-root .fin-stage-chip > span { flex: 0 0 auto; font-size: 0.75rem; }
+            #financiamento-root .fin-stage-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; padding: 5px 9px 5px 6px; border-radius: 999px; font-size: 0.7rem; font-weight: 700; line-height: 1.2; }
+            #financiamento-root .fin-stage-chip-num { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 22px; height: 22px; padding: 0 4px; box-sizing: border-box; border-radius: 999px; background: rgba(255,255,255,.82); font-size: 0.68rem; font-variant-numeric: tabular-nums; }
             #financiamento-root .fin-stage-chip.is-feita { background: #dcfce7; color: #166534; }
             #financiamento-root .fin-stage-chip.is-atual { background: #fef3c7; color: #92400e; box-shadow: inset 0 0 0 1px #f59e0b; }
             #financiamento-root .fin-stage-chip.is-espera { background: #e2e8f0; color: #475569; }
+            #financiamento-root .fin-etapa-orientacao { margin: 0 0 12px; padding: 11px 13px; border: 1px solid #dbeafe; border-left: 4px solid #0ea5e9; border-radius: 8px; background: #f8fbff; }
+            #financiamento-root .fin-etapa-orientacao strong { display: block; margin-bottom: 4px; color: #0f3d5e; font-size: 0.78rem; }
+            #financiamento-root .fin-etapa-orientacao p, #financiamento-root .fin-etapa-aguardando { margin: 0; color: #475569; font-size: 0.8rem; line-height: 1.45; }
+            #financiamento-root .fin-etapa-aguardando { margin-top: 10px; }
+            #financiamento-root .fin-historico { margin-top: 14px; padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+            #financiamento-root .fin-historico h4 { margin: 0 0 6px; color: var(--color-primary); font-size: 0.95rem; }
+            #financiamento-root .fin-historico-item { display: grid; grid-template-columns: minmax(100px, 140px) minmax(0, 1fr); gap: 5px 12px; padding: 10px 0; border-bottom: 1px solid #eef2f7; }
+            #financiamento-root .fin-historico-item:last-child { border-bottom: 0; }
+            #financiamento-root .fin-historico-data { color: #0f172a; font-size: 0.8rem; font-weight: 800; }
+            #financiamento-root .fin-historico-meta { color: #64748b; font-size: 0.72rem; font-weight: 700; }
+            #financiamento-root .fin-historico-item p { margin: 4px 0 0; color: #334155; font-size: 0.8rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+            #financiamento-root .fin-historico-termos { padding-top: 10px; border-top: 1px solid #eef2f7; }
             #financiamento-root .fin-dados-completos { margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
             #financiamento-root .fin-dados-completos > summary { padding: 11px 14px; color: #334155; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
             #financiamento-root .fin-dados-completos-conteudo { padding: 0 12px 12px; }
@@ -2712,7 +2947,7 @@ const FinanciamentoApp = {
             #financiamento-root .fin-etapa.is-espera { background: #f8fafc; }
             #financiamento-root .fin-etapa-linha { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; }
             #financiamento-root .fin-etapa-titulo { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-            #financiamento-root .fin-etapa-sinal { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 21px; height: 21px; margin-top: 1px; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 0.74rem; font-weight: 800; }
+            #financiamento-root .fin-etapa-sinal { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 26px; height: 26px; padding: 0 4px; box-sizing: border-box; margin-top: 1px; border-radius: 999px; background: #e2e8f0; color: #475569; font-size: 0.68rem; font-weight: 800; font-variant-numeric: tabular-nums; }
             #financiamento-root .fin-etapa.is-feita .fin-etapa-sinal { background: #22c55e; color: #fff; }
             #financiamento-root .fin-etapa.is-atual .fin-etapa-sinal { background: #f59e0b; color: #fff; }
             #financiamento-root .fin-etapa-nome { font-weight: 700; color: #0f172a; font-size: 0.9rem; }
@@ -2755,94 +2990,12 @@ const FinanciamentoApp = {
               #financiamento-root .fin-visao-valores { grid-template-columns: 1fr; }
               #financiamento-root .fin-etapa-linha { align-items: flex-start; flex-direction: column; }
               #financiamento-root .fin-etapa-linha > div:last-child { flex-wrap: wrap; }
+              #financiamento-root .fin-historico-item { grid-template-columns: 1fr; gap: 3px; }
             }
           </style>
-          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
-          ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
-          ${ativoIdx < 0 && folhas.length ? '<p style="margin:-4px 0 12px;color:#105436;font-size:0.82rem;font-weight:700;">Financiamento concluído.</p>' : ""}
-          ${!etapas.length ? '<p style="color:#64748b;">Nenhuma etapa cadastrada. Cadastre em Financiamento → Configurações.</p>' : etapas.map((s) => {
-            if (s.hasChildren) return `<div class="fin-grupo">${this.esc(s.label || s.nome)}</div>`;
-            const idx = folhas.findIndex((f) => String(f.id) === String(s.id));
-            const concluidaEm = this.concluidaEm(proc, s.id);
-            const encerrado = ativoIdx < 0;
-            const atual = !encerrado && idx === ativoIdx;
-            const passada = encerrado || idx < ativoIdx || !!concluidaEm;
-            const sid = String(s.id).replace(/'/g, "");
-            const notasEtapa = this.listaNotas(proc, s.id);
-            const rascunho = notasEtapa.filter((n) => n.rascunho).pop() || {};
-            const historico = this.historicoHtml(proc, s.id);
-            const termoGerado = this.termosEtapaHtml(proc, s.id);
-            const classe = passada && !atual ? "is-feita" : (atual ? "is-atual" : "is-espera");
-            if (!atual) {
-              const quando = concluidaEm || (proc.done && proc.done[s.id]) || "";
-              const meta = passada
-                ? (quando ? ("Concluída em " + this.fmtDate(quando)) : "Concluída")
-                : "Aguardando a etapa anterior";
-              const statusClasse = passada ? "is-feita" : "is-espera";
-              return `<div class="fin-etapa ${classe}">
-                <div class="fin-etapa-linha">
-                  <div class="fin-etapa-titulo">
-                    <span class="fin-etapa-sinal" aria-hidden="true">${passada ? "✓" : "○"}</span>
-                    <div>
-                      <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
-                      <div class="fin-etapa-meta">${this.esc(meta)}</div>
-                    </div>
-                  </div>
-                  <span class="fin-etapa-status ${statusClasse}">${passada ? "Concluída" : "Aguardando"}</span>
-                </div>
-                ${passada ? historico : ""}
-                ${termoGerado}
-              </div>`;
-            }
-            const iniciada = String(proc.currentStageId || "") === String(s.id);
-            const desde = iniciada && proc.done && proc.done[s.id] ? " · desde " + this.fmtDate(proc.done[s.id]) : "";
-            const termoGerar = this.ehEtapaTermoSaldo(s.id, idx) ? this.termoGerarHtml(sid) : "";
-            const corpo = iniciada ? `<div class="fin-etapa-corpo">
-              ${historico}
-              ${termoGerar}
-              ${termoGerado}
-              <div class="fin-nota">
-                <label for="fin-nota-${sid}">Nota interna</label>
-                <textarea id="fin-nota-${sid}" rows="2" placeholder="Ex.: aguardando carta para confirmar o valor">${this.esc(rascunho.texto || "")}</textarea>
-                <div class="fin-nota-linha">
-                  <div>
-                    <label for="fin-nota-data-${sid}">Data</label>
-                    <input type="date" id="fin-nota-data-${sid}" value="${this.esc(String(rascunho.data || "").slice(0, 10))}">
-                  </div>
-                  <button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.salvarNota('${sid}')">Salvar nota</button>
-                  <button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.novaNota('${sid}')">Nova nota</button>
-                  <p id="fin-nota-st-${sid}" class="fin-nota-st"></p>
-                </div>
-              </div>
-              <div class="fin-anexo">
-                <input type="file" id="fin-arq-${sid}" multiple style="max-width:240px;font-size:0.8rem;">
-                <div id="fin-tag-box-${sid}" class="fin-tag-box"></div>
-                <button type="button" class="btn btn-primary btn-sm" id="fin-env-${sid}" onclick="FinanciamentoApp.enviarAnexo('${sid}')">Enviar para a unidade</button>
-                <p style="margin:0;flex-basis:100%;color:#64748b;font-size:0.75rem;">Vários arquivos podem entrar nesta etapa. Cole com Ctrl+V e clique em Enviar para a unidade.</p>
-                <p id="fin-st-${sid}" style="margin:0;flex-basis:100%;color:#b45309;font-size:0.78rem;"></p>
-              </div>
-            </div>` : "";
-            const acao = iniciada
-              ? `<button type="button" class="btn btn-primary btn-sm" id="fin-concluir-${sid}" onclick="FinanciamentoApp.concluirEtapa('${sid}')">Concluir etapa</button>`
-              : `<button type="button" class="btn btn-primary btn-sm" onclick="FinanciamentoApp.iniciarEtapa('${sid}')">Iniciar etapa</button>`;
-            const desfazer = iniciada && this.podeDesfazer(proc)
-              ? `<button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button>`
-              : "";
-            return `<div class="fin-etapa is-atual">
-              <div class="fin-etapa-linha">
-                <div class="fin-etapa-titulo">
-                  <span class="fin-etapa-sinal" aria-hidden="true">●</span>
-                  <div>
-                    <div class="fin-etapa-nome">${this.esc(s.label || s.nome)}</div>
-                    <div class="fin-etapa-meta">${s.dias || 0} dias${this.esc(desde)}</div>
-                  </div>
-                </div>
-                <span class="fin-etapa-status is-atual">Etapa atual</span>
-                <div class="fin-etapa-acoes">${desfazer}${acao}</div>
-              </div>
-              ${corpo}
-            </div>`;
-          }).join("")}
+          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Somente a etapa atual fica aberta. Registre as informações indicadas, inclua notas e anexe os documentos necessários. O histórico do processo aparece abaixo, quando houver registros.</p>
+          ${etapaHtml}
+          ${historicoProcesso}
         </div>
       </div>`;
   }
