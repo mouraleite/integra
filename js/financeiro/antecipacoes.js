@@ -179,12 +179,39 @@
       return out;
     },
 
+    /**
+     * Recorte da antecipação na faixa de dias, parcela a parcela (mesma regra do controle antigo
+     * no Power BI): "31+" soma só as parcelas pagas 31 dias ou mais antes do vencimento; "até 30"
+     * só as demais. A parcela do mês paga junto com uma quitação fica em "até 30".
+     */
+    recorte(ev, faixa) {
+      if (!ev || faixa === "todas") return ev;
+      const parcelas = (ev.parcelas || []).filter((p) => (faixa === "31+" ? Number(p[3]) >= 31 : Number(p[3]) < 31));
+      if (!parcelas.length) return null;
+      if (parcelas.length === (ev.parcelas || []).length) return ev;
+      const soma = (i) => Math.round(parcelas.reduce((s, p) => s + (Number(p[i]) || 0), 0) * 100) / 100;
+      const vf = soma(4);
+      const vp = soma(5);
+      const pago = soma(6);
+      const dias = parcelas.map((p) => Number(p[3]) || 0);
+      return Object.assign({}, ev, {
+        parcelas, np: parcelas.length, vf, vp, pago,
+        juros: Math.round((vf - vp) * 100) / 100,
+        comercial: Math.round((vp - pago) * 100) / 100,
+        descTotal: Math.round((vf - pago) * 100) / 100,
+        minDias: Math.min.apply(null, dias),
+        maxDias: Math.max.apply(null, dias),
+        recortada: true
+      });
+    },
+
+    eventosNaFaixa(faixa, base) {
+      return (base || this.eventosDoPeriodo()).map((e) => this.recorte(e, faixa)).filter(Boolean);
+    },
+
     /** Com a faixa escolhida (31+ / até 30 / todas). */
     eventosFiltrados() {
-      const todos = this.eventosDoPeriodo();
-      if (this.state.faixa === "31+") return todos.filter((e) => e.faixa === "31+");
-      if (this.state.faixa === "ate30") return todos.filter((e) => e.faixa !== "31+");
-      return todos;
+      return this.eventosNaFaixa(this.state.faixa);
     },
 
     /** Meses do período; se o filtro de meses tiver algo marcado, só esses. */
@@ -419,8 +446,8 @@
         return;
       }
       const todos = this.eventosDoPeriodo();
-      const ate30 = todos.filter((e) => e.faixa !== "31+");
-      const mais31 = todos.filter((e) => e.faixa === "31+");
+      const ate30 = this.eventosNaFaixa("ate30", todos);
+      const mais31 = this.eventosNaFaixa("31+", todos);
       const lista = (this.state.faixa === "31+" ? mais31 : (this.state.faixa === "ate30" ? ate30 : todos))
         .slice().sort((a, b) => String(b.data).localeCompare(String(a.data)) || (Number(b.vf) || 0) - (Number(a.vf) || 0));
       const semBase = mesesDoPeriodo(this.state.de, this.state.ate).filter((m) => this._cache[m] && this._cache[m].vazio);
@@ -702,15 +729,12 @@
 
     exportar() {
       if (typeof XLSX === "undefined") { alert("Exportação indisponível nesta página."); return; }
-      const todos = this.eventosDoPeriodo();
-      const lista = (this.state.faixa === "31+" ? todos.filter((e) => e.faixa === "31+")
-        : (this.state.faixa === "ate30" ? todos.filter((e) => e.faixa !== "31+") : todos))
-        .slice().sort((a, b) => String(a.data).localeCompare(String(b.data)));
+      const lista = this.eventosFiltrados().slice().sort((a, b) => String(a.data).localeCompare(String(b.data)));
       if (!lista.length) { alert("Nenhuma antecipação para exportar."); return; }
       const ev = lista.map((e) => ({
         "Pagamento": dataBr(e.data), "Título": e.tit, "Cliente": e.cli, "Empresa": e.empNome, "Unidade": e.unid,
         "Centro de custo": e.cc, "Nome do centro de custo": e.ccNome, "Documento": e.doc,
-        "Faixa": e.faixa === "31+" ? "31 dias ou mais" : "Até 30 dias",
+        "Faixa": this.state.faixa === "31+" ? "31 dias ou mais" : (this.state.faixa === "ate30" ? "Até 30 dias" : (e.faixa === "31+" ? "Tem parcela com 31+ dias" : "Até 30 dias")),
         "Parcelas": e.np, "Dias antes (menor)": e.minDias, "Dias antes (maior)": e.maxDias,
         "Taxa a.m. (%)": e.taxa, "VF": e.vf, "Sem juros (VP)": e.vp, "Recebido": e.pago,
         "Desconto de juros": e.juros, "Desconto comercial": e.comercial, "Desconto total": e.descTotal,
