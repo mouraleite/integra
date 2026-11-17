@@ -283,3 +283,380 @@ window.ConfigTagsApp = ConfigTagsApp;
 document.addEventListener("tabChanged", (e) => {
   if (e.detail === "config-tags") ConfigTagsApp.loadTags();
 });
+
+// ===== SOLICITAÇÃO DE NOVA TAG (Firestore: tag_solicitacoes) =====
+
+const TAG_STOP = new Set(["DE", "DA", "DO", "DAS", "DOS", "E", "A", "O", "AS", "OS", "EM", "NO", "NA", "PARA", "COM", "POR"]);
+
+function tagNorm(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function tagTokens(s) {
+  return tagNorm(s).split(" ")
+    .filter((t) => t && !TAG_STOP.has(t))
+    .map((t) => (t.length > 3 && t.endsWith("S") ? t.slice(0, -1) : t))
+    .map((t) => TAG_SINONIMOS[t] || t);
+}
+
+// Palavras que significam a mesma coisa nos documentos.
+const TAG_SINONIMOS = { ENDERECO: "RESIDENCIA", END: "RESIDENCIA", IDENTIDADE: "RG", HABILITACAO: "CNH" };
+
+function tagCompacto(s) { return tagTokens(s).join(""); }
+
+function tagLevenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function tagPalavraIgual(a, b) {
+  if (a === b) return true;
+  const curta = a.length <= b.length ? a : b;
+  const longa = curta === a ? b : a;
+  if (curta.length >= 3 && longa.startsWith(curta)) return true; // abreviação: COMP x COMPROVANTE
+  return curta.length >= 5 && tagLevenshtein(a, b) <= 1;           // erro de digitação
+}
+
+/** Compara o nome pedido com as TAGs existentes. Retorna as parecidas, da mais para a menos parecida. */
+window.crmTagsSemelhantes = function(nome, tags) {
+  const nNorm = tagNorm(nome);
+  const nComp = tagCompacto(nome);
+  const nTok = tagTokens(nome);
+  if (!nNorm) return [];
+  const out = [];
+  (tags || []).forEach((t) => {
+    const nomeTag = String((t && t.name) || "").trim();
+    if (!nomeTag) return;
+    const tNorm = tagNorm(nomeTag);
+    const tComp = tagCompacto(nomeTag);
+    const tTok = tagTokens(nomeTag);
+    let score = 0;
+    let motivo = "";
+    const marcar = (s, m) => { if (s > score) { score = s; motivo = m; } };
+
+    if (tNorm === nNorm) marcar(1, "Mesmo nome");
+    else if (tComp && tComp === nComp) marcar(0.97, "Mesmo nome com outra escrita");
+
+    const menor = nComp.length <= tComp.length ? nComp : tComp;
+    const maior = menor === nComp ? tComp : nComp;
+    if (menor.length >= 3 && maior.indexOf(menor) >= 0) marcar(0.85, "Um nome contém o outro");
+
+    if (nTok.length && tTok.length) {
+      const comuns = nTok.filter((a) => tTok.some((b) => tagPalavraIgual(a, b)));
+      const uniao = nTok.length + tTok.length - comuns.length;
+      const jac = uniao ? comuns.length / uniao : 0;
+      if (comuns.length && jac >= 0.3) {
+        const palavras = Array.from(new Set(tTok.filter((b) => nTok.some((a) => tagPalavraIgual(a, b))))).join(", ");
+        marcar(Math.min(0.9, 0.45 + jac * 0.45), "Palavras em comum: " + palavras);
+      }
+    }
+
+    const maxLen = Math.max(nComp.length, tComp.length);
+    if (maxLen >= 4) {
+      const ratio = 1 - tagLevenshtein(nComp, tComp) / maxLen;
+      if (ratio >= 0.75) marcar(ratio * 0.95, "Escrita parecida");
+    }
+
+    if (score >= 0.5) out.push({ tag: t, score, motivo, igual: score >= 0.97 });
+  });
+  return out.sort((a, b) => b.score - a.score).slice(0, 8);
+};
+
+window.crmTagSolEsc = function(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+};
+
+/** HTML da lista de TAGs parecidas (usado no pedido e na aprovação). */
+window.crmTagSemelhantesHtml = function(lista, destinoPedido) {
+  const esc = window.crmTagSolEsc;
+  if (!lista.length) {
+    return '<div class="tagsol-ok"><i data-lucide="check-circle" style="width:15px;height:15px;"></i> Nenhuma TAG parecida encontrada.</div>';
+  }
+  const linhas = lista.map((s) => {
+    const mesmoDestino = !destinoPedido || s.tag.destino === destinoPedido;
+    return `<tr class="${s.igual && mesmoDestino ? "is-igual" : ""}">
+      <td title="${esc(s.tag.name)}">${esc(s.tag.name)}</td>
+      <td>${esc(s.tag.destino || "Unidade")}</td>
+      <td title="${esc(s.motivo)}">${esc(s.motivo)}</td>
+      <td class="is-right">${Math.round(s.score * 100)}%</td>
+    </tr>`;
+  }).join("");
+  return `<div class="tagsol-aviso"><i data-lucide="alert-triangle" style="width:15px;height:15px;"></i> Já existem TAGs parecidas. Veja se alguma serve antes de criar outra.</div>
+    <div class="cc-scroll tagsol-scroll"><table class="cc-table">
+      <colgroup><col><col style="width:70px"><col><col style="width:52px"></colgroup>
+      <thead><tr><th>TAG existente</th><th>Destino</th><th>Por que parece</th><th class="is-right">Grau</th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>`;
+};
+
+/** Todas as TAGs (ativas e inativas), para comparar. */
+window.crmTagsTodas = async function() {
+  if (!window.firebaseDb || !window.firebaseCollections) return [];
+  const { collection, getDocs } = window.firebaseCollections;
+  const snap = await getDocs(collection(window.firebaseDb, "tags"));
+  const tags = [];
+  snap.forEach((d) => {
+    const data = d.data() || {};
+    const name = String(data.name || data.nome || data.tag || "").trim();
+    if (!name) return;
+    const dest = String(data.destino || data.type || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const st = String(data.status == null || data.status === "" ? "ativa" : data.status).toLowerCase().trim();
+    tags.push({
+      id: d.id,
+      name,
+      destino: dest.indexOf("client") >= 0 ? "Cliente" : "Unidade",
+      status: (st === "inativa" || st === "inativo" || st === "false" || st === "0") ? "Inativa" : "Ativa"
+    });
+  });
+  tags.sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  return tags;
+};
+
+(function injetarCssTagSol() {
+  if (document.getElementById("tagsol-css")) return;
+  const st = document.createElement("style");
+  st.id = "tagsol-css";
+  st.textContent = `
+    .tagsol-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9000; backdrop-filter: blur(2px); padding: 16px; }
+    .tagsol-box { width: 760px; max-width: 100%; max-height: 92vh; overflow: auto; background: #fff; border-top: 4px solid var(--color-bg-dark, #105436); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); padding: 20px 22px; }
+    .tagsol-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .tagsol-head h3 { margin: 0; color: #105436; font-size: 1.1rem; display: flex; align-items: center; gap: 8px; }
+    .tagsol-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+    .tagsol-meta { font-size: 0.78rem; color: #64748b; margin-bottom: 8px; }
+    .tagsol-motivo { font-size: 0.85rem; color: #1c2e24; background: #f7faf8; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; white-space: pre-wrap; }
+    .tagsol-campos { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .tagsol-campos label { display: flex; flex-direction: column; gap: 4px; font-size: 0.7rem; font-weight: 700; color: #6d8c7c; text-transform: uppercase; }
+    .tagsol-campos .tagsol-nome { flex: 1 1 260px; }
+    .tagsol-campos input, .tagsol-campos select { height: 36px; padding: 0 10px; border: 1px solid #e0e5e0; border-radius: 6px; font-size: 0.85rem; text-transform: uppercase; }
+    .tagsol-ok { display: flex; align-items: center; gap: 6px; color: #105436; background: #e7f6ee; border-radius: 6px; padding: 7px 10px; font-size: 0.8rem; margin-bottom: 10px; }
+    .tagsol-aviso { display: flex; align-items: center; gap: 6px; color: #92400e; background: #fef3c7; border-radius: 6px; padding: 7px 10px; font-size: 0.8rem; margin-bottom: 6px; }
+    .tagsol-scroll { max-height: 190px; margin-bottom: 10px; }
+    .tagsol-scroll tr.is-igual td { background: #fee2e2; color: #991b1b; font-weight: 700; }
+    .tagsol-todas summary { cursor: pointer; font-size: 0.78rem; font-weight: 700; color: #105436; margin: 4px 0 8px; }
+    .tagsol-todas input { width: 100%; height: 32px; padding: 0 10px; border: 1px solid #e0e5e0; border-radius: 6px; margin-bottom: 6px; font-size: 0.8rem; }
+    .tagsol-acoes { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+    .tagsol-acoes .btn { height: 36px; display: inline-flex; align-items: center; gap: 6px; }
+    #req-tag-similares { margin-top: 8px; }
+    #req-tag-similares .tagsol-scroll { max-height: 150px; }
+  `;
+  document.head.appendChild(st);
+})();
+
+const CrmTagSolicitacoes = {
+  COL: "tag_solicitacoes",
+  _unsub: null,
+  _timer: null,
+  _pendentes: [],
+  _adiadas: new Set(),
+  _tags: [],
+
+  podeAprovar() {
+    try {
+      return !!((typeof window.crmAdministradorReal === "function" && window.crmAdministradorReal())
+        || (typeof window.crmBackOfficeReal === "function" && window.crmBackOfficeReal()));
+    } catch (e) { return false; }
+  },
+
+  usuario() {
+    const u = (window.AppState && AppState.currentUser) || {};
+    const nome = typeof window.crmNomeReal === "function" ? window.crmNomeReal() : (u.name || "");
+    return { email: String(u.email || "").trim().toLowerCase(), nome: String(nome || "").trim() };
+  },
+
+  iniciar() {
+    if (this._timer) return;
+    this._timer = setInterval(() => this.verificar(), 4000);
+    this.verificar();
+  },
+
+  verificar() {
+    if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
+    if (!(window.AppState && AppState.currentUser)) return;
+    this.ouvirMinhas();
+    if (this._unsub || !this.podeAprovar()) return;
+    const { collection, query, where, onSnapshot } = window.firebaseCollections;
+    const q = query(collection(window.firebaseDb, this.COL), where("status", "==", "Pendente"));
+    this._unsub = onSnapshot(q, (snap) => {
+      const lista = [];
+      snap.forEach((d) => lista.push({ id: d.id, ...(d.data() || {}) }));
+      lista.sort((a, b) => String(a.criado_em || "").localeCompare(String(b.criado_em || "")));
+      this._pendentes = lista;
+      this.abrir(false);
+    }, (err) => console.warn("[Tags] solicitações", err));
+  },
+
+  /** Avisa quem pediu quando a TAG for aprovada ou recusada. */
+  ouvirMinhas() {
+    if (this._unsubMinhas) return;
+    const { email } = this.usuario();
+    if (!email) return;
+    const { collection, query, where, onSnapshot, doc, updateDoc } = window.firebaseCollections;
+    const q = query(collection(window.firebaseDb, this.COL), where("solicitado_por_email", "==", email));
+    this._unsubMinhas = onSnapshot(q, (snap) => {
+      snap.forEach((d) => {
+        const s = d.data() || {};
+        if (s.status === "Pendente" || s.aviso_visto) return;
+        updateDoc(doc(window.firebaseDb, this.COL, d.id), { aviso_visto: true }).catch(() => {});
+        const msg = s.status === "Aprovada"
+          ? `Sua solicitação de TAG foi aprovada. A TAG "${s.tag_criada || s.tag_name}" já está disponível.`
+          : `Sua solicitação da TAG "${s.tag_name}" não foi aprovada.` + (s.motivo_decisao ? `\nMotivo: ${s.motivo_decisao}` : "");
+        setTimeout(() => alert(msg), 300);
+      });
+    }, (err) => console.warn("[Tags] minhas solicitações", err));
+  },
+
+  async abrir(forcar) {
+    if (!this.podeAprovar()) return;
+    if (forcar) this._adiadas.clear();
+    const visiveis = this._pendentes.filter((p) => !this._adiadas.has(p.id));
+    const overlay = document.getElementById("tagsol-overlay");
+    if (!visiveis.length) { if (overlay) overlay.remove(); return; }
+    // Não redesenha enquanto a pessoa está digitando no pop-up.
+    if (overlay && overlay.contains(document.activeElement) && !forcar) {
+      const ids = Array.from(overlay.querySelectorAll("[data-sol-id]")).map((el) => el.getAttribute("data-sol-id")).join("|");
+      if (ids === visiveis.map((p) => p.id).join("|")) return;
+    }
+    try { this._tags = await window.crmTagsTodas(); } catch (e) { console.warn("[Tags] lista", e); }
+    this.render(visiveis);
+  },
+
+  render(visiveis) {
+    const esc = window.crmTagSolEsc;
+    const tags = this._tags || [];
+    const cards = visiveis.map((p) => {
+      const dest = p.type === "Cliente" ? "Cliente" : "Unidade";
+      const semelhantes = window.crmTagsSemelhantes(p.tag_name, tags);
+      const doDestino = tags.filter((t) => t.destino === dest);
+      const quando = p.criado_em ? new Date(p.criado_em).toLocaleString("pt-BR") : "";
+      const linhasTodas = doDestino.map((t) => `<tr data-busca="${esc(tagNorm(t.name))}"><td title="${esc(t.name)}">${esc(t.name)}</td><td>${esc(t.status)}</td></tr>`).join("")
+        || '<tr><td colspan="2" style="text-align:center;padding:20px;">Nenhuma TAG cadastrada.</td></tr>';
+      const idJs = esc(JSON.stringify(p.id));
+      return `<div class="tagsol-card" data-sol-id="${esc(p.id)}">
+        <div class="tagsol-meta">Pedido por <b>${esc(p.solicitado_por_nome || p.solicitado_por_email || "—")}</b>${quando ? " em " + esc(quando) : ""}</div>
+        <div class="tagsol-campos">
+          <label class="tagsol-nome">Nome da TAG<input type="text" id="tagsol-nome-${esc(p.id)}" value="${esc(p.tag_name)}"></label>
+          <label>Destino<select id="tagsol-dest-${esc(p.id)}">
+            <option value="Unidade" ${dest === "Unidade" ? "selected" : ""}>Unidade</option>
+            <option value="Cliente" ${dest === "Cliente" ? "selected" : ""}>Cliente</option>
+          </select></label>
+        </div>
+        <div class="tagsol-motivo"><b>Motivo:</b> ${esc(p.reason || "—")}</div>
+        ${window.crmTagSemelhantesHtml(semelhantes, dest)}
+        <details class="tagsol-todas">
+          <summary>Ver todas as TAGs de ${dest} (${doDestino.length})</summary>
+          <input type="search" placeholder="Buscar TAG..." oninput="CrmTagSolicitacoes.filtrarTodas(this)">
+          <div class="cc-scroll tagsol-scroll"><table class="cc-table">
+            <colgroup><col><col style="width:80px"></colgroup>
+            <thead><tr><th>TAG</th><th>Status</th></tr></thead>
+            <tbody>${linhasTodas}</tbody>
+          </table></div>
+        </details>
+        <div class="tagsol-acoes">
+          <button type="button" class="btn btn-cancel" onclick='CrmTagSolicitacoes.recusar(${idJs})'><i data-lucide="x" style="width:15px;"></i> Recusar</button>
+          <button type="button" class="btn btn-primary" onclick='CrmTagSolicitacoes.aprovar(${idJs})'><i data-lucide="check" style="width:15px;"></i> Aprovar e criar TAG</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    const titulo = visiveis.length === 1 ? "Solicitação de nova TAG" : `${visiveis.length} solicitações de nova TAG`;
+    const html = `<div class="tagsol-overlay" id="tagsol-overlay">
+      <div class="tagsol-box">
+        <div class="tagsol-head">
+          <h3><i data-lucide="tag" style="width:20px;"></i> ${titulo}</h3>
+          <button type="button" class="btn btn-fechar" onclick="CrmTagSolicitacoes.adiar()">Ver depois</button>
+        </div>
+        ${cards}
+      </div>
+    </div>`;
+    const antigo = document.getElementById("tagsol-overlay");
+    if (antigo) antigo.remove();
+    document.body.insertAdjacentHTML("beforeend", html);
+    if (window.lucide) lucide.createIcons();
+  },
+
+  filtrarTodas(input) {
+    const termo = tagNorm(input.value);
+    const tbody = input.parentElement.querySelector("tbody");
+    if (!tbody) return;
+    tbody.querySelectorAll("tr[data-busca]").forEach((tr) => {
+      tr.style.display = !termo || tr.getAttribute("data-busca").indexOf(termo) >= 0 ? "" : "none";
+    });
+  },
+
+  adiar() {
+    this._pendentes.forEach((p) => this._adiadas.add(p.id));
+    const overlay = document.getElementById("tagsol-overlay");
+    if (overlay) overlay.remove();
+  },
+
+  async aprovar(id) {
+    const p = this._pendentes.find((x) => x.id === id);
+    if (!p) return;
+    const nomeEl = document.getElementById("tagsol-nome-" + id);
+    const destEl = document.getElementById("tagsol-dest-" + id);
+    const nome = String(nomeEl ? nomeEl.value : p.tag_name).trim().toUpperCase();
+    const destino = destEl && destEl.value === "Cliente" ? "Cliente" : "Unidade";
+    if (!nome) { alert("Informe o nome da TAG."); return; }
+    try {
+      const tags = await window.crmTagsTodas();
+      const igual = tags.find((t) => t.destino === destino && tagNorm(t.name) === tagNorm(nome));
+      if (igual) {
+        alert(`Já existe a TAG "${igual.name}" para ${destino}` + (igual.status === "Inativa" ? " (inativa: reative em Configurações > Tags de anexos)." : ".") + "\nSe ela atende o pedido, use Recusar e informe essa TAG no motivo.");
+        return;
+      }
+      const parecidas = window.crmTagsSemelhantes(nome, tags.filter((t) => t.destino === destino));
+      if (parecidas.length && !confirm(`Existem ${parecidas.length} TAG(s) parecida(s), por exemplo "${parecidas[0].tag.name}".\nCriar "${nome}" mesmo assim?`)) return;
+
+      const { email, nome: quem } = this.usuario();
+      const { collection, addDoc, doc, updateDoc } = window.firebaseCollections;
+      await addDoc(collection(window.firebaseDb, "tags"), {
+        name: nome, destino, status: "Ativa", created_by: email, solicitacao_id: id
+      });
+      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+        status: "Aprovada", tag_criada: nome, destino_final: destino,
+        decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
+      });
+      if (window.AnexosApp && typeof AnexosApp.loadTagsAtivas === "function") AnexosApp.loadTagsAtivas(true);
+      const telaTags = document.getElementById("tab-config-tags");
+      if (telaTags && telaTags.classList.contains("active") && window.ConfigTagsApp) ConfigTagsApp.loadTags();
+      alert(`TAG "${nome}" criada.`);
+    } catch (e) {
+      alert("Não foi possível aprovar: " + (e && e.message ? e.message : e));
+    }
+  },
+
+  async recusar(id) {
+    const p = this._pendentes.find((x) => x.id === id);
+    if (!p) return;
+    const motivo = prompt(`Motivo da recusa da TAG "${p.tag_name}" (ex.: use a TAG já existente X):`, "");
+    if (motivo === null) return;
+    try {
+      const { email, nome: quem } = this.usuario();
+      const { doc, updateDoc } = window.firebaseCollections;
+      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+        status: "Recusada", motivo_decisao: String(motivo).trim(),
+        decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
+      });
+    } catch (e) {
+      alert("Não foi possível recusar: " + (e && e.message ? e.message : e));
+    }
+  }
+};
+
+window.CrmTagSolicitacoes = CrmTagSolicitacoes;
+
+document.addEventListener("DOMContentLoaded", () => {
+  setTimeout(() => CrmTagSolicitacoes.iniciar(), 3000);
+});

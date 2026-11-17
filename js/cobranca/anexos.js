@@ -4564,16 +4564,17 @@ const AnexosApp = {
           <h3>Solicitar Nova TAG</h3>
           <div class="form-group" style="margin-top: 15px;">
             <label>Nome da TAG (Use maiúsculas)</label>
-            <input type="text" id="req-tag-name" class="form-control" placeholder="Ex: ESCRITURA">
+            <input type="text" id="req-tag-name" class="form-control" placeholder="Ex: ESCRITURA" style="text-transform: uppercase;" oninput="AnexosApp.verSemelhantesTag()">
+            <div id="req-tag-similares"></div>
           </div>
           <div class="form-group">
             <label>Onde essa TAG será usada?</label>
             <div style="display: flex; gap: 20px; margin-top: 8px;">
               <label style="font-weight:normal; display:flex; align-items:center; gap:5px; cursor:pointer;">
-                <input type="radio" name="req-tag-type" value="Unidade" checked> Documentos da Unidade
+                <input type="radio" name="req-tag-type" value="Unidade" checked onchange="AnexosApp.verSemelhantesTag()"> Documentos da Unidade
               </label>
               <label style="font-weight:normal; display:flex; align-items:center; gap:5px; cursor:pointer;">
-                <input type="radio" name="req-tag-type" value="Cliente"> Documentos do Cliente
+                <input type="radio" name="req-tag-type" value="Cliente" onchange="AnexosApp.verSemelhantesTag()"> Documentos do Cliente
               </label>
             </div>
           </div>
@@ -4588,7 +4589,30 @@ const AnexosApp = {
         </div>
       </div>
     `;
+    const antigo = document.getElementById('modal-solicitar-tag');
+    if (antigo) antigo.remove();
     document.body.insertAdjacentHTML('beforeend', modalHtml);
+    this._reqTagsTodas = null;
+    if (typeof window.crmTagsTodas === 'function') {
+      window.crmTagsTodas().then((tags) => { this._reqTagsTodas = tags; this.verSemelhantesTag(); }).catch(() => {});
+    }
+  },
+
+  /** Mostra, enquanto a pessoa digita, as TAGs que já existem com nome parecido. */
+  verSemelhantesTag() {
+    clearTimeout(this._reqTagTimer);
+    this._reqTagTimer = setTimeout(() => {
+      const box = document.getElementById('req-tag-similares');
+      const input = document.getElementById('req-tag-name');
+      if (!box || !input) return;
+      const nome = input.value.trim();
+      if (nome.length < 3 || !this._reqTagsTodas || typeof window.crmTagsSemelhantes !== 'function') { box.innerHTML = ''; return; }
+      const typeEl = document.querySelector('input[name="req-tag-type"]:checked');
+      const destino = typeEl ? typeEl.value : 'Unidade';
+      const lista = window.crmTagsSemelhantes(nome, this._reqTagsTodas);
+      box.innerHTML = window.crmTagSemelhantesHtml(lista, destino);
+      if (window.lucide) lucide.createIcons();
+    }, 250);
   },
 
   async enviarSolicitacaoTag() {
@@ -4598,23 +4622,41 @@ const AnexosApp = {
     const type = typeEl ? typeEl.value : 'Unidade';
 
     if (!nome || !motivo) return alert("Preencha todos os campos.");
+    if (!window.firebaseDb || !window.firebaseCollections) return alert("Sistema ainda carregando. Tente de novo em alguns segundos.");
 
-    const email = (AppState.currentUser && AppState.currentUser.email) ? AppState.currentUser.email : 'operador@mouraleite.com.br';
+    const u = (window.AppState && AppState.currentUser) || {};
+    const email = String(u.email || '').trim().toLowerCase();
+    const nomeUsuario = typeof window.crmNomeReal === 'function' ? window.crmNomeReal() : (u.name || '');
+    const { collection, addDoc, getDocs, query, where } = window.firebaseCollections;
+    const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
 
     try {
-      const res = await fetch(anexosApiUrl('/api/tags/request'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tag_name: nome, reason: motivo, type: type, requested_by_email: email })
-      });
-      if (res.ok) {
-        alert("Solicitação enviada com sucesso para israel@mouraleite.com.br.");
-        document.getElementById('modal-solicitar-tag').remove();
-      } else {
-        alert("Falha ao enviar solicitação.");
+      const tags = typeof window.crmTagsTodas === 'function' ? await window.crmTagsTodas() : [];
+      const igual = tags.find((t) => t.destino === type && norm(t.name) === norm(nome));
+      if (igual) {
+        return alert(`A TAG "${igual.name}" já existe para ${type}` + (igual.status === 'Inativa' ? ', mas está inativa. Peça ao administrador para reativar.' : '. Use essa TAG.'));
       }
+      const pend = await getDocs(query(collection(window.firebaseDb, 'tag_solicitacoes'), where('status', '==', 'Pendente')));
+      let jaPedida = null;
+      pend.forEach((d) => { const s = d.data() || {}; if (!jaPedida && s.type === type && norm(s.tag_name) === norm(nome)) jaPedida = s; });
+      if (jaPedida) return alert(`A TAG "${nome}" já foi solicitada e está aguardando aprovação.`);
+
+      const parecidas = typeof window.crmTagsSemelhantes === 'function' ? window.crmTagsSemelhantes(nome, tags) : [];
+      await addDoc(collection(window.firebaseDb, 'tag_solicitacoes'), {
+        tag_name: nome,
+        reason: motivo,
+        type: type,
+        status: 'Pendente',
+        solicitado_por_email: email,
+        solicitado_por_nome: nomeUsuario,
+        criado_em: new Date().toISOString(),
+        parecidas: parecidas.map((s) => ({ name: s.tag.name, destino: s.tag.destino, motivo: s.motivo, grau: Math.round(s.score * 100) }))
+      });
+      document.getElementById('modal-solicitar-tag').remove();
+      alert("Solicitação enviada. O administrador e o back office vão avaliar, e você recebe um aviso aqui quando houver resposta.");
     } catch (e) {
-      alert("Erro de conexão.");
+      console.error('[Tags] solicitação', e);
+      alert("Falha ao enviar solicitação: " + (e && e.message ? e.message : e));
     }
   },
 
