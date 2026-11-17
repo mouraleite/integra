@@ -110,19 +110,23 @@ const BoletoBaixa = {
           ? `<span class="bolbx-badge" title="Informada por ${this.esc(reg.informado_por_nome || reg.informado_por_email || "")} em ${this.esc(reg.informado_em ? new Date(reg.informado_em).toLocaleString("pt-BR") : "")}">Baixa informada</span>`
           : "";
       }
+      // Boleto baixado no banco: some o Ver/Download do arquivo antigo.
+      if (reg) {
+        const acoes = document.getElementById("actions-col-" + instId);
+        if (acoes && !acoes.querySelector(".bolbx-sem-arquivo")) {
+          acoes.innerHTML = `<span class="bolbx-sem-arquivo" title="Gere um boleto novo na Simulação de Vencidas">Boleto baixado no banco</span>`;
+        }
+        const st = document.getElementById("status-badge-" + instId);
+        if (st && !st.querySelector(".bolbx-st")) {
+          st.innerHTML = `<span class="bolbx-st">Baixado no banco</span>`;
+        }
+      }
     });
     this.atualizarBotao();
   },
 
-  aoMarcar(el) {
-    const tr = el.closest("tr");
-    const linha = tr && tr.getAttribute("data-linha");
-    // Boleto juntado: todas as parcelas com a mesma linha digitável vão juntas.
-    if (linha && this._container) {
-      this._container.querySelectorAll(`tbody tr[data-linha="${linha}"] .bolbx-chk`).forEach((c) => {
-        if (!c.disabled) c.checked = el.checked;
-      });
-    }
+  /** Seleção por parcela. A conferência com o comprovante é feita depois, pelo boleto de cada parcela. */
+  aoMarcar() {
     this.atualizarBotao();
   },
 
@@ -159,6 +163,16 @@ const BoletoBaixa = {
         numero: tr.getAttribute("data-inst-num") || tr.id.replace("row-inst-", "")
       });
     });
+    // Boleto juntado: parcelas do mesmo boleto que não foram marcadas (só para avisar).
+    mapa.forEach((g) => {
+      const marcadas = new Set(g.parcelas.map((p) => p.installmentId));
+      g.naoMarcadas = [];
+      if (!g.linha) return;
+      box.querySelectorAll(`tbody tr[data-linha="${g.linha}"]`).forEach((tr) => {
+        const id = tr.id.replace("row-inst-", "");
+        if (!marcadas.has(id)) g.naoMarcadas.push(tr.getAttribute("data-inst-num") || id);
+      });
+    });
     return Array.from(mapa.values());
   },
 
@@ -173,6 +187,10 @@ const BoletoBaixa = {
         <td>${this.esc(g.venc || "—")}</td>
         <td class="is-right">${g.valor != null ? this.fmtValor(g.valor) : "—"}</td>
       </tr>`).join("");
+    const juntados = grupos.filter((g) => g.naoMarcadas && g.naoMarcadas.length);
+    const avisoJuntado = juntados.length
+      ? `<div class="bolbx-aviso">${juntados.map((g) => `O boleto ${this.esc(g.nossoNumero || "")} também cobra a parcela ${this.esc(g.naoMarcadas.join(", "))}, que não foi marcada. A baixa no banco cancela o boleto inteiro; marque essa parcela também se quiser liberar um boleto novo para ela.`).join("<br>")}</div>`
+      : "";
     const html = `<div class="tagsol-overlay" id="bolbx-overlay">
       <div class="tagsol-box" style="width:640px;">
         <div class="tagsol-head">
@@ -185,6 +203,7 @@ const BoletoBaixa = {
           <thead><tr><th>Parcelas</th><th>Nosso número</th><th>Vencimento</th><th class="is-right">Valor</th></tr></thead>
           <tbody>${linhas}</tbody>
         </table></div>
+        ${avisoJuntado}
         <label class="bolbx-label">Comprovante da baixa no banco (print ou PDF)</label>
         <input type="file" id="bolbx-arquivo" accept="image/png,image/jpeg,application/pdf" onchange="BoletoBaixa.lerArquivo(this)">
         <div id="bolbx-resultado" class="bolbx-resultado"></div>
@@ -414,6 +433,9 @@ window.BoletoBaixa = BoletoBaixa;
     .bolbx-ok { background:#e7f6ee; color:#105436; border-radius:6px; padding:8px 10px; }
     .bolbx-erro { background:#fee2e2; color:#991b1b; border-radius:6px; padding:8px 10px; margin-top:6px; }
     .bolbx-lendo { display:flex; align-items:center; gap:8px; color:#475569; }
+    .bolbx-sem-arquivo { font-size:0.75rem; color:#64748b; font-style:italic; white-space:nowrap; }
+    .bolbx-st { display:inline-block; padding:2px 6px; border-radius:4px; background:#e0f2fe; color:#075985; border:1px solid #bae6fd; font-size:0.75rem; font-weight:700; white-space:nowrap; }
+    .bolbx-aviso { background:#fef3c7; color:#92400e; border-radius:6px; padding:8px 10px; margin-bottom:12px; font-size:0.8rem; }
   `;
   document.head.appendChild(st);
 })();

@@ -67,7 +67,7 @@ echo [5/5] Enviando tags para o GitHub...
 git push --tags
 echo       OK - Tags enviadas
 echo.
-REM --- 6) ATUALIZA OS AMBIENTES DE TESTE (develop = Dani, Marcelo, lucelia) ---
+REM --- 6) ATUALIZA OS AMBIENTES DE TESTE (develop = Dani, Marcelo, lucelia, israel) ---
 REM So avanca a branch; se o desenvolvedor tiver algo la que ainda nao entrou na main, nao mexe.
 echo [6/6] Atualizando os ambientes de teste...
 git push origin main:develop >nul 2>&1
@@ -90,6 +90,13 @@ if errorlevel 1 (
     echo                Nao foi atualizado. Peca ao Claude: "juntar lucelia na main".
 ) else (
     echo       OK - Teste Lucelia igual a producao
+)
+git push origin main:israel >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Israel: a branch israel tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar israel na main".
+) else (
+    echo       OK - Teste Israel igual a producao
 )
 echo.
 

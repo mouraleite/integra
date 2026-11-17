@@ -18380,10 +18380,21 @@ function formatCpfCnpj(val) {
             simInst.isFetchingBoleto = true;
             let tentarDeNovo = false;
             try {
-               const slip = await SiengeApiService.getPaymentSlipNotification(saleId, simInst.installmentId);
-               const usable = typeof window.siengePaymentSlipIsUsable === "function"
-                 ? window.siengePaymentSlipIsUsable(slip)
-                 : !!(slip && slip.results && slip.results.length > 0);
+               // Mesmo título que a aba "Boletos do Contrato" usa; o saleId da ficha pode vir em outro formato.
+               const idsSlip = [];
+               [simInst._slipBillId, AppState.currentReceivableBillId, AppState.selectedSaleId, AppState.selectedTitulo, boletoBillId, saleId].forEach((v) => {
+                  const t = String(v == null ? "" : v).replace(/^B-/i, "").split("-")[0].trim();
+                  if (t && t !== "undefined" && t !== "null" && !idsSlip.includes(t)) idsSlip.push(t);
+               });
+               const slipUsavel = (s) => typeof window.siengePaymentSlipIsUsable === "function"
+                 ? window.siengePaymentSlipIsUsable(s)
+                 : !!(s && s.results && s.results.length > 0);
+               let slip = null;
+               for (const idTit of idsSlip) {
+                  slip = await SiengeApiService.getPaymentSlipNotification(idTit, simInst.installmentId);
+                  if (slipUsavel(slip)) { simInst._slipBillId = idTit; break; }
+               }
+               const usable = slipUsavel(slip);
                // Boleto recém-gerado: o Sienge leva alguns segundos para devolver a linha.
                if (!usable && simInst.generatedBillet && tentativa < 3) tentarDeNovo = true;
                if (usable) {
@@ -18614,11 +18625,14 @@ function formatCpfCnpj(val) {
                       } else {
                         statusHtml = `<span style="background:var(--color-primary);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.7rem;">A Vencer</span>`;
                       }
-                      acoesHtml = `<div class="sim-acoes"><button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="openBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)"><i data-lucide="file-text" style="width:12px;height:12px;"></i> Ver</button>
-                        <button class="btn btn-outline btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="downloadBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)" title="Download"><i data-lucide="download" style="width:12px;height:12px;"></i></button></div>`;
+                      const idBol = String(inst._slipBillId || saleId);
+                      acoesHtml = `<div class="sim-acoes"><button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="openBoletoPdf(${JSON.stringify(idBol)}, ${JSON.stringify(String(inst.installmentId))}, this)"><i data-lucide="file-text" style="width:12px;height:12px;"></i> Ver</button>
+                        <button class="btn btn-outline btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="downloadBoletoPdf(${JSON.stringify(idBol)}, ${JSON.stringify(String(inst.installmentId))}, this)" title="Download"><i data-lucide="download" style="width:12px;height:12px;"></i></button></div>`;
                     }
                     if (baixaInf) {
-                      statusHtml += ` <span style="display:inline-block;margin-top:2px;background:#e0f2fe;color:#075985;border:1px solid #bae6fd;padding:2px 6px;border-radius:4px;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Baixa no banco informada em Boletos do Contrato">Baixa informada</span>`;
+                      // Boleto baixado no banco: não oferece mais o arquivo antigo.
+                      statusHtml = `<span style="display:inline-block;background:#e0f2fe;color:#075985;border:1px solid #bae6fd;padding:2px 6px;border-radius:4px;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Baixa no banco informada em Boletos do Contrato. Pode gerar boleto novo.">Baixado no banco</span>`;
+                      acoesHtml = "";
                     }
                   }
 
@@ -45830,12 +45844,8 @@ async function loadCustomerBoletos(customerId, saleId) {
             if (tdDate) tdDate.textContent = trueDateStr;
 
             // Boleto ainda válido (até 28 dias do vencimento): pode receber baixa informada.
-            if (window.BoletoBaixa && dtFebraban) {
-              const diasLinha = Math.floor((Date.now() - dtFebraban.getTime()) / 86400000);
-              if (diasLinha <= 28) {
-                window.BoletoBaixa.linhaPronta(inst.installmentId, (slip.results[0].digitableNumber || slip.results[0].digitableLine || ""), trueDateStr);
-              }
-            }
+            const linhaValidaBaixa = !!(window.BoletoBaixa && dtFebraban
+              && Math.floor((Date.now() - dtFebraban.getTime()) / 86400000) <= 28);
 
             if (dtFebraban) {
                // Recalcula o atraso baseado na data do boleto (com carência de dia útil)
@@ -45875,6 +45885,10 @@ async function loadCustomerBoletos(customerId, saleId) {
             } else {
                const tdDate = document.getElementById(`true-due-date-${inst.installmentId}`);
                if (tdDate) tdDate.textContent = trueDateStr || "—";
+            }
+            // Depois dos botões: se a baixa já foi informada, o módulo troca Ver/Download pelo aviso.
+            if (linhaValidaBaixa) {
+              window.BoletoBaixa.linhaPronta(inst.installmentId, (slip.results[0].digitableNumber || slip.results[0].digitableLine || ""), trueDateStr);
             }
           } catch(e) {
              const row = document.getElementById(`row-inst-${inst.installmentId}`);
