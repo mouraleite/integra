@@ -185,7 +185,8 @@
      * só as demais. A parcela do mês paga junto com uma quitação fica em "até 30".
      */
     recorte(ev, faixa) {
-      if (!ev || faixa === "todas") return ev;
+      if (!ev) return null;
+      if (faixa === "todas") return ev;
       const parcelas = (ev.parcelas || []).filter((p) => (faixa === "31+" ? Number(p[3]) >= 31 : Number(p[3]) < 31));
       if (!parcelas.length) return null;
       if (parcelas.length === (ev.parcelas || []).length) return ev;
@@ -493,9 +494,10 @@
         box.innerHTML = `<div class="antc-erro">Não foi possível ler as antecipações: ${esc(this.state.erro)}</div>`;
         return;
       }
-      const todos = this.eventosDoPeriodo();
-      const ate30 = this.eventosNaFaixa("ate30", todos);
-      const mais31 = this.eventosNaFaixa("31+", todos);
+      const brutos = this.eventosDoPeriodo();
+      const todos = this.eventosNaFaixa("todas", brutos);
+      const ate30 = this.eventosNaFaixa("ate30", brutos);
+      const mais31 = this.eventosNaFaixa("31+", brutos);
       const lista = (this.state.faixa === "31+" ? mais31 : (this.state.faixa === "ate30" ? ate30 : todos))
         .slice().sort((a, b) => String(b.data).localeCompare(String(a.data)) || (Number(b.vf) || 0) - (Number(a.vf) || 0));
       const semBase = mesesDoPeriodo(this.state.de, this.state.ate).filter((m) => this._cache[m] && this._cache[m].vazio);
