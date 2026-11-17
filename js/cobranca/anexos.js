@@ -3803,7 +3803,9 @@ const AnexosApp = {
           scheduleListRender();
           AnexosApp.checkCanSend();
         } else {
-          fileObj.status = `Erro: ${lastErr || 'download'}`;
+          fileObj.status = lastErr === '403'
+            ? 'Erro: sem permissão no Sienge para baixar'
+            : `Erro: ${lastErr || 'download'}`;
           scheduleListRender();
         }
       } catch (e) {
@@ -3951,8 +3953,20 @@ const AnexosApp = {
     try {
       // Loop de paginação
       while (hasMore) {
-        const url = `/api/sienge-proxy/units?limit=${limit}&offset=${offset}&enterpriseId=${cc}&additionalData=NONE`;
-        const res = await fetch(url, { headers: { 'Authorization': getBasicAuthHeader() } });
+        const url = `/api/sienge-proxy/units?limit=${limit}&offset=${offset}&enterpriseId=${encodeURIComponent(cc)}&additionalData=NONE`;
+        // Fila do servidor cheia (429) ou Sienge instável (5xx/rede): espera e tenta de novo.
+        let res = null;
+        for (let tentativa = 0; tentativa < 4; tentativa++) {
+          if (tentativa > 0) await new Promise((r) => setTimeout(r, 1500 * tentativa));
+          try {
+            res = await fetch(url, { headers: { 'Authorization': getBasicAuthHeader() } });
+          } catch (errRede) {
+            res = null;
+            continue;
+          }
+          if (res.ok || (res.status !== 429 && res.status < 500)) break;
+        }
+        if (!res) throw new Error("Sem conexão com o servidor");
         if (!res.ok) throw new Error("Falha Sienge HTTP " + res.status);
         
         const data = await res.json();
@@ -3996,7 +4010,12 @@ const AnexosApp = {
       
     } catch (e) {
       console.error("Erro ao buscar unidades:", e);
-      alert("Falha ao buscar unidades. O CC está correto?");
+      const msgErr = String((e && e.message) || "");
+      if (/HTTP 429|HTTP 5\d\d|conexão/i.test(msgErr)) {
+        alert("O Sienge está ocupado e não respondeu agora (" + msgErr + "). Aguarde alguns segundos e clique em Buscar de novo.");
+      } else {
+        alert("Falha ao buscar unidades. O CC está correto?" + (msgErr ? "\n(" + msgErr + ")" : ""));
+      }
     } finally {
       AnexosState.unidadesLoading = false;
       const loadEl = document.getElementById('anexos-unidade-loading');
