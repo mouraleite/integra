@@ -1090,20 +1090,32 @@ const GerarPagamentoApp = {
         ? (typeof siengeSplitDateRange === "function" ? siengeSplitDateRange(retroIni, retroFim) : [{ start: retroIni, end: retroFim }])
         : [];
       const faixas = faixasRetro.concat(faixasPeriodo);
-      const bills = [];
-      let passo = 0;
-      const total = faixas.length * alvos.length;
-      for (const faixa of faixas) {
-        for (const emp of alvos) {
+      // Duas consultas ao mesmo tempo (a fila do bulk-data do Sienge aceita duas). A ordem final não muda:
+      // cada parte entra na posição dela.
+      const pedidos = [];
+      faixas.forEach((faixa) => alvos.forEach((emp) => pedidos.push({ faixa, emp })));
+      const partes = new Array(pedidos.length);
+      const total = pedidos.length;
+      let proximo = 0;
+      let feitos = 0;
+      const worker = async () => {
+        while (proximo < pedidos.length) {
           if (gen !== s.gen) return;
-          passo += 1;
-          s.progressoPct = (passo / Math.max(1, total)) * 0.4;
-          this.pintarProgresso();
-          const parte = await api.outcomeRange(faixa.start, faixa.end, emp);
-          if (Array.isArray(parte)) bills.push.apply(bills, parte);
+          const i = proximo++;
+          const p = pedidos[i];
+          const parte = await api.outcomeRange(p.faixa.start, p.faixa.end, p.emp);
+          partes[i] = Array.isArray(parte) ? parte : [];
+          feitos += 1;
+          if (gen === s.gen) {
+            s.progressoPct = (feitos / Math.max(1, total)) * 0.4;
+            this.pintarProgresso();
+          }
         }
-      }
+      };
+      await Promise.all([worker(), worker()]);
       if (gen !== s.gen) return;
+      const bills = [];
+      partes.forEach((parte) => { if (parte) bills.push.apply(bills, parte); });
       this.montarTitulos(base, bills, parceiros);
       s.progressoPct = 0.45;
       this.pintarProgresso();
@@ -1137,6 +1149,17 @@ const GerarPagamentoApp = {
     if (nome === "PAGAMENTO" || nome.indexOf("PAGAMENTO") === 0) return true;
     if (nome === "ADIANTAMENTO" || nome.indexOf("ADIANTAMENTO") === 0) return true;
     return /BAIXA|LIQUID|QUITAC/.test(nome);
+  },
+
+  /** Abatimento de adiantamento (8) ou cancelamento (3): encerra a parcela sem pagamento em banco. */
+  baixaSemCaixa(pay) {
+    if (!pay || typeof pay !== "object") return false;
+    const id = String(pay.operationTypeId != null ? pay.operationTypeId : "").trim();
+    const nome = String(pay.operationTypeName || pay.operationName || "")
+      .normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
+    if (/ESTORNO|REAPROP/.test(nome)) return false;
+    if (id === "8" || id === "3") return true;
+    return /^ABATIMENTO DE ADIANTAMENTO|^CANCELAMENTO/.test(nome);
   },
 
   valorBaixa(pay) {
@@ -1293,9 +1316,18 @@ const GerarPagamentoApp = {
       });
       const original = Number(bill.originalAmount) || 0;
       let saldo = app.billBalance(bill);
+      const saldoSienge = saldo;
       const temConta = movs.length > 0;
       const quitou = temConta && original > 0.009 && quitadoPorBaixa >= original - 0.02 && temBaixa;
-      if (!temConta) {
+      // Baixa sem dinheiro saindo do banco: abatimento de adiantamento (8) ou cancelamento (3).
+      // No Sienge a parcela fica "Totalmente paga" e não entra mais em lote.
+      const semCaixa = lista(bill.payments).reduce((t, pay) => (this.baixaSemCaixa(pay) ? t + this.valorBaixa(pay) : t), 0);
+      const encerradaSemCaixa = semCaixa > 0.009 && saldoSienge != null && saldoSienge <= 0.009
+        && original > 0.009 && semCaixa + quitadoPorBaixa >= original - 0.02;
+      if (encerradaSemCaixa) {
+        pago = true;
+        saldo = 0;
+      } else if (!temConta) {
         pago = false;
         if (saldo != null && saldo <= 0.009) saldo = null;
       } else if (quitou || pago || (saldo != null && saldo <= 0.009)) {
@@ -1364,6 +1396,15 @@ const GerarPagamentoApp = {
       });
     });
     linhas.sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || "") || Number(a.titulo) - Number(b.titulo) || Number(a.parcela) - Number(b.parcela));
+    // Parcelas que o Sienge já mostra pagas na busca (antes do recorte): servem para não reler lotes antigos.
+    const pagos = new Set();
+    const abertos = new Set();
+    linhas.forEach((r) => {
+      const k = this.chaveTitulo(r.titulo, r.parcela);
+      if (r.pago && !(Number(r.aPagar) > 0.009)) pagos.add(k); else abertos.add(k);
+    });
+    abertos.forEach((k) => pagos.delete(k));
+    this._parcelasPagasBusca = pagos;
     const ini = String(this.state.startDate || "").slice(0, 10);
     const fim = String(this.state.endDate || "").slice(0, 10);
     const noRecorte = linhas.filter((r) => {
@@ -1424,7 +1465,14 @@ const GerarPagamentoApp = {
     const s = this.state;
     if (typeof window.siengeFetchWithRetry !== "function") return;
     s.loteSiengeLidoEm = Date.now();
-    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => (l.itens || []).map((i) => String(i.titulo)));
+    // Lote já enviado ao Sienge: só relê se ainda houver parcela dele que a busca não mostrou paga.
+    // Lote todo pago não pode ter sido excluído no Sienge, então não precisa de uma consulta por título.
+    const pagasBusca = this._parcelasPagasBusca || new Set();
+    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => {
+      const itens = l.itens || [];
+      const todosPagos = itens.length && itens.every((i) => pagasBusca.has(this.chaveTitulo(i.titulo, i.parcela)));
+      return todosPagos ? [] : itens.map((i) => String(i.titulo));
+    });
     const abertos = [...new Set(s.titulos.filter((r) => !r.pago).map((r) => r.titulo).concat(deLotes))];
     const fila = abertos.slice();
     const totalBills = fila.length;
