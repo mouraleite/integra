@@ -19,6 +19,7 @@ const rotas = {
   "valor-receber": require("./_lib/morning-warmup"),
   "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "reembolso-batimento": require("./_lib/morning-warmup"),
+  "antecipacoes-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.

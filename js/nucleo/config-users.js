@@ -439,6 +439,7 @@ const ConfigUsersApp = {
             { id: "notificacoes", label: "Notificações" },
             { id: "followup_cnd", label: "Follow-up CND", permBase: "sub_fin_cr_followup_cnd" },
             { id: "recebimentos_webro", label: "Recebimentos Webro" },
+            { id: "antecipacoes", label: "Antecipações", permBase: "sub_fin_cr_antecipacoes" },
             { id: "scod", label: "Scod" },
             { id: "relatorios", label: "Relatórios" },
             { id: "configuracoes", label: "Configurações" }

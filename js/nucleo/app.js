@@ -3730,7 +3730,8 @@ window.bootEngenhariaCaucao = function () {
     "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
     "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
     "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
-    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo"
+    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo",
+    "antecipacoes": "antecipacoes"
   };
   var grupoPronto = {};
   var grupoEmCurso = {};
@@ -3996,6 +3997,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "reintegracao-posse": "Reintegração de posse",
     "titulos-incompletos": "Títulos incompletos",
     "consultar-titulo": "Consultar título",
+    "antecipacoes": "Antecipações",
     "config-tags": "Configuração de TAGs",
     "motivos-cancelamento": "Motivos de cancelamento",
     "config-users": "Configuração de Usuários",
@@ -4098,6 +4100,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "reintegracao-posse": "key",
     "titulos-incompletos": "file-warning",
     "consultar-titulo": "file-search",
+    "antecipacoes": "fast-forward",
     "config-tags": "tags",
     "motivos-cancelamento": "list",
     "config-users": "users",

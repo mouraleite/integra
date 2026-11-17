@@ -1062,6 +1062,9 @@
                 <li data-tab="recebimentos-webro" data-module="sub_fin_cr_recebimentos_webro_acessar">
                   <a onclick="switchTab('recebimentos-webro', 'Recebimentos Webro')">Recebimentos Webro</a>
                 </li>
+                <li data-tab="antecipacoes" data-module="sub_fin_cr_antecipacoes_acessar">
+                  <a onclick="switchTab('antecipacoes', 'Antecipações')">Antecipações</a>
+                </li>
                 <li data-tab="scod" data-module="sub_fin_cr_scod_acessar">
                   <a onclick="switchTab('scod', 'Scod')">Scod</a>
                 </li>
@@ -1560,6 +1563,10 @@
       </section>
       <section id="tab-consultar-titulo" class="tab-pane" style="display: none;">
         <div id="consultar-titulo-root"></div>
+      </section>
+
+      <section id="tab-antecipacoes" class="tab-pane" style="display: none;">
+        <div id="antecipacoes-root"></div>
       </section>
       <section id="tab-rydoo" class="tab-pane" style="display: none;">
         <div id="rydoo-root"></div>
@@ -8704,6 +8711,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="acompanhamento-obra" data-src="js/engenharia/engenharia-acompanhamento.js?v=c16b955fbe"></script>
   <script type="text/x-sob-demanda" data-grupo="previsao-obras" data-src="js/relacionamento/previsao-obras.js?v=c9a9f4970a"></script>
   <script type="text/x-sob-demanda" data-grupo="consultar-titulo" data-src="js/financeiro/consultar-titulo.js?v=4f7f885504"></script>
+  <script type="text/x-sob-demanda" data-grupo="antecipacoes" data-src="js/financeiro/antecipacoes.js?v=1"></script>
   <script defer src="js/nucleo/config-tags.js?v=3843c41147"></script>
   <script defer src="js/nucleo/config-users.js?v=c857b58fdb"></script>
   <script defer src="js/nucleo/suporte.js?v=07bc755f0e"></script>
