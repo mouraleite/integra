@@ -9679,7 +9679,44 @@ window.cancelamentoExigencias = function(client) {
   const obra = obras[cc];
   const obraAndamento = obra === true || !!(obra && obra.isOn);
   const webro = typeof window.suspenderClientePagaWebro === "function" && window.suspenderClientePagaWebro(client);
-  return { obraAndamento: obraAndamento, loteamentoFechado: loteamentoFechado, webro: !!webro };
+  // Obra do cliente ainda não terminou (Engenharia > Acompanhamento de obra, "Previsão término obras Cliente"):
+  // a prefeitura ainda não emite CND para o lote, então a CND fica dispensada.
+  const prev = (window._cancelPrevObras && window._cancelPrevObras.mapa) || {};
+  const linhaObra = prev[cc];
+  const fimObra = linhaObra ? String(linhaObra.cliente || "").slice(0, 10) : "";
+  const hoje = new Date();
+  const hojeIso = hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0") + "-" + String(hoje.getDate()).padStart(2, "0");
+  const obraNaoTerminou = /^\d{4}-\d{2}-\d{2}$/.test(fimObra) && hojeIso <= fimObra;
+  return {
+    obraAndamento: obraAndamento,
+    obraNaoTerminou: obraNaoTerminou,
+    fimObraCliente: fimObra,
+    cndDispensada: obraAndamento || obraNaoTerminou,
+    loteamentoFechado: loteamentoFechado,
+    webro: !!webro
+  };
+};
+
+/** Lê (e guarda por 10 min) as previsões do Acompanhamento de obra da Engenharia, por centro de custo. */
+window.cancelamentoCarregarPrevisaoObras = async function() {
+  const c = window._cancelPrevObras;
+  if (c && Date.now() - c.em < 10 * 60 * 1000) return c.mapa;
+  const fx = window.firebaseCollections;
+  const db = window.firebaseDb;
+  if (!fx || !db || typeof fx.getDoc !== "function") return (c && c.mapa) || {};
+  try {
+    const snap = await fx.getDoc(fx.doc(db, "engenharia_acompanhamento", "obras"));
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
+    const data = existe ? (snap.data() || {}) : {};
+    const mapa = {};
+    (Array.isArray(data.linhas) ? data.linhas : []).forEach(function(r) {
+      if (r && r.id) mapa[String(r.id).trim()] = r;
+    });
+    window._cancelPrevObras = { mapa: mapa, em: Date.now() };
+    return mapa;
+  } catch (e) {
+    return (c && c.mapa) || {};
+  }
 };
 
 window.cancelamentoNormDoc = function(texto) {
@@ -9740,8 +9777,8 @@ window.cancelamentoDocsOk = function() {
     if (!(distrato.files && distrato.files[0])) return false;
     if (!leitura.distrato || leitura.distrato.status !== "ok" || !leitura.distrato.ok) return false;
   }
-  if (!exig.obraAndamento && !(cnd && cnd.files && cnd.files[0])) return false;
-  if (!exig.obraAndamento && !window.cancelamentoCertidaoPronta()) return false;
+  if (!exig.cndDispensada && !(cnd && cnd.files && cnd.files[0])) return false;
+  if (!exig.cndDispensada && !window.cancelamentoCertidaoPronta()) return false;
   if (exig.loteamentoFechado && !exig.obraAndamento && !(assoc && assoc.files && assoc.files[0])) return false;
   if (exig.webro && !(webro && webro.files && webro.files[0])) return false;
   return true;
@@ -9988,6 +10025,8 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       nexCumprida: nex
     };
     const pode = window.cancelamentoPodeSeguir(info);
+    await window.cancelamentoCarregarPrevisaoObras();
+    if (!document.getElementById("cancel-avaliacao-pop")) return;
     const exig = window.cancelamentoExigencias(client);
     window._cancelExigencias = exig;
     window._cancelDocs = null;
@@ -10030,8 +10069,13 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       if (exig.obraAndamento) {
         docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">Obra em andamento: CND e CND da associação dispensadas.</p>`;
       } else {
-        docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
-        docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        if (exig.obraNaoTerminou) {
+          const fimBr = exig.fimObraCliente.split("-").reverse().join("/");
+          docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">CND dispensada: a obra do empreendimento ainda não terminou (previsão de término das obras para o cliente em ${window.cancelContratoEsc(fimBr)}, no Acompanhamento de obra).</p>`;
+        } else {
+          docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
+          docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        }
         if (exig.loteamentoFechado) {
           docsHtml += campoArquivo("cancel-assoc-file", "CND da associação", "Loteamento fechado. Anexe a CND da associação.");
         }
@@ -10189,11 +10233,11 @@ window.enviarCancelamentoContrato = async function() {
   const rot = window.cancelMotivoRotulo(iniciativa, motivo);
   const exig = window._cancelExigencias || {};
   const docs = window._cancelDocs || {};
-  if (!exig.obraAndamento && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
+  if (!exig.cndDispensada && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
   const leituraCancel = window._cancelLeitura || {};
   const classeCnd = leituraCancel.cnd && leituraCancel.cnd.classe;
   const classeCert = leituraCancel.certidao && leituraCancel.certidao.classe;
-  if (!exig.obraAndamento && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
+  if (!exig.cndDispensada && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
     falha("O arquivo da CND não é uma certidão da prefeitura. Anexe a certidão em PDF.");
     return;
   }
