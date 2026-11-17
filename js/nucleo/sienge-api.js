@@ -816,6 +816,52 @@ window.salvarFilaProntaDoDia = function(rawList) {
   })();
 };
 
+/**
+ * Tira da fila (ou reduz o valor) o que foi pago depois que a fila do dia foi montada.
+ * Recalcula cada linha com as parcelas da base do dia e a lista de parcelas pagas.
+ * Só mexe quando o valor em aberto diminuiu; nunca aumenta nem cria linha.
+ */
+window.filaAplicarPagamentosRecentes = function(rows) {
+  const bills = (window.AppState && Array.isArray(window.AppState.defaultersBills)) ? window.AppState.defaultersBills : [];
+  if (!Array.isArray(rows) || !rows.length || !bills.length || typeof window.summarizeOpenDefaulterBill !== "function") return rows;
+  const porContrato = new Map();
+  bills.forEach((b) => {
+    if (!b) return;
+    const k = String(b.customerId) + "-" + String(b.saleId);
+    if (!porContrato.has(k)) porContrato.set(k, []);
+    porContrato.get(k).push(b);
+  });
+  let removidas = 0;
+  let reduzidas = 0;
+  const out = [];
+  rows.forEach((r) => {
+    const lista = r ? porContrato.get(String(r.customerId) + "-" + String(r.saleId)) : null;
+    if (!lista) { out.push(r); return; }
+    let valor = 0;
+    let atraso = 0;
+    let aberto = false;
+    lista.forEach((b) => {
+      const s = window.summarizeOpenDefaulterBill(b);
+      if (!s || s.skip) return;
+      aberto = true;
+      valor += Number(s.value) || 0;
+      if ((Number(s.daysDelay) || 0) > atraso) atraso = Number(s.daysDelay) || 0;
+    });
+    const atual = Number(r.overdueValue) || 0;
+    if (!aberto) { removidas += 1; return; }
+    if (valor < atual - 0.01) {
+      r.overdueValue = valor;
+      r.maxDaysDelay = atraso;
+      reduzidas += 1;
+    }
+    out.push(r);
+  });
+  if (removidas || reduzidas) {
+    console.log(`[Fila] Pagamentos recentes: ${removidas} contrato(s) saíram e ${reduzidas} tiveram o valor reduzido.`);
+  }
+  return out;
+};
+
 window.carregarFilaProntaDoDia = async function() {
   const today = filaLocalTodayStr();
   const mem = window._filaProntaCache;
@@ -2725,6 +2771,65 @@ const SiengeApiService = {
     }
   },
 
+
+  /**
+   * Busca os recebimentos dos últimos 3 dias e marca as parcelas pagas.
+   * A base da fila é baixada uma vez por dia (madrugada); baixas lançadas depois,
+   * mesmo com data de ontem, só entram por aqui. Roda no máximo a cada 30 min.
+   * Retorna quantas parcelas pagas novas entraram.
+   */
+  async refreshRecentPayments(opts = {}) {
+    if (s_apiMode === "simulado") return 0;
+    const KEY = "crm_pagtos_recentes_em";
+    if (!opts.force) {
+      try {
+        const last = Number(localStorage.getItem(KEY)) || 0;
+        if (Date.now() - last < 30 * 60 * 1000) return 0;
+      } catch (e) {}
+    }
+    if (this._refreshPaysInFlight) return this._refreshPaysInFlight;
+    const run = async () => {
+      window.advFilters = window.advFilters || {};
+      const paidMap = (window.getRecentPaidMap && window.getRecentPaidMap()) || window.advFilters.paidMap || new Map();
+      const paidInst = window.advFilters.paidInstallmentIds || new Set();
+      window.advFilters.paidMap = paidMap;
+      window.advFilters.paidInstallmentIds = paidInst;
+      const antes = paidInst.size;
+      const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      const fim = new Date();
+      fim.setHours(12, 0, 0, 0);
+      const ini = new Date(fim);
+      ini.setDate(ini.getDate() - 3);
+      let falhas = 0;
+      const companies = getConfiguredInternalCompanyIds();
+      for (const cId of companies) {
+        try {
+          const res = await this.getBulkIncome(iso(ini), iso(fim), cId);
+          this.ingestBulkIncomeRows(res && res.data, paidMap, paidInst);
+        } catch (e) {
+          falhas += 1;
+          console.warn("[Sienge] pagamentos recentes", cId, e);
+        }
+      }
+      if (typeof window.syncRecentPaidMap === "function") window.syncRecentPaidMap(paidMap);
+      if (falhas < companies.length) {
+        try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+      }
+      const novos = paidInst.size - antes;
+      if (novos > 0) {
+        console.log(`[Sienge] ${novos} parcela(s) paga(s) depois da carga do dia.`);
+        try {
+          await this.updateCachePaidMap(JSON.stringify(Array.from(paidMap.entries())), serializePaidInstallmentIds());
+        } catch (e) {}
+      }
+      return novos;
+    };
+    this._refreshPaysInFlight = (window.ApiUsage && typeof ApiUsage.withSource === "function")
+      ? ApiUsage.withSource("system", "pagamentos_recentes", run)
+      : run();
+    try { return await this._refreshPaysInFlight; }
+    finally { this._refreshPaysInFlight = null; }
+  },
 
   async _getDefaultersInternal(companyId, onProgress) {
     let targetCompanies = getConfiguredInternalCompanyIds();

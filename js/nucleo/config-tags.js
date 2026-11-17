@@ -401,6 +401,43 @@ window.crmTagSemelhantesHtml = function(lista, destinoPedido) {
     </table></div>`;
 };
 
+/** Lista de todas as TAGs com busca e filtro de destino, para consulta rápida. */
+window.crmTagListaTodasHtml = function(tags) {
+  const esc = window.crmTagSolEsc;
+  const lista = tags || [];
+  const linhas = lista.map((t) => `<tr data-busca="${esc(tagNorm(t.name))}" data-destino="${esc(t.destino)}">
+      <td title="${esc(t.name)}">${esc(t.name)}</td><td>${esc(t.destino)}</td><td>${esc(t.status)}</td></tr>`).join("")
+    || '<tr><td colspan="3" style="text-align:center;padding:20px;">Nenhuma TAG cadastrada.</td></tr>';
+  return `<div class="tagsol-todas">
+    <div class="tagsol-todas-tit">Todas as TAGs cadastradas <small>${lista.length}</small></div>
+    <div class="tagsol-todas-filtros">
+      <input type="search" placeholder="Buscar TAG..." oninput="crmTagFiltrarTodas(this)">
+      <select onchange="crmTagFiltrarTodas(this)">
+        <option value="">Unidade e Cliente</option>
+        <option value="Unidade">Unidade</option>
+        <option value="Cliente">Cliente</option>
+      </select>
+    </div>
+    <div class="cc-scroll tagsol-scroll"><table class="cc-table">
+      <colgroup><col><col style="width:80px"><col style="width:72px"></colgroup>
+      <thead><tr><th>TAG</th><th>Destino</th><th>Status</th></tr></thead>
+      <tbody>${linhas}</tbody>
+    </table></div>
+  </div>`;
+};
+
+window.crmTagFiltrarTodas = function(el) {
+  const box = el && el.closest(".tagsol-todas");
+  if (!box) return;
+  const termo = tagNorm((box.querySelector("input") || {}).value || "");
+  const dest = (box.querySelector("select") || {}).value || "";
+  box.querySelectorAll("tr[data-busca]").forEach((tr) => {
+    const ok = (!termo || tr.getAttribute("data-busca").indexOf(termo) >= 0)
+      && (!dest || tr.getAttribute("data-destino") === dest);
+    tr.style.display = ok ? "" : "none";
+  });
+};
+
 /** Todas as TAGs (ativas e inativas), para comparar. */
 window.crmTagsTodas = async function() {
   if (!window.firebaseDb || !window.firebaseCollections) return [];
@@ -444,8 +481,18 @@ window.crmTagsTodas = async function() {
     .tagsol-aviso { display: flex; align-items: center; gap: 6px; color: #92400e; background: #fef3c7; border-radius: 6px; padding: 7px 10px; font-size: 0.8rem; margin-bottom: 6px; }
     .tagsol-scroll { max-height: 190px; margin-bottom: 10px; }
     .tagsol-scroll tr.is-igual td { background: #fee2e2; color: #991b1b; font-weight: 700; }
-    .tagsol-todas summary { cursor: pointer; font-size: 0.78rem; font-weight: 700; color: #105436; margin: 4px 0 8px; }
-    .tagsol-todas input { width: 100%; height: 32px; padding: 0 10px; border: 1px solid #e0e5e0; border-radius: 6px; margin-bottom: 6px; font-size: 0.8rem; }
+    .tagsol-todas { border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 4px; }
+    .tagsol-todas-tit { font-size: 0.8rem; font-weight: 700; color: #105436; text-transform: uppercase; margin-bottom: 8px; }
+    .tagsol-todas-tit small { margin-left: 6px; padding: 1px 7px; border-radius: 99px; background: #e7f6ee; font-size: 0.7rem; }
+    .tagsol-todas-filtros { display: flex; gap: 8px; margin-bottom: 6px; }
+    .tagsol-todas-filtros input, .tagsol-todas-filtros select { height: 34px; padding: 0 10px; border: 1px solid #e0e5e0; border-radius: 6px; font-size: 0.8rem; background: #fff; }
+    .tagsol-todas-filtros input { flex: 1 1 auto; min-width: 0; }
+    .tagsol-todas-filtros select { flex: 0 0 150px; }
+    .tagsol-todas .tagsol-scroll { max-height: 220px; }
+    .tagsol-recusa { margin-top: 4px; }
+    .tagsol-recusa label { display: block; font-size: 0.7rem; font-weight: 700; color: #6d8c7c; text-transform: uppercase; margin-bottom: 4px; }
+    .tagsol-recusa textarea { width: 100%; box-sizing: border-box; border: 1px solid #e0e5e0; border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; resize: vertical; margin-bottom: 8px; font-family: inherit; }
+    .tagsol-acoes[hidden], .tagsol-recusa[hidden] { display: none; }
     .tagsol-acoes { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
     .tagsol-acoes .btn { height: 36px; display: inline-flex; align-items: center; gap: 6px; }
     #req-tag-similares { margin-top: 8px; }
@@ -538,10 +585,7 @@ const CrmTagSolicitacoes = {
     const cards = visiveis.map((p) => {
       const dest = p.type === "Cliente" ? "Cliente" : "Unidade";
       const semelhantes = window.crmTagsSemelhantes(p.tag_name, tags);
-      const doDestino = tags.filter((t) => t.destino === dest);
       const quando = p.criado_em ? new Date(p.criado_em).toLocaleString("pt-BR") : "";
-      const linhasTodas = doDestino.map((t) => `<tr data-busca="${esc(tagNorm(t.name))}"><td title="${esc(t.name)}">${esc(t.name)}</td><td>${esc(t.status)}</td></tr>`).join("")
-        || '<tr><td colspan="2" style="text-align:center;padding:20px;">Nenhuma TAG cadastrada.</td></tr>';
       const idJs = esc(JSON.stringify(p.id));
       return `<div class="tagsol-card" data-sol-id="${esc(p.id)}">
         <div class="tagsol-meta">Pedido por <b>${esc(p.solicitado_por_nome || p.solicitado_por_email || "—")}</b>${quando ? " em " + esc(quando) : ""}</div>
@@ -554,21 +598,21 @@ const CrmTagSolicitacoes = {
         </div>
         <div class="tagsol-motivo"><b>Motivo:</b> ${esc(p.reason || "—")}</div>
         ${window.crmTagSemelhantesHtml(semelhantes, dest)}
-        <details class="tagsol-todas">
-          <summary>Ver todas as TAGs de ${dest} (${doDestino.length})</summary>
-          <input type="search" placeholder="Buscar TAG..." oninput="CrmTagSolicitacoes.filtrarTodas(this)">
-          <div class="cc-scroll tagsol-scroll"><table class="cc-table">
-            <colgroup><col><col style="width:80px"></colgroup>
-            <thead><tr><th>TAG</th><th>Status</th></tr></thead>
-            <tbody>${linhasTodas}</tbody>
-          </table></div>
-        </details>
-        <div class="tagsol-acoes">
-          <button type="button" class="btn btn-cancel" onclick='CrmTagSolicitacoes.recusar(${idJs})'><i data-lucide="x" style="width:15px;"></i> Recusar</button>
+        <div class="tagsol-acoes" id="tagsol-acoes-${esc(p.id)}">
+          <button type="button" class="btn btn-cancel" onclick='CrmTagSolicitacoes.mostrarRecusa(${idJs}, true)'><i data-lucide="x" style="width:15px;"></i> Recusar</button>
           <button type="button" class="btn btn-primary" onclick='CrmTagSolicitacoes.aprovar(${idJs})'><i data-lucide="check" style="width:15px;"></i> Aprovar e criar TAG</button>
+        </div>
+        <div class="tagsol-recusa" id="tagsol-recusa-${esc(p.id)}" hidden>
+          <label for="tagsol-motivo-${esc(p.id)}">Motivo da recusa</label>
+          <textarea id="tagsol-motivo-${esc(p.id)}" rows="2" placeholder="Ex.: use a TAG já existente COMPROVANTE DE RESIDÊNCIA"></textarea>
+          <div class="tagsol-acoes">
+            <button type="button" class="btn btn-outline" onclick='CrmTagSolicitacoes.mostrarRecusa(${idJs}, false)'>Voltar</button>
+            <button type="button" class="btn btn-cancel" onclick='CrmTagSolicitacoes.recusar(${idJs})'><i data-lucide="x" style="width:15px;"></i> Confirmar recusa</button>
+          </div>
         </div>
       </div>`;
     }).join("");
+    const todasHtml = window.crmTagListaTodasHtml(tags);
 
     const titulo = visiveis.length === 1 ? "Solicitação de nova TAG" : `${visiveis.length} solicitações de nova TAG`;
     const html = `<div class="tagsol-overlay" id="tagsol-overlay">
@@ -578,6 +622,7 @@ const CrmTagSolicitacoes = {
           <button type="button" class="btn btn-fechar" onclick="CrmTagSolicitacoes.adiar()">Ver depois</button>
         </div>
         ${cards}
+        ${todasHtml}
       </div>
     </div>`;
     const antigo = document.getElementById("tagsol-overlay");
@@ -586,13 +631,16 @@ const CrmTagSolicitacoes = {
     if (window.lucide) lucide.createIcons();
   },
 
-  filtrarTodas(input) {
-    const termo = tagNorm(input.value);
-    const tbody = input.parentElement.querySelector("tbody");
-    if (!tbody) return;
-    tbody.querySelectorAll("tr[data-busca]").forEach((tr) => {
-      tr.style.display = !termo || tr.getAttribute("data-busca").indexOf(termo) >= 0 ? "" : "none";
-    });
+  mostrarRecusa(id, mostrar) {
+    const box = document.getElementById("tagsol-recusa-" + id);
+    const acoes = document.getElementById("tagsol-acoes-" + id);
+    if (!box) return;
+    box.hidden = !mostrar;
+    if (acoes) acoes.hidden = !!mostrar;
+    if (mostrar) {
+      const txt = document.getElementById("tagsol-motivo-" + id);
+      if (txt) txt.focus();
+    }
   },
 
   adiar() {
@@ -640,8 +688,13 @@ const CrmTagSolicitacoes = {
   async recusar(id) {
     const p = this._pendentes.find((x) => x.id === id);
     if (!p) return;
-    const motivo = prompt(`Motivo da recusa da TAG "${p.tag_name}" (ex.: use a TAG já existente X):`, "");
-    if (motivo === null) return;
+    const txt = document.getElementById("tagsol-motivo-" + id);
+    const motivo = String(txt ? txt.value : "").trim();
+    if (!motivo) {
+      alert("Informe o motivo da recusa.");
+      if (txt) txt.focus();
+      return;
+    }
     try {
       const { email, nome: quem } = this.usuario();
       const { doc, updateDoc } = window.firebaseCollections;

@@ -12942,6 +12942,10 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   if (dataAlreadyLoaded && typeof window.updateFilaCacheStatusIndicator === "function") {
     window.updateFilaCacheStatusIndicator();
   }
+  // Em segundo plano: baixas lançadas depois da carga do dia entram na próxima abertura e no Sprint.
+  if (getSiengeApiMode() === "real" && window.SiengeApiService && typeof SiengeApiService.refreshRecentPayments === "function") {
+    SiengeApiService.refreshRecentPayments().catch(() => {});
+  }
 
   if ((!bills || bills.length === 0) && !(window._filaProntaAtiva && filaPronta && filaPronta.length)) {
     if (body) {
@@ -12971,6 +12975,9 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   try { subjudiceMemory = JSON.parse(localStorage.getItem('subjudiceHistory') || '{}') || {}; } catch (e) { subjudiceMemory = {}; }
   const filaPausa = () => new Promise((resolve) => setTimeout(resolve, 0));
   if (window._filaProntaAtiva && filaPronta && filaPronta.length) {
+    if (typeof window.filaAplicarPagamentosRecentes === "function") {
+      try { filaPronta = window.filaAplicarPagamentosRecentes(filaPronta); } catch (e) {}
+    }
     filaPronta.forEach((c) => {
       if (!c) return;
       consolidated[String(c.customerId) + "-" + String(c.saleId)] = c;

@@ -1941,10 +1941,23 @@ const DashboardInadimplencia = (function() {
   }
 
   async function gerarRelatorioDiarioPdf() {
-    const fila = await listaDaFilaParaSprint();
+    let fila = await listaDaFilaParaSprint();
     if (!fila.length) {
       alert("A fila de cobrança de hoje ainda não está carregada. Abra a Fila de cobrança e espere ela terminar de montar.");
       return;
+    }
+    // Baixas lançadas depois da carga da madrugada (mesmo com data de ontem) saem do Sprint.
+    if (window.SiengeApiService && typeof SiengeApiService.refreshRecentPayments === "function") {
+      try {
+        await Promise.race([
+          SiengeApiService.refreshRecentPayments(),
+          new Promise((resolve) => setTimeout(resolve, 45000))
+        ]);
+      } catch (e) {}
+    }
+    if (typeof window.filaAplicarPagamentosRecentes === "function") {
+      fila = window.filaAplicarPagamentosRecentes(fila);
+      if (Array.isArray(window.rawClientList) && window.rawClientList.length) window.rawClientList = fila;
     }
     if (typeof window.refreshVistoriaSprintCounts === "function") {
       try { await window.refreshVistoriaSprintCounts(); } catch (e) {}
@@ -2282,6 +2295,19 @@ const DashboardInadimplencia = (function() {
     function snapAgingAbove31(snap) {
         if (!snap) return { v: 0, c: 0, trusted: false };
         const dj = snapDataJson(snap);
+        // O detalhe por empresa precisa bater com o total do dia. Se não bate (ex.: 13/11/2026,
+        // detalhe com 1.972 títulos e total de 845), o detalhe veio de outra carga e não é usado.
+        const totCount = Number(snap.total_count) || 0;
+        const totValue = Number(snap.total_value) || 0;
+        let somaC = 0;
+        let somaV = 0;
+        (dj.companies || []).forEach((comp) => {
+            somaC += Number(comp && comp.count) || 0;
+            somaV += Number(comp && comp.value) || 0;
+        });
+        const foraC = totCount > 0 && somaC > 0 && Math.abs(somaC - totCount) / totCount > 0.2;
+        const foraV = totValue > 0 && somaV > 0 && Math.abs(somaV - totValue) / totValue > 0.2;
+        if (foraC || foraV) return { v: 0, c: 0, trusted: false };
         let v = 0;
         let c = 0;
         const take = (row) => {

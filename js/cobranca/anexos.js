@@ -4560,7 +4560,7 @@ const AnexosApp = {
   solicitarTag() {
     const modalHtml = `
       <div id="modal-solicitar-tag" class="modal-overlay active">
-        <div class="modal-box" style="max-width: 450px;">
+        <div class="modal-box" style="max-width: 560px; max-height: 92vh; overflow: auto;">
           <h3>Solicitar Nova TAG</h3>
           <div class="form-group" style="margin-top: 15px;">
             <label>Nome da TAG (Use maiúsculas)</label>
@@ -4586,6 +4586,7 @@ const AnexosApp = {
             <button class="btn btn-cancel" onclick="document.getElementById('modal-solicitar-tag').remove()">Cancelar</button>
             <button class="btn btn-primary" onclick="AnexosApp.enviarSolicitacaoTag()">Enviar Solicitação</button>
           </div>
+          <div id="req-tag-todas" style="margin-top: 16px;"></div>
         </div>
       </div>
     `;
@@ -4594,7 +4595,12 @@ const AnexosApp = {
     document.body.insertAdjacentHTML('beforeend', modalHtml);
     this._reqTagsTodas = null;
     if (typeof window.crmTagsTodas === 'function') {
-      window.crmTagsTodas().then((tags) => { this._reqTagsTodas = tags; this.verSemelhantesTag(); }).catch(() => {});
+      window.crmTagsTodas().then((tags) => {
+        this._reqTagsTodas = tags;
+        this.verSemelhantesTag();
+        const box = document.getElementById('req-tag-todas');
+        if (box && typeof window.crmTagListaTodasHtml === 'function') box.innerHTML = window.crmTagListaTodasHtml(tags);
+      }).catch(() => {});
     }
   },
 
@@ -4629,20 +4635,25 @@ const AnexosApp = {
     const nomeUsuario = typeof window.crmNomeReal === 'function' ? window.crmNomeReal() : (u.name || '');
     const { collection, addDoc, getDocs, query, where } = window.firebaseCollections;
     const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+    // Sem cota no Firebase, a chamada fica tentando para sempre; corta em 15 s e avisa.
+    const comPrazo = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('SEM_RESPOSTA')), 15000))]);
+    const btn = document.querySelector('#modal-solicitar-tag .btn-primary');
+    const btnTxt = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
 
     try {
-      const tags = typeof window.crmTagsTodas === 'function' ? await window.crmTagsTodas() : [];
+      const tags = typeof window.crmTagsTodas === 'function' ? await comPrazo(window.crmTagsTodas()) : [];
       const igual = tags.find((t) => t.destino === type && norm(t.name) === norm(nome));
       if (igual) {
         return alert(`A TAG "${igual.name}" já existe para ${type}` + (igual.status === 'Inativa' ? ', mas está inativa. Peça ao administrador para reativar.' : '. Use essa TAG.'));
       }
-      const pend = await getDocs(query(collection(window.firebaseDb, 'tag_solicitacoes'), where('status', '==', 'Pendente')));
+      const pend = await comPrazo(getDocs(query(collection(window.firebaseDb, 'tag_solicitacoes'), where('status', '==', 'Pendente'))));
       let jaPedida = null;
       pend.forEach((d) => { const s = d.data() || {}; if (!jaPedida && s.type === type && norm(s.tag_name) === norm(nome)) jaPedida = s; });
       if (jaPedida) return alert(`A TAG "${nome}" já foi solicitada e está aguardando aprovação.`);
 
       const parecidas = typeof window.crmTagsSemelhantes === 'function' ? window.crmTagsSemelhantes(nome, tags) : [];
-      await addDoc(collection(window.firebaseDb, 'tag_solicitacoes'), {
+      await comPrazo(addDoc(collection(window.firebaseDb, 'tag_solicitacoes'), {
         tag_name: nome,
         reason: motivo,
         type: type,
@@ -4651,12 +4662,19 @@ const AnexosApp = {
         solicitado_por_nome: nomeUsuario,
         criado_em: new Date().toISOString(),
         parecidas: parecidas.map((s) => ({ name: s.tag.name, destino: s.tag.destino, motivo: s.motivo, grau: Math.round(s.score * 100) }))
-      });
+      }));
       document.getElementById('modal-solicitar-tag').remove();
       alert("Solicitação enviada. O administrador e o back office vão avaliar, e você recebe um aviso aqui quando houver resposta.");
     } catch (e) {
       console.error('[Tags] solicitação', e);
-      alert("Falha ao enviar solicitação: " + (e && e.message ? e.message : e));
+      const msg = String((e && (e.code || e.message)) || e);
+      if (msg === 'SEM_RESPOSTA' || /resource-exhausted|quota/i.test(msg)) {
+        alert("O banco de dados do CRM (Firebase) atingiu o limite de uso de hoje e não está respondendo. A solicitação não foi enviada. Tente de novo mais tarde.");
+      } else {
+        alert("Falha ao enviar solicitação: " + (e && e.message ? e.message : e));
+      }
+    } finally {
+      if (btn && document.body.contains(btn)) { btn.disabled = false; btn.textContent = btnTxt; }
     }
   },
 
