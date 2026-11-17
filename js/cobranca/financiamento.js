@@ -165,21 +165,36 @@ const FinanciamentoApp = {
     const semEtapa = abertos.filter((proc) => !proc.currentStageId
       || !etapas.some((etapa) => String(etapa.id) === String(proc.currentStageId))).length;
     if (semEtapa) etapasComContagem.unshift({ id: "", nome: "Aguardando definição da etapa", quantidade: semEtapa });
+    const abertosPorCidade = new Map();
+    const centrosCusto = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    abertos.forEach((proc) => {
+      const obra = this.obraDoProc(proc);
+      const ccId = String((proc && (proc.costCenterId || proc.empId)) || "");
+      const cc = ccId ? centrosCusto.find((item) => String(item.id) === ccId || String(item.code) === ccId) : null;
+      const cidade = String((proc && (proc.cidade || proc.city || proc.cityName))
+        || (cc && (cc.city || cc.cidade))
+        || (typeof window.extractCityDisplayName === "function" ? window.extractCityDisplayName(ccId, (cc && cc.name) || "") : "")
+        || (typeof window.extractCityFromCostCenter === "function" ? window.extractCityFromCostCenter(ccId, (cc && cc.name) || "") : "")
+        || "Sem cidade").trim();
+      const chaveCidade = cidade.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      if (!abertosPorCidade.has(chaveCidade)) abertosPorCidade.set(chaveCidade, { nome: cidade, quantidade: 0, empreendimentos: new Map() });
+      const grupoCidade = abertosPorCidade.get(chaveCidade);
+      const empreendimento = obra.empreendimento && obra.empreendimento !== "—" ? obra.empreendimento : "Sem empreendimento";
+      const chaveEmpreendimento = empreendimento.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+      grupoCidade.quantidade++;
+      grupoCidade.empreendimentos.set(chaveEmpreendimento, {
+        nome: empreendimento,
+        quantidade: ((grupoCidade.empreendimentos.get(chaveEmpreendimento) || {}).quantidade || 0) + 1
+      });
+    });
+    const cidades = Array.from(abertosPorCidade.values()).map((cidade) => ({
+      nome: cidade.nome,
+      quantidade: cidade.quantidade,
+      empreendimentos: Array.from(cidade.empreendimentos.values()).sort((a, b) => b.quantidade - a.quantidade || a.nome.localeCompare(b.nome, "pt-BR"))
+    })).sort((a, b) => b.quantidade - a.quantidade || a.nome.localeCompare(b.nome, "pt-BR"));
     const saldos = processos.map((proc) => ({ proc: proc, saldo: this.saldoDeclaradoDashboard(proc) }))
       .filter((item) => item.saldo != null);
     const valorTotal = saldos.reduce((total, item) => total + item.saldo, 0);
-    const divergencias = processos.map((proc) => {
-      const declarado = this.saldoDeclaradoDashboard(proc);
-      const caixa = Number(proc.valorLiberadoCaixa);
-      if (declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)) return null;
-      return { proc: proc, declarado: declarado, caixa: caixa, diferenca: Math.abs(caixa - declarado) };
-    }).filter((item) => item && item.diferenca > 0.01).sort((a, b) => b.diferenca - a.diferenca);
-    const diferencaTotal = processos.reduce((total, proc) => {
-      const declarado = this.saldoDeclaradoDashboard(proc);
-      const caixa = Number(proc.valorLiberadoCaixa);
-      return declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)
-        ? total : total + Math.abs(caixa - declarado);
-    }, 0);
     const ano = Number(String(periodo || "").slice(0, 4));
     const mes = Number(String(periodo || "").slice(5, 7));
     const periodoLabel = Number.isInteger(ano) && Number.isInteger(mes) && mes >= 1 && mes <= 12
@@ -191,11 +206,10 @@ const FinanciamentoApp = {
       abertos: abertos,
       concluidos: concluidos,
       etapas: etapasComContagem,
+      cidades: cidades,
       saldosDeclarados: saldos.length,
       saldosPendentes: processos.length - saldos.length,
-      valorTotal: valorTotal,
-      divergencias: divergencias,
-      diferencaTotal: diferencaTotal
+      valorTotal: valorTotal
     };
   },
 
@@ -206,6 +220,20 @@ const FinanciamentoApp = {
     FinanciamentoState.dashboardPeriodo = periodo;
     const dados = this.dadosDashboard(periodo);
     const totalAbertos = dados.abertos.length;
+    const anoSelecionado = periodo.slice(0, 4);
+    const mesSelecionado = periodo.slice(5, 7);
+    const anosDisponiveis = new Set([String(new Date().getFullYear()), anoSelecionado]);
+    this.listOpenProcesses().concat(this.listCompletedProcesses()).forEach(({ proc }) => {
+      const ano = this.dataInicioDashboard(proc).slice(0, 4);
+      if (/^\d{4}$/.test(ano)) anosDisponiveis.add(ano);
+    });
+    const opcoesAno = Array.from(anosDisponiveis).sort((a, b) => Number(b) - Number(a))
+      .map((ano) => `<option value="${ano}" ${ano === anoSelecionado ? "selected" : ""}>${ano}</option>`).join("");
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const opcoesMes = meses.map((mes, index) => {
+      const valor = String(index + 1).padStart(2, "0");
+      return `<option value="${valor}" ${valor === mesSelecionado ? "selected" : ""}>${mes}</option>`;
+    }).join("");
     const estagios = dados.etapas.map((etapa) => {
       const percentual = totalAbertos ? Math.round(etapa.quantidade / totalAbertos * 100) : 0;
       return `<article class="fin-dash-etapa">
@@ -213,21 +241,30 @@ const FinanciamentoApp = {
         <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
       </article>`;
     }).join("");
-    const divergencias = dados.divergencias.map(({ proc, declarado, caixa, diferenca }) => `
-      <tr>
-        <td class="fin-dash-cliente">${this.esc(proc.customerName || proc.customerId || "—")}</td>
-        <td>${this.esc(proc.titulo || "—")}</td>
-        <td>${this.esc(this.etapaLabel(proc))}</td>
-        <td class="is-right">${this.esc(this.fmtMoney(declarado))}</td>
-        <td class="is-right">${this.esc(this.fmtMoney(caixa))}</td>
-        <td class="is-right fin-dash-diferenca">${this.esc(this.fmtMoney(diferenca))}</td>
-      </tr>`).join("");
+    const cidades = dados.cidades.map((cidade) => `<article class="fin-dash-cidade">
+      <div class="fin-dash-cidade-titulo"><strong>${this.esc(cidade.nome)}</strong><span>${cidade.quantidade}</span></div>
+      <div class="fin-dash-cidade-itens">${cidade.empreendimentos.map((empreendimento) => {
+        const percentual = cidade.quantidade ? Math.round(empreendimento.quantidade / cidade.quantidade * 100) : 0;
+        return `<div class="fin-dash-cidade-item">
+          <div><span>${this.esc(empreendimento.nome)}</span><strong>${empreendimento.quantidade}</strong></div>
+          <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
+        </div>`;
+      }).join("")}</div>
+    </article>`).join("");
     return `<section class="fin-dashboard">
-      <div class="fin-dash-filtros">
-        <label for="fin-dashboard-periodo">Mês e ano de início do processo</label>
-        <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
-        <button type="button" class="btn btn-primary" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
-        <span id="fin-dashboard-pdf-status" role="status"></span>
+      <div class="fin-dash-toolbar">
+        <div class="fin-dash-filtros">
+          <label for="fin-dashboard-mes">Mês de início do processo
+            <select id="fin-dashboard-mes" onchange="FinanciamentoApp.atualizarDashboard()">${opcoesMes}</select>
+          </label>
+          <label for="fin-dashboard-ano">Ano
+            <select id="fin-dashboard-ano" onchange="FinanciamentoApp.atualizarDashboard()">${opcoesAno}</select>
+          </label>
+        </div>
+        <div class="fin-dash-exportar">
+          <span id="fin-dashboard-pdf-status" role="status"></span>
+          <button type="button" id="fin-dashboard-pdf-btn" class="btn btn-primary" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
+        </div>
       </div>
       <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
         <header class="fin-dash-cabecalho">
@@ -238,36 +275,34 @@ const FinanciamentoApp = {
           <article class="fin-dash-kpi fin-dash-kpi-verde"><span>Contratos em andamento</span><strong>${totalAbertos}</strong><small>Na etapa atual</small></article>
           <article class="fin-dash-kpi fin-dash-kpi-laranja"><span>Concluídos</span><strong>${dados.concluidos.length}</strong><small>Finalizados no processo</small></article>
           <article class="fin-dash-kpi"><span>Valor de financiamento</span><strong>${this.esc(this.fmtMoney(dados.valorTotal))}</strong><small>${dados.saldosDeclarados} com saldo declarado · ${dados.saldosPendentes} pendentes</small></article>
-          <article class="fin-dash-kpi"><span>Diferença dos clientes</span><strong>${this.esc(this.fmtMoney(dados.diferencaTotal))}</strong><small>${dados.divergencias.length} com divergência · soma das diferenças absolutas</small></article>
         </div>
         <section class="fin-dash-bloco">
           <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento</span></div>
           <div class="fin-dash-etapas">${estagios || '<p class="fin-dash-vazio">Etapas de financiamento não cadastradas.</p>'}</div>
         </section>
         <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Divergências por cliente</h3><span>Valor absoluto entre a declaração e a Carta SIOPI</span></div>
-          <div class="cc-scroll">
-            <table class="cc-table fin-dash-tabela">
-              <colgroup><col><col style="width:100px"><col style="width:230px"><col style="width:130px"><col style="width:130px"><col style="width:130px"></colgroup>
-              <thead><tr><th>Cliente</th><th>Título</th><th>Etapa</th><th class="is-right">Declarado</th><th class="is-right">CAIXA / SIOPI</th><th class="is-right">Diferença</th></tr></thead>
-              <tbody>${divergencias || '<tr><td colspan="6" style="text-align:center;padding:24px;">Não há divergências registradas neste período.</td></tr>'}</tbody>
-            </table>
-          </div>
+          <div class="fin-dash-titulo"><h3>Em andamento por cidade e empreendimento</h3><span>${totalAbertos} contratos em andamento</span></div>
+          <div class="fin-dash-cidades">${cidades || '<p class="fin-dash-vazio">Não há contratos em andamento neste período.</p>'}</div>
         </section>
       </div>
       <style>
         #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-laranja:#f37021; }
-        #financiamento-root .fin-dash-filtros { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+        #financiamento-root .fin-dash-toolbar { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+        #financiamento-root .fin-dash-filtros { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; }
         #financiamento-root .fin-dash-filtros label { display:flex; flex-direction:column; gap:5px; color:#475569; font-size:0.75rem; font-weight:700; }
-        #financiamento-root .fin-dash-filtros input { width:190px; height:40px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:6px; padding:0 10px; font:inherit; }
-        #financiamento-root .fin-dash-filtros .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
+        #financiamento-root .fin-dash-filtros select { height:40px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:6px; padding:0 10px; font:inherit; background:#fff; }
+        #financiamento-root #fin-dashboard-mes { min-width:145px; }
+        #financiamento-root #fin-dashboard-ano { min-width:100px; }
+        #financiamento-root .fin-dash-exportar { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-left:auto; }
+        #financiamento-root .fin-dash-exportar .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
+        #financiamento-root .fin-dash-exportar .btn svg { width:16px; height:16px; flex-shrink:0; }
         #financiamento-root #fin-dashboard-pdf-status { color:#105436; font-size:0.78rem; font-weight:700; }
         #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; }
         #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; padding:18px 20px; border-radius:12px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
         #financiamento-root .fin-dash-marca { font-size:0.7rem; font-weight:800; letter-spacing:0.08em; opacity:.85; }
         #financiamento-root .fin-dash-cabecalho h2 { margin:4px 0 0; font-size:1.35rem; }
         #financiamento-root .fin-dash-cabecalho p { margin:0; font-size:0.82rem; font-weight:700; }
-        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
         #financiamento-root .fin-dash-kpi { min-width:0; display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #e2e8f0; border-top:4px solid #105436; border-radius:10px; background:#fff; box-shadow:0 2px 6px rgba(15,23,42,.04); }
         #financiamento-root .fin-dash-kpi-verde { border-top-color:#105436; }
         #financiamento-root .fin-dash-kpi-laranja { border-top-color:#f37021; }
@@ -286,12 +321,19 @@ const FinanciamentoApp = {
         #financiamento-root .fin-dash-barra { height:6px; margin-top:7px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
         #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
         #financiamento-root .fin-dash-vazio { grid-column:1/-1; margin:6px 0; color:#64748b; font-size:0.8rem; }
-        #financiamento-root .fin-dash-tabela { min-width:900px; }
-        #financiamento-root .fin-dash-tabela .fin-dash-cliente { white-space:normal; }
-        #financiamento-root .fin-dash-tabela .fin-dash-diferenca { color:#b45309; font-weight:800; }
+        #financiamento-root .fin-dash-cidades { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+        #financiamento-root .fin-dash-cidade { min-width:0; padding:10px; border:1px solid #eef2f7; border-radius:8px; background:#f8fafc; }
+        #financiamento-root .fin-dash-cidade-titulo, #financiamento-root .fin-dash-cidade-item > div:first-child { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+        #financiamento-root .fin-dash-cidade-titulo { padding-bottom:7px; border-bottom:1px solid #e2e8f0; color:#105436; font-size:0.8rem; }
+        #financiamento-root .fin-dash-cidade-titulo span, #financiamento-root .fin-dash-cidade-item strong { flex:0 0 auto; font-weight:800; font-variant-numeric:tabular-nums; }
+        #financiamento-root .fin-dash-cidade-itens { display:grid; gap:8px; padding-top:8px; }
+        #financiamento-root .fin-dash-cidade-item > div:first-child { color:#334155; font-size:0.74rem; }
+        #financiamento-root .fin-dash-cidade-item > div:first-child span { line-height:1.35; }
+        #financiamento-root .fin-dash-cidade-item strong { color:#105436; }
+        #financiamento-root .fin-dash-cidade-item .fin-dash-barra { margin-top:4px; }
         @media (max-width:900px) { #financiamento-root .fin-dash-indicadores { grid-template-columns:repeat(2,minmax(0,1fr)); } }
         @media (max-width:600px) {
-          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas { grid-template-columns:1fr; }
+          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas, #financiamento-root .fin-dash-cidades { grid-template-columns:1fr; }
           #financiamento-root .fin-dash-cabecalho { align-items:flex-start; flex-direction:column; }
           #financiamento-root .fin-dash-titulo { align-items:flex-start; flex-direction:column; }
         }
@@ -300,6 +342,12 @@ const FinanciamentoApp = {
   },
 
   atualizarDashboard(periodo) {
+    if (!periodo) {
+      const mes = document.getElementById("fin-dashboard-mes");
+      const ano = document.getElementById("fin-dashboard-ano");
+      if (!mes || !ano) return;
+      periodo = ano.value + "-" + mes.value;
+    }
     if (periodo && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(periodo))) return;
     FinanciamentoState.dashboardPeriodo = String(periodo || "");
     this.render();
@@ -307,7 +355,7 @@ const FinanciamentoApp = {
 
   async exportarDashboardPdf() {
     const conteudo = document.getElementById("fin-dashboard-conteudo");
-    const btn = document.querySelector("#fin-dashboard-periodo") && document.querySelector(".fin-dash-filtros .btn");
+    const btn = document.getElementById("fin-dashboard-pdf-btn");
     const status = document.getElementById("fin-dashboard-pdf-status");
     if (!conteudo) return false;
     if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
