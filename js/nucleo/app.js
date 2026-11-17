@@ -18403,13 +18403,15 @@ function formatCpfCnpj(val) {
                  ? window.siengePaymentSlipIsUsable(s)
                  : !!(s && s.results && s.results.length > 0);
                let slip = null;
-               for (const idTit of idsSlip) {
+               // No máximo 2 títulos por parcela: o Sienge limita a conta a 200 consultas por minuto.
+               for (const idTit of idsSlip.slice(0, 2)) {
                   slip = await SiengeApiService.getPaymentSlipNotification(idTit, simInst.installmentId);
                   if (slipUsavel(slip)) { simInst._slipBillId = idTit; break; }
                }
                const usable = slipUsavel(slip);
-               // Boleto recém-gerado: o Sienge leva alguns segundos para devolver a linha.
-               if (!usable && simInst.generatedBillet && tentativa < 3) tentarDeNovo = true;
+               // Boleto recém-gerado (últimos 15 min): o Sienge leva alguns segundos para devolver a linha.
+               const recemGerado = recentFresh && recentIds.includes(String(simInst.installmentId));
+               if (!usable && recemGerado && tentativa < 3) tentarDeNovo = true;
                if (usable) {
                   simInst.isActiveBoleto = true;
                   const barcode = slip.results[0].digitableLine || slip.results[0].digitableNumber || "";
@@ -18444,7 +18446,7 @@ function formatCpfCnpj(val) {
                }
             } catch(e) {
                simInst.isActiveBoleto = false;
-               if (simInst.generatedBillet && tentativa < 3) tentarDeNovo = true;
+               if (recentFresh && recentIds.includes(String(simInst.installmentId)) && tentativa < 3) tentarDeNovo = true;
             }
             if (tentarDeNovo) {
                setTimeout(() => {

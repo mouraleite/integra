@@ -801,7 +801,20 @@ const CompromissarioApp = {
   movementDocs(m) {
     const docs = [];
     if (m && m._movementType === 'Cessão') {
-      docs.push({ kind: 'CESSAO', contract: { id: m.id }, label: 'Cessão de direitos' });
+      const rec = m._cessao || {};
+      docs.push({
+        kind: 'CESSAO',
+        // id continua o do movimento (chave do arquivo na tela); os demais campos servem para achar a cópia no Integra.
+        contract: {
+          id: m.id,
+          contractId: rec.contractId || '',
+          receivableBillId: rec.receivableBillId || this.digitsOnly(rec.titulo) || '',
+          enterpriseId: m.enterpriseId || rec.enterpriseId || '',
+          _unitName: m._unitName || rec.unitName || '',
+          salesContractUnits: m.salesContractUnits || []
+        },
+        label: 'Cessão de direitos'
+      });
       return docs;
     }
     if (m && m._distrato) docs.push({ kind: 'DISTRATO', contract: m._distrato, label: 'Distrato' });
@@ -2721,7 +2734,11 @@ const CompromissarioApp = {
       this.movementDocs(m).forEach((doc) => {
         const id = String((doc.contract && doc.contract.id) || '');
         if (!id || this.state.files[id]) return;
-        const payload = Object.assign({}, doc.contract, { _operationType: doc.kind === 'DISTRATO' ? 'Distrato' : 'Venda' });
+        const payload = Object.assign({}, doc.contract, {
+          _operationType: doc.kind === 'DISTRATO' ? 'Distrato' : (doc.kind === 'CESSAO' ? 'Cessão' : 'Venda'),
+          enterpriseId: (doc.contract && doc.contract.enterpriseId) || m.enterpriseId || '',
+          _unitName: (doc.contract && doc.contract._unitName) || m._unitName || this.unitNameOf(m) || ''
+        });
         jobs.push({ id, payload });
       });
     });

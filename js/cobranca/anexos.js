@@ -517,17 +517,64 @@ async function anexosLoadMapaEnvios(enterpriseId) {
   }
 }
 
+/** CONTRATO, DISTRATO e CESSÃO são os termos que a notificação à prefeitura usa. */
+function anexosTagTermo(tag) {
+  const t = String(tag || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+  if (t.startsWith('DISTRATO')) return 'DISTRATO';
+  if (t.startsWith('CONTRATO')) return 'CONTRATO';
+  if (t.startsWith('CESSAO')) return 'CESSAO';
+  return '';
+}
+
+/**
+ * O Sienge não devolve anexos de unidade pela API. Para a notificação à prefeitura,
+ * o Integra guarda uma cópia do termo no Firebase Storage e anota o caminho no anexos_mapa.
+ */
+async function anexosGuardarCopiaTermo(record, file) {
+  const fc = window.firebaseCollections;
+  if (!file || !window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes) return '';
+  const termo = anexosTagTermo(record.tag);
+  if (!termo) return '';
+  const cc = String(record.enterpriseId || '').replace(/[^\w-]/g, '');
+  const cid = String(record.contractId || '').replace(/[^\w-]/g, '');
+  const nome = String(record.fileName || file.name || 'termo.pdf');
+  const ext = (nome.match(/\.([a-z0-9]{2,5})$/i) || [, 'pdf'])[1].toLowerCase();
+  const caminho = `anexos_termos/${cc}/${cid}_${termo}_${Date.now()}.${ext}`;
+  await fc.uploadBytes(fc.ref(window.firebaseStorage, caminho), file, {
+    contentType: file.type || (ext === 'pdf' ? 'application/pdf' : 'application/octet-stream')
+  });
+  return caminho;
+}
+
 async function anexosSaveMapaEnvio(record) {
   const cc = String((record && record.enterpriseId) || '').trim();
   const contractId = String((record && record.contractId) || '').trim();
   const tag = String((record && record.tag) || '').trim().toUpperCase();
   if (!cc || !contractId || !tag || !window.firebaseCollections || !window.firebaseDb) return false;
   const key = anexosEnvioKey(contractId, tag);
+  const arquivo = record._file || null;
+  record = Object.assign({}, record);
+  delete record._file;
+  if (arquivo && anexosTagTermo(tag)) {
+    try {
+      record.storagePath = await anexosGuardarCopiaTermo(record, arquivo);
+      record.copiaIntegra = record.storagePath ? 'ok' : 'sem-storage';
+    } catch (e) {
+      console.warn('[Anexos] cópia do termo no Integra', e);
+      record.copiaIntegra = 'falhou';
+    }
+  }
   try {
     const { doc, getDoc, setDoc } = window.firebaseCollections;
     const ref = doc(window.firebaseDb, 'anexos_mapa', cc);
     const snap = await getDoc(ref);
     const prev = snap.exists() ? (snap.data() || {}) : {};
+    const anterior = (prev.byKey && prev.byKey[key]) || {};
+    // Mesmo termo enviado para cliente e unidade: o segundo registro mantém a cópia guardada no primeiro.
+    if (!record.storagePath && anterior.storagePath && anexosTagTermo(tag)) {
+      record.storagePath = anterior.storagePath;
+      record.copiaIntegra = anterior.copiaIntegra || 'ok';
+    }
     const byKey = { ...(prev.byKey || {}), [key]: { ...record, tag, key, sentAt: record.sentAt || new Date().toISOString() } };
     await setDoc(ref, {
       enterpriseId: cc,
@@ -1213,19 +1260,39 @@ function anexosThumbHtml(fileObj) {
 /** Usado pelo Compromissário: baixa CONTRATO/DISTRATO da unidade ou do contrato no Sienge (Assistente + IntegrA). */
 async function anexosFetchTermoBlobForContract(contract) {
   if (!contract) return null;
-  const op = String(contract._operationType || 'Venda').toUpperCase();
-  const wantTag = op === 'DISTRATO' ? 'DISTRATO' : 'CONTRATO';
+  const op = String(contract._operationType || 'Venda').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase();
+  const termo = op === 'DISTRATO' ? 'DISTRATO' : (op.startsWith('CESS') ? 'CESSAO' : 'CONTRATO');
+  const wantTag = termo === 'CESSAO' ? 'CESSÃO' : termo;
   const unit = (contract.salesContractUnits && contract.salesContractUnits[0]) || {};
   const unitId = unit.id || unit.unitId || contract.unitId;
   const enterpriseId = String(contract.enterpriseId || '').trim();
   const contractId = String(contract.id || '').trim();
   const auth = typeof getBasicAuthHeader === 'function' ? getBasicAuthHeader() : '';
 
+  // 1) Cópia guardada pelo Integra no envio (o Sienge não devolve anexos de unidade).
   let preferredName = '';
-  if (enterpriseId && contractId) {
-    const envios = await anexosLoadMapaEnvios(enterpriseId);
-    const rec = envios[anexosEnvioKey(contractId, wantTag)];
-    if (rec && rec.fileName) preferredName = String(rec.fileName);
+  const envios = enterpriseId ? await anexosLoadMapaEnvios(enterpriseId) : {};
+  const idsContrato = [contract.id, contract.contractId, contract.salesContractId, contract.receivableBillId]
+    .map((v) => String(v == null ? '' : v).trim()).filter((v) => v && !v.startsWith('cessao-') && !v.startsWith('troca-'));
+  const nomeUnidade = anexosNormName(String(contract._unitName || unit.name || contract.unitName || '').replace(/-/g, ' '));
+  const doTermo = Object.values(envios || {})
+    .filter((r) => r && anexosTagTermo(r.tag) === termo)
+    .sort((a, b) => String(b.sentAt || '').localeCompare(String(a.sentAt || '')));
+  const rec = doTermo.find((r) => idsContrato.includes(String(r.contractId || '').trim()))
+    || (nomeUnidade ? doTermo.find((r) => anexosNormName(String(r.unitName || '').replace(/-/g, ' ')) === nomeUnidade) : null);
+  if (rec && rec.fileName) preferredName = String(rec.fileName);
+  if (rec && rec.storagePath) {
+    try {
+      const fc = window.firebaseCollections;
+      const url = await fc.getDownloadURL(fc.ref(window.firebaseStorage, rec.storagePath));
+      const r = await fetch(url);
+      if (r.ok) {
+        const blob = await r.blob();
+        return new File([blob], preferredName || `${termo}-${rec.contractId || contractId}.pdf`, { type: blob.type || 'application/pdf' });
+      }
+    } catch (e) {
+      console.warn('[Anexos] cópia do termo no Integra', rec.storagePath, e);
+    }
   }
 
   const listPath = async (path) => {
@@ -3962,10 +4029,21 @@ const AnexosApp = {
       // Loop de paginação
       while (hasMore) {
         const url = `/api/sienge-proxy/units?limit=${limit}&offset=${offset}&enterpriseId=${encodeURIComponent(cc)}&additionalData=NONE`;
-        // Fila do servidor cheia (429) ou Sienge instável (5xx/rede): espera e tenta de novo.
+        // O Sienge limita a conta inteira a 200 consultas por minuto (todos os usuários juntos).
+        // Estourou (429) ou ficou instável (5xx/rede): espera até o minuto virar e tenta de novo (~1 min no total).
+        const esperas = [2000, 4000, 8000, 15000, 30000];
         let res = null;
-        for (let tentativa = 0; tentativa < 4; tentativa++) {
-          if (tentativa > 0) await new Promise((r) => setTimeout(r, 1500 * tentativa));
+        for (let tentativa = 0; tentativa <= esperas.length; tentativa++) {
+          if (tentativa > 0) {
+            const ms = esperas[tentativa - 1];
+            const aviso = document.getElementById('anexos-unidade-loading');
+            if (aviso) {
+              aviso.style.display = 'block';
+              aviso.textContent = `Sienge ocupado (limite de consultas por minuto). Tentando de novo em ${Math.round(ms / 1000)}s…`;
+            }
+            await new Promise((r) => setTimeout(r, ms));
+            if (aviso) aviso.textContent = 'Carregando unidades...';
+          }
           try {
             res = await fetch(url, { headers: { 'Authorization': getBasicAuthHeader() } });
           } catch (errRede) {
@@ -4020,7 +4098,7 @@ const AnexosApp = {
       console.error("Erro ao buscar unidades:", e);
       const msgErr = String((e && e.message) || "");
       if (/HTTP 429|HTTP 5\d\d|conexão/i.test(msgErr)) {
-        alert("O Sienge está ocupado e não respondeu agora (" + msgErr + "). Aguarde alguns segundos e clique em Buscar de novo.");
+        alert("O Sienge está no limite de consultas por minuto da conta (todos os usuários do Integra juntos) e não respondeu depois de 1 minuto tentando (" + msgErr + "). Aguarde um pouco e clique em Buscar de novo.");
       } else {
         alert("Falha ao buscar unidades. O CC está correto?" + (msgErr ? "\n(" + msgErr + ")" : ""));
       }
@@ -5092,10 +5170,16 @@ const AnexosApp = {
            } else if (srcAtt && srcAtt.isUnitAttachment) {
              dlUrl = anexosApiUrl(`/sienge-proxy/units/${srcAtt.unitId || AnexosState.selectedUnidade}/attachments/${fileObj.downloadedId}/file`);
            }
-           const dRes = await fetch(dlUrl, {
-             headers: { 'Authorization': getBasicAuthHeader() }
-           });
-           if (dRes.ok) {
+           // Anexo do contrato de venda: o download é .../attachments/{id}; o "/file" responde 404.
+           let dRes = null;
+           for (const u of [dlUrl.replace(/\/file$/, ''), dlUrl]) {
+             try {
+               const r = await fetch(u, { headers: { 'Authorization': getBasicAuthHeader() } });
+               const tipo = String(r.headers.get('content-type') || '');
+               if (r.ok && !/json|text\/html/i.test(tipo)) { dRes = r; break; }
+             } catch (e) {}
+           }
+           if (dRes) {
              fileBlob = await dRes.blob();
            } else {
              throw new Error("Falha ao baixar arquivo importado do contrato.");
@@ -5177,9 +5261,11 @@ const AnexosApp = {
           xhr.send(multipart.body);
         });
 
-        // Ledger por contractId: permite reenvio após distrato (novo CV)
-        if (destinoAPI !== 'Cliente' && AnexosState.activeContract && AnexosState.activeContract.id) {
-          const tagU = fileObj._tcdRotulo ? "TCD" : String(tagLabel || '').toUpperCase().split('-')[0].trim();
+        // Ledger por contractId: permite reenvio após distrato (novo CV).
+        // Contrato, distrato e cessão também entram quando vão só para o cliente: a notificação à prefeitura precisa deles.
+        const tagU = fileObj._tcdRotulo ? "TCD" : String(tagLabel || '').toUpperCase().split('-')[0].trim();
+        const ehTermo = !fileObj._tcdRotulo && !!anexosTagTermo(tagU || tagLabel);
+        if ((destinoAPI !== 'Cliente' || (ehTermo && !fileObj._copiaTermoFeita)) && AnexosState.activeContract && AnexosState.activeContract.id) {
           await anexosSaveMapaEnvio({
             enterpriseId: cc,
             unitId: AnexosState.selectedUnidade,
@@ -5187,12 +5273,14 @@ const AnexosApp = {
             contractId: AnexosState.activeContract.id,
             contractNumber: AnexosState.activeContract.contractNumber,
             tag: tagU || tagLabel,
-            destination: 'Unidade',
+            destination: destinoAPI === 'Cliente' ? 'Cliente' : 'Unidade',
             description: descricaoSienge,
             fileName: nomeFinalArquivo,
             sentAt: new Date().toISOString(),
-            sentBy: (window.AppState && AppState.user && (AppState.user.email || AppState.user.name)) || ''
+            sentBy: (window.AppState && AppState.user && (AppState.user.email || AppState.user.name)) || '',
+            _file: (ehTermo && !fileObj._copiaTermoFeita) ? fileBlob : null
           });
+          if (ehTermo) fileObj._copiaTermoFeita = true;
           const uid = String(AnexosState.selectedUnidade);
           if (AnexosState.mapaMeta[uid]) {
             const prev = AnexosState.mapaMeta[uid].sentTags || [];
@@ -5607,7 +5695,8 @@ window.anexosUploadUnitAttachment = async function(opts) {
       description: descricaoSienge,
       fileName: nomeFinalArquivo,
       sentAt: new Date().toISOString(),
-      sentBy: (window.AppState && AppState.user && (AppState.user.email || AppState.user.name)) || ""
+      sentBy: (window.AppState && AppState.user && (AppState.user.email || AppState.user.name)) || "",
+      _file: file
     });
   }
   return { ok: true, fileName: nomeFinalArquivo, description: descricaoSienge, unitId: siengeUnitId, tag: tag, dateIso: `${y}-${m}-${d}` };
