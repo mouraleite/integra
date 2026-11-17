@@ -11034,6 +11034,14 @@ window.webroOccurrenceWasReceived = function(occ, client) {
   const today = (typeof window.localDateStr === "function")
     ? window.localDateStr(new Date())
     : new Date().toISOString().slice(0, 10);
+  // A lista de pagamentos só guarda os últimos 30 dias. Para baixas mais antigas, olha o atraso de hoje:
+  // se a parcela vencida mais antiga vence depois da data da baixa Webro, a parcela daquela baixa
+  // já entrou no Sienge e o cliente fica só com a situação atual.
+  const atraso = Number(client && client.maxDaysDelay);
+  if (baixa && Number.isFinite(atraso) && atraso > 0 && typeof window.addDaysIso === "function") {
+    const vencMaisAntigo = window.addDaysIso(today, -atraso);
+    if (vencMaisAntigo > baixa) return true;
+  }
   for (const map of maps) {
     for (const id of ids) {
       if (!map.has(id)) continue;
