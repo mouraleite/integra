@@ -13,6 +13,15 @@
     const h = new Date();
     return h.getFullYear() + "-" + String(h.getMonth() + 1).padStart(2, "0");
   }
+  function hojeIso() {
+    const h = new Date();
+    return h.getFullYear() + "-" + String(h.getMonth() + 1).padStart(2, "0") + "-" + String(h.getDate()).padStart(2, "0");
+  }
+  function isoMenosDias(iso, n) {
+    const d = new Date(iso + "T12:00:00");
+    d.setDate(d.getDate() - n);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
   function esc(s) {
     return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
@@ -42,17 +51,6 @@
     return out;
   }
 
-  /** Nome curto da empresa (Configurações > Empresas: nome usual), igual aos relatórios. */
-  let _custom = null;
-  function nomeEmpresa(id, fallback) {
-    if (_custom === null) {
-      try { _custom = JSON.parse(localStorage.getItem("crm_empresas_custom") || "{}") || {}; } catch (e) { _custom = {}; }
-      if (window.EmpresasState && window.EmpresasState.customFields) _custom = Object.assign({}, _custom, window.EmpresasState.customFields);
-    }
-    const c = _custom[id] || _custom[String(id)] || {};
-    return String(c.nome_usual || c.nome || fallback || ("Empresa " + id)).trim();
-  }
-
   const METRICAS = {
     pago: { rot: "Recebido (R$)", moeda: true, val: (e) => Number(e.pago) || 0 },
     vf: { rot: "Valor das parcelas - VF (R$)", moeda: true, val: (e) => Number(e.vf) || 0 },
@@ -64,8 +62,9 @@
 
   const App = {
     state: {
-      de: mesAtual().slice(0, 4) + "-01",
-      ate: mesAtual(),
+      de: hojeIso().slice(0, 4) + "-01-01",
+      ate: hojeIso(),
+      datasOpen: false,
       aba: "analitico",
       empresas: [],
       ccs: [],
@@ -152,7 +151,7 @@
       this.state.carregando = false;
       Object.values(this._cache).forEach((c) => (c.eventos || []).forEach((ev) => {
         if (!ev) return;
-        if (ev.emp != null && !this._empresas[ev.emp]) this._empresas[ev.emp] = nomeEmpresa(ev.emp, ev.empNome);
+        if (ev.emp != null && !this._empresas[ev.emp]) this._empresas[ev.emp] = String(ev.empNome || ("Empresa " + ev.emp)).trim();
         const cc = String(ev.cc || "");
         if (cc && !this._ccs[cc]) this._ccs[cc] = { nome: ev.ccNome || ("Centro de custo " + cc), emp: String(ev.emp) };
       }));
@@ -170,6 +169,7 @@
         const c = this._cache[mes];
         if (!c) return;
         c.eventos.forEach((ev) => {
+          if (ev.data < this.state.de || ev.data > this.state.ate) return;
           if (emp.size && !emp.has(String(ev.emp))) return;
           if (ccs.size && !ccs.has(String(ev.cc || ""))) return;
           if (q && norm(`${ev.tit} ${ev.cli} ${ev.unid} ${ev.ccNome} ${ev.doc}`).indexOf(q) < 0) return;
@@ -224,7 +224,7 @@
     mesItens() {
       return mesesDoPeriodo(this.state.de, this.state.ate).map((m) => ({
         id: m,
-        name: MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(0, 4)
+        label: MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(0, 4)
       }));
     },
 
@@ -292,13 +292,30 @@
             </div>
           </div>
           <div class="antc-filtros">
-            <div class="antc-periodo">
+            <div class="antc-periodo${this.state.datasOpen ? " is-open" : ""}" id="antc-periodo" onmousedown="event.stopPropagation()">
               <span class="antc-lbl">PERÍODO</span>
-              <div class="antc-periodo-campos">
-                <input type="month" id="antc-de" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.de)}" onchange="AntecipacoesApp.mudarPeriodo()" title="De">
-                <span>a</span>
-                <input type="month" id="antc-ate" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.ate)}" onchange="AntecipacoesApp.mudarPeriodo()" title="Até">
-              </div>
+              <button type="button" class="antc-per-btn" onclick="AntecipacoesApp.abrirDatas()">
+                <i data-lucide="calendar" style="width:15px;height:15px;"></i>
+                <span>${dataBr(this.state.de)} a ${dataBr(this.state.ate)}</span>
+                <i data-lucide="chevron-down" style="width:16px;height:16px;"></i>
+              </button>
+              ${this.state.datasOpen ? `
+              <div class="antc-per-pop">
+                <div class="antc-per-campos">
+                  <label><span>Início</span><input type="date" id="antc-de" min="${INICIO}-01" max="${hojeIso()}" value="${esc(this.state.de)}"></label>
+                  <label><span>Fim</span><input type="date" id="antc-ate" min="${INICIO}-01" max="${hojeIso()}" value="${esc(this.state.ate)}"></label>
+                </div>
+                <div class="antc-per-atalhos">
+                  <button type="button" onclick="AntecipacoesApp.atalhoPeriodo('ano')">Este ano</button>
+                  <button type="button" onclick="AntecipacoesApp.atalhoPeriodo('12m')">Últimos 12 meses</button>
+                  <button type="button" onclick="AntecipacoesApp.atalhoPeriodo('anoPassado')">Ano passado</button>
+                  <button type="button" onclick="AntecipacoesApp.atalhoPeriodo('tudo')">Desde 2024</button>
+                </div>
+                <div class="antc-per-acoes">
+                  <button type="button" class="btn btn-outline" onclick="AntecipacoesApp.abrirDatas()">Cancelar</button>
+                  <button type="button" class="btn btn-primary" onclick="AntecipacoesApp.mudarPeriodo()">Aplicar</button>
+                </div>
+              </div>` : ""}
             </div>
             <div class="antc-f antc-f-mes">${mesHtml}</div>
             <div class="antc-f">${empHtml}</div>
@@ -332,6 +349,7 @@
           self.state.mesOpen = false;
           self.state.empOpen = false;
           self.state.ccOpen = false;
+          self.state.datasOpen = false;
           self.state[abertoKey] = abrir;
           self.render();
         },
@@ -397,13 +415,43 @@
       this.paintCorpo();
     },
 
+    abrirDatas() {
+      this.state.datasOpen = !this.state.datasOpen;
+      this.state.mesOpen = false;
+      this.state.empOpen = false;
+      this.state.ccOpen = false;
+      if (!this._fecharDatas) {
+        // Clique fora do quadro de datas fecha sem aplicar.
+        this._fecharDatas = () => { if (this.state.datasOpen) { this.state.datasOpen = false; this.render(); } };
+        document.addEventListener("mousedown", this._fecharDatas);
+      }
+      this.render();
+    },
+
+    atalhoPeriodo(tipo) {
+      const hoje = hojeIso();
+      const ano = Number(hoje.slice(0, 4));
+      let de = ano + "-01-01";
+      let ate = hoje;
+      if (tipo === "12m") de = isoMenosDias(hoje, 365);
+      if (tipo === "anoPassado") { de = (ano - 1) + "-01-01"; ate = (ano - 1) + "-12-31"; }
+      if (tipo === "tudo") de = INICIO + "-01";
+      const elDe = document.getElementById("antc-de");
+      const elAte = document.getElementById("antc-ate");
+      if (elDe) elDe.value = de;
+      if (elAte) elAte.value = ate;
+      this.mudarPeriodo();
+    },
+
     mudarPeriodo() {
       let de = (document.getElementById("antc-de") || {}).value || this.state.de;
       let ate = (document.getElementById("antc-ate") || {}).value || this.state.ate;
-      if (de < INICIO) de = INICIO;
+      if (de < INICIO + "-01") de = INICIO + "-01";
+      if (ate > hojeIso()) ate = hojeIso();
       if (ate < de) ate = de;
       this.state.de = de;
       this.state.ate = ate;
+      this.state.datasOpen = false;
       this.state.limite = 300;
       // Meses marcados que ficaram fora do novo período saem do filtro.
       const dentro = new Set(mesesDoPeriodo(de, ate));
@@ -532,7 +580,7 @@
         const e = arvore[emp];
         const aberta = this.state.empAbertas.has(emp);
         corpo += `<tr class="antc-n1" onclick="AntecipacoesApp.abrirEmpresa('${esc(emp)}')">
-          <td class="antc-rot"><i data-lucide="${aberta ? "minus-square" : "plus-square"}" class="antc-ic"></i>${esc(this._empresas[emp] || nomeEmpresa(emp))}</td>${celulas(e)}</tr>`;
+          <td class="antc-rot"><i data-lucide="${aberta ? "minus-square" : "plus-square"}" class="antc-ic"></i>${esc(this._empresas[emp] || ("Empresa " + emp))}</td>${celulas(e)}</tr>`;
         if (!aberta) return;
         porTotal(e.ccs).forEach((cc) => {
           const c = e.ccs[cc];
@@ -571,11 +619,11 @@
       const h2 = colunas.filter((col) => col.tipo === "mes" || col.aberto).map((col) => col.tipo === "mes"
         ? `<th class="is-right">${MESES_NOME[Number(col.mes.slice(5, 7)) - 1]}</th>`
         : `<th class="is-right antc-col-ano">Total ${col.ano}</th>`).join("");
-      const largura = 340 + colunas.length * 104 + 110;
+      const largura = 440 + colunas.length * 104 + 110;
       return `
         <div class="cc-scroll antc-scroll antc-analit-scroll">
           <table class="cc-table antc-analit" style="width:${largura}px;">
-            <colgroup><col style="width:340px">${colunas.map(() => `<col style="width:104px">`).join("")}<col style="width:110px"></colgroup>
+            <colgroup><col style="width:440px">${colunas.map(() => `<col style="width:104px">`).join("")}<col style="width:110px"></colgroup>
             <thead><tr>${h1}</tr><tr>${h2}</tr></thead>
             <tbody>${corpo}
               <tr class="antc-total"><td class="antc-rot">Total</td>${celulas(geral)}</tr>
@@ -696,7 +744,7 @@
               <colgroup><col><col style="width:120px"><col style="width:70px"><col style="width:110px"></colgroup>
               <thead><tr><th>Nome</th><th class="is-right">Recebido</th><th class="is-right">Contratos</th><th class="is-right">Média</th></tr></thead>
               <tbody>${linhas.map((x) => `<tr>
-                <td title="${esc(x.nome)}"><div class="antc-rank"><span>${esc(x.nome)}</span><i style="width:${Math.max(2, Math.round((x.pago / max) * 100))}%"></i></div></td>
+                <td title="${esc(x.nome)}">${esc(x.nome)}</td>
                 <td class="is-right">${moeda(x.pago)}</td><td class="is-right">${x.tits.size}</td>
                 <td class="is-right">${moeda(x.tits.size ? x.pago / x.tits.size : 0)}</td></tr>`).join("")
                 || `<tr><td colspan="4" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}
@@ -705,7 +753,7 @@
           </div>
         </div>`;
       };
-      const porEmpresa = agrupar((e) => String(e.emp), (e) => this._empresas[e.emp] || nomeEmpresa(e.emp, e.empNome));
+      const porEmpresa = agrupar((e) => String(e.emp), (e) => this._empresas[e.emp] || e.empNome || ("Empresa " + e.emp));
       const porCc = agrupar((e) => String(e.cc || ""), (e) => (e.cc ? `${e.cc} - ${e.ccNome || ""}` : "Sem centro de custo"));
       const graficoMeses = colunas(meses.map((x) => ({ rot: MESES_NOME[Number(x.slice(5, 7)) - 1] + "/" + x.slice(2, 4), v: porMes[x] || 0 })));
       return `
@@ -800,9 +848,24 @@
       .antc-atualizado { font-size:0.72rem; color:#64748b; cursor:help; }
       .antc-lbl { display:block; font-size:0.68rem; font-weight:700; color:#6d8c7c; letter-spacing:.02em; margin-bottom:4px; }
       .antc-filtros { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin-bottom:12px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; }
-      .antc-periodo-campos { display:flex; align-items:center; gap:6px; }
-      .antc-periodo-campos input { height:38px; padding:0 8px; border:1px solid #e0e5e0; border-radius:6px; font-size:0.82rem; background:#fff; width:150px; }
-      .antc-periodo-campos span { color:#64748b; font-size:0.8rem; }
+      .antc-periodo { position:relative; }
+      .antc-per-btn { height:34px; min-width:230px; display:flex; align-items:center; gap:8px; padding:0 10px; border:1px solid #334155; border-radius:6px; background:#fff; font-size:0.85rem; font-weight:700; color:#0f172a; cursor:pointer; white-space:nowrap; }
+      .antc-per-btn span { flex:1; text-align:left; }
+      .antc-per-pop { position:absolute; top:calc(100% + 4px); left:0; z-index:240; background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 12px 28px rgba(15,23,42,0.14); padding:12px; width:max-content; }
+      .antc-per-campos { display:flex; gap:10px; margin-bottom:10px; }
+      .antc-per-campos label { display:flex; flex-direction:column; gap:4px; font-size:0.7rem; font-weight:700; color:#6d8c7c; text-transform:uppercase; }
+      .antc-per-campos input { height:34px; padding:0 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.85rem; }
+      .antc-per-atalhos { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+      .antc-per-atalhos button { height:30px; padding:0 10px; border:1px solid #cfe3d7; border-radius:99px; background:#f7faf8; color:#105436; font-size:0.75rem; font-weight:700; cursor:pointer; white-space:nowrap; }
+      .antc-per-acoes { display:flex; justify-content:flex-end; gap:8px; }
+      .antc-per-acoes .btn { height:34px; white-space:nowrap; }
+      /* Listas dos filtros: largura do maior nome, sem quebrar texto nem botão. */
+      .antc-page .ml-emp-filter-panel { width:max-content; min-width:100%; max-width:min(640px, 72vw); }
+      .antc-page .ml-emp-filter-item { align-items:center; }
+      .antc-page .ml-emp-filter-item span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .antc-page .ml-emp-filter-btn span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .antc-page .ml-emp-filter-all, .antc-page .ml-emp-filter-none { white-space:nowrap; padding:0 12px; }
+      .antc-page .cc-table td, .antc-page .cc-table th { white-space:nowrap; }
       .antc-f { min-width:190px; }
       .antc-f-mes { min-width:150px; }
       .antc-f-busca { flex:1 1 200px; display:flex; flex-direction:column; }
@@ -824,9 +887,6 @@
       .antc-ajuda { text-decoration:underline dotted; cursor:help; color:#105436; margin-left:6px; }
       .antc-kpis-4 { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
       .antc-graficos.sem-ano { grid-template-columns:minmax(320px,2fr) minmax(260px,1fr); }
-      .antc-rank { position:relative; overflow:hidden; text-overflow:ellipsis; }
-      .antc-rank span { position:relative; z-index:1; }
-      .antc-rank i { position:absolute; left:0; bottom:0; height:3px; background:#1b8253; opacity:.55; border-radius:2px; }
       .antc-subs { display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; }
       .antc-sub { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 14px; border:0; border-bottom:3px solid transparent; background:transparent; color:#475569; font-weight:700; font-size:0.85rem; cursor:pointer; }
       .antc-sub.is-on { color:#105436; border-bottom-color:#1b8253; }
