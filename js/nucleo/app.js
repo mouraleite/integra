@@ -24963,8 +24963,18 @@ async function renegTermoPdfSelecionavel(titulo, texto, testemunhas) {
     if (y + altura > fundo) nova();
   };
   if (logo) {
-    try { pdf.addImage(logo, "PNG", 210 - margem - 42, 10, 42, 14); } catch (e) {}
-    y = 30;
+    // Mantém a proporção do arquivo (o logo é quase quadrado): cabe numa caixa de até 42 x 24 mm no canto direito.
+    let lw = 42;
+    let lh = 14;
+    try {
+      const props = pdf.getImageProperties(logo);
+      const ratio = props && props.width && props.height ? props.width / props.height : 3;
+      lh = 24;
+      lw = lh * ratio;
+      if (lw > 42) { lw = 42; lh = lw / ratio; }
+    } catch (e) {}
+    try { pdf.addImage(logo, "PNG", 210 - margem - lw, 10, lw, lh); } catch (e) {}
+    y = Math.max(30, 10 + lh + 6);
   }
   pdf.setTextColor(17, 17, 17);
   pdf.setFont("times", "bold");
