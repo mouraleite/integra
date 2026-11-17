@@ -18355,7 +18355,8 @@ function formatCpfCnpj(val) {
                   isActiveBoleto: false,
                   isFetchingBoleto: !!hasBoletoFlag,
                   originalValue: Number(inst.originalValue != null ? inst.originalValue : (inst.value != null ? inst.value : cb)),
-                  correctedValue: cb
+                  correctedValue: cb,
+                  _tituloBoleto: String(boletoBillId)
                };
                const blocksSienge = (typeof window.installmentIsParcelaWebro === "function" && window.installmentIsParcelaWebro(row))
                  || (typeof window.installmentAllowsSiengeBoleto === "function" && !window.installmentAllowsSiengeBoleto(row));
@@ -18369,17 +18370,26 @@ function formatCpfCnpj(val) {
             if (typeof AppState !== "undefined") AppState._simVencidas = vencidasSimulador;
          }
 
-         const fetchSlipForSimInst = async (simInst) => {
+         if (window.BoletoBaixa && boletoBillId) {
+            window.BoletoBaixa.carregar(String(boletoBillId)).then(() => {
+               if (typeof window.recalcularSimulador === "function") window.recalcularSimulador();
+            }).catch(() => {});
+         }
+         const fetchSlipForSimInst = async (simInst, tentativa = 0) => {
             if (!simInst.isFetchingBoleto && !simInst.generatedBillet) return;
             simInst.isFetchingBoleto = true;
+            let tentarDeNovo = false;
             try {
                const slip = await SiengeApiService.getPaymentSlipNotification(saleId, simInst.installmentId);
                const usable = typeof window.siengePaymentSlipIsUsable === "function"
                  ? window.siengePaymentSlipIsUsable(slip)
                  : !!(slip && slip.results && slip.results.length > 0);
+               // Boleto recém-gerado: o Sienge leva alguns segundos para devolver a linha.
+               if (!usable && simInst.generatedBillet && tentativa < 3) tentarDeNovo = true;
                if (usable) {
                   simInst.isActiveBoleto = true;
                   const barcode = slip.results[0].digitableLine || slip.results[0].digitableNumber || "";
+                  simInst.linhaBoleto = String(barcode).replace(/\D/g, "");
                   const dtFebraban = typeof window.boletoDataDaLinha === "function"
                     ? window.boletoDataDaLinha(barcode, simInst.due)
                     : null;
@@ -18410,6 +18420,14 @@ function formatCpfCnpj(val) {
                }
             } catch(e) {
                simInst.isActiveBoleto = false;
+               if (simInst.generatedBillet && tentativa < 3) tentarDeNovo = true;
+            }
+            if (tentarDeNovo) {
+               setTimeout(() => {
+                  if (AppState._simVencidas && AppState._simVencidas.indexOf(simInst) < 0) return;
+                  fetchSlipForSimInst(simInst, tentativa + 1);
+               }, [5000, 15000, 30000][tentativa] || 30000);
+               return;
             }
             simInst.isFetchingBoleto = false;
             if (typeof recalcularSimulador === "function") recalcularSimulador();
@@ -18517,7 +18535,9 @@ function formatCpfCnpj(val) {
                const jurosContrato = oficial ? oficial.juros : (charges.jurosPadrao != null ? charges.jurosPadrao : charges.juros);
                const honorarios = charges.honorarios || 0;
                const juros = jurosContrato + honorarios;
-               if (boletoVencidoDentroDe28(inst)) inst.selected = false;
+               // Baixa no banco informada e conferida em "Boletos do Contrato": libera gerar outro boleto.
+               const baixaInf = typeof window.simParcelaTemBaixa === "function" ? window.simParcelaTemBaixa(inst) : null;
+               if (boletoVencidoDentroDe28(inst) && !baixaInf) inst.selected = false;
                
                if (inst.selected) {
                   totalPrincipal += inst.cb;
@@ -18536,11 +18556,12 @@ function formatCpfCnpj(val) {
                   if (inst.isFetchingBoleto) {
                      chkHtml = `<div class="loading-spinner" style="width:14px; height:14px; border:2px solid var(--color-primary); border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></div>`;
                      bgStyle = "background-color: rgba(0,0,0,0.02);";
-                  } else if (boletoVencidoDentroDe28(inst)) {
-                     chkHtml = `<input type="checkbox" disabled class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-boleto-so-download="true" title="Boleto vencido e ainda válido. Baixe o boleto já gerado." style="cursor:not-allowed;opacity:0.45;">`;
+                  } else if (boletoVencidoDentroDe28(inst) && !baixaInf) {
+                     chkHtml = `<input type="checkbox" disabled class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-boleto-so-download="true" title="Boleto vencido e ainda válido. Baixe o boleto já gerado ou informe a baixa no banco em Boletos do Contrato." style="cursor:not-allowed;opacity:0.45;">`;
                      bgStyle = "background-color: #fffbeb;";
                   } else if (inst.isActiveBoleto || inst.boletoBaixado) {
-                     chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-has-active-boleto="true" ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
+                     const precisaBaixa = inst.isActiveBoleto && !inst.boletoBaixado && !baixaInf;
+                     chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" ${precisaBaixa ? 'data-has-active-boleto="true"' : ""} ${baixaInf ? 'data-baixa-informada="true"' : ""} ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
                      bgStyle = AppState.isSubjudiceMode ? "background-color: transparent;" : (inst.boletoBaixado ? "background-color: #fee2e2;" : "background-color: #ecfdf5;");
                   } else {
                      chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
@@ -18595,6 +18616,9 @@ function formatCpfCnpj(val) {
                       }
                       acoesHtml = `<div class="sim-acoes"><button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="openBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)"><i data-lucide="file-text" style="width:12px;height:12px;"></i> Ver</button>
                         <button class="btn btn-outline btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="downloadBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)" title="Download"><i data-lucide="download" style="width:12px;height:12px;"></i></button></div>`;
+                    }
+                    if (baixaInf) {
+                      statusHtml += ` <span style="display:inline-block;margin-top:2px;background:#e0f2fe;color:#075985;border:1px solid #bae6fd;padding:2px 6px;border-radius:4px;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Baixa no banco informada em Boletos do Contrato">Baixa informada</span>`;
                     }
                   }
 
@@ -19012,10 +19036,17 @@ function formatCpfCnpj(val) {
         alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
         return;
       }
-      const hasActiveBoleto = Array.from(checkboxes).some(c => c.getAttribute('data-has-active-boleto') === 'true');
-      if (hasActiveBoleto) {
-          const confirmBaixa = confirm("Atenção! Uma ou mais parcelas selecionadas já possuem um boleto gerado e válido nos últimos 28 dias.\n\nVocê realizou a baixa manual do boleto anterior?\nSe isso não foi feito, o cliente poderá pagar em duplicidade.\n\nClique em OK se já fez a baixa e deseja continuar, ou Cancelar para abortar.");
-          if (!confirmBaixa) return;
+      // Boleto ainda válido só é refeito depois da baixa no banco informada (com comprovante)
+      // em "Boletos do Contrato". Evita o cliente pagar em duplicidade.
+      const semBaixa = Array.from(checkboxes).filter(c => c.getAttribute('data-has-active-boleto') === 'true');
+      if (semBaixa.length) {
+        const nums = semBaixa.map(c => {
+          const id = c.getAttribute('data-inst-id');
+          const row = (AppState._simVencidas || []).find(s => String(s.installmentId) === String(id));
+          return row ? (row.installmentNumber || row.installmentId) : id;
+        }).join(", ");
+        alert("A parcela " + nums + " já tem boleto válido no banco.\n\nPara gerar outro, primeiro faça a baixa do boleto no banco e informe essa baixa com o comprovante em Boletos do Contrato > Informar baixa no banco.\n\nSe o cliente vai pagar o boleto atual, use Ver ou Download.");
+        return;
       }
 
       const instIds = Array.from(checkboxes).map(c => parseInt(c.getAttribute('data-inst-id')));
@@ -31447,10 +31478,17 @@ function boletoVencidoDentroDe28(inst) {
 }
 window.boletoVencidoDentroDe28 = boletoVencidoDentroDe28;
 
+/** Baixa no banco já informada (com comprovante conferido) para o boleto atual desta parcela. */
+window.simParcelaTemBaixa = function(inst) {
+  if (!inst || !window.BoletoBaixa || !inst._tituloBoleto || !inst.linhaBoleto) return null;
+  return window.BoletoBaixa.temBaixa(inst._tituloBoleto, inst.installmentId, inst.linhaBoleto);
+};
+
 window.reprocessBoleto = async function(billId, instId, costCenterId, source = 'avulso') {
   const idsPedido = (Array.isArray(instId) ? instId : [instId]).map(String);
   const sims = (AppState && AppState._simVencidas) || [];
-  const bloqueadas = sims.filter((s) => idsPedido.includes(String(s.installmentId)) && boletoVencidoDentroDe28(s));
+  const bloqueadas = sims.filter((s) => idsPedido.includes(String(s.installmentId)) && boletoVencidoDentroDe28(s)
+    && !(typeof window.simParcelaTemBaixa === "function" && window.simParcelaTemBaixa(s)));
   if (bloqueadas.length) {
     const nums = bloqueadas.map((s) => s.installmentNumber || s.installmentId).join(", ");
     alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
@@ -45615,6 +45653,7 @@ async function loadCustomerBoletos(customerId, saleId) {
     let boletosHtml = `<table class="crm-table" style="width:100%; border-collapse:collapse; margin-top: 15px;">
       <thead>
         <tr style="background:#f5f5f5; text-align:left;">
+          <th style="padding:10px 6px; border-bottom:1px solid #ddd; width:32px;" title="Marque para informar a baixa no banco"></th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Título</th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Parcela</th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Venc. Orig.</th>
@@ -45673,9 +45712,10 @@ async function loadCustomerBoletos(customerId, saleId) {
         const recentBadge = isRecentGen ? ` <span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:700;">Recém gerado</span>` : "";
         
         boletosHtml += `
-          <tr id="row-inst-${inst.installmentId}">
+          <tr id="row-inst-${inst.installmentId}" data-inst-num="${String(inst.installmentNumber || inst.installmentId).replace(/[^\w-]/g, '')}">
+            <td style="padding:10px 6px; border-bottom:1px solid #eee; text-align:center;"><input type="checkbox" class="bolbx-chk" disabled title="Aguardando o boleto no Sienge" onchange="BoletoBaixa.aoMarcar(this)" style="cursor:pointer;"></td>
             <td style="padding:10px; border-bottom:1px solid #eee; font-weight:600; color:var(--color-primary);">${currentBill.billReceivableId || currentBill.documentCode || 'N/D'}</td>
-            <td style="padding:10px; border-bottom:1px solid #eee;">${inst.installmentNumber || 'N/D'}${recentBadge}</td>
+            <td style="padding:10px; border-bottom:1px solid #eee;">${inst.installmentNumber || 'N/D'}${recentBadge}<span class="bolbx-tag"></span></td>
             <td style="padding:10px; border-bottom:1px solid #eee;">${dueDateStr}</td>
             <td style="padding:10px; border-bottom:1px solid #eee;" id="true-due-date-${inst.installmentId}">Buscando...</td>
             <td style="padding:10px; border-bottom:1px solid #eee;">${new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(inst.originalValue || 0)}</td>
@@ -45702,8 +45742,12 @@ async function loadCustomerBoletos(customerId, saleId) {
       container.innerHTML = `
         <h3 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 15px; display: flex; align-items: center;">Boletos do Contrato <span style="background:var(--color-primary); color:#fff; padding:2px 8px; border-radius:12px; font-size:0.8rem; margin-left:8px;">${count}</span></h3>
         <p style="font-size: 0.9rem; color: #666;">Aqui estão os boletos disponíveis (não pagos) para o contrato atual.</p>
+        ${window.BoletoBaixa ? `<div class="bolbx-bar"><button type="button" class="btn btn-outline bolbx-btn" disabled onclick="BoletoBaixa.abrir()"><i data-lucide="file-check" style="width:14px;height:14px;"></i> Informar baixa no banco</button></div>` : ""}
         ${boletosHtml}
       `;
+      if (window.BoletoBaixa) {
+        window.BoletoBaixa.prepararAba(container, boletoBillId, realCustomerId).catch(() => {});
+      }
     }
     
     if (window.lucide) {
@@ -45784,6 +45828,14 @@ async function loadCustomerBoletos(customerId, saleId) {
             
             const tdDate = document.getElementById(`true-due-date-${inst.installmentId}`);
             if (tdDate) tdDate.textContent = trueDateStr;
+
+            // Boleto ainda válido (até 28 dias do vencimento): pode receber baixa informada.
+            if (window.BoletoBaixa && dtFebraban) {
+              const diasLinha = Math.floor((Date.now() - dtFebraban.getTime()) / 86400000);
+              if (diasLinha <= 28) {
+                window.BoletoBaixa.linhaPronta(inst.installmentId, (slip.results[0].digitableNumber || slip.results[0].digitableLine || ""), trueDateStr);
+              }
+            }
 
             if (dtFebraban) {
                // Recalcula o atraso baseado na data do boleto (com carência de dia útil)
