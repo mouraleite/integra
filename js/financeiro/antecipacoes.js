@@ -69,6 +69,9 @@
       aba: "analitico",
       empresas: [],
       ccs: [],
+      meses: [],
+      mesOpen: false,
+      mesQuery: "",
       faixa: "31+",
       busca: "",
       limite: 300,
@@ -156,7 +159,7 @@
 
     /** Período + empresas + empreendimentos + busca (sem a faixa de dias). */
     eventosDoPeriodo() {
-      const meses = mesesDoPeriodo(this.state.de, this.state.ate);
+      const meses = this.mesesAtivos();
       const emp = new Set(this.state.empresas.map(String));
       const ccs = new Set(this.state.ccs.map(String));
       const q = norm(this.state.busca).trim();
@@ -180,6 +183,20 @@
       if (this.state.faixa === "31+") return todos.filter((e) => e.faixa === "31+");
       if (this.state.faixa === "ate30") return todos.filter((e) => e.faixa !== "31+");
       return todos;
+    },
+
+    /** Meses do período; se o filtro de meses tiver algo marcado, só esses. */
+    mesesAtivos() {
+      const todos = mesesDoPeriodo(this.state.de, this.state.ate);
+      const sel = new Set(this.state.meses);
+      return sel.size ? todos.filter((m) => sel.has(m)) : todos;
+    },
+
+    mesItens() {
+      return mesesDoPeriodo(this.state.de, this.state.ate).map((m) => ({
+        id: m,
+        name: MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(0, 4)
+      }));
     },
 
     ccItens() {
@@ -224,6 +241,12 @@
         open: this.state.ccOpen, query: this.state.ccQuery, emptyMeansAll: true, countMode: true,
         nouns: { singular: "empreendimento", plural: "empreendimentos" }
       }) : "";
+      const mesItens = this.mesItens();
+      const mesHtml = F ? F.html({
+        id: "antc-mes", label: "MESES", items: mesItens, selectedIds: this.state.meses,
+        open: this.state.mesOpen, query: this.state.mesQuery, emptyMeansAll: true, countMode: true, keepOrder: true,
+        nouns: { singular: "mês", plural: "meses", noMatch: "Nenhum mês com esse nome." }
+      }) : "";
       const abaBtn = (id, rot, icone) => `<button type="button" class="antc-sub${this.state.aba === id ? " is-on" : ""}" onclick="AntecipacoesApp.trocarAba('${id}')"><i data-lucide="${icone}" style="width:15px;height:15px;"></i> ${rot}</button>`;
       root.innerHTML = `
         <div class="cc-page antc-page">
@@ -235,6 +258,7 @@
           <div class="antc-toolbar">
             <label class="antc-campo"><span>DE</span><input type="month" id="antc-de" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.de)}" onchange="AntecipacoesApp.mudarPeriodo()"></label>
             <label class="antc-campo"><span>ATÉ</span><input type="month" id="antc-ate" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.ate)}" onchange="AntecipacoesApp.mudarPeriodo()"></label>
+            <div class="antc-emp antc-mes">${mesHtml}</div>
             <div class="antc-emp">${empHtml}</div>
             <div class="antc-emp">${ccHtml}</div>
             <label class="antc-campo antc-busca"><span>BUSCAR</span><input type="search" id="antc-busca" placeholder="Título, cliente, unidade..." value="${esc(this.state.busca)}" oninput="AntecipacoesApp.buscar(this.value)"></label>
@@ -244,6 +268,7 @@
           <div id="antc-corpo"></div>
         </div>`;
       if (F) {
+        this.bindFiltro("antc-mes", "meses", "mesOpen", "mesQuery", mesItens, false);
         this.bindFiltro("antc-emp", "empresas", "empOpen", "empQuery", empItens, true);
         this.bindFiltro("antc-cc", "ccs", "ccOpen", "ccQuery", ccItens, false);
       }
@@ -263,8 +288,11 @@
       };
       F.bind(id, {
         toggleOpen() {
-          self.state[abertoKey] = !self.state[abertoKey];
-          if (self.state[abertoKey]) { if (ehEmpresa) self.state.ccOpen = false; else self.state.empOpen = false; }
+          const abrir = !self.state[abertoKey];
+          self.state.mesOpen = false;
+          self.state.empOpen = false;
+          self.state.ccOpen = false;
+          self.state[abertoKey] = abrir;
           self.render();
         },
         close() { if (!self.state[abertoKey]) return; self.state[abertoKey] = false; self.render(); },
@@ -329,6 +357,9 @@
       this.state.de = de;
       this.state.ate = ate;
       this.state.limite = 300;
+      // Meses marcados que ficaram fora do novo período saem do filtro.
+      const dentro = new Set(mesesDoPeriodo(de, ate));
+      this.state.meses = this.state.meses.filter((m) => dentro.has(m));
       this.carregar(false);
     },
 
@@ -428,7 +459,7 @@
     analiticoHtml(lista) {
       const m = METRICAS[this.state.metrica] || METRICAS.pago;
       const fmt = (v) => (m.moeda ? moeda(v) : (Number(v) || 0).toLocaleString("pt-BR"));
-      const meses = mesesDoPeriodo(this.state.de, this.state.ate);
+      const meses = this.mesesAtivos();
       const anos = [...new Set(meses.map((x) => x.slice(0, 4)))];
       // Colunas: ano aberto = meses do ano + total do ano; ano fechado = só o total do ano.
       const colunas = [];
@@ -485,17 +516,23 @@
       });
       if (!corpo) corpo = `<tr><td colspan="${colunas.length + 2}" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`;
       // Cabeçalho em duas linhas: ano (clicável para abrir/fechar os meses) e, embaixo, os meses.
+      // Ano fechado ocupa as duas linhas, sem repetir o rótulo.
       let h1 = `<th rowspan="2" class="antc-rot">Empresa / Empreendimento / Título</th>`;
       anos.forEach((ano) => {
         const aberto = this.state.anosAbertos.has(ano);
-        const n = aberto ? meses.filter((x) => x.slice(0, 4) === ano).length + 1 : 1;
-        h1 += `<th colspan="${n}" class="is-center antc-th-ano" onclick="AntecipacoesApp.abrirAno('${ano}')" title="${aberto ? "Agrupar o ano" : "Abrir os meses"}"><i data-lucide="${aberto ? "minus-square" : "plus-square"}" class="antc-ic"></i>${ano}</th>`;
+        const icone = `<i data-lucide="${aberto ? "minus-square" : "plus-square"}" class="antc-ic"></i>`;
+        if (aberto) {
+          const n = meses.filter((x) => x.slice(0, 4) === ano).length + 1;
+          h1 += `<th colspan="${n}" class="is-center antc-th-ano" onclick="AntecipacoesApp.abrirAno('${ano}')" title="Agrupar o ano">${icone}${ano}</th>`;
+        } else {
+          h1 += `<th rowspan="2" class="is-right antc-th-ano antc-col-ano" onclick="AntecipacoesApp.abrirAno('${ano}')" title="Abrir os meses">${icone}${ano}</th>`;
+        }
       });
       h1 += `<th rowspan="2" class="is-right">Total</th>`;
-      const h2 = colunas.map((col) => col.tipo === "mes"
+      const h2 = colunas.filter((col) => col.tipo === "mes" || col.aberto).map((col) => col.tipo === "mes"
         ? `<th class="is-right">${MESES_NOME[Number(col.mes.slice(5, 7)) - 1]}</th>`
-        : `<th class="is-right antc-col-ano">${col.aberto ? "Total " + col.ano : col.ano}</th>`).join("");
-      const largura = 340 + (colunas.length + 1) * 104;
+        : `<th class="is-right antc-col-ano">Total ${col.ano}</th>`).join("");
+      const largura = 340 + colunas.length * 104 + 110;
       const opcoes = Object.keys(METRICAS).map((k) => `<option value="${k}"${k === this.state.metrica ? " selected" : ""}>${esc(METRICAS[k].rot)}</option>`).join("");
       return `
         <div class="antc-analit-bar">
@@ -505,7 +542,7 @@
           <span class="antc-info">Clique no ano para abrir ou agrupar os meses. Clique na empresa e no empreendimento para descer de nível.</span>
         </div>
         <div class="cc-scroll antc-scroll antc-analit-scroll">
-          <table class="cc-table antc-analit" style="width:${largura}px;min-width:100%;">
+          <table class="cc-table antc-analit" style="width:${largura}px;">
             <colgroup><col style="width:340px">${colunas.map(() => `<col style="width:104px">`).join("")}<col style="width:110px"></colgroup>
             <thead><tr>${h1}</tr><tr>${h2}</tr></thead>
             <tbody>${corpo}
@@ -548,8 +585,8 @@
         porAno[ano] = (porAno[ano] || 0) + (Number(e.pago) || 0);
         porMes[mes] = (porMes[mes] || 0) + (Number(e.pago) || 0);
       });
-      const meses = mesesDoPeriodo(this.state.de, this.state.ate).slice(-12);
-      const anos = [...new Set(mesesDoPeriodo(this.state.de, this.state.ate).map((x) => x.slice(0, 4)))];
+      const meses = this.mesesAtivos().slice(-12);
+      const anos = [...new Set(this.mesesAtivos().map((x) => x.slice(0, 4)))];
       // Faixas de valor por antecipação (recebido)
       const faixas = [
         ["Até 1 mil", 0, 1000], ["1 a 5 mil", 1000, 5000], ["5 a 10 mil", 5000, 10000],
@@ -701,6 +738,7 @@
       .antc-campo input { height:38px; padding:0 10px; border:1px solid #e0e5e0; border-radius:6px; font-size:0.85rem; background:#fff; }
       .antc-busca { flex:1 1 220px; }
       .antc-emp { min-width:220px; }
+      .antc-emp.antc-mes { min-width:170px; }
       .antc-toolbar .btn { height:38px; display:inline-flex; align-items:center; gap:6px; }
       .antc-abas { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:10px; }
       .antc-aba { height:34px; padding:0 12px; border:1px solid #cfe3d7; background:#fff; color:#105436; border-radius:8px; font-weight:700; font-size:0.8rem; cursor:pointer; }
