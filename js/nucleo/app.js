@@ -6149,6 +6149,19 @@ window.crmRepararCacoLista = function(list) {
       caco.login_email = CONTA;
       changed = true;
     }
+    // Cópia velha do Caco com o e-mail da conta (mesmo id e mesmo nome, sem usuário Sienge),
+    // criada antes de existir o E-mail de login. Sai da lista e fica marcada como removida
+    // para outro navegador não trazer de volta. Não mexe nos cadastros que entram pela conta.
+    const nomeNorm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const u = list[i];
+      if (u === caco || emailOf(u) !== CONTA) continue;
+      if (String(u.id) === String(caco.id) && nomeNorm(u.name) === nomeNorm(caco.name)) {
+        list.splice(i, 1);
+        if (typeof window.removeCrmUserEmail === "function") window.removeCrmUserEmail(CONTA);
+        changed = true;
+      }
+    }
   }
   return changed;
 };

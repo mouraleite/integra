@@ -1275,10 +1275,18 @@ async function anexosFetchTermoBlobForContract(contract) {
   const att = candidates[0];
   const attId = anexosAttId(att) || att.attachmentid || att.attachmentId || att.id;
   if (!attId) return null;
-  const fileRes = await fetch(anexosApiUrl(`/sienge-proxy${att._dlBase}/${attId}/file`), {
-    headers: { Authorization: auth }
-  });
-  if (!fileRes.ok) return null;
+  // Contrato de venda: o download é GET .../attachments/{id} (o "/file" responde 404). Mantém as duas formas.
+  let fileRes = null;
+  for (const sufixo of ['', '/file']) {
+    try {
+      const r = await fetch(anexosApiUrl(`/sienge-proxy${att._dlBase}/${attId}${sufixo}`), {
+        headers: { Authorization: auth }
+      });
+      const tipo = String(r.headers.get('content-type') || '');
+      if (r.ok && !/json|text\/html/i.test(tipo)) { fileRes = r; break; }
+    } catch (e) {}
+  }
+  if (!fileRes) return null;
   const blob = await fileRes.blob();
   const fileName = preferredName || att.name || att.fileName || `${wantTag}-${contractId}.pdf`;
   return new File([blob], fileName, { type: blob.type || 'application/pdf' });
