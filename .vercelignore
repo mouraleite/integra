@@ -21,3 +21,6 @@ docs
 ferramentas/servidor-local
 ferramentas/scripts
 ferramentas/_version_bump.ps1
+
+# Relatórios do Power BI (dados da empresa)
+*.pbix
