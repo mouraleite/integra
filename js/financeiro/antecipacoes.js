@@ -83,6 +83,8 @@
       anosAbertos: new Set([mesAtual().slice(0, 4)]),
       empAbertas: new Set(),
       ccAbertos: new Set(),
+      titAbertos: new Set(),
+      nivel: 1,
       abertos: new Set(),
       carregando: false,
       erro: ""
@@ -237,9 +239,9 @@
         open: this.state.empOpen, query: this.state.empQuery, emptyMeansAll: true, countMode: true
       }) : "";
       const ccHtml = F ? F.html({
-        id: "antc-cc", label: "EMPREENDIMENTOS", items: ccItens, selectedIds: this.state.ccs,
+        id: "antc-cc", label: "CENTROS DE CUSTO", items: ccItens, selectedIds: this.state.ccs,
         open: this.state.ccOpen, query: this.state.ccQuery, emptyMeansAll: true, countMode: true,
-        nouns: { singular: "empreendimento", plural: "empreendimentos" }
+        nouns: { singular: "centro de custo", plural: "centros de custo" }
       }) : "";
       const mesItens = this.mesItens();
       const mesHtml = F ? F.html({
@@ -248,22 +250,33 @@
         nouns: { singular: "mês", plural: "meses", noMatch: "Nenhum mês com esse nome." }
       }) : "";
       const abaBtn = (id, rot, icone) => `<button type="button" class="antc-sub${this.state.aba === id ? " is-on" : ""}" onclick="AntecipacoesApp.trocarAba('${id}')"><i data-lucide="${icone}" style="width:15px;height:15px;"></i> ${rot}</button>`;
+      const atualizado = this.atualizadoEm();
       root.innerHTML = `
         <div class="cc-page antc-page">
-          <div class="antc-subs">
-            ${abaBtn("analitico", "Analítico", "table-2")}
-            ${abaBtn("indicadores", "Indicadores", "bar-chart-3")}
-            ${abaBtn("lista", "Antecipações", "list")}
+          <div class="antc-cab">
+            <div class="antc-subs">
+              ${abaBtn("analitico", "Analítico", "table-2")}
+              ${abaBtn("indicadores", "Indicadores", "bar-chart-3")}
+            </div>
+            <div class="antc-cab-acoes">
+              <span class="antc-atualizado" title="Base salva no Integra. O batimento das 7h relê no Sienge os últimos 7 dias; o histórico desde jan/2024 não muda.">${atualizado ? "Base de " + esc(atualizado) : ""}</span>
+              <button type="button" class="btn btn-primary cc-atualizar" onclick="AntecipacoesApp.carregar(true)"><i data-lucide="refresh-cw" style="width:16px;"></i> Atualizar</button>
+              <button type="button" class="btn btn-excel" onclick="AntecipacoesApp.exportar()"><i data-lucide="download" style="width:16px;"></i> Excel</button>
+            </div>
           </div>
-          <div class="antc-toolbar">
-            <label class="antc-campo"><span>DE</span><input type="month" id="antc-de" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.de)}" onchange="AntecipacoesApp.mudarPeriodo()"></label>
-            <label class="antc-campo"><span>ATÉ</span><input type="month" id="antc-ate" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.ate)}" onchange="AntecipacoesApp.mudarPeriodo()"></label>
-            <div class="antc-emp antc-mes">${mesHtml}</div>
-            <div class="antc-emp">${empHtml}</div>
-            <div class="antc-emp">${ccHtml}</div>
-            <label class="antc-campo antc-busca"><span>BUSCAR</span><input type="search" id="antc-busca" placeholder="Título, cliente, unidade..." value="${esc(this.state.busca)}" oninput="AntecipacoesApp.buscar(this.value)"></label>
-            <button type="button" class="btn btn-primary cc-atualizar" onclick="AntecipacoesApp.carregar(true)"><i data-lucide="refresh-cw" style="width:16px;"></i> Atualizar</button>
-            <button type="button" class="btn btn-excel" onclick="AntecipacoesApp.exportar()"><i data-lucide="download" style="width:16px;"></i> Excel</button>
+          <div class="antc-filtros">
+            <div class="antc-periodo">
+              <span class="antc-lbl">PERÍODO</span>
+              <div class="antc-periodo-campos">
+                <input type="month" id="antc-de" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.de)}" onchange="AntecipacoesApp.mudarPeriodo()" title="De">
+                <span>a</span>
+                <input type="month" id="antc-ate" min="${INICIO}" max="${mesAtual()}" value="${esc(this.state.ate)}" onchange="AntecipacoesApp.mudarPeriodo()" title="Até">
+              </div>
+            </div>
+            <div class="antc-f antc-f-mes">${mesHtml}</div>
+            <div class="antc-f">${empHtml}</div>
+            <div class="antc-f">${ccHtml}</div>
+            <label class="antc-f antc-f-busca"><span class="antc-lbl">BUSCAR</span><input type="search" id="antc-busca" placeholder="Título, cliente ou unidade" value="${esc(this.state.busca)}" oninput="AntecipacoesApp.buscar(this.value)"></label>
           </div>
           <div id="antc-corpo"></div>
         </div>`;
@@ -330,22 +343,30 @@
 
     abrirEmpresa(id) {
       if (this.state.empAbertas.has(id)) this.state.empAbertas.delete(id); else this.state.empAbertas.add(id);
+      this.state.nivel = 0;
       this.paintCorpo();
     },
 
     abrirCc(id) {
       if (this.state.ccAbertos.has(id)) this.state.ccAbertos.delete(id); else this.state.ccAbertos.add(id);
+      this.state.nivel = 0;
       this.paintCorpo();
     },
 
-    abrirTudo(abrir) {
+    abrirTitulo(chave) {
+      if (this.state.titAbertos.has(chave)) this.state.titAbertos.delete(chave); else this.state.titAbertos.add(chave);
+      this.paintCorpo();
+    },
+
+    /** Abre a matriz até o nível: 1 = empresas, 2 = centros de custo, 3 = títulos. */
+    nivel(n) {
       const lista = this.eventosFiltrados();
-      if (abrir) {
-        lista.forEach((e) => { this.state.empAbertas.add(String(e.emp)); this.state.ccAbertos.add(String(e.emp) + "|" + String(e.cc || "")); });
-      } else {
-        this.state.empAbertas.clear();
-        this.state.ccAbertos.clear();
-      }
+      this.state.empAbertas.clear();
+      this.state.ccAbertos.clear();
+      this.state.titAbertos.clear();
+      if (n >= 2) lista.forEach((e) => this.state.empAbertas.add(String(e.emp)));
+      if (n >= 3) lista.forEach((e) => this.state.ccAbertos.add(String(e.emp) + "|" + String(e.cc || "")));
+      this.state.nivel = n;
       this.paintCorpo();
     },
 
@@ -403,55 +424,41 @@
       const lista = (this.state.faixa === "31+" ? mais31 : (this.state.faixa === "ate30" ? ate30 : todos))
         .slice().sort((a, b) => String(b.data).localeCompare(String(a.data)) || (Number(b.vf) || 0) - (Number(a.vf) || 0));
       const semBase = mesesDoPeriodo(this.state.de, this.state.ate).filter((m) => this._cache[m] && this._cache[m].vazio);
-      const aba = (id, rot, n) => `<button type="button" class="antc-aba${this.state.faixa === id ? " is-on" : ""}" onclick="AntecipacoesApp.faixa('${id}')">${rot} <small>${n.toLocaleString("pt-BR")}</small></button>`;
+      const seg = (id, rot, n) => `<button type="button" class="${this.state.faixa === id ? "is-on" : ""}" onclick="AntecipacoesApp.faixa('${id}')">${rot} <small>${n.toLocaleString("pt-BR")}</small></button>`;
+      const opcoes = Object.keys(METRICAS).map((k) => `<option value="${k}"${k === this.state.metrica ? " selected" : ""}>${esc(METRICAS[k].rot)}</option>`).join("");
+      const niv = (n, rot) => `<button type="button" class="${this.state.nivel === n ? "is-on" : ""}" onclick="AntecipacoesApp.nivel(${n})">${rot}</button>`;
       const topo = `
-        <div class="antc-abas">
-          ${aba("31+", "31 dias ou mais antes do vencimento", mais31.length)}
-          ${aba("ate30", "Até 30 dias antes", ate30.length)}
-          ${aba("todas", "Todas", todos.length)}
-          <span class="antc-info">Base salva no Integra · atualizada pelo batimento das 7h (últimos 7 dias)${this.atualizadoEm() ? " · último: " + esc(this.atualizadoEm()) : ""}</span>
+        <div class="antc-barra-opc">
+          <div class="antc-grupo"><span class="antc-lbl">ANTECEDÊNCIA</span>
+            <div class="antc-seg">
+              ${seg("31+", "31 dias ou mais", mais31.length)}
+              ${seg("ate30", "Até 30 dias", ate30.length)}
+              ${seg("todas", "Todas", todos.length)}
+            </div>
+          </div>
+          ${this.state.aba === "analitico" ? `
+          <div class="antc-grupo"><span class="antc-lbl">VALOR</span>
+            <select class="antc-sel" onchange="AntecipacoesApp.mudarMetrica(this.value)">${opcoes}</select>
+          </div>
+          <div class="antc-grupo"><span class="antc-lbl">ABRIR ATÉ</span>
+            <div class="antc-seg">${niv(1, "Empresa")}${niv(2, "Centro de custo")}${niv(3, "Título")}</div>
+          </div>` : ""}
         </div>
         ${semBase.length ? `<div class="antc-aviso">Sem base salva para: ${semBase.map(esc).join(", ")}. Clique em Atualizar; se continuar, esses meses entram no próximo batimento.</div>` : ""}`;
-      if (this.state.aba === "analitico") {
-        box.innerHTML = topo + this.analiticoHtml(lista);
-        if (window.lucide) lucide.createIcons();
-        return;
-      }
       if (this.state.aba === "indicadores") {
         box.innerHTML = topo + this.indicadoresHtml(lista);
         if (window.lucide) lucide.createIcons();
         return;
       }
       const t = this.totais(lista);
-      const linhas = lista.slice(0, this.state.limite).map((e) => this.linhaHtml(e)).join("")
-        || `<tr><td colspan="13" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`;
-      const pctCom = t.vf > 0 ? (t.comercial / t.vf) * 100 : 0;
-      const pctJur = t.vf > 0 ? (t.juros / t.vf) * 100 : 0;
-      box.innerHTML = `
-        ${topo}
-        <div class="antc-kpis">
-          <div class="antc-kpi"><span>Antecipações</span><b>${t.n.toLocaleString("pt-BR")}</b><small>${t.parc.toLocaleString("pt-BR")} parcela(s)</small></div>
-          <div class="antc-kpi"><span>Valor das parcelas (VF)</span><b>${moeda(t.vf)}</b><small>com os juros do parcelamento</small></div>
-          <div class="antc-kpi"><span>Recebido</span><b>${moeda(t.pago)}</b><small>valor líquido baixado</small></div>
-          <div class="antc-kpi"><span>Desconto de juros</span><b>${moeda(t.juros)}</b><small>${pct(pctJur)} do VF · retirada obrigatória</small></div>
-          <div class="antc-kpi ${t.comercial > 0.009 ? "is-alerta" : ""}"><span>Desconto comercial</span><b>${moeda(t.comercial)}</b><small>${pct(pctCom)} do VF · ${t.comCom} título(s) com desconto além dos juros</small></div>
-        </div>
-        <div class="cc-scroll antc-scroll">
-          <table class="cc-table antc-table">
-            <colgroup>
-              <col style="width:86px"><col style="width:66px"><col><col style="width:150px"><col style="width:70px"><col style="width:58px">
-              <col style="width:96px"><col style="width:104px"><col style="width:104px"><col style="width:104px"><col style="width:100px"><col style="width:104px"><col style="width:70px">
-            </colgroup>
-            <thead><tr>
-              <th>Pagamento</th><th>Título</th><th>Cliente</th><th>Empresa</th><th>Unidade</th><th class="is-center">Parc.</th>
-              <th class="is-center">Antecedência</th><th class="is-right">VF</th><th class="is-right">Sem juros (VP)</th><th class="is-right">Recebido</th>
-              <th class="is-right">Desc. juros</th><th class="is-right">Desc. comercial</th><th class="is-right">% com.</th>
-            </tr></thead>
-            <tbody>${linhas}</tbody>
-          </table>
-        </div>
-        ${lista.length > this.state.limite ? `<div class="antc-mais"><button type="button" class="btn btn-outline" onclick="AntecipacoesApp.mais()">Mostrar mais (${lista.length - this.state.limite} restantes)</button></div>` : ""}
-        <p class="antc-nota">VF = valor da parcela na baixa (com correção). Sem juros (VP) = VF ÷ (1 + taxa do contrato)<sup>meses até o vencimento</sup>. Desconto de juros = VF − VP. Desconto comercial = VP − recebido (negativo: o cliente pagou acima do valor sem juros). Antecipações do mesmo título no mesmo dia formam uma linha. Clique na linha para ver as parcelas.</p>`;
+      const resumo = `
+        <div class="antc-resumo">
+          <span><b>${t.n.toLocaleString("pt-BR")}</b> antecipações · ${t.parc.toLocaleString("pt-BR")} parcelas</span>
+          <span>Recebido <b>${moeda(t.pago)}</b></span>
+          <span>Desconto de juros <b>${moeda(t.juros)}</b></span>
+          <span class="${t.comercial > 0.009 ? "antc-com" : ""}">Desconto comercial <b>${moeda(t.comercial)}</b> (${pct(t.vf > 0 ? (t.comercial / t.vf) * 100 : 0)} do VF)</span>
+        </div>`;
+      box.innerHTML = topo + resumo + this.analiticoHtml(lista);
       if (window.lucide) lucide.createIcons();
     },
 
@@ -482,7 +489,8 @@
         const cc = String(ev.cc || "");
         const e = arvore[emp] = arvore[emp] || Object.assign(novo(), { ccs: {} });
         const c = e.ccs[cc] = e.ccs[cc] || Object.assign(novo(), { tits: {} });
-        const t = c.tits[ev.tit] = c.tits[ev.tit] || Object.assign(novo(), { cli: ev.cli, unid: ev.unid });
+        const t = c.tits[ev.tit] = c.tits[ev.tit] || Object.assign(novo(), { cli: ev.cli, unid: ev.unid, eventos: [] });
+        t.eventos.push(ev);
         [e, c, t, geral].forEach((no) => somar(no, ev));
       });
       const celulas = (no) => colunas.map((col) => {
@@ -509,15 +517,19 @@
           if (!ccAberto) return;
           porTotal(c.tits).forEach((tit) => {
             const t = c.tits[tit];
+            const chaveT = chave + "|" + tit;
+            const titAberto = this.state.titAbertos.has(chaveT);
             const rot = `${tit} - ${t.cli}${t.unid ? " (" + t.unid + ")" : ""}`;
-            corpo += `<tr class="antc-n3"><td class="antc-rot" title="${esc(rot)}">${esc(rot)}</td>${celulas(t)}</tr>`;
+            corpo += `<tr class="antc-n3" onclick="AntecipacoesApp.abrirTitulo('${esc(chaveT)}')" title="Clique para ver as antecipações do título">
+              <td class="antc-rot" title="${esc(rot)}"><i data-lucide="${titAberto ? "minus-square" : "plus-square"}" class="antc-ic"></i>${esc(rot)}</td>${celulas(t)}</tr>`;
+            if (titAberto) corpo += `<tr class="antc-ev"><td colspan="${colunas.length + 2}">${this.eventosTituloHtml(t.eventos)}</td></tr>`;
           });
         });
       });
       if (!corpo) corpo = `<tr><td colspan="${colunas.length + 2}" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`;
       // Cabeçalho em duas linhas: ano (clicável para abrir/fechar os meses) e, embaixo, os meses.
       // Ano fechado ocupa as duas linhas, sem repetir o rótulo.
-      let h1 = `<th rowspan="2" class="antc-rot">Empresa / Empreendimento / Título</th>`;
+      let h1 = `<th rowspan="2" class="antc-rot">Empresa / Centro de custo / Título</th>`;
       anos.forEach((ano) => {
         const aberto = this.state.anosAbertos.has(ano);
         const icone = `<i data-lucide="${aberto ? "minus-square" : "plus-square"}" class="antc-ic"></i>`;
@@ -533,14 +545,7 @@
         ? `<th class="is-right">${MESES_NOME[Number(col.mes.slice(5, 7)) - 1]}</th>`
         : `<th class="is-right antc-col-ano">Total ${col.ano}</th>`).join("");
       const largura = 340 + colunas.length * 104 + 110;
-      const opcoes = Object.keys(METRICAS).map((k) => `<option value="${k}"${k === this.state.metrica ? " selected" : ""}>${esc(METRICAS[k].rot)}</option>`).join("");
       return `
-        <div class="antc-analit-bar">
-          <label class="antc-campo"><span>VALOR EXIBIDO</span><select onchange="AntecipacoesApp.mudarMetrica(this.value)">${opcoes}</select></label>
-          <button type="button" class="btn btn-outline" onclick="AntecipacoesApp.abrirTudo(true)"><i data-lucide="chevrons-down" style="width:15px;"></i> Expandir empresas e empreendimentos</button>
-          <button type="button" class="btn btn-outline" onclick="AntecipacoesApp.abrirTudo(false)"><i data-lucide="chevrons-up" style="width:15px;"></i> Recolher</button>
-          <span class="antc-info">Clique no ano para abrir ou agrupar os meses. Clique na empresa e no empreendimento para descer de nível.</span>
-        </div>
         <div class="cc-scroll antc-scroll antc-analit-scroll">
           <table class="cc-table antc-analit" style="width:${largura}px;">
             <colgroup><col style="width:340px">${colunas.map(() => `<col style="width:104px">`).join("")}<col style="width:110px"></colgroup>
@@ -550,7 +555,45 @@
             </tbody>
           </table>
         </div>
-        <p class="antc-nota">Mês = data do pagamento antecipado. ${esc(m.rot)}. Empreendimento = centro de custo do recebimento no Sienge.</p>`;
+        <p class="antc-nota">Clique no ano para abrir ou agrupar os meses; na empresa, no centro de custo e no título para descer de nível. Mês = data do pagamento antecipado.
+          <span class="antc-ajuda" title="VF = valor da parcela na baixa (com correção). Sem juros (VP) = VF ÷ (1 + taxa do contrato) elevado aos meses até o vencimento. Desconto de juros = VF − VP (retirada obrigatória). Desconto comercial = VP − recebido; negativo = o cliente pagou acima do valor sem juros. Antecipações do mesmo título no mesmo dia formam uma linha.">Como os descontos são calculados?</span></p>`;
+    },
+
+    /** Antecipações de um título (abre dentro da matriz, no lugar da antiga aba de lista). */
+    eventosTituloHtml(eventos) {
+      const linhas = eventos.slice().sort((a, b) => String(b.data).localeCompare(String(a.data))).map((e) => {
+        const aberto = this.state.abertos.has(e.k);
+        const com = Number(e.comercial) || 0;
+        const tol = 0.05 + (Number(e.vf) || 0) * 0.0005;
+        const cls = com > tol ? "antc-com" : (com < -tol ? "antc-neg" : "");
+        const antec = e.minDias === e.maxDias ? `${e.maxDias} d` : `${e.minDias}–${e.maxDias} d`;
+        const kJs = esc(JSON.stringify(e.k));
+        let h = `<tr class="antc-linha${aberto ? " is-aberto" : ""}" onclick='event.stopPropagation();AntecipacoesApp.alternar(${kJs})' title="Clique para ver as parcelas">
+          <td>${dataBr(e.data)}</td><td class="is-center">${e.np}</td><td class="is-center">${antec}</td>
+          <td class="is-right">${moeda(e.vf)}</td><td class="is-right">${moeda(e.vp)}</td><td class="is-right">${moeda(e.pago)}</td>
+          <td class="is-right">${moeda(e.juros)}</td><td class="is-right ${cls}">${moeda(com)}</td>
+          <td class="is-right ${cls}">${Math.abs(com) > tol && e.vf ? pct((com / e.vf) * 100) : "—"}</td></tr>`;
+        if (aberto) {
+          const parc = (e.parcelas || []).map((p) => `<tr>
+              <td>${esc(p[0])} ${esc(p[1])}</td><td>${dataBr(p[2])}</td><td class="is-center">${p[3]} d</td>
+              <td class="is-right">${moeda(p[4])}</td><td class="is-right">${moeda(p[5])}</td><td class="is-right">${moeda(p[6])}</td>
+              <td class="is-right">${moeda((Number(p[4]) || 0) - (Number(p[5]) || 0))}</td><td class="is-right" colspan="2">Sienge: ${moeda(p[7])}</td></tr>`).join("");
+          h += `<tr class="antc-detalhe"><td colspan="9">
+            <div class="antc-det-info">Taxa ${String(e.taxa || 0).replace(".", ",")}% a.m. (${e.tipoJuros === "P" ? "Price" : esc(e.tipoJuros || "—")}) · Documento ${esc(e.doc || "—")} · No Sienge o desconto de várias parcelas é dividido por igual; a separação juros × comercial vale para a linha toda.</div>
+            <table class="cc-table antc-det">
+              <colgroup><col style="width:90px"><col style="width:96px"><col style="width:84px"><col><col><col><col><col style="width:140px"></colgroup>
+              <thead><tr><th>Parcela</th><th>Vencimento</th><th class="is-center">Antes</th><th class="is-right">VF</th><th class="is-right">Sem juros</th><th class="is-right">Recebido</th><th class="is-right">Juros retirados</th><th class="is-right" colspan="2">Desconto lançado</th></tr></thead>
+              <tbody>${parc}</tbody>
+            </table></td></tr>`;
+        }
+        return h;
+      }).join("");
+      return `<div class="antc-ev-box">
+        <table class="cc-table antc-ev-tab">
+          <colgroup><col style="width:92px"><col style="width:56px"><col style="width:96px"><col><col><col><col><col><col style="width:64px"></colgroup>
+          <thead><tr><th>Pagamento</th><th class="is-center">Parc.</th><th class="is-center">Antecedência</th><th class="is-right">VF</th><th class="is-right">Sem juros (VP)</th><th class="is-right">Recebido</th><th class="is-right">Desc. juros</th><th class="is-right">Desc. comercial</th><th class="is-right">% com.</th></tr></thead>
+          <tbody>${linhas}</tbody>
+        </table></div>`;
     },
 
     // ---------- Aba Indicadores ----------
@@ -615,85 +658,46 @@
         });
         return Object.values(g).sort((a, b) => b.pago - a.pago);
       };
-      const tabela = (titulo, linhas) => `
+      // Ranking enxuto: recebido, contratos e média; a barra mostra o peso no total.
+      const tabela = (titulo, linhas) => {
+        const max = Math.max(1, ...linhas.map((x) => x.pago));
+        return `
         <div class="antc-ind-tab">
           <div class="antc-ind-tit">${esc(titulo)}</div>
-          <div class="cc-scroll" style="max-height:340px;">
+          <div class="cc-scroll" style="max-height:300px;">
             <table class="cc-table">
-              <colgroup><col><col style="width:110px"><col style="width:64px"><col style="width:96px"><col style="width:70px"><col style="width:100px"></colgroup>
-              <thead><tr><th>Nome</th><th class="is-right">Recebido</th><th class="is-right">Qtde. CT</th><th class="is-right">Média por CT</th><th class="is-right">Méd. parc.</th><th class="is-right">Desc. comercial</th></tr></thead>
+              <colgroup><col><col style="width:120px"><col style="width:70px"><col style="width:110px"></colgroup>
+              <thead><tr><th>Nome</th><th class="is-right">Recebido</th><th class="is-right">Contratos</th><th class="is-right">Média</th></tr></thead>
               <tbody>${linhas.map((x) => `<tr>
-                <td title="${esc(x.nome)}">${esc(x.nome)}</td><td class="is-right">${moeda(x.pago)}</td><td class="is-right">${x.tits.size}</td>
-                <td class="is-right">${moeda(x.tits.size ? x.pago / x.tits.size : 0)}</td>
-                <td class="is-right">${x.tits.size ? Math.round(x.parc / x.tits.size) : 0}</td><td class="is-right">${moeda(x.comercial)}</td></tr>`).join("")
-                || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}
+                <td title="${esc(x.nome)}"><div class="antc-rank"><span>${esc(x.nome)}</span><i style="width:${Math.max(2, Math.round((x.pago / max) * 100))}%"></i></div></td>
+                <td class="is-right">${moeda(x.pago)}</td><td class="is-right">${x.tits.size}</td>
+                <td class="is-right">${moeda(x.tits.size ? x.pago / x.tits.size : 0)}</td></tr>`).join("")
+                || `<tr><td colspan="4" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}
               </tbody>
             </table>
           </div>
         </div>`;
+      };
       const porEmpresa = agrupar((e) => String(e.emp), (e) => this._empresas[e.emp] || nomeEmpresa(e.emp, e.empNome));
       const porCc = agrupar((e) => String(e.cc || ""), (e) => (e.cc ? `${e.cc} - ${e.ccNome || ""}` : "Sem centro de custo"));
+      const graficoMeses = colunas(meses.map((x) => ({ rot: MESES_NOME[Number(x.slice(5, 7)) - 1] + "/" + x.slice(2, 4), v: porMes[x] || 0 })));
       return `
-        <div class="antc-kpis">
-          <div class="antc-kpi"><span>Antecipação (recebido)</span><b>${moeda(t.pago)}</b><small>${t.n.toLocaleString("pt-BR")} antecipação(ões)</small></div>
-          <div class="antc-kpi"><span>Contratos com antecipação</span><b>${contratos.toLocaleString("pt-BR")}</b><small>títulos distintos no período</small></div>
-          <div class="antc-kpi"><span>Média por contrato</span><b>${moeda(mediaCt)}</b><small>recebido ÷ contratos</small></div>
-          <div class="antc-kpi"><span>Média de parcelas antecipadas</span><b>${mediaParc.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}</b><small>parcelas ÷ contratos (${t.parc.toLocaleString("pt-BR")} parcelas)</small></div>
-          <div class="antc-kpi"><span>Desconto de juros</span><b>${moeda(t.juros)}</b><small>${pct(pctJur)} do valor das parcelas</small></div>
-          <div class="antc-kpi ${t.comercial > 0.009 ? "is-alerta" : ""}"><span>Desconto comercial</span><b>${moeda(t.comercial)}</b><small>${pct(pctCom)} do VF · ${t.comCom} título(s)</small></div>
+        <div class="antc-kpis antc-kpis-4">
+          <div class="antc-kpi"><span>Antecipação recebida</span><b>${moeda(t.pago)}</b><small>${t.n.toLocaleString("pt-BR")} antecipações</small></div>
+          <div class="antc-kpi"><span>Contratos</span><b>${contratos.toLocaleString("pt-BR")}</b><small>média de ${moeda(mediaCt)} por contrato</small></div>
+          <div class="antc-kpi"><span>Parcelas antecipadas</span><b>${t.parc.toLocaleString("pt-BR")}</b><small>média de ${mediaParc.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} por contrato</small></div>
+          <div class="antc-kpi ${t.comercial > 0.009 ? "is-alerta" : ""}"><span>Descontos</span><b>${moeda(t.juros + t.comercial)}</b>
+            <small>juros ${moeda(t.juros)} (${pct(pctJur)}) · comercial ${moeda(t.comercial)} (${pct(pctCom)}, ${t.comCom} título(s))</small></div>
         </div>
-        <div class="antc-graficos">
-          <div class="antc-graf"><div class="antc-ind-tit">Total por ano</div>${colunas(anos.map((a) => ({ rot: a, v: porAno[a] || 0 })))}</div>
-          <div class="antc-graf antc-graf-larga"><div class="antc-ind-tit">Últimos ${meses.length} meses do período</div>${colunas(meses.map((x) => ({ rot: MESES_NOME[Number(x.slice(5, 7)) - 1] + "/" + x.slice(2, 4), v: porMes[x] || 0 })))}</div>
-          <div class="antc-graf"><div class="antc-ind-tit">Por faixa de valor da antecipação</div>${faixasHtml}</div>
+        <div class="antc-graficos ${anos.length > 1 ? "" : "sem-ano"}">
+          ${anos.length > 1 ? `<div class="antc-graf"><div class="antc-ind-tit">Por ano</div>${colunas(anos.map((a) => ({ rot: a, v: porAno[a] || 0 })))}</div>` : ""}
+          <div class="antc-graf"><div class="antc-ind-tit">Mês a mês${this.mesesAtivos().length > 12 ? " (últimos 12)" : ""}</div>${graficoMeses}</div>
+          <div class="antc-graf"><div class="antc-ind-tit">Por faixa de valor</div>${faixasHtml}</div>
         </div>
         <div class="antc-ind-tabs">
           ${tabela("Por empresa", porEmpresa)}
-          ${tabela("Por empreendimento", porCc)}
-        </div>
-        <p class="antc-nota">Valores pelo recebido (valor líquido baixado) e pela data do pagamento. Use as faixas acima (31+ / até 30 / todas) e os filtros de empresa e empreendimento.</p>`;
-    },
-
-    linhaHtml(e) {
-      const aberto = this.state.abertos.has(e.k);
-      const com = Number(e.comercial) || 0;
-      const pctCom = e.vf > 0 ? (com / e.vf) * 100 : 0;
-      const tolerancia = 0.05 + (Number(e.vf) || 0) * 0.0005;
-      const clsCom = com > tolerancia ? "antc-com" : (com < -tolerancia ? "antc-neg" : "");
-      const antec = e.minDias === e.maxDias ? `${e.maxDias} d` : `${e.minDias}–${e.maxDias} d`;
-      const kJs = esc(JSON.stringify(e.k));
-      let html = `<tr class="antc-linha${aberto ? " is-aberto" : ""}" onclick='AntecipacoesApp.alternar(${kJs})' title="Clique para ver as parcelas">
-        <td>${dataBr(e.data)}</td>
-        <td>${esc(e.tit)}</td>
-        <td title="${esc(e.cli)}">${esc(e.cli)}</td>
-        <td title="${esc(e.empNome)}">${esc(this._empresas[e.emp] || e.empNome)}</td>
-        <td>${esc(e.unid)}</td>
-        <td class="is-center">${e.np}</td>
-        <td class="is-center">${antec}</td>
-        <td class="is-right">${moeda(e.vf)}</td>
-        <td class="is-right">${moeda(e.vp)}</td>
-        <td class="is-right">${moeda(e.pago)}</td>
-        <td class="is-right">${moeda(e.juros)}</td>
-        <td class="is-right ${clsCom}">${moeda(com)}</td>
-        <td class="is-right ${clsCom}">${Math.abs(com) > tolerancia ? pct(pctCom) : "—"}</td>
-      </tr>`;
-      if (aberto) {
-        const parc = (e.parcelas || []).map((p) => `<tr>
-            <td>${esc(p[0])}</td><td>${esc(p[1])}</td><td>${dataBr(p[2])}</td><td class="is-center">${p[3]}</td>
-            <td class="is-right">${moeda(p[4])}</td><td class="is-right">${moeda(p[5])}</td><td class="is-right">${moeda(p[6])}</td>
-            <td class="is-right">${moeda((Number(p[4]) || 0) - (Number(p[5]) || 0))}</td><td class="is-right">${moeda(p[7])}</td>
-          </tr>`).join("");
-        html += `<tr class="antc-detalhe"><td colspan="13">
-          <div class="antc-det-info">Taxa do contrato: ${String(e.taxa || 0).replace(".", ",")}% a.m. (${e.tipoJuros === "P" ? "Price" : esc(e.tipoJuros || "—")}) · Documento ${esc(e.doc || "—")} · Centro de custo ${esc(e.cc)} ${esc(e.ccNome || "")}</div>
-          <table class="cc-table antc-det">
-            <colgroup><col style="width:70px"><col style="width:60px"><col style="width:96px"><col style="width:90px"><col><col><col><col><col></colgroup>
-            <thead><tr><th>Parcela</th><th>Cond.</th><th>Vencimento</th><th class="is-center">Dias antes</th><th class="is-right">VF</th><th class="is-right">Sem juros (VP)</th><th class="is-right">Recebido</th><th class="is-right">Juros retirados</th><th class="is-right">Desconto no Sienge</th></tr></thead>
-            <tbody>${parc}</tbody>
-          </table>
-          <div class="antc-det-info">No Sienge o desconto de uma antecipação com várias parcelas é dividido por igual entre elas; por isso a separação juros × comercial é feita no total da linha.</div>
-        </td></tr>`;
-      }
-      return html;
+          ${tabela("Por centro de custo", porCc)}
+        </div>`;
     },
 
     exportar() {
@@ -765,6 +769,40 @@
       .antc-det-info { font-size:0.72rem; color:#475569; margin:2px 0; }
       .antc-mais { text-align:center; margin:10px 0; }
       .antc-nota { font-size:0.72rem; color:#64748b; margin-top:8px; line-height:1.45; }
+      .antc-cab { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; border-bottom:1px solid #e2e8f0; margin-bottom:12px; flex-wrap:wrap; }
+      .antc-cab .antc-subs { border-bottom:0; margin-bottom:0; }
+      .antc-cab-acoes { display:flex; align-items:center; gap:8px; padding-bottom:6px; }
+      .antc-cab-acoes .btn { height:36px; display:inline-flex; align-items:center; gap:6px; }
+      .antc-atualizado { font-size:0.72rem; color:#64748b; cursor:help; }
+      .antc-lbl { display:block; font-size:0.68rem; font-weight:700; color:#6d8c7c; letter-spacing:.02em; margin-bottom:4px; }
+      .antc-filtros { display:flex; flex-wrap:wrap; align-items:flex-end; gap:10px; margin-bottom:12px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; }
+      .antc-periodo-campos { display:flex; align-items:center; gap:6px; }
+      .antc-periodo-campos input { height:38px; padding:0 8px; border:1px solid #e0e5e0; border-radius:6px; font-size:0.82rem; background:#fff; width:150px; }
+      .antc-periodo-campos span { color:#64748b; font-size:0.8rem; }
+      .antc-f { min-width:190px; }
+      .antc-f-mes { min-width:150px; }
+      .antc-f-busca { flex:1 1 200px; display:flex; flex-direction:column; }
+      .antc-f-busca input { height:38px; padding:0 10px; border:1px solid #e0e5e0; border-radius:6px; font-size:0.85rem; background:#fff; }
+      .antc-barra-opc { display:flex; flex-wrap:wrap; align-items:flex-end; gap:18px; margin-bottom:10px; }
+      .antc-seg { display:inline-flex; border:1px solid #cfe3d7; border-radius:8px; overflow:hidden; background:#fff; }
+      .antc-seg button { height:34px; padding:0 12px; border:0; border-right:1px solid #cfe3d7; background:#fff; color:#105436; font-weight:700; font-size:0.78rem; cursor:pointer; white-space:nowrap; }
+      .antc-seg button:last-child { border-right:0; }
+      .antc-seg button small { margin-left:4px; padding:1px 6px; border-radius:99px; background:#e7f6ee; font-size:0.68rem; }
+      .antc-seg button.is-on { background:#1b8253; color:#fff; }
+      .antc-seg button.is-on small { background:rgba(255,255,255,.2); color:#fff; }
+      .antc-sel { height:36px; padding:0 10px; border:1px solid #cfe3d7; border-radius:8px; font-size:0.8rem; background:#fff; color:#105436; font-weight:600; }
+      .antc-resumo { display:flex; flex-wrap:wrap; gap:6px 22px; padding:8px 12px; margin-bottom:8px; background:#f7faf8; border:1px solid #e2e8f0; border-radius:8px; font-size:0.8rem; color:#334155; }
+      .antc-resumo b { color:#105436; font-variant-numeric:tabular-nums; }
+      .antc-resumo .antc-com b { color:#b45309; }
+      .antc-ev > td { background:#f8fafc !important; padding:6px 10px 10px 46px !important; white-space:normal !important; }
+      .antc-ev-box { position:sticky; left:46px; max-width:min(1100px, calc(100vw - 260px)); }
+      .antc-ev-tab { margin:2px 0; }
+      .antc-ajuda { text-decoration:underline dotted; cursor:help; color:#105436; margin-left:6px; }
+      .antc-kpis-4 { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+      .antc-graficos.sem-ano { grid-template-columns:minmax(320px,2fr) minmax(260px,1fr); }
+      .antc-rank { position:relative; overflow:hidden; text-overflow:ellipsis; }
+      .antc-rank span { position:relative; z-index:1; }
+      .antc-rank i { position:absolute; left:0; bottom:0; height:3px; background:#1b8253; opacity:.55; border-radius:2px; }
       .antc-subs { display:flex; gap:6px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; }
       .antc-sub { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 14px; border:0; border-bottom:3px solid transparent; background:transparent; color:#475569; font-weight:700; font-size:0.85rem; cursor:pointer; }
       .antc-sub.is-on { color:#105436; border-bottom-color:#1b8253; }
