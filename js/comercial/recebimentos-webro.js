@@ -15,8 +15,15 @@ const RecebimentosWebroApp = {
     rows: [],
     condicoes: [],
     webroSemComissao: 0,
-    recebimentos: 0
+    recebimentos: 0,
+    aba: "sienge",
+    repasse: null,
+    repasseErro: "",
+    repasseLendo: false,
+    repasseFiltro: "confere"
   },
+
+  REPASSE_KEY: "crm_webro_relatorio_detalhado_v1",
 
   esc(s) {
     return String(s == null ? "" : s)
@@ -536,10 +543,324 @@ const RecebimentosWebroApp = {
     a.remove();
   },
 
+  /* ---------- Aba Repasse pendente: relatório detalhado da Webro x fila de cobrança ---------- */
+
+  trocarAba(aba) {
+    this.state.aba = aba === "repasse" ? "repasse" : "sienge";
+    this.render();
+  },
+
+  /** Cabeçalho sem acento e sem símbolo: "Status_comissão" -> "STATUSCOMISSAO". */
+  chaveCab(h) {
+    return this.fold(h);
+  },
+
+  numero(v) {
+    if (typeof v === "number") return v;
+    const s = String(v == null ? "" : v).trim();
+    if (!s) return NaN;
+    const limpo = s.indexOf(",") >= 0 ? s.replace(/\./g, "").replace(",", ".") : s;
+    return Number(limpo.replace(/[^\d.-]/g, ""));
+  },
+
+  dataIso(v) {
+    if (v instanceof Date && !isNaN(v.getTime())) return this.iso(v);
+    if (typeof v === "number" && v > 20000 && v < 80000) {
+      const d = new Date(Math.round((v - 25569) * 86400000) + 12 * 3600000);
+      return d.toISOString().slice(0, 10);
+    }
+    return this.isoDue(v);
+  },
+
+  /** Lê o relatório detalhado (modelo antigo, por comissão) e guarda só Moura Leite com comissão disponível. */
+  async aoArquivoRepasse(input) {
+    const file = input && input.files && input.files[0];
+    if (input) input.value = "";
+    if (!file) return;
+    this.state.repasseLendo = true;
+    this.state.repasseErro = "";
+    this.render();
+    try {
+      if (typeof XLSX === "undefined") throw new Error("A leitura de Excel não está disponível. Atualize a página.");
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const matriz = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+      const linhas = this.lerRelatorioWebro(matriz);
+      this.state.repasse = { arquivo: file.name, quando: new Date().toISOString(), total: linhas.total, linhas: linhas.linhas };
+      try { localStorage.setItem(this.REPASSE_KEY, JSON.stringify(this.state.repasse)); } catch (e) {}
+    } catch (e) {
+      this.state.repasseErro = (e && e.message) || String(e);
+    }
+    this.state.repasseLendo = false;
+    this.render();
+  },
+
+  lerRelatorioWebro(matriz) {
+    const rows = Array.isArray(matriz) ? matriz : [];
+    let hi = -1;
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const cab = (rows[i] || []).map((c) => this.chaveCab(c));
+      if (cab.indexOf("STATUSCOMISSAO") >= 0 && cab.indexOf("PAGADOR") >= 0) { hi = i; break; }
+    }
+    if (hi < 0) throw new Error("Este arquivo não é o relatório detalhado da Webro (modelo antigo, por comissão). Faltam as colunas Status_comissão e Pagador.");
+    const cab = rows[hi].map((c) => this.chaveCab(c));
+    const col = (nome) => cab.indexOf(nome);
+    const c = {
+      contrato: col("IDCONTRATO"), emp: col("EMPREENDIMENTO"), unidade: col("UNIDADE"), parcela: col("NUMEROPARCELA"),
+      statusParcela: col("STATUSPARCELA"), venc: col("DATADEVENCIMENTOPARCELA"), pago: col("DATADEPAGAMENTOPARCELA"),
+      comissao: col("COMISSAOORIGINAL"), disponivel: col("COMISSAODISPONIVEL"), status: col("STATUSCOMISSAO"),
+      corretor: col("CORRETOR"), pagador: col("PAGADOR"), idExterno: col("IDEXTERNO")
+    };
+    ["emp", "unidade", "comissao", "status", "corretor", "pagador"].forEach((k) => {
+      if (c[k] < 0) throw new Error("O relatório não tem a coluna " + ({ emp: "Empreendimento", unidade: "Unidade", comissao: "Comissão_original", status: "Status_comissão", corretor: "Corretor", pagador: "Pagador" })[k] + ".");
+    });
+    const v = (r, k) => (c[k] >= 0 ? r[c[k]] : "");
+    const linhas = [];
+    let total = 0;
+    for (let i = hi + 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      if (!String(v(r, "pagador")).trim()) continue;
+      total += 1;
+      if (this.fold(v(r, "status")) !== "DISPONIVEL") continue;
+      if (this.fold(v(r, "corretor")).indexOf("MOURALEITE") < 0) continue;
+      linhas.push({
+        contrato: String(v(r, "contrato") || "").trim(),
+        empreendimento: String(v(r, "emp") || "").trim(),
+        unidade: String(v(r, "unidade") || "").trim(),
+        parcela: String(v(r, "parcela") || "").trim(),
+        statusParcela: String(v(r, "statusParcela") || "").trim(),
+        vencimento: this.dataIso(v(r, "venc")),
+        pagamento: this.dataIso(v(r, "pago")),
+        comissao: this.numero(v(r, "comissao")),
+        pagador: String(v(r, "pagador") || "").trim(),
+        idExterno: String(v(r, "idExterno") || "").trim()
+      });
+    }
+    return { total, linhas };
+  },
+
+  /** Chaves da unidade: inteira e só o último pedaço ("BLOCO 01 - P-06" -> P6), sem zero à esquerda. */
+  chavesUnidade(u) {
+    const norm = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^A-Z0-9]+/g, " ").trim().split(" ").filter(Boolean)
+      .map((t) => t.replace(/^0+(?=\d)/, "")).join("");
+    const partes = String(u || "").split(/\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+    const out = new Set();
+    if (u) out.add(norm(u));
+    if (partes.length > 1) {
+      out.add(norm(partes[partes.length - 1]));
+      if (/^BLOCO/i.test(partes[0])) out.add(norm(partes.slice(1).join(" ")));
+    }
+    out.delete("");
+    return out;
+  },
+
+  /** Mesmo nome: igual sem acento, ou mesmo primeiro e último nome. */
+  mesmoNome(a, b) {
+    const fa = this.fold(a);
+    const fb = this.fold(b);
+    if (!fa || !fb) return false;
+    if (fa === fb) return true;
+    const t = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Z ]/g, " ").split(/\s+/).filter(Boolean);
+    const ta = t(a);
+    const tb = t(b);
+    return ta.length > 1 && tb.length > 1 && ta[0] === tb[0] && ta[ta.length - 1] === tb[tb.length - 1];
+  },
+
+  /** Cidade do empreendimento (parte antes do primeiro " - "). */
+  cidade(nome) {
+    return this.fold(String(nome || "").split(/\s+-\s+/)[0]);
+  },
+
+  /** Tag da fila que interessa aqui: 0% pago, Boleto WEBRO ou baixa Webro pendente. */
+  tagFila(c) {
+    const w = window;
+    const webroStatus = typeof w.getWebroBaixaStatus === "function" ? w.getWebroBaixaStatus(c) : null;
+    if (webroStatus === "PENDENTE") return "Pendente Repasse Webro";
+    if (webroStatus === "AGUARDANDO") return "Aguardando Webro";
+    if (c.isZeroPaid || (typeof w.clientIsZeroPercentPaid === "function" && w.clientIsZeroPercentPaid(c))) return "0% Pago";
+    if (typeof w.clientHasPagamentoEntradaWebro === "function" && w.clientHasPagamentoEntradaWebro(c)) return "Boleto WEBRO";
+    return "";
+  },
+
+  parcelasVencidas(c) {
+    const lista = typeof window.listInstallmentsForSiCheck === "function" ? window.listInstallmentsForSiCheck(c) : [];
+    return lista.map((i) => ({
+      numero: String(i.installmentNumber || i.installmentId || i.number || ""),
+      tipo: String(i.conditionType || ""),
+      vencimento: String(i.dueDate || i.due || "").slice(0, 10),
+      dias: Number(i.daysOfDelay) || 0,
+      semJuros: Number(i.correctedValueWithoutAdditions)
+    })).filter((p) => Number.isFinite(p.semJuros) && p.semJuros > 0);
+  },
+
+  cruzarRepasse() {
+    const rep = this.state.repasse;
+    const fila = window.rawClientList || [];
+    if (!rep || !fila.length) return null;
+    const candidatos = [];
+    fila.forEach((c) => {
+      const tag = this.tagFila(c);
+      if (!tag) return;
+      const ccNome = (typeof window.knownCostCenterName === "function" && window.knownCostCenterName(c.costCenterId)) || "";
+      candidatos.push({ c, tag, ccNome, unidades: this.chavesUnidade(c.unitName), parcelas: this.parcelasVencidas(c) });
+    });
+    const out = [];
+    rep.linhas.forEach((w) => {
+      const unW = this.chavesUnidade(w.unidade);
+      const cidW = this.cidade(w.empreendimento);
+      candidatos.forEach((k) => {
+        if (!this.mesmoNome(w.pagador, k.c.customerName)) return;
+        if (![...unW].some((u) => k.unidades.has(u))) return;
+        if (k.ccNome && cidW && this.cidade(k.ccNome) !== cidW) return;
+        const igual = k.parcelas.find((p) => Math.abs(p.semJuros - w.comissao) <= 0.05);
+        out.push({
+          webro: w,
+          cliente: k.c.customerName,
+          customerId: k.c.customerId,
+          titulo: k.c.saleId,
+          unidade: (k.c.costCenterId ? k.c.costCenterId + " - " : "") + (k.c.unitName || ""),
+          empreendimento: k.ccNome,
+          tag: k.tag,
+          operador: k.c.assignedOperator || "",
+          parcela: igual || null,
+          parcelas: k.parcelas,
+          confere: !!igual
+        });
+      });
+    });
+    out.sort((a, b) => (b.confere - a.confere) || String(a.cliente).localeCompare(String(b.cliente), "pt-BR"));
+    return { linhas: out, candidatos: candidatos.length };
+  },
+
+  filtroRepasse(f) {
+    this.state.repasseFiltro = f === "todos" ? "todos" : "confere";
+    this.render();
+  },
+
+  async exportarRepasse() {
+    const cruz = this.cruzarRepasse();
+    const linhas = cruz ? cruz.linhas.filter((l) => this.state.repasseFiltro === "todos" || l.confere) : [];
+    if (!linhas.length) { alert("Não há linha para exportar."); return; }
+    if (!window.ExcelJS) { alert("Não foi possível gerar o Excel. Recarregue a página."); return; }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Repasse pendente");
+    ws.columns = [
+      { header: "Cliente", key: "cliente", width: 36 }, { header: "Título", key: "titulo", width: 10 },
+      { header: "Unidade", key: "unidade", width: 18 }, { header: "Empreendimento", key: "emp", width: 40 },
+      { header: "Tag na fila", key: "tag", width: 22 }, { header: "Operador", key: "op", width: 18 },
+      { header: "Parcela Webro", key: "pw", width: 12 }, { header: "Vencimento Webro", key: "vw", width: 14 },
+      { header: "Pago na Webro", key: "pg", width: 14 }, { header: "Comissão (Webro)", key: "com", width: 16 },
+      { header: "Parcela Integra", key: "pi", width: 14 }, { header: "Vencimento Integra", key: "vi", width: 16 },
+      { header: "Valor sem juros (Integra)", key: "sj", width: 20 }, { header: "Situação", key: "sit", width: 22 }
+    ];
+    ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B8253" } };
+    linhas.forEach((l) => {
+      const row = ws.addRow({
+        cliente: l.cliente, titulo: l.titulo, unidade: l.unidade, emp: l.empreendimento || l.webro.empreendimento,
+        tag: l.tag, op: l.operador, pw: l.webro.parcela, vw: this.fmtDate(l.webro.vencimento), pg: this.fmtDate(l.webro.pagamento),
+        com: Number(l.webro.comissao) || 0, pi: l.parcela ? l.parcela.numero : "", vi: l.parcela ? this.fmtDate(l.parcela.vencimento) : "",
+        sj: l.parcela ? l.parcela.semJuros : "", sit: l.confere ? "Valor confere" : "Valor diferente"
+      });
+      row.getCell("com").numFmt = "#,##0.00";
+      row.getCell("sj").numFmt = "#,##0.00";
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    a.download = "Repasse_pendente_Webro_" + this.iso(new Date()) + ".xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
+  repasseHtml() {
+    const s = this.state;
+    const rep = s.repasse;
+    const fila = window.rawClientList || [];
+    const upload = `
+      <label class="btn btn-primary" style="height:36px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;white-space:nowrap;">
+        <i data-lucide="upload" style="width:14px;height:14px;"></i> Subir relatório da Webro
+        <input type="file" accept=".xlsx,.xls,.csv" hidden onchange="RecebimentosWebroApp.aoArquivoRepasse(this)">
+      </label>`;
+    const nota = `<p class="rweb-note">Na Webro, em Gestão de contratos, baixe <strong>Baixar Excel &gt; Modelo antigo, por comissão &gt; Todos os contratos</strong>. A tela usa só as linhas com Status_comissão <strong>disponível</strong> e Corretor <strong>Moura Leite</strong> e procura, na fila de cobrança, cliente com 0% pago, Boleto WEBRO ou baixa Webro pendente com o mesmo nome, empreendimento e unidade. Quando a comissão da Webro é igual ao valor sem juros de uma parcela vencida no Integra, a Webro recebeu essa parcela e ainda não repassou.</p>`;
+    let corpo = "";
+    if (s.repasseLendo) corpo = `<div class="tvig-empty">Lendo o relatório…</div>`;
+    else if (s.repasseErro) corpo = `<div class="tvig-empty">${this.esc(s.repasseErro)}</div>`;
+    else if (!rep) corpo = `<div class="tvig-empty">Nenhum relatório enviado.</div>`;
+    else if (!fila.length) corpo = `<div class="tvig-empty">A fila de cobrança ainda não foi carregada nesta sessão. Abra a Fila de Cobrança e volte aqui para cruzar o relatório.</div>`;
+    else {
+      const cruz = this.cruzarRepasse();
+      const todas = cruz.linhas;
+      const conferem = todas.filter((l) => l.confere);
+      const linhas = s.repasseFiltro === "todos" ? todas : conferem;
+      const valor = conferem.reduce((t, l) => t + (Number(l.webro.comissao) || 0), 0);
+      const seg = (id, rot, n) => `<button type="button" class="ml-tab${s.repasseFiltro === id ? " is-active" : ""}" onclick="RecebimentosWebroApp.filtroRepasse('${id}')">${rot} <small>${n}</small></button>`;
+      corpo = `
+        <div class="ccom-kpis">
+          <div class="ccom-kpi"><span>Comissões disponíveis (Moura Leite)</span><strong>${rep.linhas.length}</strong></div>
+          <div class="ccom-kpi"><span>Clientes na fila com a tag</span><strong>${cruz.candidatos}</strong></div>
+          <div class="ccom-kpi"><span>Pendentes de repasse</span><strong>${conferem.length}</strong></div>
+          <div class="ccom-kpi"><span>Valor pendente</span><strong>${this.esc(this.money(valor))}</strong></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+          <div class="ml-tabs" role="tablist" style="margin:0;">${seg("confere", "Valor confere", conferem.length)}${seg("todos", "Mesmo cliente e unidade", todas.length)}</div>
+          <button type="button" class="btn btn-excel" ${linhas.length ? "" : "disabled"} onclick="RecebimentosWebroApp.exportarRepasse()"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>
+        </div>
+        <div class="cc-scroll">
+          <table class="cc-table rweb-rep-table">
+            <thead><tr>
+              <th>Cliente</th><th>Título</th><th>Unidade</th><th>Tag na fila</th><th>Operador</th>
+              <th class="is-center">Parcela Webro</th><th class="is-center">Pago na Webro</th><th class="is-right">Comissão Webro</th>
+              <th class="is-center">Parcela Integra</th><th class="is-center">Vencimento</th><th class="is-right">Sem juros (Integra)</th><th>Situação</th>
+            </tr></thead>
+            <tbody>${linhas.length ? linhas.map((l) => {
+              const p = l.parcela;
+              const outras = !p && l.parcelas.length ? l.parcelas.map((x) => x.numero + ": " + this.money(x.semJuros)).join(" · ") : "";
+              return `<tr>
+                <td title="${this.esc(l.webro.pagador)}">${this.esc(l.cliente)}</td>
+                <td>${this.esc(l.titulo)}</td>
+                <td title="Webro: ${this.esc(l.webro.empreendimento)} · ${this.esc(l.webro.unidade)}">${this.esc(l.unidade)}</td>
+                <td>${this.esc(l.tag)}</td>
+                <td>${this.esc(l.operador)}</td>
+                <td class="is-center">${this.esc(l.webro.parcela || "—")}</td>
+                <td class="is-center">${this.esc(this.fmtDate(l.webro.pagamento))}</td>
+                <td class="is-right">${this.esc(this.money(l.webro.comissao))}</td>
+                <td class="is-center">${p ? this.esc(p.numero + (p.tipo ? " (" + p.tipo + ")" : "")) : "—"}</td>
+                <td class="is-center">${p ? this.esc(this.fmtDate(p.vencimento)) : "—"}</td>
+                <td class="is-right"${outras ? ` title="Parcelas vencidas no Integra, sem juros: ${this.esc(outras)}"` : ""}>${p ? this.esc(this.money(p.semJuros)) : "—"}</td>
+                <td><span class="ccom-sit ${l.confere ? "ccom-sit-pago" : "ccom-sit-prog"}">${l.confere ? "Valor confere" : "Valor diferente"}</span></td>
+              </tr>`;
+            }).join("") : `<tr><td colspan="12" style="text-align:center;padding:30px;">Nenhum cliente da fila com essa comissão disponível na Webro.</td></tr>`}</tbody>
+          </table>
+        </div>`;
+    }
+    return `
+      <div class="search-filter-panel tvig-params ccom-params">
+        <h3 class="tvig-section-title">Repasse pendente da Webro</h3>
+        ${nota}
+        <div class="ccom-filters"><div class="tvig-filter-actions">${upload}</div></div>
+        ${rep ? `<p class="rweb-note">${this.esc(rep.arquivo)} · ${rep.total} linha(s) no arquivo · ${rep.linhas.length} com comissão disponível da Moura Leite · enviado em ${this.esc(this.fmtDate(String(rep.quando).slice(0, 10)))}</p>` : ""}
+      </div>
+      ${corpo}`;
+  },
+
+  abasHtml() {
+    const a = this.state.aba;
+    const b = (id, rot, ic) => `<button type="button" role="tab" class="ml-tab${a === id ? " is-active" : ""}" aria-selected="${a === id}" onclick="RecebimentosWebroApp.trocarAba('${id}')"><i data-lucide="${ic}"></i> ${rot}</button>`;
+    return `<div class="ml-tabs" role="tablist" style="margin:0 0 12px;">${b("sienge", "Recebimentos no Sienge", "banknote")}${b("repasse", "Repasse pendente", "file-search")}</div>`;
+  },
+
   render() {
     const root = document.getElementById("recebimentos-webro-root");
     if (!root) return;
     const s = this.state;
+    if (s.aba === "repasse") {
+      root.innerHTML = `<div class="ccom-page">${this.abasHtml()}${this.repasseHtml()}</div>`;
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
     const period = (s.de && s.ate) ? (this.fmtDate(s.de) + " a " + this.fmtDate(s.ate)) : "";
     const rows = s.rows || [];
     const recebido = rows.reduce((sum, r) => sum + (Number(r.valorRecebido) || 0), 0);
@@ -548,6 +869,7 @@ const RecebimentosWebroApp = {
     const condicoes = (s.condicoes || []).join(", ");
     root.innerHTML = `
       <div class="ccom-page">
+        ${this.abasHtml()}
         <div class="search-filter-panel tvig-params ccom-params">
           <h3 class="tvig-section-title">Recebimentos Webro</h3>
           <p class="rweb-note">A consulta começa pelo recebimento da parcela do cliente marcada como Parcela Webro. O título e o contrato (CVMOURALEI) identificam o empreendimento e a unidade, e a tela cruza com a comissão da Moura Leite para mostrar o que a Webro precisa repassar.</p>
@@ -617,6 +939,12 @@ const RecebimentosWebroApp = {
   init() {
     const root = document.getElementById("recebimentos-webro-root");
     if (!root) return;
+    if (!this.state.inited && !this.state.repasse) {
+      try {
+        const salvo = JSON.parse(localStorage.getItem(this.REPASSE_KEY) || "null");
+        if (salvo && Array.isArray(salvo.linhas)) this.state.repasse = salvo;
+      } catch (e) {}
+    }
     this.state.inited = true;
     this.render();
   }
