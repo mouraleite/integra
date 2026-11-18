@@ -129,7 +129,7 @@ const CentralEmailApp = {
   diasAtraso(client, tag) {
     const G = window.FILA_QUEUE_GROUPS || {};
     const n = Number(tag);
-    if (n === G.ACORDO_JURIDICO || n === G.ACORDO_INTERNO_QUEBRADO) {
+    if (n === G.ACORDO_JURIDICO || n === G.REENVIAR_JURIDICO || n === G.ACORDO_INTERNO_QUEBRADO) {
       const acordo = Number(client && client.agreementDaysDelay);
       if (acordo > 0) return acordo;
     }

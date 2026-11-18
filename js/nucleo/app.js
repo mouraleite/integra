@@ -8957,6 +8957,8 @@ window.FILA_QUEUE_GROUPS = {
   EXECUTAR_ACORDO_QUEBRADO: 6,
   RECENTE_JURIDICO: 7,
   ANALISE_INTERNA_JURIDICO: 8,
+  // Acordo judicial quebrado há 31 dias ou mais: o cliente já passou pelo jurídico e volta para lá.
+  REENVIAR_JURIDICO: 8.5,
   ENVIAR_JURIDICO: 9,
   SEM_CATEGORIA_SEM_PAGTO: 10,
   SEM_CATEGORIA_COM_PAGTO: 11,
@@ -9066,10 +9068,10 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   if (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client)) {
     return G.NEX_CUMPRIDA;
   }
-  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Enviar para Jurídico
+  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(client)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9085,7 +9087,7 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   }
   if (client && client.hasOverdueAgreement) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9113,6 +9115,7 @@ window.getFilaQueueGroupMeta = function(group) {
     [G.EXECUTAR_ACORDO_QUEBRADO]: { label: 'Executar Acordo Quebrado', bg: '#ffe4e6', color: '#9f1239' },
     [G.RECENTE_JURIDICO]: { label: 'Recente Jurídico', bg: '#e0e7ff', color: '#3730a3' },
     [G.ANALISE_INTERNA_JURIDICO]: { label: 'Análise Interna Jurídico', bg: '#ede9fe', color: '#5b21b6' },
+    [G.REENVIAR_JURIDICO]: { label: 'Reenviar para Jurídico - Acordo Judicial Quebrado', bg: '#fee2e2', color: '#991b1b' },
     [G.ENVIAR_JURIDICO]: { label: 'Enviar para Jurídico', bg: '#ffedd5', color: '#9a3412' },
     [G.SEM_CATEGORIA_SEM_PAGTO]: { label: 'Sem pagamento nos últimos 30 dias', bg: '#f8fafc', color: '#475569' },
     [G.SEM_CATEGORIA_COM_PAGTO]: { label: 'Com pagamento nos últimos 30 dias', bg: '#ecfdf5', color: '#047857' },
@@ -9136,7 +9139,7 @@ window.getAcordoJuridicoAgingHtml = function(client) {
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
-  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Enviar para Jurídico.">
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Reenviar para Jurídico - Acordo Judicial Quebrado.">
     <i data-lucide="handshake" style="width: 14px; height: 14px;"></i> Acordo Judicial Quebrado - ${dayLabel}
   </span>`;
 };
@@ -9148,8 +9151,8 @@ window.getAcordoJudicialEnviarJuridicoAgingHtml = function(client) {
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
   const customerId = client && client.customerId != null ? client.customerId : "";
   const saleId = client && client.saleId != null ? client.saleId : "";
-  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para enviar ao Jurídico.">
-    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Enviar Jurídico - ${dayLabel}
+  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para reenviar ao Jurídico.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Reenviar Jurídico - ${dayLabel}
   </button>`;
 };
 
@@ -13586,7 +13589,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
         }
         const g = typeof window.getFilaQueueGroup === "function" ? window.getFilaQueueGroup(c) : null;
         const G = window.FILA_QUEUE_GROUPS || {};
-        if (g && g === G.ENVIAR_JURIDICO) return true;
+        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO)) return true;
       }
       return false;
     });
@@ -15750,7 +15753,7 @@ function formatCpfCnpj(val) {
   ) || (window.rawClientList || []).find(c => String(c.customerId) === String(customerId));
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(filaMatch)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(filaMatch)) {
-      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Enviar para Jurídico.">Enviar para Jurídico</span>`;
+      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Reenviar para Jurídico - Acordo Judicial Quebrado.">Reenviar para Jurídico</span>`;
     } else {
       subjudiceAlertHtml += `<span style="background-color: #d97706; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece no grupo Acordo Judicial Quebrado até o 30º dia.">Acordo Judicial Quebrado</span>`;
     }
