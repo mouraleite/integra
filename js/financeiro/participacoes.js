@@ -1287,11 +1287,9 @@ const ParticipacoesApp = {
       if (parts.length >= 3) return `${parts[0].slice(0, 3)}/${parts[2]}`;
       return lab;
     };
-    const warn = (mx.saldoChecks || []).map((c) =>
-      `${this.periodLabel(c.periodo, c.periodo)}: lido ${this.fmt(c.got)} × Saldo Total PDF ${this.fmt(c.saldo)}`
-    ).join(" · ");
+    // A conferência com o "Saldo Total" do PDF não aparece mais na tela: o saldo acumulado do PDF não bate
+    // mês a mês com a soma lida e a faixa só atrapalhava a leitura da matriz.
     return `
-      ${warn ? `<div class="part-alert is-warn"><strong>Conferência Saldo Total:</strong> ${this.esc(warn)}</div>` : ""}
       <div class="part-matrix-wrap">
         <div id="part-matrix-scroll" class="part-matrix-scroll">
           <table class="part-matrix-table">
