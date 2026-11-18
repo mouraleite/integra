@@ -4416,7 +4416,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   } else if (tabId === "gerar-pagamento") {
     if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("lotes");
   } else if (tabId === "cartao-credito") {
-    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("cartao");
+    if (window.CartaoClaraApp && typeof CartaoClaraApp.init === "function") CartaoClaraApp.init();
   } else if (tabId === "parametrizacao-parceiro") {
     if (typeof ParametrizacaoParceiroApp !== "undefined") ParametrizacaoParceiroApp.init();
   } else if (tabId === "estrutura-societaria") {

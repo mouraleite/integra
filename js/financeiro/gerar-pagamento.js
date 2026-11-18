@@ -858,12 +858,11 @@ const GerarPagamentoApp = {
   },
 
   rootEl() {
-    const id = this.state.tela === "cartao" ? "cartao-credito-root" : "gerar-pagamento-root";
-    return document.getElementById(id);
+    return document.getElementById("gerar-pagamento-root");
   },
 
   init(tela) {
-    if (tela === "cartao" || tela === "lotes") this.state.tela = tela;
+    if (tela === "lotes") this.state.tela = tela;
     const padrao = this.periodoPadrao();
     this.state.startDate = padrao.start;
     this.state.endDate = padrao.end;
@@ -3858,67 +3857,6 @@ const GerarPagamentoApp = {
     </button>`;
   },
 
-  itensCartao(grupos, dia) {
-    const g = (grupos || []).find((x) => x.key === "__cartao");
-    const itens = g ? g.itens.filter((it) => !it.emLote) : [];
-    if (!dia) return itens;
-    return itens.filter((it) => {
-      const venc = String(it.vencimento || "").slice(0, 10);
-      const lote = this.diaDoLote(venc) || venc;
-      return lote === dia || venc === dia;
-    });
-  },
-
-  gruposCartaoEmpresa(itens) {
-    const mapa = new Map();
-    (itens || []).forEach((it) => {
-      const id = String(it.companyId || "");
-      if (!mapa.has(id)) mapa.set(id, { key: "__cartao@" + id, empresaConta: id, itens: [], conta: null });
-      mapa.get(id).itens.push(it);
-    });
-    return [...mapa.values()];
-  },
-
-  cartaoTelaHtml() {
-    const s = this.state;
-    if (s.consultando) return this.carregandoHtml();
-    if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
-    if (!s.consultado) {
-      return `<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Escolha o período e clique em <strong>Buscar títulos</strong>.</div>`;
-    }
-    const itens = this.itensCartao(this.gruposLote(), "");
-    const empresas = this.gruposCartaoEmpresa(itens);
-    const abas = this.abasEmpresaHtml(empresas, []);
-    const emp = this.state.abaEmpresa;
-    const vis = itens.filter((it) => !emp || String(it.companyId || "") === emp);
-    if (!vis.length) {
-      return `${abas}<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Nenhum título de cartão de crédito${emp ? " nesta empresa" : ""} no período carregado.</div>`;
-    }
-    return `${abas}${this.cartaoPainelHtml(vis)}`;
-  },
-
-  cartaoPainelHtml(itens) {
-    if (!itens.length) return "";
-    const total = itens.reduce((t, it) => t + this.valorPagar(it), 0);
-    const linhas = itens.map((it) => `<tr class="gp-click" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Abrir o título">
-      <td>${this.dataBr(it.vencimento)}</td>
-      <td>${this.esc(it.titulo)}/${this.esc(it.parcela || 1)}</td>
-      <td>${this.esc(it.credor || "")}</td>
-      <td>${this.esc(it.documento || "")}</td>
-      <td style="text-align:right;">${this.money(this.valorPagar(it))}</td>
-      <td><span class="bchk bchk-info">Cartão de crédito</span></td>
-    </tr>`).join("");
-    return `<section class="gp-lotes-painel gp-cartao">
-      <p class="gp-nota">${itens.length} título(s) · ${this.money(total)}. A forma no Sienge é cartão de crédito, então não entram no lote do banco.</p>
-      <div style="overflow:auto;">
-        <table class="gp-table gp-titulos gp-card-tab">
-          <thead><tr><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th style="text-align:right;">A pagar</th><th>Pagamento</th></tr></thead>
-          <tbody>${linhas}</tbody>
-        </table>
-      </div>
-    </section>`;
-  },
-
   resumoEmLoteHtml(g) {
     const linhas = (g.itens || []).map((it) => this.linhaTituloHtml(it, it.chave)).join("");
     return `<div class="gp-lote-linhas">${linhas}</div>`;
@@ -4704,7 +4642,6 @@ const GerarPagamentoApp = {
 
   titulosHtml() {
     const s = this.state;
-    if (s.tela === "cartao") return this.cartaoTelaHtml();
     if (s.consultando) return this.carregandoHtml();
     if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
     if (!s.consultado) {
@@ -4984,9 +4921,9 @@ const GerarPagamentoApp = {
         </style>
         <div class="crm-card" style="overflow:hidden;padding:0;">
           <div class="gp-busca">
-            ${s.tela === "cartao" ? "" : `<div style="flex:1 1 220px;">
+            <div style="flex:1 1 220px;">
               <h3 style="margin:0;color:var(--color-primary);font-size:1rem;">${s.visao === "lotes" ? "Lotes de pagamento" : "Programação de Pagamentos"}</h3>
-            </div>`}
+            </div>
             <div class="form-group">
               <label>Vencimento de</label>
               <input type="date" class="form-control" value="${this.esc(s.startDate)}" ${busy ? "disabled" : ""}
@@ -5001,12 +4938,12 @@ const GerarPagamentoApp = {
               style="height:38px;width:150px;justify-content:center;display:inline-flex;align-items:center;gap:6px;">
               <i data-lucide="search" style="width:14px;"></i> Buscar títulos
             </button>
-            ${s.tela === "cartao" ? "" : `<span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
+            <span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
             <button type="button" id="gp-robo-btn" class="gp-robo-btn" ${s.roboLigando ? "disabled" : ""} onclick="GerarPagamentoApp.ligarRobo()">
               <i data-lucide="bot" style="width:16px;height:16px;"></i> Ligar robô
-            </button>`}
+            </button>
           </div>
-          ${s.tela === "cartao" ? "" : this.alertaSemContaHtml()}
+          ${this.alertaSemContaHtml()}
           <div id="gp-titulos-box">${this.titulosHtml()}</div>
         </div>`);
 
@@ -5029,7 +4966,6 @@ window.contaPagamentoDoCentroCusto = function (input) {
 document.addEventListener("tabChanged", function (e) {
   if (!e) return;
   if (e.detail === "gerar-pagamento") GerarPagamentoApp.init("lotes");
-  if (e.detail === "cartao-credito") GerarPagamentoApp.init("cartao");
 });
 
 document.addEventListener("DOMContentLoaded", function () {
