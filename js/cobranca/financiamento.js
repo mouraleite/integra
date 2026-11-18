@@ -227,6 +227,7 @@ const FinanciamentoApp = {
         <label for="fin-dashboard-periodo">Mês e ano de início do processo</label>
         <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
         <button type="button" class="btn btn-primary" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
+        <button type="button" class="btn btn-outline" id="fin-dashboard-botao-teste" onclick="FinanciamentoApp.botaoTeste()"><i data-lucide="flask-conical" style="width:16px;height:16px;"></i> Botão de teste</button>
         <span id="fin-dashboard-pdf-status" role="status"></span>
       </div>
       <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
@@ -303,6 +304,15 @@ const FinanciamentoApp = {
     if (periodo && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(periodo))) return;
     FinanciamentoState.dashboardPeriodo = String(periodo || "");
     this.render();
+  },
+
+  botaoTeste() {
+    const status = document.getElementById("fin-dashboard-pdf-status");
+    const periodo = FinanciamentoState.dashboardPeriodo || "—";
+    const mensagem = "Botão de teste ok · período " + periodo;
+    if (status) status.textContent = mensagem;
+    alert(mensagem);
+    return true;
   },
 
   async exportarDashboardPdf() {
