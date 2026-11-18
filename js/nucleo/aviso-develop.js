@@ -859,103 +859,23 @@
     const semAlteracoesCodigo = !r.totais.commits && !r.totais.arquivos;
     const atualizando = minhaSolic && minhaSolic.status === "pendente";
     const anterior = atualizando ? minhaSolic : null;
-    const escolhidas = new Set((anterior && Array.isArray(anterior.telas) && anterior.telas.length) ? anterior.telas : sugerirTelas(r, ""));
-    const menu = menuTelas();
-    const prints = {};
-    Object.keys((anterior && anterior.prints) || {}).forEach((k) => { prints[k] = (anterior.prints[k] || []).filter(printSeguro).slice(0, 3); });
+    // Sem campos para preencher: as telas e o resumo saem das próprias alterações (commits com Novo/Como funciona/Onde).
+    const telas = sugerirTelas(r, "").slice(0, 20);
     corpo.innerHTML = `
       ${semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Não há commits pendentes nesta branch.</strong> Você pode encaminhar uma solicitação manual para o administrador; ela não fará publicação automática.</div>` : ""}
-      ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com o que está abaixo.</div>` : ""}
-      <div>
-        <div class="avsol-tit">1. Em quais telas mudou?</div>
-        <div class="avsol-escolha" id="avsol-telas"></div>
-        <input class="avsol-campo" id="avsol-busca-tela" list="avsol-menu" placeholder="Adicionar outra tela (digite o nome)…">
-        <datalist id="avsol-menu">${menu.map((t) => `<option value="${esc(t.caminho)}"></option>`).join("")}</datalist>
-      </div>
-      <div>
-        <div class="avsol-tit">2. O que muda para quem usa?</div>
-        <textarea class="avsol-texto" id="avsol-desc" placeholder="Em palavras simples. Ex.: agora dá para marcar a data do acordo e anexar o documento do acordo.">${esc(anterior ? anterior.descricao || "" : "")}</textarea>
-      </div>
-      <div>
-        <div class="avsol-tit">3. Como testar (opcional)</div>
-        <textarea class="avsol-texto curto" id="avsol-teste" placeholder="Ex.: abrir um cliente com acordo, clicar em Registrar acordo e anexar um PDF.">${esc(anterior ? anterior.comoTestar || "" : "")}</textarea>
-      </div>
-      ${semAlteracoesCodigo ? "" : `<div class="avsol-meta2">Opcional: anexe prints em cada alteração (botão novo, tela nova, como funciona). Até 3 imagens por alteração, 5 MB cada.</div>` + htmlVisual(r, "", { upload: true, prints })}
+      ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com as alterações abaixo.</div>` : ""}
+      <div><div class="avsol-tit">Onde mudou</div>${htmlTelas(telas, amb, true)}</div>
+      ${semAlteracoesCodigo ? "" : htmlVisual(r, "")}
       <div class="avsol-acoes">
         <button type="button" class="avdev-btn ok" id="avsol-enviar">${atualizando ? "Atualizar solicitação" : "Enviar para o administrador"}</button>
         <button type="button" class="avdev-btn" data-fechar>Cancelar</button>
       </div>`;
-    const caixaTelas = corpo.querySelector("#avsol-telas");
-    const pintarTelas = () => {
-      const todas = Array.from(escolhidas).concat(sugerirTelas(r, "").filter((t) => !escolhidas.has(t)));
-      caixaTelas.innerHTML = todas.length ? todas.map((tab) => {
-        const t = telaPorTab(tab);
-        return `<label class="avsol-op"><input type="checkbox" value="${esc(tab)}" ${escolhidas.has(tab) ? "checked" : ""}><span>${esc(t ? t.caminho : tab)}</span></label>`;
-      }).join("") : `<div class="avsol-meta2">Nenhuma tela sugerida. Use o campo abaixo para escolher.</div>`;
-      caixaTelas.querySelectorAll("input").forEach((cb) => {
-        cb.onchange = () => { if (cb.checked) escolhidas.add(cb.value); else escolhidas.delete(cb.value); };
-      });
-    };
-    pintarTelas();
-    const repintarCommit = (sha) => {
-      const li = corpo.querySelector('.avsol-ci[data-sha="' + sha + '"]');
-      const c = (r.commits || []).find((x) => x.sha === sha);
-      if (li && c) li.innerHTML = htmlCommit(c, { upload: true, prints });
-      if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(li || corpo);
-      else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
-    };
-    corpo.addEventListener("change", async (ev) => {
-      const inp = ev.target;
-      if (!inp || !inp.getAttribute || !inp.getAttribute("data-print")) return;
-      const sha = inp.getAttribute("data-print");
-      const arquivos = Array.from(inp.files || []);
-      inp.value = "";
-      const fc = window.firebaseCollections;
-      if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) { alert("O armazenamento de arquivos do Integra não carregou. Tente de novo."); return; }
-      const rotulo = inp.closest(".avsol-anexar");
-      if (rotulo) rotulo.classList.add("carregando");
-      for (const f of arquivos) {
-        if ((prints[sha] || []).length >= 3) break;
-        if (!/^image\/(png|jpeg|webp)$/.test(f.type)) { alert(f.name + ": só PNG, JPG ou WEBP."); continue; }
-        if (f.size > 5 * 1024 * 1024) { alert(f.name + ": a imagem passa de 5 MB."); continue; }
-        const ext = f.type === "image/png" ? "png" : (f.type === "image/webp" ? "webp" : "jpg");
-        const caminho = "solicitacoes_producao/" + amb.chave + "/" + sha + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) + "." + ext;
-        try {
-          const ref = fc.ref(window.firebaseStorage, caminho);
-          await fc.uploadBytes(ref, f, { contentType: f.type });
-          const url = await fc.getDownloadURL(ref);
-          prints[sha] = (prints[sha] || []).concat(url).slice(0, 3);
-        } catch (e) {
-          console.warn("[Encaminhar para produção] print", e);
-          alert("Não foi possível enviar o print " + f.name + ".");
-        }
-      }
-      repintarCommit(sha);
-    });
-    corpo.addEventListener("click", (ev) => {
-      const x = ev.target && ev.target.closest && ev.target.closest("[data-tirar]");
-      if (!x) return;
-      const sha = x.getAttribute("data-tirar");
-      const i = Number(x.getAttribute("data-i"));
-      prints[sha] = (prints[sha] || []).filter((u, j) => j !== i);
-      repintarCommit(sha);
-    });
-    const busca = corpo.querySelector("#avsol-busca-tela");
-    busca.onchange = () => {
-      const alvo = menu.find((t) => t.caminho === busca.value);
-      if (alvo) { escolhidas.add(alvo.tab); busca.value = ""; pintarTelas(); }
-    };
     corpo.querySelector("#avsol-enviar").onclick = async (ev) => {
       const btn = ev.currentTarget;
-      const descricao = String(corpo.querySelector("#avsol-desc").value || "").trim();
-      const comoTestar = String(corpo.querySelector("#avsol-teste").value || "").trim();
-      if (!escolhidas.size) { alert("Marque pelo menos uma tela onde houve mudança."); return; }
-      if (descricao.length < 10) { alert("Escreva em poucas palavras o que muda para quem usa."); return; }
       const f = fb();
       if (!f) { alert("O banco do Integra ainda não carregou. Tente de novo."); return; }
       btn.disabled = true;
       btn.textContent = "Enviando…";
-      const telas = Array.from(escolhidas).slice(0, 20);
       const pedido = Object.assign({
         ambiente: amb.chave,
         ambienteNome: amb.nome,
@@ -963,8 +883,8 @@
         sha: d.sha,
         shaMain: d.shaMain,
         versaoBase: d.versaoBase || 0,
-        descricao: descricao.slice(0, 4000),
-        comoTestar: comoTestar.slice(0, 2000),
+        descricao: "",
+        comoTestar: "",
         telas,
         telasNomes: telas.map((tab) => { const t = telaPorTab(tab); return t ? t.caminho : tab; }),
         solicitante: usuarioReal(),
@@ -972,7 +892,7 @@
         status: "pendente",
         avisoVisto: false,
         semAlteracoesCodigo,
-        prints
+        prints: {}
       }, r);
       try {
         if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
