@@ -12371,6 +12371,10 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .cem-legenda { margin: 8px 0; color: #64748b; font-size: 0.75rem; }
 .cem-previa { margin: 0; white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; color: #1e293b; font-family: inherit; font-size: 0.85rem; line-height: 1.45; }
 .cem-aviso { margin: 0 0 10px; color: #b45309; font-size: 0.8rem; }
+.cem-env { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.72rem; font-weight: 700; background: #f1f5f9; color: #475569; white-space: nowrap; }
+.cem-env.ok { background: #dcfce7; color: #166534; }
+.cem-env.erro { background: #fee2e2; color: #991b1b; }
+div.cem-previa { white-space: normal; }
 @media (max-width: 800px) {
   .cem-grade, .cem-editor { grid-template-columns: 1fr; }
 }
