@@ -3852,6 +3852,10 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   if (tabId === 'engenharia-caucao' && typeof window.bootEngenhariaCaucao === 'function') {
     window.bootEngenhariaCaucao();
   }
+  if (tabId === 'projetos-landbank' && !window.hasCrmPerm('mod_projetos')) {
+    alert('Sem permissão para Projetos.');
+    return;
+  }
   if (tabId === 'acessos') tabId = 'auditoria';
   if (tabId === 'regras-cobranca' || tabId === 'regras-negociacao') tabId = 'configuracoes';
   if (tabId === 'estoque-comercial' && typeof window.permCoversMenuKey === 'function' && !window.isCrmSuperAdmin()) {
@@ -4211,6 +4215,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   document.querySelectorAll(".nav-group.active").forEach(group => {
     group.classList.remove("active");
   });
+
+  if (tabId === 'projetos-landbank') window.carregarLandbank();
 
   // Carregar dados específicos da aba
   if (tabId === "construcao-home") {
