@@ -545,7 +545,7 @@ const PagarReembolsoApp = {
       const proc = g[0].processoConsulta || "sem número no cadastro";
       return "Título " + g[0].saleId + " · " + this.money(total) + " · processo " + proc;
     });
-    const texto = "Liberar " + grupos.length + " título(s) a pagar no Sienge?\n\n" + linhas.join("\n") + "\n\nCredor 2244 · documento REEM · vencimento em 10 dias · PIX.";
+    const texto = "Liberar " + grupos.length + " título(s) a pagar no Sienge?\n\n" + linhas.join("\n") + "\n\nCredor 2244 · documento REEM · vencimento em 10 dias · depósito Itaú.";
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(texto) : confirm(texto);
     if (!ok) return;
     this.liberando = true;
@@ -645,24 +645,37 @@ const PagarReembolsoApp = {
     if (st) st.cachedCostCenters = list || [];
   },
 
-  rateio(ccId) {
+  /* Rateio pela Parametrização de parceiros, só com centros de custo da mesma empresa do título
+     (o Sienge recusa centro de outra empresa) e com a soma fechando exatamente 100%. */
+  rateio(ccId, companyId) {
     const digits = String(ccId || "").replace(/\D/g, "");
     const base = parseInt(digits, 10);
+    const sozinho = [{ costCenterId: base, percentage: 100 }];
     const PP = window.ParametrizacaoParceiroApp;
     const PC = window.PrestacaoContasApp;
     const obra = PP && typeof PP.obraFromCc === "function" ? PP.obraFromCc(digits) : digits.slice(0, -2);
     let map = null;
     if (PC && typeof PC.padraoObra === "function") map = PC.padraoObra(obra);
-    const ids = map ? Object.keys(map) : [];
-    if (!ids.length) return [{ costCenterId: base, percentage: 100 }];
-    let acc = 0;
-    return ids.map((id, i) => {
-      const pct = i === ids.length - 1
-        ? Math.round((100 - acc) * 10000) / 10000
-        : Math.round((Number(map[id]) || 0) * 10000) / 10000;
-      acc += pct;
-      return { costCenterId: parseInt(id, 10), percentage: pct };
-    }).filter((x) => x.costCenterId && x.percentage > 0);
+    if (!map) return sozinho;
+    const centros = PP && typeof PP.allCostCenters === "function" ? (PP.allCostCenters() || []) : [];
+    const empresaDe = (id) => {
+      const cc = centros.find((c) => String(c && c.id).replace(/\D/g, "") === String(id));
+      return cc && typeof PP.empresaDoCentro === "function" ? String(PP.empresaDoCentro(cc) || "") : "";
+    };
+    const empresa = String(companyId || "");
+    const ids = Object.keys(map).filter((id) => {
+      if (!parseInt(id, 10) || !(Number(map[id]) > 0)) return false;
+      if (String(id).replace(/\D/g, "") === digits) return true;
+      return !!empresa && empresaDe(id) === empresa;
+    });
+    if (!ids.length) return sozinho;
+    const peso = ids.reduce((s, id) => s + Number(map[id]), 0);
+    // Em centésimos de ponto: a soma dá 10000 certinho e a sobra do arredondamento vai para o maior.
+    const partes = ids.map((id) => ({ id: id, c: Math.floor((Number(map[id]) / peso) * 10000) }));
+    const sobra = 10000 - partes.reduce((s, p) => s + p.c, 0);
+    partes.sort((a, b) => b.c - a.c);
+    partes[0].c += sobra;
+    return partes.filter((p) => p.c > 0).map((p) => ({ costCenterId: parseInt(p.id, 10), percentage: p.c / 100 }));
   },
 
   foldUnit(s) {
@@ -719,7 +732,7 @@ const PagarReembolsoApp = {
     const notes = this.observacao(grupo);
     const dep = await this.departamentoTesouraria();
     await this.garantirCentros();
-    const rateio = this.rateio(ccId);
+    const rateio = this.rateio(ccId, companyId);
     await this.completarUnidades([primeiro]);
     const CJ = window.CustasJudiciaisApp;
     const nomeUnidade = (CJ && typeof CJ.limparUnidade === "function" ? CJ.limparUnidade(primeiro.unitName, ccId) : String(primeiro.unitName || "").trim());
@@ -795,12 +808,12 @@ const PagarReembolsoApp = {
     }
     const avisos = [];
     try {
-      await this.enviarPix(billId);
+      await this.enviarDepositoItau(billId);
     } catch (e) {
-      avisos.push("PIX não gravado: " + ((e && e.message) || e));
-      this.auditar("erro", "Título " + billId + " gerado, mas o PIX não foi gravado. Título a receber " + primeiro.saleId + ".", {
+      avisos.push("Depósito Itaú não gravado: " + ((e && e.message) || e));
+      this.auditar("erro", "Título " + billId + " gerado, mas a forma de pagamento (depósito Itaú) não foi gravada. Título a receber " + primeiro.saleId + ".", {
         action: "Atualizar título", method: "PATCH",
-        endpoint: "/bills/" + billId + "/installments/payment-information/pix",
+        endpoint: "/bills/" + billId + "/installments/payment-information/bank-transfer",
         billId: billId, companyId: companyId, cliente: primeiro.customerName || "", erro: (e && e.message) || String(e)
       });
     }
@@ -832,6 +845,54 @@ const PagarReembolsoApp = {
     } catch (e) {
       return "";
     }
+  },
+
+  /* Depósito na conta Itaú do credor 2244 (forma 3 no Sienge). Os títulos com a mesma conta saem
+     num único pagamento no banco, em vez de um PIX por título. */
+  async enviarDepositoItau(billId) {
+    const r = await this.siengeJson("/creditors/" + this.CREDOR + "/bank-informations?limit=100&offset=0");
+    const corpo = r.body || {};
+    const contas = corpo.results || corpo.data || (Array.isArray(corpo) ? corpo : []);
+    const itau = contas.filter((b) => String(b.bank || b.bankCode || "").replace(/\D/g, "").padStart(3, "0") === "341");
+    const bank = itau.find((b) => String(b.defaultFlag || "").trim().toUpperCase() === "S") || itau[0];
+    if (!bank) throw new Error("O credor " + this.CREDOR + " não tem conta no Itaú cadastrada no Sienge.");
+    const espera = (ms) => new Promise((res) => setTimeout(res, ms));
+    let list = [];
+    for (let t = 1; t <= 6 && !list.length; t++) {
+      try {
+        const inst = await this.siengeJson("/bills/" + encodeURIComponent(billId) + "/installments");
+        const body = inst.body || {};
+        list = body.results || body.data || (Array.isArray(body) ? body : []);
+      } catch (e) {}
+      if (!list.length && t < 6) await espera(1200 * t);
+    }
+    if (!list.length) throw new Error("A parcela do título " + billId + " ainda não apareceu.");
+    const installmentId = list[0].installmentNumber || list[0].id || 1;
+    const ag = String(bank.agency || bank.branchNumber || "").trim();
+    const [agNum, agDig] = ag.indexOf("-") >= 0 ? ag.split("-", 2) : [ag, ""];
+    const conta = String(bank.accountNumber || bank.account || "").trim();
+    const digito = String(bank.checkDigit || bank.accountDigit || "").trim();
+    const tipoConta = String(bank.accountType || "C").trim().toUpperCase().slice(0, 1);
+    const favorecido = String(bank.nameOfRecipient || bank.beneficiaryName || "COLENCI ADVOGADOS").trim();
+    await this.siengeJson("/bills/" + encodeURIComponent(billId) + "/installments/" + encodeURIComponent(installmentId) + "/payment-information/bank-transfer", {
+      method: "PATCH",
+      headers: {
+        Authorization: this.siengeAuth(),
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        paymentTypeId: 3,
+        beneficiaryAccountType: tipoConta === "P" ? "P" : "C",
+        beneficiaryBankCode: "341",
+        beneficiaryBankBranchNumber: agNum,
+        beneficiaryBankBranchDigit: agDig || "",
+        beneficiaryAccountNumber: conta,
+        beneficiaryAccountDigit: digito,
+        beneficiaryName: favorecido,
+        notes: "Banco: 341-Banco Itaú Unibanco\nAgência: " + ag + "\nConta: " + conta + (digito ? "-" + digito : "") + "\nFavorecido: " + favorecido
+      })
+    });
   },
 
   async enviarPix(billId) {
