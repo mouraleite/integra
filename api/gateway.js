@@ -33,9 +33,11 @@ const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/in
 
 // Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
 // As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
+// proxy-download fica fora: o boleto/extrato abre numa aba nova, que não leva o login. Ele só aceita
+// links do próprio Sienge (que já trazem a chave do relatório), então não serve de passagem para outros sites.
 const ROTAS_COM_LOGIN = new Set([
   "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "sienge-builder-proxy", "sync-customers", "sync-creditors",
-  "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
+  "cvcrm-proxy", "scod-proxy", "clicksign",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
 
