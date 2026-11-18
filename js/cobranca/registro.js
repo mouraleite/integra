@@ -10,6 +10,7 @@ const RegistroApp = {
     linhas: [],
     arquivo: "",
     quando: "",
+    por: "",
     empresas: [],
     empOpen: false,
     empQuery: "",
@@ -26,6 +27,62 @@ const RegistroApp = {
     }
     this.render();
     this.carregarPosicao();
+    this.lerRemoto();
+  },
+
+  /* O último arquivo fica no banco do Integra (coleção registro_cadastro), para toda a equipe e qualquer computador.
+     Fica dividido em partes de até 600 mil caracteres por causa do limite de cada documento. */
+  COLECAO: "registro_cadastro",
+
+  async lerRemoto() {
+    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.getDoc) return;
+    try {
+      const meta = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"));
+      const existe = meta && (typeof meta.exists === "function" ? meta.exists() : meta.exists);
+      if (!existe) return;
+      const m = meta.data() || {};
+      if (!m.quando || (this.state.quando && String(m.quando) <= String(this.state.quando) && this.state.linhas.length)) return;
+      let texto = "";
+      for (let i = 0; i < (Number(m.partes) || 0); i++) {
+        const parte = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual_" + i));
+        texto += String(((parte && parte.data && parte.data()) || {}).dados || "");
+      }
+      const linhas = JSON.parse(texto || "[]");
+      if (!Array.isArray(linhas) || !linhas.length) return;
+      this.state.linhas = linhas;
+      this.state.arquivo = m.arquivo || "";
+      this.state.quando = m.quando || "";
+      this.state.por = m.por || "";
+      this.gravarLocal();
+      this.render();
+    } catch (e) {
+      console.warn("[Registro] leitura do banco", e);
+    }
+  },
+
+  async gravarRemoto() {
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.setDoc) return false;
+    try {
+      const texto = JSON.stringify(this.state.linhas);
+      const TAM = 600000;
+      const partes = Math.max(1, Math.ceil(texto.length / TAM));
+      for (let i = 0; i < partes; i++) {
+        await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual_" + i), { dados: texto.slice(i * TAM, (i + 1) * TAM) });
+      }
+      // A ficha principal só é trocada no fim: se o envio parar no meio, continua valendo o arquivo anterior inteiro.
+      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"), {
+        arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, partes, unidades: this.state.linhas.length
+      });
+      return true;
+    } catch (e) {
+      console.warn("[Registro] gravação no banco", e);
+      return false;
+    }
   },
 
   /** A posição gravada no Firebase entra nesta aba. Não depende de a tela de estoque ter sido aberta aqui. */
@@ -66,21 +123,26 @@ const RegistroApp = {
       this.state.linhas = raw.linhas;
       this.state.arquivo = raw.arquivo || "";
       this.state.quando = raw.quando || "";
+      this.state.por = raw.por || "";
     } catch (e) {}
   },
 
-  gravar() {
+  async gravar() {
+    this.gravarLocal();
+    const ok = await this.gravarRemoto();
+    if (!ok) this.state.avisoGravacao = "O arquivo ficou só neste navegador: não consegui gravar no banco do Integra.";
+  },
+
+  gravarLocal() {
     const payload = {
       arquivo: this.state.arquivo,
       quando: this.state.quando,
+      por: this.state.por,
       linhas: this.state.linhas
     };
     try {
       localStorage.setItem(this.CHAVE, JSON.stringify(payload));
-      this.state.avisoGravacao = "";
-    } catch (e) {
-      this.state.avisoGravacao = "O arquivo ficou só nesta sessão: o navegador não teve espaço para guardá-lo.";
-    }
+    } catch (e) {}
   },
 
   esc(s) {
@@ -356,8 +418,11 @@ const RegistroApp = {
       this.state.linhas = linhas;
       this.state.arquivo = file.name;
       this.state.quando = new Date().toISOString();
+      const quem = (window.AppState && window.AppState.currentUser) || {};
+      this.state.por = String(quem.name || "").trim();
       this.state.abertos = {};
-      this.gravar();
+      this.state.avisoGravacao = "";
+      await this.gravar();
     } catch (e) {
       alert(e.message || String(e));
     }
@@ -503,7 +568,12 @@ const RegistroApp = {
     }, { quitados: 0, f: 0, m: 0, vazio: 0, fora: 0, fin: 0, prop: 0, conf: 0 });
     const pctMin = Math.round(this.VOLUME_MIN * 100);
     const obrasArq = new Set(linhas.map((l) => l.obraId)).size;
-    const quando = this.state.quando ? this.dataBr(this.state.quando.slice(0, 10)) : "";
+    let quando = "";
+    if (this.state.quando) {
+      const d = new Date(this.state.quando);
+      quando = isNaN(d.getTime()) ? this.dataBr(this.state.quando.slice(0, 10))
+        : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
     const meta = pos.meta || {};
     const posData = this.dataBr(String(meta.batimentoDate || meta.date || "").slice(0, 10));
     const filtro = window.MlEmpresaFilter && itens.length
@@ -570,7 +640,7 @@ const RegistroApp = {
             </button>
           </div>
         </div>
-        ${linhas.length ? `<p style="margin:-4px 0 12px;font-size:0.8rem;color:#334155;">${this.esc(this.state.arquivo)} · ${this.n(linhas.length)} unidades · ${this.n(obrasArq)} empreendimentos${quando ? " · enviado em " + quando : ""}</p>` : ""}
+        ${linhas.length ? `<p style="margin:-4px 0 12px;font-size:0.8rem;color:#334155;"><strong>Última atualização:</strong> ${quando || "—"}${this.state.por ? " por " + this.esc(this.state.por) : ""} · ${this.esc(this.state.arquivo)} · ${this.n(linhas.length)} unidades · ${this.n(obrasArq)} empreendimentos</p>` : ""}
         ${this.state.avisoGravacao ? `<p style="margin:0 0 12px;font-size:0.8rem;color:#9a3412;">${this.esc(this.state.avisoGravacao)}</p>` : ""}
         ${avisoPos}
         ${corpo}
