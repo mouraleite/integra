@@ -167,13 +167,26 @@ module.exports = async function handler(req, res) {
     return responder(res, 409, { error: "O que foi pedido não está mais na branch " + branch + ". Peça para o desenvolvedor encaminhar de novo." });
   }
 
+  // Publicar só até um ponto: "ate" é uma alteração do próprio pedido; vai ela e todas as anteriores.
+  const ate = String((body && body.ate) || "").trim();
+  let alvo = sha;
+  if (ate && ate !== sha) {
+    if (!/^[0-9a-f]{40}$/.test(ate)) return responder(res, 400, { error: "Ponto de publicação inválido." });
+    const cmpAte = await github("GET", "/compare/" + ate + "..." + sha);
+    if (cmpAte.status !== 200 || !cmpAte.json || cmpAte.json.status !== "ahead") {
+      return responder(res, 400, { error: "O ponto escolhido não faz parte deste pedido." });
+    }
+    alvo = ate;
+  }
+  const parcial = alvo !== sha;
+
   const quem = String(sol.solicitante && (sol.solicitante.nome || sol.solicitante.email) || "desenvolvedor");
-  const mensagem = "Junta " + branch + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")";
+  const mensagem = "Junta " + branch + (parcial ? " até " + alvo.slice(0, 7) : "") + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")";
   // 1) junta na main
-  let merge = await github("POST", "/merges", { base: "main", head: sha, commit_message: mensagem });
+  let merge = await github("POST", "/merges", { base: "main", head: alvo, commit_message: mensagem });
   // Conflito com a produção: se depois do pedido a branch só recebeu atualizações com a produção
   // (commits de "merge", nenhuma alteração nova do desenvolvedor), usa a branch já atualizada.
-  if (merge.status === 409 && cmp.json.status === "ahead") {
+  if (!parcial && merge.status === 409 && cmp.json.status === "ahead") {
     // Alterações do desenvolvedor (commits que não são "merge") que ainda não estão na produção:
     // precisam ser exatamente as mesmas no pedido e na ponta da branch.
     const proprios = async (ref) => {
@@ -239,5 +252,5 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  return responder(res, 200, { publicado: true, versao, commit: commitFinal, branch, testes });
+  return responder(res, 200, { publicado: true, versao, commit: commitFinal, branch, testes, parcial, ate: alvo });
 };
