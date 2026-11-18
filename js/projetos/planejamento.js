@@ -6,7 +6,6 @@
 
   const form = document.getElementById('projetos-planejamento-filtro');
   const obra = document.getElementById('projetos-planejamento-obra');
-  const unidade = document.getElementById('projetos-planejamento-unidade');
   const button = form.querySelector('button');
   const status = document.getElementById('projetos-planejamento-status');
   const table = document.getElementById('projetos-planejamento-lista');
@@ -53,11 +52,7 @@
     }
   };
 
-  obra.addEventListener('change', () => {
-    unidade.value = obra.value === '15700' ? '01' : '';
-    limparConsulta();
-  });
-  unidade.addEventListener('input', limparConsulta);
+  obra.addEventListener('change', limparConsulta);
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -65,11 +60,10 @@
     limparConsulta();
     const current = consulta;
     const buildingId = obra.value;
-    const unitId = unidade.value.trim();
     button.disabled = true;
     status.textContent = 'Consultando o planejamento no Sienge…';
     try {
-      const tasks = await window.SiengeApiService.getBuildingPlanningTasks(buildingId, unitId);
+      const tasks = await window.SiengeApiService.getBuildingPlanningTasks(buildingId, '01');
       if (current !== consulta || !window.hasCrmPerm('mod_projetos')) return;
       tasks.sort((a, b) => a.presentationId - b.presentationId);
       const rows = document.createDocumentFragment();
@@ -93,7 +87,7 @@
       if (error.status === 401 || error.status === 403) {
         status.textContent = 'A consulta foi recusada. Confira sua sessão no Integra e o acesso da integração ao Planejamento do Sienge.';
       } else if (error.status === 404) {
-        status.textContent = 'Planejamento não encontrado. Confira o código da unidade construtiva.';
+        status.textContent = 'Planejamento indisponível para a unidade construtiva 1 desta obra.';
       } else {
         console.error('Falha ao consultar o planejamento', error);
         status.textContent = 'Não foi possível carregar o planejamento. Tente consultar novamente.';
