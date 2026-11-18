@@ -412,6 +412,10 @@ const ConfigUsersApp = {
       ] }]
     },
     {
+      name: "Projetos", icon: "folder", key: "mod_projetos", direct: true,
+      submodules: []
+    },
+    {
       name: "Vistoria", icon: "camera", key: "mod_vistoria", direct: true,
       submodules: []
     },

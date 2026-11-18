@@ -977,6 +977,19 @@
             </li>
           </ul>
         </li>
+        <li class="nav-item nav-group" data-module="mod_projetos">
+          <a onclick="toggleNavMenu(event, 'submenu-projetos')" title="Projetos">
+            <i data-lucide="folder"></i>
+            <span>Projetos</span>
+            <i data-lucide="chevron-down" class="nav-chevron"></i>
+          </a>
+          <ul class="nav-submenu" id="submenu-projetos" style="display: none;">
+            <li data-tab="projetos-landbank" data-module="mod_projetos">
+              <a onclick="switchTab('projetos-landbank', 'Landbank')">Landbank</a>
+            </li>
+          </ul>
+        </li>
+
         <!-- 3 - VISTORIA -->
         <li class="nav-item nav-group" data-module="mod_vistoria">
           <a onclick="toggleNavMenu(event, 'submenu-vistoria')" title="Vistoria">
@@ -3599,6 +3612,10 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
            </div>
         </div>
 
+      </section>
+
+      <section id="tab-projetos-landbank" class="tab-pane" style="display: none;">
+        <div class="tvig-empty">Cadastro de terrenos em preparação.</div>
       </section>
 
       <section id="tab-construcao-engenharia" class="tab-pane" style="display: none;"></section>
@@ -8705,7 +8722,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="previsao-obras" data-src="js/relacionamento/previsao-obras.js?v=c9a9f4970a"></script>
   <script type="text/x-sob-demanda" data-grupo="consultar-titulo" data-src="js/financeiro/consultar-titulo.js?v=4f7f885504"></script>
   <script defer src="js/nucleo/config-tags.js?v=3843c41147"></script>
-  <script defer src="js/nucleo/config-users.js?v=c857b58fdb"></script>
+  <script defer src="js/nucleo/config-users.js?v=668fbce054"></script>
   <script defer src="js/nucleo/suporte.js?v=07bc755f0e"></script>
   <script defer src="js/nucleo/aviso-develop.js?v=6a03e17816"></script>
   <script defer src="js/nucleo/ml-select-unico.js?v=4f7efa8871"></script>
