@@ -817,19 +817,30 @@ const RecebimentosWebroApp = {
         ${passo(3, "passo3-baixar-excel.png", "<strong>Baixar Excel</strong> &gt; Modelo antigo, por comissão &gt; <strong>Todos os contratos</strong>.")}
       </div>`;
     let corpo = "";
-    if (s.repasseLendo) corpo = `<div class="tvig-empty">Lendo o relatório…</div>`;
+    if (s.repasseLendo) corpo = this.carregandoHtml("Lendo o relatório da Webro…");
     else if (s.repasseErro) corpo = `<div class="tvig-empty">${this.esc(s.repasseErro)}</div>`;
     else if (!rep) corpo = `<div class="tvig-empty">Nenhum relatório enviado.</div>`;
-    else if (!fila.length) corpo = `<div class="tvig-empty">A fila de cobrança ainda não foi carregada nesta sessão. Abra a Fila de Cobrança e volte aqui para cruzar o relatório.</div>`;
-    else {
+    else if (!fila.length) {
+      if (s.filaErro) corpo = `<div class="tvig-empty">${this.esc(s.filaErro)} <button type="button" class="btn btn-primary" style="margin-left:8px;" onclick="RecebimentosWebroApp.garantirFila(true)">Tentar de novo</button></div>`;
+      else {
+        corpo = this.carregandoHtml("Carregando a fila de cobrança para cruzar com o relatório…");
+        setTimeout(() => this.garantirFila(), 0);
+      }
+    } else {
       const cruz = this.cruzarRepasse();
       const todas = cruz.linhas;
       const conferem = todas.filter((l) => l.confere);
       const semOcc = this.semOcorrenciaWebro(cruz);
+      // Lançamento automático: ao cruzar o relatório com a fila, grava sozinho o Aguardando Baixa Webro.
+      if (semOcc.length && !s.lancando) setTimeout(() => this.lancarBaixasWebro(true), 0);
       const linhas = s.repasseFiltro === "todos" ? todas : conferem;
       const valor = conferem.reduce((t, l) => t + (Number(l.webro.comissao) || 0), 0);
       const seg = (id, rot, n) => `<button type="button" class="ml-tab${s.repasseFiltro === id ? " is-active" : ""}" onclick="RecebimentosWebroApp.filtroRepasse('${id}')">${rot} <small>${n}</small></button>`;
+      const avisoLanc = s.lancando
+        ? `<p class="rweb-note" style="color:#105436;font-weight:700;">Lançando Aguardando Baixa Webro em ${semOcc.length} título(s)…</p>`
+        : (s.lancMsg ? `<p class="rweb-note" style="color:${s.lancErro ? "#b91c1c" : "#105436"};font-weight:700;">${this.esc(s.lancMsg)}</p>` : "");
       corpo = `
+        ${avisoLanc}
         <div class="rweb-rep-kpis">
           <div class="ccom-kpi"><span>Comissões disponíveis</span><strong>${rep.linhas.length}</strong><small>No relatório da Webro, Moura Leite</small></div>
           <div class="ccom-kpi"><span>Clientes na fila com a tag</span><strong>${cruz.candidatos}</strong><small>0% Pago, Boleto WEBRO ou baixa Webro</small></div>
@@ -839,7 +850,6 @@ const RecebimentosWebroApp = {
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
           <div class="ml-tabs" role="tablist" style="margin:0;">${seg("confere", "Valor confere", conferem.length)}${seg("todos", "Mesmo cliente e unidade", todas.length)}</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button type="button" class="btn btn-primary" style="height:36px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" ${semOcc.length && !s.lancando ? "" : "disabled"} title="Grava o canal Aguardando Baixa Webro nos títulos com valor conferido que ainda não têm a ocorrência" onclick="RecebimentosWebroApp.lancarBaixasWebro()"><i data-lucide="${s.lancando ? "loader-2" : "banknote"}" style="width:14px;height:14px;"></i> ${s.lancando ? "Lançando..." : "Lançar Aguardando Baixa Webro (" + semOcc.length + ")"}</button>
             <button type="button" class="btn btn-excel" style="height:36px;" ${linhas.length ? "" : "disabled"} onclick="RecebimentosWebroApp.exportarRepasse()"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>
           </div>
         </div>
@@ -884,6 +894,48 @@ const RecebimentosWebroApp = {
       ${corpo}`;
   },
 
+  /** Carregamento padrão do Integra: círculo girando e barra verde. */
+  carregandoHtml(texto) {
+    return `<style>
+        .rweb-load .loading-progress-bar{width:8%;animation:rweb-carga 25s ease-out forwards;}
+        @keyframes rweb-carga{from{width:8%}to{width:92%}}
+      </style>
+      <div class="ml-load rweb-load">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-status-text">${this.esc(texto)}</div>
+        <div class="ml-load-track"><div class="loading-progress-bar"></div></div>
+      </div>`;
+  },
+
+  /**
+   * A fila de cobrança é montada pela tela da Fila. Se ela ainda não foi aberta nesta sessão,
+   * monta aqui mesmo (usa a fila pronta do dia quando existe) e espera a lista ficar pronta.
+   */
+  async garantirFila(tentarDeNovo) {
+    if ((window.rawClientList || []).length) return true;
+    if (this._filaEsperando && !tentarDeNovo) return false;
+    this._filaEsperando = true;
+    this.state.filaErro = "";
+    if (tentarDeNovo) this.render();
+    try {
+      if (typeof window.loadDashboardData === "function") {
+        Promise.resolve(window.loadDashboardData()).catch((e) => console.warn("[Recebimentos Webro] fila", e));
+      } else {
+        throw new Error("A fila de cobrança não está disponível.");
+      }
+      const limite = Date.now() + 4 * 60 * 1000;
+      while (!(window.rawClientList || []).length && Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      if (!(window.rawClientList || []).length) throw new Error("A fila de cobrança demorou demais para carregar.");
+    } catch (e) {
+      this.state.filaErro = (e && e.message) || String(e);
+    }
+    this._filaEsperando = false;
+    if (this.state.aba === "repasse") this.render();
+    return !this.state.filaErro;
+  },
+
   /** Abre a ficha do cliente no título da linha. */
   abrirFicha(customerId, titulo) {
     if (!customerId || typeof window.viewCustomerCard !== "function") return;
@@ -904,19 +956,21 @@ const RecebimentosWebroApp = {
   },
 
   /** Grava, em Ocorrências e Promessas, o canal Aguardando Baixa Webro com a data paga na Webro. */
-  async lancarBaixasWebro() {
+  async lancarBaixasWebro(auto) {
     if (this.state.lancando) return;
     const grupos = this.semOcorrenciaWebro(this.cruzarRepasse());
-    if (!grupos.length) { alert("Todos os clientes com valor conferido já têm a ocorrência Aguardando Baixa Webro."); return; }
+    if (!grupos.length) return;
     const w = window;
     if (!w.AppState || typeof w.saveNotesToFirebase !== "function" || typeof w.mergeOccurrenceLists !== "function"
       || typeof w.getCustomerNotesList !== "function" || typeof w.normalizeCustomerNotesKey !== "function") {
-      alert("As ocorrências ainda não carregaram. Atualize a página e tente de novo.");
+      this.state.lancMsg = "As ocorrências ainda não carregaram. Atualize a página para lançar o Aguardando Baixa Webro.";
+      this.state.lancErro = true;
       return;
     }
-    const pergunta = "Lançar a ocorrência Aguardando Baixa Webro em " + grupos.length + " título(s)? A data da baixa será a data paga na Webro.";
-    const ok = typeof w.mouraConfirm === "function" ? await w.mouraConfirm(pergunta) : confirm(pergunta);
-    if (!ok) return;
+    // Não repete o mesmo lote na mesma sessão (evita laço se algum título não puder ser gravado).
+    const assin = grupos.map((g) => g[0].customerId + "|" + g[0].titulo).sort().join(",");
+    if (auto && this._ultimoLancAuto === assin) return;
+    this._ultimoLancAuto = assin;
     this.state.lancando = true;
     this.render();
     const hoje = this.iso(new Date());
@@ -969,8 +1023,10 @@ const RecebimentosWebroApp = {
       }
     }
     this.state.lancando = false;
+    this.state.lancErro = !!falhas.length;
+    this.state.lancMsg = (feitos ? feitos + " título(s) receberam Aguardando Baixa Webro automaticamente, com a data paga na Webro." : "")
+      + (falhas.length ? (feitos ? " " : "") + "Não foi possível gravar: " + falhas.join(", ") + "." : "");
     this.render();
-    alert(feitos + " ocorrência(s) Aguardando Baixa Webro lançada(s)." + (falhas.length ? "\nNão foi possível gravar: " + falhas.join(", ") + "." : ""));
   },
 
   alternarInstrucoes() {
