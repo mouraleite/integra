@@ -4,6 +4,11 @@
     return parts ? [parts[3], parts[2], parts[1]].join('/') : '—';
   };
 
+  const dayMs = 86400000;
+  const todayFormat = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' });
+  const monthFormat = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const percentageFormat = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 2 });
+
   const form = document.getElementById('projetos-planejamento-filtro');
   const obra = document.getElementById('projetos-planejamento-obra');
   const button = form.querySelector('button');
@@ -65,12 +70,33 @@
     try {
       const tasks = await window.SiengeApiService.getBuildingPlanningTasks(buildingId, '01');
       if (current !== consulta || !window.hasCrmPerm('mod_projetos')) return;
+      let measurements = null;
+      if (tasks.length) {
+        status.textContent = 'Consultando as medições no Sienge…';
+        try {
+          measurements = await window.SiengeApiService.getBuildingPlanningMeasurements(
+            buildingId, '01', tasks.map(task => task.id)
+          );
+        } catch (error) {
+          console.error('Falha ao consultar as medições do planejamento', error);
+        }
+      }
+      if (current !== consulta || !window.hasCrmPerm('mod_projetos')) return;
+      const today = Date.parse(todayFormat.format(new Date()));
       tasks.sort((a, b) => a.presentationId - b.presentationId);
       const rows = document.createDocumentFragment();
       for (const task of tasks) {
         const row = document.createElement('tr');
+        const start = Date.parse(task.startDate);
+        const finish = Date.parse(task.finishDate);
+        const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
+        const measured = measurements?.get(task.id);
+        const overdue = measurements && Number.isFinite(finish) && !(measured >= 100)
+          ? Math.max(0, (today - finish) / dayMs)
+          : null;
         const values = [task.presentationId, task.description, dateLabel(task.startDate),
-          dateLabel(task.finishDate), task.duration];
+          dateLabel(task.finishDate), task.duration, days, days === null ? null : monthFormat.format(days / 30.4375),
+          overdue, measured === undefined ? null : percentageFormat.format(measured / 100)];
         for (const value of values) row.insertCell().textContent = value ?? '—';
         const description = row.cells[1];
         description.style.paddingInlineStart = (1.25 + Math.max(0, (task.level || 1) - 1) * 0.75) + 'rem';
@@ -82,6 +108,7 @@
       status.textContent = tasks.length
         ? tasks.length + (tasks.length === 1 ? ' atividade encontrada.' : ' atividades encontradas.')
         : 'Nenhuma atividade encontrada para esta obra e unidade.';
+      if (tasks.length && !measurements) status.textContent += ' As medições e os atrasos estão indisponíveis. Tente consultar novamente.';
     } catch (error) {
       if (current !== consulta) return;
       if (error.status === 401 || error.status === 403) {

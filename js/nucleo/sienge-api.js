@@ -1658,28 +1658,58 @@ function normalizeSiengeCustomer(c) {
 // -----------------------------------------------
 // Interface de Acesso aos Serviços
 // -----------------------------------------------
+async function getBuildingPlanningPages(path) {
+  const limit = 200;
+  const separator = path.includes("?") ? "&" : "?";
+  const results = [];
+  let offset = 0;
+  while (true) {
+    const page = await siengeFetch(`${path}${separator}offset=${offset}&limit=${limit}`);
+    const count = page.resultSetMetadata?.count;
+    if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
+      throw new Error("Resposta de planejamento inválida.");
+    }
+    results.push(...page.results);
+    offset += page.results.length;
+    if (offset >= count) return results;
+    if (page.results.length === 0) throw new Error("O Sienge retornou uma página incompleta.");
+  }
+}
+
 const SiengeApiService = {
   async getBuildingPlanningTasks(buildingId, buildingUnitId) {
     if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
       throw new Error("Informe os códigos da obra e da unidade construtiva.");
     }
-    const limit = 200;
-    const tasks = [];
-    const path = `/building-projects/${buildingId}/sheets/${buildingUnitId}/tasks`;
-    let offset = 0;
-    while (true) {
-      const page = await siengeFetch(`${path}?offset=${offset}&limit=${limit}`);
-      const count = page.resultSetMetadata?.count;
-      if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
-        throw new Error("Resposta de planejamento inválida.");
-      }
-      tasks.push(...page.results);
-      offset += page.results.length;
-      if (offset >= count) return tasks;
-      if (page.results.length === 0) throw new Error("O Sienge retornou uma página incompleta.");
-    }
+    return getBuildingPlanningPages(`/building-projects/${buildingId}/sheets/${buildingUnitId}/tasks`);
   },
 
+  async getBuildingPlanningMeasurements(buildingId, buildingUnitId, taskIds) {
+    if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
+      throw new Error("Informe os códigos da obra e da unidade construtiva.");
+    }
+    const pending = new Set(taskIds);
+    const measured = new Map();
+    const filters = new URLSearchParams({ buildingId, buildingUnitId, consistent: "true" });
+    const logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
+    const approved = logs.filter(log => log.statusApproval === "APROVADA" &&
+      Number.isSafeInteger(log.measurementNumber) && typeof log.date === "string");
+    approved.sort((a, b) => b.date.localeCompare(a.date) || b.measurementNumber - a.measurementNumber);
+    for (const log of approved) {
+      if (!pending.size) break;
+      const path = `/building-projects/${buildingId}/progress-logs/${log.measurementNumber}/items/${buildingUnitId}`;
+      const page = await siengeFetch(path);
+      if (!Array.isArray(page.results) || page.resultSetMetadata?.count > page.results.length) {
+        throw new Error("Resposta de medição incompleta.");
+      }
+      for (const item of page.results) {
+        if (Number.isFinite(item.cumulativePercentage) && pending.delete(item.taskId)) {
+          measured.set(item.taskId, item.cumulativePercentage);
+        }
+      }
+    }
+    return measured;
+  },
 
   // 1. Empresas
   async getCompanies(forceRefresh = false) {
