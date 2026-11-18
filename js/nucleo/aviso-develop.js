@@ -12,9 +12,11 @@
     { chave: "dani", nome: "Teste Dani", pessoa: "da Dani", branch: "develop", cor: "#2563eb" },
     { chave: "marcelo", nome: "Teste Marcelo", pessoa: "do Marcelo", branch: "Marcelo", cor: "#7c3aed" },
     { chave: "lucelia", nome: "Teste Lucélia", pessoa: "da Lucélia", branch: "lucelia", cor: "#0891b2" },
+    { chave: "isabella", nome: "Teste Isabella", pessoa: "da Isabella", branch: "isabella_garcia", slug: "isabellagarcia", cor: "#ea580c" },
     { chave: "israel", nome: "Teste Israel", pessoa: "do Israel", branch: "israel", cor: "#db2777" }
   ].map((a) => {
-    const slug = a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    // A Vercel tira o sublinhado do nome da branch (isabella_garcia vira isabellagarcia); slug fixo quando precisa.
+    const slug = a.slug || a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     return Object.assign(a, { host: "crm-gestao-git-" + slug + "-", url: "https://crm-gestao-git-" + slug + "-crm-mldu.vercel.app/" });
   });
   const DISPENSADO = "integra_testes_dispensado";
