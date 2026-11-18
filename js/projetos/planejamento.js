@@ -15,6 +15,28 @@
   const status = document.getElementById('projetos-planejamento-status');
   const table = document.getElementById('projetos-planejamento-lista');
   const body = table.querySelector('tbody');
+  const hierarchy = document.getElementById('projetos-planejamento-hierarquia');
+  let taskRows = [];
+
+  function atualizarHierarquia() {
+    for (const entry of taskRows) {
+      const { row, parent, toggle, expanded } = entry;
+      row.hidden = Boolean(parent && (parent.row.hidden || !parent.expanded));
+      if (toggle) {
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.setAttribute('aria-label', (expanded ? 'Recolher ' : 'Expandir ') + entry.description);
+        toggle.textContent = expanded ? '▾' : '▸';
+      }
+    }
+  }
+
+  for (const control of hierarchy.querySelectorAll('button')) {
+    control.addEventListener('click', () => {
+      const expanded = control.dataset.expand === 'true';
+      for (const entry of taskRows) entry.expanded = expanded;
+      atualizarHierarquia();
+    });
+  }
   let obrasCarregadas = false;
   let carregandoObras = false;
   let consulta = 0;
@@ -24,6 +46,8 @@
     button.disabled = !obrasCarregadas;
     table.hidden = true;
     body.replaceChildren();
+    taskRows = [];
+    hierarchy.hidden = true;
     status.textContent = '';
   }
 
@@ -85,7 +109,11 @@
       const today = Date.parse(todayFormat.format(new Date()));
       tasks.sort((a, b) => a.presentationId - b.presentationId);
       const rows = document.createDocumentFragment();
+      const ancestors = [];
       for (const task of tasks) {
+        const level = Number.isSafeInteger(task.level) && task.level > 0 ? task.level : 1;
+        while (ancestors.length && ancestors.at(-1).level >= level) ancestors.pop();
+        const parent = ancestors.at(-1);
         const row = document.createElement('tr');
         const start = Date.parse(task.startDate);
         const finish = Date.parse(task.finishDate);
@@ -99,11 +127,29 @@
           overdue, measured === undefined ? null : percentageFormat.format(measured / 100)];
         for (const value of values) row.insertCell().textContent = value ?? '—';
         const description = row.cells[1];
-        description.style.paddingInlineStart = (1.25 + Math.max(0, (task.level || 1) - 1) * 0.75) + 'rem';
+        description.style.paddingInlineStart = (1.25 + (level - 1) * 0.75) + 'rem';
         if (task.summary) description.style.fontWeight = '700';
+
+        const entry = { row, parent, level, expanded: true, description: task.description || String(task.presentationId) };
+        if (parent && !parent.toggle) {
+          const toggle = document.createElement('button');
+          toggle.type = 'button';
+          toggle.className = 'btn btn-secondary btn-sm';
+          toggle.style.marginInlineEnd = '0.5rem';
+          toggle.addEventListener('click', () => {
+            parent.expanded = !parent.expanded;
+            atualizarHierarquia();
+          });
+          parent.row.cells[1].prepend(toggle);
+          parent.toggle = toggle;
+        }
+        ancestors.push(entry);
+        taskRows.push(entry);
         rows.append(row);
       }
       body.append(rows);
+      hierarchy.hidden = !taskRows.some(entry => entry.toggle);
+      atualizarHierarquia();
       table.hidden = tasks.length === 0;
       status.textContent = tasks.length
         ? tasks.length + (tasks.length === 1 ? ' atividade encontrada.' : ' atividades encontradas.')
