@@ -18,7 +18,13 @@
       const { collection, getDocs } = window.firebaseCollections;
       const snapshot = await getDocs(collection(window.firebaseDb, 'landbank'));
       const terrenos = snapshot.docs.map(doc => doc.data());
-      terrenos.sort((a, b) => a.id - b.id);
+      const collator = new Intl.Collator('pt-BR', { sensitivity: 'base' });
+      terrenos.sort((a, b) => {
+        const statusA = String(a.status ?? '').trim();
+        const statusB = String(b.status ?? '').trim();
+        if (Boolean(statusA) !== Boolean(statusB)) return statusA ? -1 : 1;
+        return collator.compare(statusA, statusB) || a.id - b.id;
+      });
 
       const rows = document.createDocumentFragment();
       for (const terreno of terrenos) {
