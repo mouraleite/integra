@@ -4,6 +4,7 @@ const CentralEmailApp = {
   state: { templates: [], pronto: false, aba: "templates" },
 
   VARIAVEIS: [
+    { token: "{{saudacao}}", label: "Bom dia / Boa tarde", grupo: "Saudação" },
     { token: "{{primeiro_nome}}", label: "Primeiro nome", grupo: "Cliente" },
     { token: "{{nome}}", label: "Nome completo", grupo: "Cliente" },
     { token: "{{unidade}}", label: "Unidade", grupo: "Imóvel" },
@@ -142,8 +143,15 @@ const CentralEmailApp = {
     };
   },
 
+  // Bom dia até 11h59, boa tarde até 17h59, boa noite depois, pela hora em que o e-mail é montado.
+  saudacao(agora) {
+    const h = (agora || new Date()).getHours();
+    return h < 12 ? "Bom dia" : (h < 18 ? "Boa tarde" : "Boa noite");
+  },
+
   aplicar(texto, ctx) {
     let s = String(texto || "");
+    s = s.split("{{saudacao}}").join(this.saudacao());
     s = s.replace(/\{\{retorno:(\d+)\}\}/g, (_, n) => this.dataMais(Number(n)));
     const dados = ctx || this.EXEMPLO;
     Object.keys(dados).forEach((k) => {
