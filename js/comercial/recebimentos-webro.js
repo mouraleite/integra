@@ -779,6 +779,8 @@ const RecebimentosWebroApp = {
     const s = this.state;
     const rep = s.repasse;
     const fila = window.rawClientList || [];
+    // Sem relatório enviado, as instruções já aparecem abertas.
+    const aberto = s.instrAberto != null ? s.instrAberto : !rep;
     const upload = `
       <label class="btn btn-primary" style="height:36px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;white-space:nowrap;">
         <i data-lucide="upload" style="width:14px;height:14px;"></i> Subir relatório da Webro
@@ -786,7 +788,7 @@ const RecebimentosWebroApp = {
       </label>`;
     const passo = (n, img, texto) => `
       <a class="rweb-passo" href="assets/webro/${img}" target="_blank" rel="noopener" title="Abrir imagem ampliada">
-        <span class="rweb-passo-tit"><b>${n}</b>${texto}</span>
+        <span class="rweb-passo-tit"><b>${n}</b><span>${texto}</span></span>
         <span class="rweb-passo-img"><img src="assets/webro/${img}" alt="${this.esc(texto.replace(/<[^>]+>/g, ""))}" loading="lazy"></span>
       </a>`;
     const nota = `
@@ -804,11 +806,11 @@ const RecebimentosWebroApp = {
         .rweb-rep-kpis .ccom-kpi small{display:block;margin-top:2px;font-size:0.7rem;color:#64748b;}
         .rweb-rep-kpis .rweb-kpi-alerta{border-left-color:#d97706;background:#fffbeb;}
         .rweb-rep-kpis .rweb-kpi-alerta strong{color:#b45309;}
+        .rweb-passos[hidden]{display:none;}
         @media (max-width:1100px){.rweb-passos{grid-template-columns:1fr 1fr;}.rweb-rep-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
         @media (max-width:640px){.rweb-passos,.rweb-rep-kpis{grid-template-columns:1fr;}}
       </style>
-      <p class="rweb-note" style="margin-bottom:6px;">Onde baixar o relatório no portal da Webro:</p>
-      <div class="rweb-passos">
+      <div class="rweb-passos"${aberto ? "" : " hidden"}>
         ${passo(1, "passo1-gestao-contratos.png", "Abra <strong>Gestão de contratos</strong> na aba <strong>Todos os Contratos</strong>.")}
         ${passo(2, "passo2-periodo.png?v=2", "Em <strong>Selecionar período</strong>, marque <strong>Data de liberação</strong> e clique em <strong>Últimos 90 dias</strong>.")}
         ${passo(3, "passo3-baixar-excel.png", "<strong>Baixar Excel</strong> &gt; Modelo antigo, por comissão &gt; <strong>Todos os contratos</strong>.")}
@@ -867,11 +869,20 @@ const RecebimentosWebroApp = {
     return `
       <div class="search-filter-panel tvig-params ccom-params">
         <h3 class="tvig-section-title">Repasse pendente da Webro</h3>
-        ${nota}
-        <div class="ccom-filters"><div class="tvig-filter-actions">${upload}</div></div>
+        <div class="ccom-filters"><div class="tvig-filter-actions" style="display:flex;gap:8px;flex-wrap:wrap;">${upload}
+          <button type="button" class="btn btn-secondary" style="height:36px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" aria-expanded="${aberto ? "true" : "false"}" onclick="RecebimentosWebroApp.alternarInstrucoes()">
+            <i data-lucide="${aberto ? "chevron-up" : "help-circle"}" style="width:14px;height:14px;"></i> ${aberto ? "Fechar instruções" : "Instruções para atualizar"}
+          </button></div></div>
         ${rep ? `<p class="rweb-note">${this.esc(rep.arquivo)} · ${rep.total} linha(s) no arquivo · ${rep.linhas.length} com comissão disponível da Moura Leite · enviado em ${this.esc(this.fmtDate(String(rep.quando).slice(0, 10)))}</p>` : ""}
+        ${nota}
       </div>
       ${corpo}`;
+  },
+
+  alternarInstrucoes() {
+    const s = this.state;
+    s.instrAberto = !(s.instrAberto != null ? s.instrAberto : !s.repasse);
+    this.render();
   },
 
   abasHtml() {
