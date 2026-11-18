@@ -61,7 +61,9 @@
       const snapshot = await getDocs(collection(window.firebaseDb, 'landbank'));
       const obras = new Map();
       for (const doc of snapshot.docs) {
-        const { idSienge, nomeSienge, nomeAprovacao } = doc.data();
+        const { idSienge, nomeSienge, nomeAprovacao, status: landbankStatus } = doc.data();
+        const etapa = String(landbankStatus ?? '').split('|').at(-1).trim().replace(/^\d+(?:\.\d+)*\.?\s+/, '');
+        if (etapa.localeCompare('Aprovação', 'pt-BR', { sensitivity: 'base' }) !== 0) continue;
         if (Number.isSafeInteger(idSienge) && idSienge > 0 && !obras.has(idSienge)) {
           obras.set(idSienge, nomeSienge || nomeAprovacao || '');
         }
@@ -72,7 +74,7 @@
       obrasCarregadas = obras.size > 0;
       obra.disabled = !obrasCarregadas;
       limparConsulta();
-      if (!obrasCarregadas) status.textContent = 'Nenhuma obra com ID Sienge encontrada no Landbank.';
+      if (!obrasCarregadas) status.textContent = 'Nenhuma obra em Aprovação com ID Sienge encontrada no Landbank.';
     } catch (error) {
       console.error('Falha ao carregar obras do Landbank', error);
       status.textContent = 'Não foi possível carregar as obras. Abra Aprovação novamente para tentar de novo.';
