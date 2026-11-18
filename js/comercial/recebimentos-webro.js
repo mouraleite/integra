@@ -784,7 +784,35 @@ const RecebimentosWebroApp = {
         <i data-lucide="upload" style="width:14px;height:14px;"></i> Subir relatório da Webro
         <input type="file" accept=".xlsx,.xls,.csv" hidden onchange="RecebimentosWebroApp.aoArquivoRepasse(this)">
       </label>`;
-    const nota = `<p class="rweb-note">Na Webro, em Gestão de contratos, baixe <strong>Baixar Excel &gt; Modelo antigo, por comissão &gt; Todos os contratos</strong>. A tela usa só as linhas com Status_comissão <strong>disponível</strong> e Corretor <strong>Moura Leite</strong> e procura, na fila de cobrança, cliente com 0% pago, Boleto WEBRO ou baixa Webro pendente com o mesmo nome, empreendimento e unidade. Quando a comissão da Webro é igual ao valor sem juros de uma parcela vencida no Integra, a Webro recebeu essa parcela e ainda não repassou.</p>`;
+    const passo = (n, img, texto) => `
+      <a class="rweb-passo" href="assets/webro/${img}" target="_blank" rel="noopener" title="Abrir imagem ampliada">
+        <span class="rweb-passo-tit"><b>${n}</b>${texto}</span>
+        <span class="rweb-passo-img"><img src="assets/webro/${img}" alt="${this.esc(texto.replace(/<[^>]+>/g, ""))}" loading="lazy"></span>
+      </a>`;
+    const nota = `
+      <style>
+        .rweb-passos{display:grid;grid-template-columns:1.5fr 1fr 0.8fr;gap:10px;margin:4px 0 12px;}
+        .rweb-passo{display:flex;flex-direction:column;gap:6px;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc;text-decoration:none;color:#1c2e24;min-width:0;}
+        .rweb-passo:hover{border-color:#1b8253;background:#f0f9f4;}
+        .rweb-passo-tit{display:flex;align-items:flex-start;gap:6px;font-size:0.76rem;line-height:1.35;}
+        .rweb-passo-tit b{flex:0 0 20px;height:20px;border-radius:50%;background:#1b8253;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;}
+        .rweb-passo-img{flex:1;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #e8eee9;border-radius:6px;overflow:hidden;height:150px;}
+        .rweb-passo-img img{max-width:100%;max-height:150px;object-fit:contain;display:block;}
+        .rweb-rep-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 10px;}
+        .rweb-rep-kpis .ccom-kpi{padding:10px 12px;border-left:4px solid #1b8253;}
+        .rweb-rep-kpis .ccom-kpi strong{font-size:1.15rem;margin-top:4px;}
+        .rweb-rep-kpis .ccom-kpi small{display:block;margin-top:2px;font-size:0.7rem;color:#64748b;}
+        .rweb-rep-kpis .rweb-kpi-alerta{border-left-color:#d97706;background:#fffbeb;}
+        .rweb-rep-kpis .rweb-kpi-alerta strong{color:#b45309;}
+        @media (max-width:1100px){.rweb-passos{grid-template-columns:1fr 1fr;}.rweb-rep-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
+        @media (max-width:640px){.rweb-passos,.rweb-rep-kpis{grid-template-columns:1fr;}}
+      </style>
+      <p class="rweb-note" style="margin-bottom:6px;">Onde baixar o relatório no portal da Webro:</p>
+      <div class="rweb-passos">
+        ${passo(1, "passo1-gestao-contratos.png", "Abra <strong>Gestão de contratos</strong> na aba <strong>Todos os Contratos</strong>.")}
+        ${passo(2, "passo2-periodo.png", "Em <strong>Selecionar período</strong>, marque <strong>Data de liberação</strong> e escolha as datas.")}
+        ${passo(3, "passo3-baixar-excel.png", "<strong>Baixar Excel</strong> &gt; Modelo antigo, por comissão &gt; <strong>Todos os contratos</strong>.")}
+      </div>`;
     let corpo = "";
     if (s.repasseLendo) corpo = `<div class="tvig-empty">Lendo o relatório…</div>`;
     else if (s.repasseErro) corpo = `<div class="tvig-empty">${this.esc(s.repasseErro)}</div>`;
@@ -798,11 +826,11 @@ const RecebimentosWebroApp = {
       const valor = conferem.reduce((t, l) => t + (Number(l.webro.comissao) || 0), 0);
       const seg = (id, rot, n) => `<button type="button" class="ml-tab${s.repasseFiltro === id ? " is-active" : ""}" onclick="RecebimentosWebroApp.filtroRepasse('${id}')">${rot} <small>${n}</small></button>`;
       corpo = `
-        <div class="ccom-kpis">
-          <div class="ccom-kpi"><span>Comissões disponíveis (Moura Leite)</span><strong>${rep.linhas.length}</strong></div>
-          <div class="ccom-kpi"><span>Clientes na fila com a tag</span><strong>${cruz.candidatos}</strong></div>
-          <div class="ccom-kpi"><span>Pendentes de repasse</span><strong>${conferem.length}</strong></div>
-          <div class="ccom-kpi"><span>Valor pendente</span><strong>${this.esc(this.money(valor))}</strong></div>
+        <div class="rweb-rep-kpis">
+          <div class="ccom-kpi"><span>Comissões disponíveis</span><strong>${rep.linhas.length}</strong><small>No relatório da Webro, Moura Leite</small></div>
+          <div class="ccom-kpi"><span>Clientes na fila com a tag</span><strong>${cruz.candidatos}</strong><small>0% Pago, Boleto WEBRO ou baixa Webro</small></div>
+          <div class="ccom-kpi rweb-kpi-alerta"><span>Pendentes de repasse</span><strong>${conferem.length}</strong><small>Valor da Webro igual ao do Integra</small></div>
+          <div class="ccom-kpi rweb-kpi-alerta"><span>Valor pendente</span><strong>${this.esc(this.money(valor))}</strong><small>Soma das comissões que conferem</small></div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
           <div class="ml-tabs" role="tablist" style="margin:0;">${seg("confere", "Valor confere", conferem.length)}${seg("todos", "Mesmo cliente e unidade", todas.length)}</div>
