@@ -1669,6 +1669,9 @@ async function getBuildingPlanningPages(path) {
     if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
       throw new Error("Resposta de planejamento inválida.");
     }
+    if (page.resultSetMetadata.offset != null && Number(page.resultSetMetadata.offset) !== offset) {
+      throw new Error("O Sienge retornou um deslocamento diferente do solicitado.");
+    }
     results.push(...page.results);
     offset += page.results.length;
     if (offset >= count) return results;
@@ -1688,24 +1691,24 @@ const SiengeApiService = {
     if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
       throw new Error("Informe os códigos da obra e da unidade construtiva.");
     }
-    const pending = new Set(taskIds);
+    const pending = new Set(taskIds.map(String));
     const measured = new Map();
-    const filters = new URLSearchParams({ buildingId, buildingUnitId, consistent: "true" });
+    const filters = new URLSearchParams({ buildingId, buildingUnitId: String(Number(buildingUnitId)) });
     const logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
-    const approved = logs.filter(log => log.statusApproval === "APROVADA" &&
-      Number.isSafeInteger(log.measurementNumber) && typeof log.date === "string");
-    approved.sort((a, b) => b.date.localeCompare(a.date) || b.measurementNumber - a.measurementNumber);
-    for (const log of approved) {
+    // Alguns registros não têm situação de aprovação. Excluir somente as medições reprovadas.
+    const usable = logs.filter(log => log.statusApproval !== "REPROVADA" &&
+      /^\d+$/.test(String(log.measurementNumber)));
+    usable.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")) ||
+      Number(b.measurementNumber) - Number(a.measurementNumber));
+    for (const log of usable) {
       if (!pending.size) break;
       const path = `/building-projects/${buildingId}/progress-logs/${log.measurementNumber}/items/${buildingUnitId}`;
-      const page = await siengeFetch(path);
-      if (!Array.isArray(page.results) || page.resultSetMetadata?.count > page.results.length) {
-        throw new Error("Resposta de medição incompleta.");
-      }
-      for (const item of page.results) {
-        if (Number.isFinite(item.cumulativePercentage) && pending.delete(item.taskId)) {
-          measured.set(item.taskId, item.cumulativePercentage);
-        }
+      const items = await getBuildingPlanningPages(path);
+      for (const item of items) {
+        const value = item.cumulativePercentage;
+        const percentage = value === null || value === undefined || value === "" ? NaN : Number(value);
+        const taskId = String(item.taskId);
+        if (Number.isFinite(percentage) && pending.delete(taskId)) measured.set(taskId, percentage);
       }
     }
     return measured;

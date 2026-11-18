@@ -120,7 +120,7 @@
         const start = Date.parse(task.startDate);
         const finish = Date.parse(task.finishDate);
         const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
-        const recorded = measurements?.get(task.id);
+        const recorded = measurements?.get(String(task.id));
         const measured = recorded ?? (measurements && !task.summary ? 0 : null);
         const elapsedDays = (today - start) / dayMs;
         const overdue = days === null || measured === null
@@ -158,7 +158,14 @@
       status.textContent = tasks.length
         ? tasks.length + (tasks.length === 1 ? ' atividade encontrada.' : ' atividades encontradas.')
         : 'Nenhuma atividade encontrada para esta obra e unidade.';
-      if (tasks.length && !measurements) status.textContent += ' As medições e os atrasos estão indisponíveis. Tente consultar novamente.';
+      if (tasks.length && !measurements) {
+        status.textContent += ' O Sienge não retornou as medições. Tente consultar novamente.';
+      } else if (tasks.length && !measurements.size) {
+        status.textContent += ' Nenhuma medição acumulada foi encontrada para essas atividades.';
+      } else if (measurements?.size) {
+        status.textContent += ' Medição acumulada encontrada para ' + measurements.size
+          + (measurements.size === 1 ? ' atividade.' : ' atividades.');
+      }
     } catch (error) {
       if (current !== consulta) return;
       if (error.status === 401 || error.status === 403) {
