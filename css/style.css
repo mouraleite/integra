@@ -12379,6 +12379,18 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .apa-tabela { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
 .apa-tabela th { text-align: left; background: #f8fafc; color: #105436; font-size: 0.75rem; letter-spacing: 0.03em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
 .apa-tabela td { padding: 12px; border-bottom: 1px solid #f1f5f9; vertical-align: top; font-size: 0.86rem; color: #1e293b; line-height: 1.4; }
+.cem-rotulo { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
+.cem-ativo { display: flex; flex-direction: column; justify-content: flex-start; }
+.cem-ativo .moura-switch { height: 36px; align-items: center; }
+.cem-dest { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; margin-top: 10px; padding: 10px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.cem-dest > .cem-rotulo, .cem-dest-opcoes { grid-column: 1 / -1; }
+.cem-dest-opcoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.cem-radio { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; font-size: 0.8rem; font-weight: 600; color: #1e293b; cursor: pointer; white-space: nowrap; }
+.cem-radio:has(input:checked) { border-color: #1b8253; background: #f0fdf4; color: #105436; }
+.cem-dest-campo { display: flex; flex-direction: column; gap: 4px; font-size: 0.72rem; font-weight: 700; color: #64748b; }
+.cem-dest-campo[hidden] { display: none; }
+.cem-cc { color: #64748b; }
+.tvig-ico.cem-ligada { color: #1b8253; }
 .apa-tabela tr:last-child td { border-bottom: 0; }
 .apa-tabela .apa-nome { font-weight: 700; color: #0f172a; }
 .apa-acoes { width: 64px; text-align: right; white-space: nowrap; }
