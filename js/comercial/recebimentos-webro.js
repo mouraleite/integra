@@ -810,7 +810,7 @@ const RecebimentosWebroApp = {
       <p class="rweb-note" style="margin-bottom:6px;">Onde baixar o relatório no portal da Webro:</p>
       <div class="rweb-passos">
         ${passo(1, "passo1-gestao-contratos.png", "Abra <strong>Gestão de contratos</strong> na aba <strong>Todos os Contratos</strong>.")}
-        ${passo(2, "passo2-periodo.png", "Em <strong>Selecionar período</strong>, marque <strong>Data de liberação</strong> e escolha as datas.")}
+        ${passo(2, "passo2-periodo.png?v=2", "Em <strong>Selecionar período</strong>, marque <strong>Data de liberação</strong> e clique em <strong>Últimos 90 dias</strong>.")}
         ${passo(3, "passo3-baixar-excel.png", "<strong>Baixar Excel</strong> &gt; Modelo antigo, por comissão &gt; <strong>Todos os contratos</strong>.")}
       </div>`;
     let corpo = "";
