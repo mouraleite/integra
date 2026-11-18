@@ -131,6 +131,18 @@ const AlertasPopupApp = {
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente.</p>`
     },
     {
+      id: "webro-repasse",
+      nome: "Repasse Webro pendente",
+      quando: "No login, quando há título com a tag Pendente Repasse Webro. Ciente dispensa o restante do dia.",
+      logica: "A baixa Webro registrada em Ocorrências e Promessas tem 3 dias úteis para o repasse entrar. Passado o prazo, o título fica com a tag Pendente Repasse Webro. Quem está com a fila de cobrança aberta atualiza a lista a cada 2 minutos; título que sai da tag sai da lista. O botão Checar repasse abre Recebimentos Webro, na aba Repasse pendente.",
+      quem: "Analista de Pagadoria I.",
+      titulo: "Repasse Webro pendente",
+      faixa: true,
+      corpo: `<p>Há títulos pendentes de baixa na Webro: a Webro recebeu e o repasse não entrou no prazo de 3 dias úteis. Checar repasse.</p>
+        <div class="apa-item"><strong>Título 16752 · Cliente exemplo</strong><span>14704 - P-06 · baixa na Webro em 06/11/2026</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real os botões são Ciente e Checar repasse.</p>`
+    },
+    {
       id: "esteira",
       nome: "Etapas vencidas na esteira",
       quando: "Todo dia às 08:00, enquanto a etapa continuar vencida. Se a pessoa entra depois, abre na hora. Fechar dispensa só aquele dia, inclusive depois de atualizar a página.",
