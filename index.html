@@ -1123,6 +1123,11 @@
                 </li>
               </ul>
             </li>
+            <li class="nav-item" data-tab="antecipacoes" data-module="sub_fin_antec_antecipacoes_acessar">
+              <a onclick="switchTab('antecipacoes', 'Antecipações')" title="Antecipações">
+                <span>Antecipações</span>
+              </a>
+            </li>
             <li class="nav-item nav-group" data-module="sub_fin_pc">
               <a onclick="toggleNavMenu(event, 'submenu-prestacao-contas')" title="Prestação de contas">
                 <span>Prestação de contas</span>
@@ -1539,7 +1544,7 @@
         <div id="gerar-pagamento-root" class="gp-root"></div>
       </section>
       <section id="tab-cartao-credito" class="tab-pane" style="display: none;">
-        <div id="cartao-credito-root" class="gp-root"></div>
+        <div id="cartao-credito-root"></div>
       </section>
       <section id="tab-contabil" class="tab-pane" style="display: none;">
         <div id="contabil-root"></div>
@@ -1560,6 +1565,10 @@
       </section>
       <section id="tab-consultar-titulo" class="tab-pane" style="display: none;">
         <div id="consultar-titulo-root"></div>
+      </section>
+
+      <section id="tab-antecipacoes" class="tab-pane" style="display: none;">
+        <div id="antecipacoes-root"></div>
       </section>
       <section id="tab-rydoo" class="tab-pane" style="display: none;">
         <div id="rydoo-root"></div>
@@ -8448,6 +8457,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
               <div class="adv-pill" data-value="EXECUTAR_ACORDO_QUEBRADO">Executar Acordo Quebrado</div>
               <div class="adv-pill" data-value="RECENTE_JURIDICO">Recente Jurídico</div>
               <div class="adv-pill" data-value="ANALISE_INTERNA_JURIDICO">Análise Interna Jurídico</div>
+              <div class="adv-pill" data-value="REENVIAR_JURIDICO">Reenviar para Jurídico - Acordo Judicial Quebrado</div>
               <div class="adv-pill" data-value="ENVIAR_JURIDICO">Enviar para Jurídico</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_SEM_PAGTO">Sem pagamento nos últimos 30 dias</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_COM_PAGTO">Com pagamento nos últimos 30 dias</div>
@@ -8668,11 +8678,11 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
-  <script defer src="js/nucleo/alertas-popup.js?v=3b5263ea20"></script>
+  <script defer src="js/nucleo/alertas-popup.js?v=20261118webro"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=0729f8da80"></script>
+  <script defer src="js/nucleo/app.js?v=20261118clara"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
-  <script defer src="js/nucleo/central-email.js?v=5c605a8ce3"></script>
+  <script defer src="js/nucleo/central-email.js?v=20261118reenv"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=a28cc1507e"></script>
@@ -8683,12 +8693,13 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/alcada-desconto.js?v=e8826f2636"></script>
   <script defer src="js/cobranca/alcada-distrato.js?v=2811047cfb"></script>
   <script defer src="js/nucleo/home-dashboard.js?v=a36d15465d"></script>
-  <script defer src="js/cobranca/anexos.js?v=5501e8021d"></script>
+  <script defer src="js/cobranca/anexos.js?v=20261118grande"></script>
   <script defer src="js/cobranca/boletos-baixa.js?v=83666a3816"></script>
   <script type="text/x-sob-demanda" data-grupo="contas-pagar" data-src="js/financeiro/contas-pagar.js?v=3f6d4ddbf5"></script>
-    <script defer src="js/financeiro/boleto-check.js?v=42fb1639c2"></script>
+    <script defer src="js/financeiro/boleto-check.js?v=20261118pixqr"></script>
     <script defer src="js/financeiro/nota-fiscal-check.js?v=27ba062a96"></script>
-    <script defer src="js/financeiro/gerar-pagamento.js?v=1455d7397f"></script>
+    <script defer src="js/financeiro/gerar-pagamento.js?v=20261118semcartao"></script>
+    <script defer src="js/financeiro/cartao-clara.js?v=20261118clara"></script>
     <script defer src="js/contabil/contabil.js?v=508491accb"></script>
     <script defer src="js/contabil/contabil-equiv.js?v=bf21ef1b34"></script>
     <script defer src="js/contabil/contabil-depara.js?v=a581419424"></script>
@@ -8704,10 +8715,11 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="acompanhamento-obra" data-src="js/engenharia/engenharia-acompanhamento.js?v=c16b955fbe"></script>
   <script type="text/x-sob-demanda" data-grupo="previsao-obras" data-src="js/relacionamento/previsao-obras.js?v=c9a9f4970a"></script>
   <script type="text/x-sob-demanda" data-grupo="consultar-titulo" data-src="js/financeiro/consultar-titulo.js?v=4f7f885504"></script>
+  <script type="text/x-sob-demanda" data-grupo="antecipacoes" data-src="js/financeiro/antecipacoes.js?v=2"></script>
   <script defer src="js/nucleo/config-tags.js?v=3843c41147"></script>
   <script defer src="js/nucleo/config-users.js?v=c857b58fdb"></script>
   <script defer src="js/nucleo/suporte.js?v=07bc755f0e"></script>
-  <script defer src="js/nucleo/aviso-develop.js?v=54ed721d2d"></script>
+  <script defer src="js/nucleo/aviso-develop.js?v=20261118juntou"></script>
   <script defer src="js/nucleo/ml-select-unico.js?v=4f7efa8871"></script>
   <script defer src="js/nucleo/escala-home-office.js?v=d269d4eced"></script>
   <script defer src="js/nucleo/alerta-ponto.js?v=3f3477a576"></script>
@@ -8725,7 +8737,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/documentos-sienge.js?v=6b96789811"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
   <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
-  <script defer src="js/comercial/recebimentos-webro.js?v=4e08ebacae"></script>
+  <script defer src="js/comercial/recebimentos-webro.js?v=20261118auto"></script>
   <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
   <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
   <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
@@ -8752,7 +8764,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
   <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
   <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
-  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=f35308634e"></script>
+  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=20261118catml2"></script>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=981e037a7b"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>
@@ -8764,7 +8776,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/financiamento.js?v=1347b8c00c"></script>
   <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
   <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>
-  <script defer src="js/cobranca/registro.js?v=39d59d3a5e"></script>
+  <script defer src="js/cobranca/registro.js?v=39d59d3a5f"></script>
   
   <!-- Dashboard de Inadimplência -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>

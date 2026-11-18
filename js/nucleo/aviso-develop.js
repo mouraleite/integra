@@ -144,19 +144,19 @@
     const lista = chave ? AMBIENTES.filter((a) => a.chave === chave) : comPendencia();
     if (!lista.length) return;
     estilo();
+    estiloSolic();
     const status = { added: "novo", removed: "removido", modified: "alterado", renamed: "renomeado" };
     const blocos = lista.map((amb) => {
       const d = dados[amb.chave];
       const commits = alteracoesUteis(d).slice().reverse();
+      const pedido = solicPendentes.find((x) => x.ambiente === amb.chave) || (minhaSolic && minhaSolic.ambiente === amb.chave ? minhaSolic : null);
+      const prints = (pedido && pedido.prints) || {};
       const itens = commits.map((c) => {
         const msg = String((c.commit && c.commit.message) || "").trim();
-        const titulo = msg.split("\n")[0];
-        const resto = msg.split("\n").slice(1).join("\n").trim();
         const autor = (c.commit && c.commit.author && c.commit.author.name) || (c.author && c.author.login) || "";
         const quando = c.commit && c.commit.author && c.commit.author.date;
-        return `<div class="avdev-item"><h4>${esc(titulo)}</h4>
-          <div class="avdev-meta">${esc(autor)}${quando ? " • " + esc(fmtData(quando)) : ""}</div>
-          ${resto ? `<pre>${esc(resto)}</pre>` : ""}</div>`;
+        const item = { sha: String(c.sha || "").slice(0, 12), titulo: msg.split("\n")[0], corpo: msg.split("\n").slice(1).join("\n").trim() };
+        return `<div class="avdev-item">${htmlCommit(item, { prints, meta: esc(autor) + (quando ? " • " + esc(fmtData(quando)) : "") })}</div>`;
       }).join("");
       const arqs = ((d && d.files) || []).map((f) => `<li>${esc(f.filename)} <span style="color:#94a3b8;">(${esc(status[f.status] || f.status)})</span></li>`).join("");
       return `<div class="avdev-amb" style="color:${amb.cor};"><h3>${esc(amb.nome)}</h3><span>branch ${esc(amb.branch)}</span>
@@ -512,6 +512,7 @@
       const msg = String((c.commit && c.commit.message) || "").trim();
       return {
         sha: String(c.sha || "").slice(0, 12),
+        shaCompleto: /^[0-9a-f]{40}$/.test(String(c.sha || "")) ? String(c.sha) : "",
         titulo: msg.split("\n")[0].slice(0, 300),
         corpo: msg.split("\n").slice(1).join("\n").trim().slice(0, 2000),
         autor: (c.commit && c.commit.author && c.commit.author.name) || (c.author && c.author.login) || "",
@@ -601,6 +602,53 @@
       .filter((l) => l && !/^(co-authored-by|signed-off-by|reviewed-by)\s*:/i.test(l)).join("\n");
   }
 
+  // Tópicos que o commit pode trazer no corpo, um por linha:
+  //   Novo: ...  /  Como funciona: ...  /  Onde: ...  /  Parecido na produção: ...
+  const TOPICOS = [
+    ["novo", /^(novo|nova|novidade)\s*:\s*/i, "O que é novo"],
+    ["como", /^como funciona\s*:\s*/i, "Como funciona"],
+    ["onde", /^onde( fica)?\s*:\s*/i, "Onde fica"],
+    ["parecido", /^(parecido|j[aá] existe)[^:]*:\s*/i, "Já existe parecido na produção?"]
+  ];
+
+  function topicosDe(corpo) {
+    const topicos = {};
+    const resto = [];
+    corpoSimples(corpo).split("\n").forEach((l) => {
+      const t = TOPICOS.find((x) => x[1].test(l));
+      if (t) topicos[t[0]] = (topicos[t[0]] ? topicos[t[0]] + " " : "") + l.replace(t[1], "").trim();
+      else if (l) resto.push(l);
+    });
+    return { topicos, resto: resto.join("\n") };
+  }
+
+  // Só mostra imagem guardada no Firebase Storage do Integra.
+  function printSeguro(u) {
+    return /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(String(u || ""));
+  }
+
+  function htmlPrints(lista, editavel, sha) {
+    const urls = (lista || []).filter(printSeguro);
+    if (!urls.length && !editavel) return "";
+    return `<div class="avsol-prints">${urls.map((u, i) => `<span class="avsol-print"><a href="${esc(u)}" target="_blank" rel="noopener" title="Abrir o print"><img src="${esc(u)}" alt="Print da alteração" loading="lazy"></a>${editavel ? `<button type="button" class="avsol-print-x" data-tirar="${esc(sha)}" data-i="${i}" title="Tirar este print">×</button>` : ""}</span>`).join("")}
+      ${editavel && urls.length < 3 ? `<label class="avsol-anexar"><input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden data-print="${esc(sha)}"><i data-lucide="image-plus" style="width:14px;height:14px;"></i> Anexar print</label>` : ""}</div>`;
+  }
+
+  /** Uma alteração: título, tópicos (novo, como funciona, onde, parecido), prints e, para o administrador, "publicar até aqui". */
+  function htmlCommit(c, opts) {
+    const o = opts || {};
+    const { topicos, resto } = topicosDe(c.corpo);
+    const tops = TOPICOS.filter((t) => topicos[t[0]]).map((t) => `<div class="avsol-top"><b>${esc(t[2])}</b><span>${esc(topicos[t[0]])}</span></div>`).join("");
+    const radio = o.escolher && c.shaCompleto
+      ? `<label class="avsol-ate"><input type="radio" name="avsol-ate-${esc(o.id)}" value="${esc(c.shaCompleto)}" ${o.marcado === c.shaCompleto ? "checked" : ""}> Publicar até aqui</label>`
+      : "";
+    return `<div class="avsol-ci-cab"><strong>${esc(frase(c.titulo))}</strong>${radio}</div>
+      ${o.meta ? `<div class="avdev-meta">${o.meta}</div>` : ""}
+      ${tops ? `<div class="avsol-tops">${tops}</div>` : ""}
+      ${resto ? `<span class="avsol-det">${esc(resto)}</span>` : ""}
+      ${htmlPrints((o.prints || {})[c.sha], !!o.upload, c.sha)}`;
+  }
+
   function tamanhoDe(t) {
     const n = (Number(t && t.mais) || 0) + (Number(t && t.menos) || 0);
     if (n < 80) return ["pequena", "peq"];
@@ -618,13 +666,10 @@
   }
 
   // Resumo em linguagem simples + detalhes técnicos recolhidos.
-  function htmlVisual(r, extraTecnico) {
+  function htmlVisual(r, extraTecnico, opts) {
     const t = (r && r.totais) || { commits: 0, arquivos: 0, mais: 0, menos: 0 };
     const tam = tamanhoDe(t);
-    const itens = ((r && r.commits) || []).map((c) => {
-      const corpo = corpoSimples(c.corpo);
-      return `<li>${esc(frase(c.titulo))}${corpo ? `<span class="avsol-det">${esc(corpo)}</span>` : ""}</li>`;
-    }).join("");
+    const itens = ((r && r.commits) || []).map((c) => `<li class="avsol-ci" data-sha="${esc(c.sha)}">${htmlCommit(c, opts)}</li>`).join("");
     const rotulo = { added: ["novo", "novo"], removed: ["removido", "rem"], modified: ["alterado", "alt"], renamed: ["renomeado", "ren"] };
     const maior = Math.max(1, ...((r && r.arquivos) || []).map((f) => f.mais + f.menos));
     const arqs = ((r && r.arquivos) || []).slice().sort((a, b) => (b.mais + b.menos) - (a.mais + a.menos)).map((f) => {
@@ -640,7 +685,7 @@
       </div>`;
     }).join("");
     return `
-      ${itens ? `<div><div class="avsol-tit">Passo a passo do que foi feito</div><ul class="avsol-lista">${itens}</ul></div>` : ""}
+      ${itens ? `<div><div class="avsol-tit">${opts && opts.escolher ? "Alterações (da mais nova para a mais antiga): marque até onde publicar" : "Passo a passo do que foi feito"}</div><ul class="avsol-lista avsol-cis">${itens}</ul></div>` : ""}
       <div class="avsol-rodape">
         <span class="avsol-tam ${tam[1]}">Mudança ${tam[0]}</span>
         <span class="avsol-meta2">${num(t.commits)} ${t.commits === 1 ? "envio" : "envios"} • ${num(t.arquivos)} ${t.arquivos === 1 ? "arquivo" : "arquivos"} do sistema</span>
@@ -727,6 +772,24 @@
       ".avsol-pub-cab span{display:block;font-size:.78rem;opacity:.85;}",
       ".avdev-barra.solic{background:#f0fdf4;border:1px solid #86efac;color:#14532d;}",
       ".avdev-btn.verde{background:#105436;border-color:#105436;color:#fff;}",
+      ".avsol-cis{list-style:none;padding-left:0;gap:8px;}",
+      ".avsol-ci{border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;}",
+      ".avsol-ci.fica{opacity:.55;background:#f8fafc;}",
+      ".avsol-ci.fica .avsol-ci-cab strong::after{content:' · fica para depois';font-weight:600;color:#94a3b8;font-size:.76rem;}",
+      ".avsol-ci-cab{display:flex;align-items:flex-start;gap:10px;justify-content:space-between;}",
+      ".avsol-ci-cab strong{font-size:.86rem;color:#0f172a;}",
+      ".avsol-ate{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:.76rem;font-weight:700;color:#105436;cursor:pointer;border:1px solid #a7f3d0;border-radius:99px;padding:2px 9px;background:#ecfdf5;}",
+      ".avsol-tops{display:flex;flex-direction:column;gap:4px;}",
+      ".avsol-top{display:grid;grid-template-columns:170px minmax(0,1fr);gap:8px;font-size:.8rem;}",
+      ".avsol-top b{color:#105436;}",
+      ".avsol-top span{color:#334155;}",
+      ".avsol-prints{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}",
+      ".avsol-print{position:relative;display:inline-block;}",
+      ".avsol-print img{display:block;width:160px;height:100px;object-fit:cover;border:1px solid #cbd5e1;border-radius:6px;}",
+      ".avsol-print-x{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;border:0;background:#b91c1c;color:#fff;cursor:pointer;line-height:18px;font-weight:700;}",
+      ".avsol-anexar{display:inline-flex;align-items:center;gap:6px;border:1px dashed #94a3b8;border-radius:6px;padding:6px 10px;font-size:.76rem;font-weight:700;color:#105436;cursor:pointer;}",
+      ".avsol-anexar.carregando{opacity:.6;pointer-events:none;}",
+      "@media (max-width:640px){.avsol-top{grid-template-columns:1fr;}}",
       "@media (max-width:640px){.avsol-cards{grid-template-columns:repeat(2,minmax(0,1fr));}.avsol-arq{grid-template-columns:70px minmax(0,1fr) 84px;}.avsol-barra{display:none;}}"
     ].join("");
     document.head.appendChild(st);
@@ -798,6 +861,8 @@
     const anterior = atualizando ? minhaSolic : null;
     const escolhidas = new Set((anterior && Array.isArray(anterior.telas) && anterior.telas.length) ? anterior.telas : sugerirTelas(r, ""));
     const menu = menuTelas();
+    const prints = {};
+    Object.keys((anterior && anterior.prints) || {}).forEach((k) => { prints[k] = (anterior.prints[k] || []).filter(printSeguro).slice(0, 3); });
     corpo.innerHTML = `
       ${semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Não há commits pendentes nesta branch.</strong> Você pode encaminhar uma solicitação manual para o administrador; ela não fará publicação automática.</div>` : ""}
       ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com o que está abaixo.</div>` : ""}
@@ -815,7 +880,7 @@
         <div class="avsol-tit">3. Como testar (opcional)</div>
         <textarea class="avsol-texto curto" id="avsol-teste" placeholder="Ex.: abrir um cliente com acordo, clicar em Registrar acordo e anexar um PDF.">${esc(anterior ? anterior.comoTestar || "" : "")}</textarea>
       </div>
-      ${semAlteracoesCodigo ? "" : htmlVisual(r)}
+      ${semAlteracoesCodigo ? "" : `<div class="avsol-meta2">Opcional: anexe prints em cada alteração (botão novo, tela nova, como funciona). Até 3 imagens por alteração, 5 MB cada.</div>` + htmlVisual(r, "", { upload: true, prints })}
       <div class="avsol-acoes">
         <button type="button" class="avdev-btn ok" id="avsol-enviar">${atualizando ? "Atualizar solicitação" : "Enviar para o administrador"}</button>
         <button type="button" class="avdev-btn" data-fechar>Cancelar</button>
@@ -832,6 +897,49 @@
       });
     };
     pintarTelas();
+    const repintarCommit = (sha) => {
+      const li = corpo.querySelector('.avsol-ci[data-sha="' + sha + '"]');
+      const c = (r.commits || []).find((x) => x.sha === sha);
+      if (li && c) li.innerHTML = htmlCommit(c, { upload: true, prints });
+      if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(li || corpo);
+      else if (window.lucide && typeof window.lucide.createIcons === "function") window.lucide.createIcons();
+    };
+    corpo.addEventListener("change", async (ev) => {
+      const inp = ev.target;
+      if (!inp || !inp.getAttribute || !inp.getAttribute("data-print")) return;
+      const sha = inp.getAttribute("data-print");
+      const arquivos = Array.from(inp.files || []);
+      inp.value = "";
+      const fc = window.firebaseCollections;
+      if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) { alert("O armazenamento de arquivos do Integra não carregou. Tente de novo."); return; }
+      const rotulo = inp.closest(".avsol-anexar");
+      if (rotulo) rotulo.classList.add("carregando");
+      for (const f of arquivos) {
+        if ((prints[sha] || []).length >= 3) break;
+        if (!/^image\/(png|jpeg|webp)$/.test(f.type)) { alert(f.name + ": só PNG, JPG ou WEBP."); continue; }
+        if (f.size > 5 * 1024 * 1024) { alert(f.name + ": a imagem passa de 5 MB."); continue; }
+        const ext = f.type === "image/png" ? "png" : (f.type === "image/webp" ? "webp" : "jpg");
+        const caminho = "solicitacoes_producao/" + amb.chave + "/" + sha + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8) + "." + ext;
+        try {
+          const ref = fc.ref(window.firebaseStorage, caminho);
+          await fc.uploadBytes(ref, f, { contentType: f.type });
+          const url = await fc.getDownloadURL(ref);
+          prints[sha] = (prints[sha] || []).concat(url).slice(0, 3);
+        } catch (e) {
+          console.warn("[Encaminhar para produção] print", e);
+          alert("Não foi possível enviar o print " + f.name + ".");
+        }
+      }
+      repintarCommit(sha);
+    });
+    corpo.addEventListener("click", (ev) => {
+      const x = ev.target && ev.target.closest && ev.target.closest("[data-tirar]");
+      if (!x) return;
+      const sha = x.getAttribute("data-tirar");
+      const i = Number(x.getAttribute("data-i"));
+      prints[sha] = (prints[sha] || []).filter((u, j) => j !== i);
+      repintarCommit(sha);
+    });
     const busca = corpo.querySelector("#avsol-busca-tela");
     busca.onchange = () => {
       const alvo = menu.find((t) => t.caminho === busca.value);
@@ -863,7 +971,8 @@
         criadoEm: Date.now(),
         status: "pendente",
         avisoVisto: false,
-        semAlteracoesCodigo
+        semAlteracoesCodigo,
+        prints
       }, r);
       try {
         if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
@@ -1045,7 +1154,7 @@
         ${s.comoTestar ? `<div><div class="avsol-tit">Como testar</div><div class="avsol-desc teste">${esc(s.comoTestar)}</div></div>` : ""}
         ${s.semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Solicitação manual:</strong> não havia commits pendentes na branch. A aprovação não publica código automaticamente.</div>` : ""}
         ${mudouDepois ? `<div class="avsol-aviso">Depois deste pedido, subiram mais alterações nesse ambiente. Só o que foi pedido será publicado.</div>` : ""}
-        ${s.semAlteracoesCodigo ? "" : htmlVisual(s, github)}
+        ${s.semAlteracoesCodigo ? "" : htmlVisual(s, github, { prints: s.prints || {}, escolher: escolhivel(s), id: s.id, marcado: (s.commits && s.commits[0] && s.commits[0].shaCompleto) || "" })}
         <div class="avsol-acoes">
           <button type="button" class="avdev-btn ok" data-sol="aprovar">${s.semAlteracoesCodigo ? "Aprovar solicitação manual" : "Aprovar e publicar"}</button>
           <button type="button" class="avdev-btn nao" data-sol="recusar">Recusar</button>
@@ -1059,7 +1168,25 @@
     </div>`;
   }
 
-  async function chamarPublicar(id) {
+  /** O pedido tem o código completo de cada alteração e mais de uma alteração: dá para publicar só até um ponto. */
+  function escolhivel(s) {
+    const cs = (s && s.commits) || [];
+    return cs.length > 1 && cs.every((c) => /^[0-9a-f]{40}$/.test(String(c.shaCompleto || "")));
+  }
+
+  /** Marca, na lista do pedido, o que vai agora e o que fica para depois, e ajusta o botão. */
+  function pintarEscolha(caixa, s) {
+    const cs = (s && s.commits) || [];
+    const marcado = caixa.querySelector('input[name="avsol-ate-' + s.id + '"]:checked');
+    const ate = marcado ? marcado.value : (cs[0] && cs[0].shaCompleto) || "";
+    const k = Math.max(0, cs.findIndex((c) => c.shaCompleto === ate));
+    caixa.querySelectorAll(".avsol-ci").forEach((li, i) => li.classList.toggle("fica", i < k));
+    const btn = caixa.querySelector('[data-sol="aprovar"]');
+    if (btn && !btn.disabled) btn.textContent = k > 0 ? "Aprovar e publicar " + (cs.length - k) + " de " + cs.length : "Aprovar e publicar";
+    return { ate, k, parcial: k > 0 };
+  }
+
+  async function chamarPublicar(id, ate) {
     // Pede o token já no clique: se não houver um pronto, abre a janela da Microsoft para confirmar.
     const auth = window.MouraAuth;
     let pedidoToken = Promise.resolve("");
@@ -1073,7 +1200,7 @@
     const res = await fetch("/api/publicar", {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, token ? { "X-Integra-Token": token } : {}),
-      body: JSON.stringify({ solicitacao: id })
+      body: JSON.stringify(ate ? { solicitacao: id, ate } : { solicitacao: id })
     });
     let j = {};
     try { j = await res.json(); } catch (e) { j = {}; }
@@ -1101,11 +1228,30 @@
     const branch = s.branch || ambientePorChave(s.ambiente).branch;
     const alvo = caixa.querySelector(".avsol-conteudo");
     const registro = { motivo: motivo || "", decididoPor: quem.nome || quem.email, decididoPorEmail: quem.email, decididoEm: Date.now(), avisoVisto: false };
+    const escolha = escolhivel(s) ? pintarEscolha(caixa, s) : { parcial: false };
     if (status === "aprovado" && !s.semAlteracoesCodigo) {
       const btn = caixa.querySelector('[data-sol="aprovar"]');
       if (btn) btn.textContent = "Publicando… (até 1 minuto)";
       let resultado = null;
-      try { resultado = await chamarPublicar(s.id); } catch (e) { resultado = { error: "Sem resposta do servidor." }; }
+      try { resultado = await chamarPublicar(s.id, escolha.parcial ? escolha.ate : ""); } catch (e) { resultado = { error: "Sem resposta do servidor." }; }
+      if (resultado && resultado.publicado && escolha.parcial && resultado.parcial) {
+        // Publicou só uma parte: o resto continua no mesmo pedido, aguardando.
+        const resto = (s.commits || []).slice(0, escolha.k);
+        const parte = { versao: resultado.versao, ate: escolha.ate, em: Date.now(), por: quem.nome || quem.email, quantas: (s.commits || []).length - escolha.k };
+        try {
+          await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), {
+            commits: resto,
+            totais: Object.assign({}, s.totais || {}, { commits: resto.length }),
+            publicacoesParciais: (s.publicacoesParciais || []).concat(parte)
+          });
+        } catch (e) {
+          console.warn("[Solicitações de envio] Falha ao gravar a publicação parcial:", e);
+        }
+        s.commits = resto;
+        alvo.innerHTML = `<div class="avsol-feito ok"><strong>Publicado na produção: v${esc(resultado.versao)}.</strong> Foram ${parte.quantas} alteração(ões). As outras ${resto.length} continuam neste pedido, aguardando.
+          <br><span style="font-size:.8rem;">A Vercel termina de publicar em cerca de 1 minuto.</span></div>`;
+        return;
+      }
       if (resultado && resultado.publicado) {
         status = "publicado";
         Object.assign(registro, { versao: resultado.versao, publicadoEm: Date.now(), testes: resultado.testes || {} });
@@ -1161,6 +1307,10 @@
     fundo.querySelectorAll(".avsol-pedido").forEach((caixa) => {
       const s = lista.find((x) => x.id === caixa.getAttribute("data-id"));
       if (!s) return;
+      if (escolhivel(s)) {
+        caixa.querySelectorAll('input[name="avsol-ate-' + s.id + '"]').forEach((rd) => { rd.onchange = () => pintarEscolha(caixa, s); });
+        pintarEscolha(caixa, s);
+      }
       caixa.querySelectorAll("[data-sol]").forEach((b) => {
         b.onclick = () => {
           const acao = b.getAttribute("data-sol");

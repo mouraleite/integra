@@ -7,6 +7,7 @@ const caucaoHandler = require("../../lib/caucao-batimento");
 const { marcarBaixados } = require("../../lib/distrato-followup-core");
 const { aplicarFila, normalizarOutcome, chaveTitulo } = require("../../lib/titulos-incompletos-batimento");
 const { runReembolsoBatimento } = require("../../lib/reembolso-batimento");
+const { runAntecipacoesBatimento } = require("../../lib/antecipacoes-batimento");
 
 const SIENGE_DOMAIN = "mouraleite";
 // Usuário e senha da API do Sienge ficam nas variáveis da Vercel, nunca no código.
@@ -1427,7 +1428,39 @@ async function dispararReembolso(req) {
   }
 }
 
+async function antecipacoesBatimentoHandler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(204).end();
+  }
+  if (!authorized(req)) return res.status(401).json({ error: "unauthorized" });
+  try {
+    const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
+    const out = await runAntecipacoesBatimento(force);
+    return res.status(200).json(out);
+  } catch (e) {
+    console.error("[antecipacoes-batimento]", e);
+    return res.status(500).json({ error: String((e && e.message) || e) });
+  }
+}
+
+/** Antecipações (últimos 7 dias) entram no batimento das 7h. A chamada é abandonada; a função segue sozinha. */
+async function dispararAntecipacoes(req) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    await fetch(`${originFromReq(req)}/api/antecipacoes-batimento`, {
+      headers: { Authorization: req.headers.authorization || "" },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handler(req, res) {
+  if (String(req.url || "").indexOf("antecipacoes-batimento") >= 0) return antecipacoesBatimentoHandler(req, res);
   if (String(req.url || "").indexOf("reembolso-batimento") >= 0) return reembolsoBatimentoHandler(req, res);
   if (String(req.url || "").indexOf("caucao-batimento") >= 0) return caucaoHandler(req, res);
   if (String(req.url || "").indexOf("valor-receber") >= 0) return valorReceberHandler(req, res);
@@ -1447,6 +1480,7 @@ async function handler(req, res) {
   await dispararValorReceber(req);
   await dispararTitulosIncompletos(req);
   await dispararReembolso(req);
+  await dispararAntecipacoes(req);
 
   const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
   const today = todayIsoSP();

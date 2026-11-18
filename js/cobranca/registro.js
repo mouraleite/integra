@@ -10,7 +10,6 @@ const RegistroApp = {
     linhas: [],
     arquivo: "",
     quando: "",
-    ano: "ambos",
     empresas: [],
     empOpen: false,
     empQuery: "",
@@ -225,35 +224,20 @@ const RegistroApp = {
     return { units: [], meta: null };
   },
 
-  anosAtivos() {
-    if (this.state.ano === "2025") return ["2025"];
-    if (this.state.ano === "2026") return ["2026"];
-    return ["2025", "2026"];
-  },
-
   /**
-   * Cruza lotes quitados da posição de estoque com a letra do cadastro.
-   * Sem data de quitação o lote não entra no ano: o batimento ainda não fechou essa data.
+   * Cruza todos os lotes quitados da posição de estoque com a letra do cadastro (sem separar por ano).
    */
-  cruzar(linhas, units, anos) {
+  cruzar(linhas, units) {
     const mapa = new Map();
     (linhas || []).forEach((l) => {
       mapa.set(this.chaveUnidade(l.obraId, l.unidade), l);
     });
     const grupos = new Map();
-    let semData = 0;
-    const aceita = new Set(anos || []);
     (units || []).forEach((u) => {
       if (!u) return;
       if (u.relFin === "distratado") return;
       if (!(u.quitado || u.relFin === "quitado")) return;
       const iso = String(u.quitacaoDate || "").slice(0, 10);
-      const ano = iso.slice(0, 4);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-        semData += 1;
-        return;
-      }
-      if (aceita.size && !aceita.has(ano)) return;
       const obraId = String(u.enterpriseId || "").replace(/\D/g, "");
       const hit = mapa.get(this.chaveUnidade(obraId, u.name));
       const letra = hit ? hit.letra : "";
@@ -299,7 +283,7 @@ const RegistroApp = {
         origem: origem
       });
     });
-    return { grupos: [...grupos.values()], semData: semData };
+    return { grupos: [...grupos.values()] };
   },
 
   /** Valor recebido na data da quitação (gravado pelo batimento do estoque) e a fração do total recebido. */
@@ -342,12 +326,6 @@ const RegistroApp = {
       this.state.sort = campo;
       this.state.dir = campo === "empresa" || campo === "obra" ? 1 : -1;
     }
-    this.render();
-  },
-
-  setAno(ano) {
-    this.state.ano = ano;
-    this.state.abertos = {};
     this.render();
   },
 
@@ -405,19 +383,6 @@ const RegistroApp = {
 
   n(v) {
     return Number(v || 0).toLocaleString("pt-BR");
-  },
-
-  abasHtml() {
-    const tabs = [
-      { id: "2025", label: "2025", icon: "calendar" },
-      { id: "2026", label: "2026", icon: "calendar" },
-      { id: "ambos", label: "2025 e 2026", icon: "calendar-range" }
-    ];
-    const atual = this.state.ano || "ambos";
-    return `<div class="ml-tabs" role="tablist" style="margin:0 0 12px;">${tabs.map((t) => `
-      <button type="button" role="tab" class="ml-tab${atual === t.id ? " is-active" : ""}" aria-selected="${atual === t.id}" onclick="RegistroApp.setAno('${t.id}')">
-        <i data-lucide="${t.icon}"></i> ${t.label}
-      </button>`).join("")}</div>`;
   },
 
   itensEmpresa(grupos) {
@@ -511,8 +476,7 @@ const RegistroApp = {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Registro");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(unid), "Unidades");
-    const anos = this.anosAtivos().join("-");
-    XLSX.writeFile(wb, "registro-quitados-" + anos + ".xlsx");
+    XLSX.writeFile(wb, "registro-quitados.xlsx");
   },
 
   render() {
@@ -520,7 +484,7 @@ const RegistroApp = {
     if (!root) return;
     const linhas = this.state.linhas || [];
     const pos = linhas.length ? this.posicao() : { units: [], meta: null };
-    const cruz = linhas.length ? this.cruzar(linhas, pos.units, this.anosAtivos()) : { grupos: [], semData: 0 };
+    const cruz = linhas.length ? this.cruzar(linhas, pos.units) : { grupos: [] };
     let grupos = cruz.grupos;
     const itens = this.itensEmpresa(grupos);
     const sel = (this.state.empresas || []).map(String);
@@ -557,14 +521,11 @@ const RegistroApp = {
       : (this.state.carregandoPos
         ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#f8fafc;color:#334155;font-size:0.85rem;">Lendo a Posição de estoque gravada…</p>`
         : (!pos.units.length
-        ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">O cadastro foi lido, mas a Posição de estoque ainda não está neste navegador. Abra Posição de estoque e conclua o batimento para contar os quitados de 2025 e 2026.</p>`
-        : (cruz.semData
-          ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">${this.n(cruz.semData)} lote(s) quitado(s) na Posição de estoque estão sem data de quitação e ficam de fora de 2025 e 2026. O batimento precisa gravar essa data.</p>`
-          : "")));
+        ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">O cadastro foi lido, mas a Posição de estoque ainda não está neste navegador. Abra Posição de estoque e conclua o batimento para contar os quitados.</p>`
+        : ""));
     const corpo = !linhas.length
       ? `<p style="color:#64748b;padding:8px 0 0;">Nenhum arquivo enviado.</p>`
       : (!pos.units.length ? "" : `
-        ${this.abasHtml()}
         <div class="est-stock-finance" style="margin-bottom:12px;">
           <div class="est-fin-card is-ok"><label>Quitados</label><strong>${this.n(tot.quitados)}</strong><small>Posição de estoque${posData !== "—" ? " · " + posData : ""}</small></div>
           <div class="est-fin-card"><label>Financiado</label><strong>${this.n(tot.f)}</strong><small>Letra F no número do registro</small></div>

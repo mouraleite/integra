@@ -2,6 +2,7 @@
    continuam no mesmo endereço; o rewrite manda tudo para cá. O código fica em api/_lib. */
 const rotas = {
   "sienge-proxy": require("./_lib/sienge-proxy"),
+  "sienge-upload": require("./_lib/sienge-upload"),
   "sienge-builder-proxy": require("./_lib/sienge-builder-proxy"),
   "sync-customers": require("./_lib/sync-customers"),
   "sync-creditors": require("./_lib/sync-creditors"),
@@ -19,6 +20,7 @@ const rotas = {
   "valor-receber": require("./_lib/morning-warmup"),
   "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "reembolso-batimento": require("./_lib/morning-warmup"),
+  "antecipacoes-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
@@ -30,7 +32,7 @@ const { conferirAcesso, modoBloqueio } = require("../lib/integra-auth");
 // Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
 // As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "sienge-proxy", "sienge-upload", "sienge-builder-proxy", "sync-customers", "sync-creditors",
   "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);

@@ -858,12 +858,11 @@ const GerarPagamentoApp = {
   },
 
   rootEl() {
-    const id = this.state.tela === "cartao" ? "cartao-credito-root" : "gerar-pagamento-root";
-    return document.getElementById(id);
+    return document.getElementById("gerar-pagamento-root");
   },
 
   init(tela) {
-    if (tela === "cartao" || tela === "lotes") this.state.tela = tela;
+    if (tela === "lotes") this.state.tela = tela;
     const padrao = this.periodoPadrao();
     this.state.startDate = padrao.start;
     this.state.endDate = padrao.end;
@@ -1090,20 +1089,32 @@ const GerarPagamentoApp = {
         ? (typeof siengeSplitDateRange === "function" ? siengeSplitDateRange(retroIni, retroFim) : [{ start: retroIni, end: retroFim }])
         : [];
       const faixas = faixasRetro.concat(faixasPeriodo);
-      const bills = [];
-      let passo = 0;
-      const total = faixas.length * alvos.length;
-      for (const faixa of faixas) {
-        for (const emp of alvos) {
+      // Duas consultas ao mesmo tempo (a fila do bulk-data do Sienge aceita duas). A ordem final não muda:
+      // cada parte entra na posição dela.
+      const pedidos = [];
+      faixas.forEach((faixa) => alvos.forEach((emp) => pedidos.push({ faixa, emp })));
+      const partes = new Array(pedidos.length);
+      const total = pedidos.length;
+      let proximo = 0;
+      let feitos = 0;
+      const worker = async () => {
+        while (proximo < pedidos.length) {
           if (gen !== s.gen) return;
-          passo += 1;
-          s.progressoPct = (passo / Math.max(1, total)) * 0.4;
-          this.pintarProgresso();
-          const parte = await api.outcomeRange(faixa.start, faixa.end, emp);
-          if (Array.isArray(parte)) bills.push.apply(bills, parte);
+          const i = proximo++;
+          const p = pedidos[i];
+          const parte = await api.outcomeRange(p.faixa.start, p.faixa.end, p.emp);
+          partes[i] = Array.isArray(parte) ? parte : [];
+          feitos += 1;
+          if (gen === s.gen) {
+            s.progressoPct = (feitos / Math.max(1, total)) * 0.4;
+            this.pintarProgresso();
+          }
         }
-      }
+      };
+      await Promise.all([worker(), worker()]);
       if (gen !== s.gen) return;
+      const bills = [];
+      partes.forEach((parte) => { if (parte) bills.push.apply(bills, parte); });
       this.montarTitulos(base, bills, parceiros);
       s.progressoPct = 0.45;
       this.pintarProgresso();
@@ -1137,6 +1148,17 @@ const GerarPagamentoApp = {
     if (nome === "PAGAMENTO" || nome.indexOf("PAGAMENTO") === 0) return true;
     if (nome === "ADIANTAMENTO" || nome.indexOf("ADIANTAMENTO") === 0) return true;
     return /BAIXA|LIQUID|QUITAC/.test(nome);
+  },
+
+  /** Abatimento de adiantamento (8) ou cancelamento (3): encerra a parcela sem pagamento em banco. */
+  baixaSemCaixa(pay) {
+    if (!pay || typeof pay !== "object") return false;
+    const id = String(pay.operationTypeId != null ? pay.operationTypeId : "").trim();
+    const nome = String(pay.operationTypeName || pay.operationName || "")
+      .normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
+    if (/ESTORNO|REAPROP/.test(nome)) return false;
+    if (id === "8" || id === "3") return true;
+    return /^ABATIMENTO DE ADIANTAMENTO|^CANCELAMENTO/.test(nome);
   },
 
   valorBaixa(pay) {
@@ -1293,9 +1315,18 @@ const GerarPagamentoApp = {
       });
       const original = Number(bill.originalAmount) || 0;
       let saldo = app.billBalance(bill);
+      const saldoSienge = saldo;
       const temConta = movs.length > 0;
       const quitou = temConta && original > 0.009 && quitadoPorBaixa >= original - 0.02 && temBaixa;
-      if (!temConta) {
+      // Baixa sem dinheiro saindo do banco: abatimento de adiantamento (8) ou cancelamento (3).
+      // No Sienge a parcela fica "Totalmente paga" e não entra mais em lote.
+      const semCaixa = lista(bill.payments).reduce((t, pay) => (this.baixaSemCaixa(pay) ? t + this.valorBaixa(pay) : t), 0);
+      const encerradaSemCaixa = semCaixa > 0.009 && saldoSienge != null && saldoSienge <= 0.009
+        && original > 0.009 && semCaixa + quitadoPorBaixa >= original - 0.02;
+      if (encerradaSemCaixa) {
+        pago = true;
+        saldo = 0;
+      } else if (!temConta) {
         pago = false;
         if (saldo != null && saldo <= 0.009) saldo = null;
       } else if (quitou || pago || (saldo != null && saldo <= 0.009)) {
@@ -1364,6 +1395,15 @@ const GerarPagamentoApp = {
       });
     });
     linhas.sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || "") || Number(a.titulo) - Number(b.titulo) || Number(a.parcela) - Number(b.parcela));
+    // Parcelas que o Sienge já mostra pagas na busca (antes do recorte): servem para não reler lotes antigos.
+    const pagos = new Set();
+    const abertos = new Set();
+    linhas.forEach((r) => {
+      const k = this.chaveTitulo(r.titulo, r.parcela);
+      if (r.pago && !(Number(r.aPagar) > 0.009)) pagos.add(k); else abertos.add(k);
+    });
+    abertos.forEach((k) => pagos.delete(k));
+    this._parcelasPagasBusca = pagos;
     const ini = String(this.state.startDate || "").slice(0, 10);
     const fim = String(this.state.endDate || "").slice(0, 10);
     const noRecorte = linhas.filter((r) => {
@@ -1424,7 +1464,14 @@ const GerarPagamentoApp = {
     const s = this.state;
     if (typeof window.siengeFetchWithRetry !== "function") return;
     s.loteSiengeLidoEm = Date.now();
-    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => (l.itens || []).map((i) => String(i.titulo)));
+    // Lote já enviado ao Sienge: só relê se ainda houver parcela dele que a busca não mostrou paga.
+    // Lote todo pago não pode ter sido excluído no Sienge, então não precisa de uma consulta por título.
+    const pagasBusca = this._parcelasPagasBusca || new Set();
+    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => {
+      const itens = l.itens || [];
+      const todosPagos = itens.length && itens.every((i) => pagasBusca.has(this.chaveTitulo(i.titulo, i.parcela)));
+      return todosPagos ? [] : itens.map((i) => String(i.titulo));
+    });
     const abertos = [...new Set(s.titulos.filter((r) => !r.pago).map((r) => r.titulo).concat(deLotes))];
     const fila = abertos.slice();
     const totalBills = fila.length;
@@ -3810,67 +3857,6 @@ const GerarPagamentoApp = {
     </button>`;
   },
 
-  itensCartao(grupos, dia) {
-    const g = (grupos || []).find((x) => x.key === "__cartao");
-    const itens = g ? g.itens.filter((it) => !it.emLote) : [];
-    if (!dia) return itens;
-    return itens.filter((it) => {
-      const venc = String(it.vencimento || "").slice(0, 10);
-      const lote = this.diaDoLote(venc) || venc;
-      return lote === dia || venc === dia;
-    });
-  },
-
-  gruposCartaoEmpresa(itens) {
-    const mapa = new Map();
-    (itens || []).forEach((it) => {
-      const id = String(it.companyId || "");
-      if (!mapa.has(id)) mapa.set(id, { key: "__cartao@" + id, empresaConta: id, itens: [], conta: null });
-      mapa.get(id).itens.push(it);
-    });
-    return [...mapa.values()];
-  },
-
-  cartaoTelaHtml() {
-    const s = this.state;
-    if (s.consultando) return this.carregandoHtml();
-    if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
-    if (!s.consultado) {
-      return `<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Escolha o período e clique em <strong>Buscar títulos</strong>.</div>`;
-    }
-    const itens = this.itensCartao(this.gruposLote(), "");
-    const empresas = this.gruposCartaoEmpresa(itens);
-    const abas = this.abasEmpresaHtml(empresas, []);
-    const emp = this.state.abaEmpresa;
-    const vis = itens.filter((it) => !emp || String(it.companyId || "") === emp);
-    if (!vis.length) {
-      return `${abas}<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Nenhum título de cartão de crédito${emp ? " nesta empresa" : ""} no período carregado.</div>`;
-    }
-    return `${abas}${this.cartaoPainelHtml(vis)}`;
-  },
-
-  cartaoPainelHtml(itens) {
-    if (!itens.length) return "";
-    const total = itens.reduce((t, it) => t + this.valorPagar(it), 0);
-    const linhas = itens.map((it) => `<tr class="gp-click" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Abrir o título">
-      <td>${this.dataBr(it.vencimento)}</td>
-      <td>${this.esc(it.titulo)}/${this.esc(it.parcela || 1)}</td>
-      <td>${this.esc(it.credor || "")}</td>
-      <td>${this.esc(it.documento || "")}</td>
-      <td style="text-align:right;">${this.money(this.valorPagar(it))}</td>
-      <td><span class="bchk bchk-info">Cartão de crédito</span></td>
-    </tr>`).join("");
-    return `<section class="gp-lotes-painel gp-cartao">
-      <p class="gp-nota">${itens.length} título(s) · ${this.money(total)}. A forma no Sienge é cartão de crédito, então não entram no lote do banco.</p>
-      <div style="overflow:auto;">
-        <table class="gp-table gp-titulos gp-card-tab">
-          <thead><tr><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th style="text-align:right;">A pagar</th><th>Pagamento</th></tr></thead>
-          <tbody>${linhas}</tbody>
-        </table>
-      </div>
-    </section>`;
-  },
-
   resumoEmLoteHtml(g) {
     const linhas = (g.itens || []).map((it) => this.linhaTituloHtml(it, it.chave)).join("");
     return `<div class="gp-lote-linhas">${linhas}</div>`;
@@ -4656,7 +4642,6 @@ const GerarPagamentoApp = {
 
   titulosHtml() {
     const s = this.state;
-    if (s.tela === "cartao") return this.cartaoTelaHtml();
     if (s.consultando) return this.carregandoHtml();
     if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
     if (!s.consultado) {
@@ -4936,9 +4921,9 @@ const GerarPagamentoApp = {
         </style>
         <div class="crm-card" style="overflow:hidden;padding:0;">
           <div class="gp-busca">
-            ${s.tela === "cartao" ? "" : `<div style="flex:1 1 220px;">
+            <div style="flex:1 1 220px;">
               <h3 style="margin:0;color:var(--color-primary);font-size:1rem;">${s.visao === "lotes" ? "Lotes de pagamento" : "Programação de Pagamentos"}</h3>
-            </div>`}
+            </div>
             <div class="form-group">
               <label>Vencimento de</label>
               <input type="date" class="form-control" value="${this.esc(s.startDate)}" ${busy ? "disabled" : ""}
@@ -4953,12 +4938,12 @@ const GerarPagamentoApp = {
               style="height:38px;width:150px;justify-content:center;display:inline-flex;align-items:center;gap:6px;">
               <i data-lucide="search" style="width:14px;"></i> Buscar títulos
             </button>
-            ${s.tela === "cartao" ? "" : `<span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
+            <span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
             <button type="button" id="gp-robo-btn" class="gp-robo-btn" ${s.roboLigando ? "disabled" : ""} onclick="GerarPagamentoApp.ligarRobo()">
               <i data-lucide="bot" style="width:16px;height:16px;"></i> Ligar robô
-            </button>`}
+            </button>
           </div>
-          ${s.tela === "cartao" ? "" : this.alertaSemContaHtml()}
+          ${this.alertaSemContaHtml()}
           <div id="gp-titulos-box">${this.titulosHtml()}</div>
         </div>`);
 
@@ -4981,7 +4966,6 @@ window.contaPagamentoDoCentroCusto = function (input) {
 document.addEventListener("tabChanged", function (e) {
   if (!e) return;
   if (e.detail === "gerar-pagamento") GerarPagamentoApp.init("lotes");
-  if (e.detail === "cartao-credito") GerarPagamentoApp.init("cartao");
 });
 
 document.addEventListener("DOMContentLoaded", function () {

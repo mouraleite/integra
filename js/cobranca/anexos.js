@@ -484,6 +484,37 @@ async function anexosMultipartBody(fileBlob, filename) {
   return { body, contentType: `multipart/form-data; boundary=${boundary}`, fileName: safeName };
 }
 
+// A Vercel recusa requisições acima de ~4,5 MB (HTTP 413). Acima deste tamanho o arquivo
+// vai primeiro para o Firebase Storage e o servidor (/api/sienge-upload) leva ao Sienge.
+const ANEXOS_LIMITE_PROXY = 4 * 1024 * 1024;
+
+async function anexosEnviarPeloStorage(apiUrl, fileBlob, fileName, avisar) {
+  const fc = window.firebaseCollections;
+  if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) {
+    throw new Error('Arquivo acima de 4 MB e o armazenamento temporário não está disponível.');
+  }
+  const m = String(apiUrl).match(/\/sienge-proxy\/((?:units|customers)\/\d+\/attachments\?description=[^&]*)$/);
+  if (!m) throw new Error('Destino do anexo não reconhecido.');
+  const ext = (String(fileName).match(/\.([a-z0-9]{2,5})$/i) || [, 'bin'])[1].toLowerCase();
+  const caminho = `anexos_temp/${Date.now()}_${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const ref = fc.ref(window.firebaseStorage, caminho);
+  const mime = (fileBlob && fileBlob.type) || 'application/octet-stream';
+  if (avisar) avisar('Arquivo grande: preparando o envio...');
+  await fc.uploadBytes(ref, fileBlob, { contentType: mime });
+  try {
+    const url = await fc.getDownloadURL(ref);
+    if (avisar) avisar('Enviando para o Sienge, falta pouco...');
+    const res = await fetch(anexosApiUrl('/api/sienge-upload'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ url, caminho: m[1], fileName, mime })
+    });
+    return res;
+  } finally {
+    try { if (fc.deleteObject) await fc.deleteObject(ref); } catch (e) {}
+  }
+}
+
 function anexosContractIsActive(c) {
   const sit = String((c && (c.situation || c.status)) || '').toUpperCase();
   return sit !== 'CANCELED' && sit !== 'CANCELADO' && sit !== 'DISTRATADO' && sit !== '3';
@@ -5191,7 +5222,29 @@ const AnexosApp = {
           : "Enviando arquivo...";
         const multipart = await anexosMultipartBody(fileBlob, nomeFinalArquivo);
         await new Promise((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
+          // Arquivo grande: mesmo fluxo de resposta, mas o envio passa pelo Firebase Storage.
+          const grande = multipart.body.length > ANEXOS_LIMITE_PROXY;
+          const xhr = grande ? {
+            status: 0,
+            upload: {},
+            open() {},
+            setRequestHeader() {},
+            send() {
+              const st = document.getElementById('upload-status-text');
+              anexosEnviarPeloStorage(apiUrl, fileBlob, multipart.fileName, (t) => { if (st) st.innerText = t; })
+                .then(async (res) => {
+                  if (!res.ok) {
+                    let msg = '';
+                    try { const j = await res.json(); msg = j.error || j.clientMessage || j.developerMessage || ''; } catch (e) {}
+                    reject(new Error(`HTTP ${res.status}${msg ? ' - ' + msg : ''}`));
+                    return;
+                  }
+                  this.status = res.status;
+                  this.onload();
+                })
+                .catch(reject);
+            }
+          } : new XMLHttpRequest();
           xhr.open('POST', apiUrl);
           xhr.setRequestHeader('Authorization', getBasicAuthHeader());
           xhr.setRequestHeader('Accept', 'application/json');
@@ -5503,15 +5556,17 @@ window.anexosUploadCustomerAttachment = async function(customerId, file, tagLabe
   const apiUrl = anexosApiUrl(`/sienge-proxy/customers/${id}/attachments?description=${encodeURIComponent(descricaoSienge)}`);
   const multipart = await anexosMultipartBody(file, nomeFinalArquivo);
   const auth = (typeof getBasicAuthHeader === "function") ? getBasicAuthHeader() : "";
-  const res = await fetch(apiUrl, {
-    method: "POST",
-    headers: {
-      Authorization: auth,
-      Accept: "application/json",
-      "Content-Type": multipart.contentType
-    },
-    body: multipart.body
-  });
+  const res = multipart.body.length > ANEXOS_LIMITE_PROXY
+    ? await anexosEnviarPeloStorage(apiUrl, file, multipart.fileName)
+    : await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: auth,
+        Accept: "application/json",
+        "Content-Type": multipart.contentType
+      },
+      body: multipart.body
+    });
   if (!res.ok) {
     if (typeof window.logCrmAudit === "function") {
       window.logCrmAudit({
@@ -5644,15 +5699,17 @@ window.anexosUploadUnitAttachment = async function(opts) {
   const apiUrl = anexosApiUrl(`/sienge-proxy/units/${encodeURIComponent(siengeUnitId)}/attachments?description=${encodeURIComponent(descricaoSienge)}`);
   const multipart = await anexosMultipartBody(file, nomeFinalArquivo);
   const auth = (typeof getBasicAuthHeader === "function") ? getBasicAuthHeader() : "";
-  const res = await fetch(apiUrl, {
-    method: "POST",
-    headers: {
-      Authorization: auth,
-      Accept: "application/json",
-      "Content-Type": multipart.contentType
-    },
-    body: multipart.body
-  });
+  const res = multipart.body.length > ANEXOS_LIMITE_PROXY
+    ? await anexosEnviarPeloStorage(apiUrl, file, multipart.fileName)
+    : await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        Authorization: auth,
+        Accept: "application/json",
+        "Content-Type": multipart.contentType
+      },
+      body: multipart.body
+    });
   const context = o.context || "unidade";
   if (!res.ok) {
     if (typeof window.logCrmAudit === "function") {

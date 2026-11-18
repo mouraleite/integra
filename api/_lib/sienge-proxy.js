@@ -175,3 +175,6 @@ module.exports = async function handler(req, res) {
   if (body.length) proxyReq.write(body);
   proxyReq.end();
 };
+
+// Usado pelo envio de anexos grandes (api/_lib/sienge-upload.js).
+module.exports.encodeSiengePath = encodeSiengePath;

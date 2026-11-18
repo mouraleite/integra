@@ -473,6 +473,10 @@ const ConfigUsersApp = {
           ]
         },
         {
+          name: "Antecipações", key: "sub_fin_antec",
+          actions: [{ id: "antecipacoes", label: "Antecipações" }]
+        },
+        {
           name: "Repactuação", key: "sub_fin_repac",
           actions: [{ id: "repactuacao", label: "Repactuação" }]
         }

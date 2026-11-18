@@ -3730,7 +3730,8 @@ window.bootEngenhariaCaucao = function () {
     "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
     "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
     "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
-    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo"
+    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo",
+    "antecipacoes": "antecipacoes"
   };
   var grupoPronto = {};
   var grupoEmCurso = {};
@@ -3996,6 +3997,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "reintegracao-posse": "Reintegração de posse",
     "titulos-incompletos": "Títulos incompletos",
     "consultar-titulo": "Consultar título",
+    "antecipacoes": "Antecipações",
     "config-tags": "Configuração de TAGs",
     "motivos-cancelamento": "Motivos de cancelamento",
     "config-users": "Configuração de Usuários",
@@ -4098,6 +4100,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "reintegracao-posse": "key",
     "titulos-incompletos": "file-warning",
     "consultar-titulo": "file-search",
+    "antecipacoes": "fast-forward",
     "config-tags": "tags",
     "motivos-cancelamento": "list",
     "config-users": "users",
@@ -4413,7 +4416,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   } else if (tabId === "gerar-pagamento") {
     if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("lotes");
   } else if (tabId === "cartao-credito") {
-    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("cartao");
+    if (window.CartaoClaraApp && typeof CartaoClaraApp.init === "function") CartaoClaraApp.init();
   } else if (tabId === "parametrizacao-parceiro") {
     if (typeof ParametrizacaoParceiroApp !== "undefined") ParametrizacaoParceiroApp.init();
   } else if (tabId === "estrutura-societaria") {
@@ -8954,6 +8957,8 @@ window.FILA_QUEUE_GROUPS = {
   EXECUTAR_ACORDO_QUEBRADO: 6,
   RECENTE_JURIDICO: 7,
   ANALISE_INTERNA_JURIDICO: 8,
+  // Acordo judicial quebrado há 31 dias ou mais: o cliente já passou pelo jurídico e volta para lá.
+  REENVIAR_JURIDICO: 8.5,
   ENVIAR_JURIDICO: 9,
   SEM_CATEGORIA_SEM_PAGTO: 10,
   SEM_CATEGORIA_COM_PAGTO: 11,
@@ -9063,10 +9068,10 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   if (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client)) {
     return G.NEX_CUMPRIDA;
   }
-  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Enviar para Jurídico
+  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(client)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9082,7 +9087,7 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   }
   if (client && client.hasOverdueAgreement) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9110,6 +9115,7 @@ window.getFilaQueueGroupMeta = function(group) {
     [G.EXECUTAR_ACORDO_QUEBRADO]: { label: 'Executar Acordo Quebrado', bg: '#ffe4e6', color: '#9f1239' },
     [G.RECENTE_JURIDICO]: { label: 'Recente Jurídico', bg: '#e0e7ff', color: '#3730a3' },
     [G.ANALISE_INTERNA_JURIDICO]: { label: 'Análise Interna Jurídico', bg: '#ede9fe', color: '#5b21b6' },
+    [G.REENVIAR_JURIDICO]: { label: 'Reenviar para Jurídico - Acordo Judicial Quebrado', bg: '#fee2e2', color: '#991b1b' },
     [G.ENVIAR_JURIDICO]: { label: 'Enviar para Jurídico', bg: '#ffedd5', color: '#9a3412' },
     [G.SEM_CATEGORIA_SEM_PAGTO]: { label: 'Sem pagamento nos últimos 30 dias', bg: '#f8fafc', color: '#475569' },
     [G.SEM_CATEGORIA_COM_PAGTO]: { label: 'Com pagamento nos últimos 30 dias', bg: '#ecfdf5', color: '#047857' },
@@ -9133,7 +9139,7 @@ window.getAcordoJuridicoAgingHtml = function(client) {
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
-  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Enviar para Jurídico.">
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Reenviar para Jurídico - Acordo Judicial Quebrado.">
     <i data-lucide="handshake" style="width: 14px; height: 14px;"></i> Acordo Judicial Quebrado - ${dayLabel}
   </span>`;
 };
@@ -9145,8 +9151,8 @@ window.getAcordoJudicialEnviarJuridicoAgingHtml = function(client) {
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
   const customerId = client && client.customerId != null ? client.customerId : "";
   const saleId = client && client.saleId != null ? client.saleId : "";
-  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para enviar ao Jurídico.">
-    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Enviar Jurídico - ${dayLabel}
+  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para reenviar ao Jurídico.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Reenviar Jurídico - ${dayLabel}
   </button>`;
 };
 
@@ -9676,7 +9682,44 @@ window.cancelamentoExigencias = function(client) {
   const obra = obras[cc];
   const obraAndamento = obra === true || !!(obra && obra.isOn);
   const webro = typeof window.suspenderClientePagaWebro === "function" && window.suspenderClientePagaWebro(client);
-  return { obraAndamento: obraAndamento, loteamentoFechado: loteamentoFechado, webro: !!webro };
+  // Obra do cliente ainda não terminou (Engenharia > Acompanhamento de obra, "Previsão término obras Cliente"):
+  // a prefeitura ainda não emite CND para o lote, então a CND fica dispensada.
+  const prev = (window._cancelPrevObras && window._cancelPrevObras.mapa) || {};
+  const linhaObra = prev[cc];
+  const fimObra = linhaObra ? String(linhaObra.cliente || "").slice(0, 10) : "";
+  const hoje = new Date();
+  const hojeIso = hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0") + "-" + String(hoje.getDate()).padStart(2, "0");
+  const obraNaoTerminou = /^\d{4}-\d{2}-\d{2}$/.test(fimObra) && hojeIso <= fimObra;
+  return {
+    obraAndamento: obraAndamento,
+    obraNaoTerminou: obraNaoTerminou,
+    fimObraCliente: fimObra,
+    cndDispensada: obraAndamento || obraNaoTerminou,
+    loteamentoFechado: loteamentoFechado,
+    webro: !!webro
+  };
+};
+
+/** Lê (e guarda por 10 min) as previsões do Acompanhamento de obra da Engenharia, por centro de custo. */
+window.cancelamentoCarregarPrevisaoObras = async function() {
+  const c = window._cancelPrevObras;
+  if (c && Date.now() - c.em < 10 * 60 * 1000) return c.mapa;
+  const fx = window.firebaseCollections;
+  const db = window.firebaseDb;
+  if (!fx || !db || typeof fx.getDoc !== "function") return (c && c.mapa) || {};
+  try {
+    const snap = await fx.getDoc(fx.doc(db, "engenharia_acompanhamento", "obras"));
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
+    const data = existe ? (snap.data() || {}) : {};
+    const mapa = {};
+    (Array.isArray(data.linhas) ? data.linhas : []).forEach(function(r) {
+      if (r && r.id) mapa[String(r.id).trim()] = r;
+    });
+    window._cancelPrevObras = { mapa: mapa, em: Date.now() };
+    return mapa;
+  } catch (e) {
+    return (c && c.mapa) || {};
+  }
 };
 
 window.cancelamentoNormDoc = function(texto) {
@@ -9737,8 +9780,8 @@ window.cancelamentoDocsOk = function() {
     if (!(distrato.files && distrato.files[0])) return false;
     if (!leitura.distrato || leitura.distrato.status !== "ok" || !leitura.distrato.ok) return false;
   }
-  if (!exig.obraAndamento && !(cnd && cnd.files && cnd.files[0])) return false;
-  if (!exig.obraAndamento && !window.cancelamentoCertidaoPronta()) return false;
+  if (!exig.cndDispensada && !(cnd && cnd.files && cnd.files[0])) return false;
+  if (!exig.cndDispensada && !window.cancelamentoCertidaoPronta()) return false;
   if (exig.loteamentoFechado && !exig.obraAndamento && !(assoc && assoc.files && assoc.files[0])) return false;
   if (exig.webro && !(webro && webro.files && webro.files[0])) return false;
   return true;
@@ -9985,6 +10028,8 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       nexCumprida: nex
     };
     const pode = window.cancelamentoPodeSeguir(info);
+    await window.cancelamentoCarregarPrevisaoObras();
+    if (!document.getElementById("cancel-avaliacao-pop")) return;
     const exig = window.cancelamentoExigencias(client);
     window._cancelExigencias = exig;
     window._cancelDocs = null;
@@ -10027,8 +10072,13 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       if (exig.obraAndamento) {
         docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">Obra em andamento: CND e CND da associação dispensadas.</p>`;
       } else {
-        docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
-        docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        if (exig.obraNaoTerminou) {
+          const fimBr = exig.fimObraCliente.split("-").reverse().join("/");
+          docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">CND dispensada: a obra do empreendimento ainda não terminou (previsão de término das obras para o cliente em ${window.cancelContratoEsc(fimBr)}, no Acompanhamento de obra).</p>`;
+        } else {
+          docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
+          docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        }
         if (exig.loteamentoFechado) {
           docsHtml += campoArquivo("cancel-assoc-file", "CND da associação", "Loteamento fechado. Anexe a CND da associação.");
         }
@@ -10186,11 +10236,11 @@ window.enviarCancelamentoContrato = async function() {
   const rot = window.cancelMotivoRotulo(iniciativa, motivo);
   const exig = window._cancelExigencias || {};
   const docs = window._cancelDocs || {};
-  if (!exig.obraAndamento && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
+  if (!exig.cndDispensada && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
   const leituraCancel = window._cancelLeitura || {};
   const classeCnd = leituraCancel.cnd && leituraCancel.cnd.classe;
   const classeCert = leituraCancel.certidao && leituraCancel.certidao.classe;
-  if (!exig.obraAndamento && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
+  if (!exig.cndDispensada && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
     falha("O arquivo da CND não é uma certidão da prefeitura. Anexe a certidão em PDF.");
     return;
   }
@@ -10987,6 +11037,14 @@ window.webroOccurrenceWasReceived = function(occ, client) {
   const today = (typeof window.localDateStr === "function")
     ? window.localDateStr(new Date())
     : new Date().toISOString().slice(0, 10);
+  // A lista de pagamentos só guarda os últimos 30 dias. Para baixas mais antigas, olha o atraso de hoje:
+  // se a parcela vencida mais antiga vence depois da data da baixa Webro, a parcela daquela baixa
+  // já entrou no Sienge e o cliente fica só com a situação atual.
+  const atraso = Number(client && client.maxDaysDelay);
+  if (baixa && Number.isFinite(atraso) && atraso > 0 && typeof window.addDaysIso === "function") {
+    const vencMaisAntigo = window.addDaysIso(today, -atraso);
+    if (vencMaisAntigo > baixa) return true;
+  }
   for (const map of maps) {
     for (const id of ids) {
       if (!map.has(id)) continue;
@@ -13531,7 +13589,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
         }
         const g = typeof window.getFilaQueueGroup === "function" ? window.getFilaQueueGroup(c) : null;
         const G = window.FILA_QUEUE_GROUPS || {};
-        if (g && g === G.ENVIAR_JURIDICO) return true;
+        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO)) return true;
       }
       return false;
     });
@@ -15695,7 +15753,7 @@ function formatCpfCnpj(val) {
   ) || (window.rawClientList || []).find(c => String(c.customerId) === String(customerId));
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(filaMatch)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(filaMatch)) {
-      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Enviar para Jurídico.">Enviar para Jurídico</span>`;
+      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Reenviar para Jurídico - Acordo Judicial Quebrado.">Reenviar para Jurídico</span>`;
     } else {
       subjudiceAlertHtml += `<span style="background-color: #d97706; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece no grupo Acordo Judicial Quebrado até o 30º dia.">Acordo Judicial Quebrado</span>`;
     }
@@ -24963,8 +25021,18 @@ async function renegTermoPdfSelecionavel(titulo, texto, testemunhas) {
     if (y + altura > fundo) nova();
   };
   if (logo) {
-    try { pdf.addImage(logo, "PNG", 210 - margem - 42, 10, 42, 14); } catch (e) {}
-    y = 30;
+    // Mantém a proporção do arquivo (o logo é quase quadrado): cabe numa caixa de até 42 x 24 mm no canto direito.
+    let lw = 42;
+    let lh = 14;
+    try {
+      const props = pdf.getImageProperties(logo);
+      const ratio = props && props.width && props.height ? props.width / props.height : 3;
+      lh = 24;
+      lw = lh * ratio;
+      if (lw > 42) { lw = 42; lh = lw / ratio; }
+    } catch (e) {}
+    try { pdf.addImage(logo, "PNG", 210 - margem - lw, 10, lw, lh); } catch (e) {}
+    y = Math.max(30, 10 + lh + 6);
   }
   pdf.setTextColor(17, 17, 17);
   pdf.setFont("times", "bold");

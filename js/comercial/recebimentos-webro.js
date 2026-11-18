@@ -15,8 +15,15 @@ const RecebimentosWebroApp = {
     rows: [],
     condicoes: [],
     webroSemComissao: 0,
-    recebimentos: 0
+    recebimentos: 0,
+    aba: "sienge",
+    repasse: null,
+    repasseErro: "",
+    repasseLendo: false,
+    repasseFiltro: "confere"
   },
+
+  REPASSE_KEY: "crm_webro_relatorio_detalhado_v1",
 
   esc(s) {
     return String(s == null ? "" : s)
@@ -536,10 +543,513 @@ const RecebimentosWebroApp = {
     a.remove();
   },
 
+  /* ---------- Aba Repasse pendente: relatório detalhado da Webro x fila de cobrança ---------- */
+
+  trocarAba(aba) {
+    this.state.aba = aba === "repasse" ? "repasse" : "sienge";
+    this.render();
+  },
+
+  /** Cabeçalho sem acento e sem símbolo: "Status_comissão" -> "STATUSCOMISSAO". */
+  chaveCab(h) {
+    return this.fold(h);
+  },
+
+  numero(v) {
+    if (typeof v === "number") return v;
+    const s = String(v == null ? "" : v).trim();
+    if (!s) return NaN;
+    const limpo = s.indexOf(",") >= 0 ? s.replace(/\./g, "").replace(",", ".") : s;
+    return Number(limpo.replace(/[^\d.-]/g, ""));
+  },
+
+  dataIso(v) {
+    if (v instanceof Date && !isNaN(v.getTime())) return this.iso(v);
+    if (typeof v === "number" && v > 20000 && v < 80000) {
+      const d = new Date(Math.round((v - 25569) * 86400000) + 12 * 3600000);
+      return d.toISOString().slice(0, 10);
+    }
+    return this.isoDue(v);
+  },
+
+  /** Lê o relatório detalhado (modelo antigo, por comissão) e guarda só Moura Leite com comissão disponível. */
+  async aoArquivoRepasse(input) {
+    const file = input && input.files && input.files[0];
+    if (input) input.value = "";
+    if (!file) return;
+    this.state.repasseLendo = true;
+    this.state.repasseErro = "";
+    this.render();
+    try {
+      if (typeof XLSX === "undefined") throw new Error("A leitura de Excel não está disponível. Atualize a página.");
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const matriz = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+      const linhas = this.lerRelatorioWebro(matriz);
+      this.state.repasse = { arquivo: file.name, quando: new Date().toISOString(), total: linhas.total, linhas: linhas.linhas };
+      try { localStorage.setItem(this.REPASSE_KEY, JSON.stringify(this.state.repasse)); } catch (e) {}
+    } catch (e) {
+      this.state.repasseErro = (e && e.message) || String(e);
+    }
+    this.state.repasseLendo = false;
+    this.render();
+  },
+
+  lerRelatorioWebro(matriz) {
+    const rows = Array.isArray(matriz) ? matriz : [];
+    let hi = -1;
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const cab = (rows[i] || []).map((c) => this.chaveCab(c));
+      if (cab.indexOf("STATUSCOMISSAO") >= 0 && cab.indexOf("PAGADOR") >= 0) { hi = i; break; }
+    }
+    if (hi < 0) throw new Error("Este arquivo não é o relatório detalhado da Webro (modelo antigo, por comissão). Faltam as colunas Status_comissão e Pagador.");
+    const cab = rows[hi].map((c) => this.chaveCab(c));
+    const col = (nome) => cab.indexOf(nome);
+    const c = {
+      contrato: col("IDCONTRATO"), emp: col("EMPREENDIMENTO"), unidade: col("UNIDADE"), parcela: col("NUMEROPARCELA"),
+      statusParcela: col("STATUSPARCELA"), venc: col("DATADEVENCIMENTOPARCELA"), pago: col("DATADEPAGAMENTOPARCELA"),
+      comissao: col("COMISSAOORIGINAL"), disponivel: col("COMISSAODISPONIVEL"), status: col("STATUSCOMISSAO"),
+      corretor: col("CORRETOR"), pagador: col("PAGADOR"), idExterno: col("IDEXTERNO")
+    };
+    ["emp", "unidade", "comissao", "status", "corretor", "pagador"].forEach((k) => {
+      if (c[k] < 0) throw new Error("O relatório não tem a coluna " + ({ emp: "Empreendimento", unidade: "Unidade", comissao: "Comissão_original", status: "Status_comissão", corretor: "Corretor", pagador: "Pagador" })[k] + ".");
+    });
+    const v = (r, k) => (c[k] >= 0 ? r[c[k]] : "");
+    const linhas = [];
+    let total = 0;
+    for (let i = hi + 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      if (!String(v(r, "pagador")).trim()) continue;
+      total += 1;
+      if (this.fold(v(r, "status")) !== "DISPONIVEL") continue;
+      if (this.fold(v(r, "corretor")).indexOf("MOURALEITE") < 0) continue;
+      linhas.push({
+        contrato: String(v(r, "contrato") || "").trim(),
+        empreendimento: String(v(r, "emp") || "").trim(),
+        unidade: String(v(r, "unidade") || "").trim(),
+        parcela: String(v(r, "parcela") || "").trim(),
+        statusParcela: String(v(r, "statusParcela") || "").trim(),
+        vencimento: this.dataIso(v(r, "venc")),
+        pagamento: this.dataIso(v(r, "pago")),
+        comissao: this.numero(v(r, "comissao")),
+        pagador: String(v(r, "pagador") || "").trim(),
+        idExterno: String(v(r, "idExterno") || "").trim()
+      });
+    }
+    return { total, linhas };
+  },
+
+  /** Chaves da unidade: inteira e só o último pedaço ("BLOCO 01 - P-06" -> P6), sem zero à esquerda. */
+  chavesUnidade(u) {
+    const norm = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^A-Z0-9]+/g, " ").trim().split(" ").filter(Boolean)
+      .map((t) => t.replace(/^0+(?=\d)/, "")).join("");
+    const partes = String(u || "").split(/\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+    const out = new Set();
+    if (u) out.add(norm(u));
+    if (partes.length > 1) {
+      out.add(norm(partes[partes.length - 1]));
+      if (/^BLOCO/i.test(partes[0])) out.add(norm(partes.slice(1).join(" ")));
+    }
+    out.delete("");
+    return out;
+  },
+
+  /** Mesmo nome: igual sem acento, ou mesmo primeiro e último nome. */
+  mesmoNome(a, b) {
+    const fa = this.fold(a);
+    const fb = this.fold(b);
+    if (!fa || !fb) return false;
+    if (fa === fb) return true;
+    const t = (s) => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Z ]/g, " ").split(/\s+/).filter(Boolean);
+    const ta = t(a);
+    const tb = t(b);
+    return ta.length > 1 && tb.length > 1 && ta[0] === tb[0] && ta[ta.length - 1] === tb[tb.length - 1];
+  },
+
+  /** Cidade do empreendimento (parte antes do primeiro " - "). */
+  cidade(nome) {
+    return this.fold(String(nome || "").split(/\s+-\s+/)[0]);
+  },
+
+  /** Tag da fila que interessa aqui: 0% pago, Boleto WEBRO ou baixa Webro pendente. */
+  tagFila(c) {
+    const w = window;
+    const webroStatus = typeof w.getWebroBaixaStatus === "function" ? w.getWebroBaixaStatus(c) : null;
+    if (webroStatus === "PENDENTE") return "Pendente Repasse Webro";
+    if (webroStatus === "AGUARDANDO") return "Aguardando Webro";
+    if (c.isZeroPaid || (typeof w.clientIsZeroPercentPaid === "function" && w.clientIsZeroPercentPaid(c))) return "0% Pago";
+    if (typeof w.clientHasPagamentoEntradaWebro === "function" && w.clientHasPagamentoEntradaWebro(c)) return "Boleto WEBRO";
+    return "";
+  },
+
+  parcelasVencidas(c) {
+    const lista = typeof window.listInstallmentsForSiCheck === "function" ? window.listInstallmentsForSiCheck(c) : [];
+    return lista.map((i) => ({
+      numero: String(i.installmentNumber || i.installmentId || i.number || ""),
+      tipo: String(i.conditionType || ""),
+      vencimento: String(i.dueDate || i.due || "").slice(0, 10),
+      dias: Number(i.daysOfDelay) || 0,
+      semJuros: Number(i.correctedValueWithoutAdditions)
+    })).filter((p) => Number.isFinite(p.semJuros) && p.semJuros > 0);
+  },
+
+  cruzarRepasse() {
+    const rep = this.state.repasse;
+    const fila = window.rawClientList || [];
+    if (!rep || !fila.length) return null;
+    const candidatos = [];
+    fila.forEach((c) => {
+      const tag = this.tagFila(c);
+      if (!tag) return;
+      const ccNome = (typeof window.knownCostCenterName === "function" && window.knownCostCenterName(c.costCenterId)) || "";
+      candidatos.push({ c, tag, ccNome, unidades: this.chavesUnidade(c.unitName), parcelas: this.parcelasVencidas(c) });
+    });
+    const out = [];
+    rep.linhas.forEach((w) => {
+      const unW = this.chavesUnidade(w.unidade);
+      const cidW = this.cidade(w.empreendimento);
+      candidatos.forEach((k) => {
+        if (!this.mesmoNome(w.pagador, k.c.customerName)) return;
+        if (![...unW].some((u) => k.unidades.has(u))) return;
+        if (k.ccNome && cidW && this.cidade(k.ccNome) !== cidW) return;
+        const igual = k.parcelas.find((p) => Math.abs(p.semJuros - w.comissao) <= 0.05);
+        out.push({
+          webro: w,
+          cliente: k.c.customerName,
+          customerId: k.c.customerId,
+          titulo: k.c.saleId,
+          unidade: (k.c.costCenterId ? k.c.costCenterId + " - " : "") + (k.c.unitName || ""),
+          empreendimento: k.ccNome,
+          tag: k.tag,
+          operador: k.c.assignedOperator || "",
+          parcela: igual || null,
+          parcelas: k.parcelas,
+          confere: !!igual
+        });
+      });
+    });
+    out.sort((a, b) => (b.confere - a.confere) || String(a.cliente).localeCompare(String(b.cliente), "pt-BR"));
+    return { linhas: out, candidatos: candidatos.length };
+  },
+
+  filtroRepasse(f) {
+    this.state.repasseFiltro = f === "todos" ? "todos" : "confere";
+    this.render();
+  },
+
+  async exportarRepasse() {
+    const cruz = this.cruzarRepasse();
+    const linhas = cruz ? cruz.linhas.filter((l) => this.state.repasseFiltro === "todos" || l.confere) : [];
+    if (!linhas.length) { alert("Não há linha para exportar."); return; }
+    if (!window.ExcelJS) { alert("Não foi possível gerar o Excel. Recarregue a página."); return; }
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Repasse pendente");
+    ws.columns = [
+      { header: "Cliente", key: "cliente", width: 36 }, { header: "Título", key: "titulo", width: 10 },
+      { header: "Unidade", key: "unidade", width: 18 }, { header: "Empreendimento", key: "emp", width: 40 },
+      { header: "Tag na fila", key: "tag", width: 22 }, { header: "Operador", key: "op", width: 18 },
+      { header: "Parcela Webro", key: "pw", width: 12 }, { header: "Vencimento Webro", key: "vw", width: 14 },
+      { header: "Pago na Webro", key: "pg", width: 14 }, { header: "Comissão (Webro)", key: "com", width: 16 },
+      { header: "Parcela Integra", key: "pi", width: 14 }, { header: "Vencimento Integra", key: "vi", width: 16 },
+      { header: "Valor sem juros (Integra)", key: "sj", width: 20 }, { header: "Situação", key: "sit", width: 22 }
+    ];
+    ws.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1B8253" } };
+    linhas.forEach((l) => {
+      const row = ws.addRow({
+        cliente: l.cliente, titulo: l.titulo, unidade: l.unidade, emp: l.empreendimento || l.webro.empreendimento,
+        tag: l.tag, op: l.operador, pw: l.webro.parcela, vw: this.fmtDate(l.webro.vencimento), pg: this.fmtDate(l.webro.pagamento),
+        com: Number(l.webro.comissao) || 0, pi: l.parcela ? l.parcela.numero : "", vi: l.parcela ? this.fmtDate(l.parcela.vencimento) : "",
+        sj: l.parcela ? l.parcela.semJuros : "", sit: l.confere ? "Valor confere" : "Valor diferente"
+      });
+      row.getCell("com").numFmt = "#,##0.00";
+      row.getCell("sj").numFmt = "#,##0.00";
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    a.download = "Repasse_pendente_Webro_" + this.iso(new Date()) + ".xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+
+  repasseHtml() {
+    const s = this.state;
+    const rep = s.repasse;
+    const fila = window.rawClientList || [];
+    // Sem relatório enviado, as instruções já aparecem abertas.
+    const aberto = s.instrAberto != null ? s.instrAberto : !rep;
+    const upload = `
+      <label class="btn btn-primary" style="height:36px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0;white-space:nowrap;">
+        <i data-lucide="upload" style="width:14px;height:14px;"></i> Subir relatório da Webro
+        <input type="file" accept=".xlsx,.xls,.csv" hidden onchange="RecebimentosWebroApp.aoArquivoRepasse(this)">
+      </label>`;
+    const passo = (n, img, texto) => `
+      <a class="rweb-passo" href="assets/webro/${img}" target="_blank" rel="noopener" title="Abrir imagem ampliada">
+        <span class="rweb-passo-tit"><b>${n}</b><span>${texto}</span></span>
+        <span class="rweb-passo-img"><img src="assets/webro/${img}" alt="${this.esc(texto.replace(/<[^>]+>/g, ""))}" loading="lazy"></span>
+      </a>`;
+    const nota = `
+      <style>
+        .rweb-passos{display:grid;grid-template-columns:1.5fr 1fr 0.8fr;gap:10px;margin:4px 0 12px;}
+        .rweb-passo{display:flex;flex-direction:column;gap:6px;border:1px solid #e2e8f0;border-radius:8px;padding:8px;background:#f8fafc;text-decoration:none;color:#1c2e24;min-width:0;}
+        .rweb-passo:hover{border-color:#1b8253;background:#f0f9f4;}
+        .rweb-passo-tit{display:flex;align-items:flex-start;gap:6px;font-size:0.76rem;line-height:1.35;}
+        .rweb-passo-tit b{flex:0 0 20px;height:20px;border-radius:50%;background:#1b8253;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;}
+        .rweb-passo-img{flex:1;display:flex;align-items:center;justify-content:center;background:#fff;border:1px solid #e8eee9;border-radius:6px;overflow:hidden;height:150px;}
+        .rweb-passo-img img{max-width:100%;max-height:150px;object-fit:contain;display:block;}
+        .rweb-rep-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:0 0 10px;}
+        .rweb-rep-kpis .ccom-kpi{padding:10px 12px;border-left:4px solid #1b8253;}
+        .rweb-rep-kpis .ccom-kpi strong{font-size:1.15rem;margin-top:4px;}
+        .rweb-rep-kpis .ccom-kpi small{display:block;margin-top:2px;font-size:0.7rem;color:#64748b;}
+        .rweb-rep-kpis .rweb-kpi-alerta{border-left-color:#d97706;background:#fffbeb;}
+        .rweb-rep-kpis .rweb-kpi-alerta strong{color:#b45309;}
+        .rweb-passos[hidden]{display:none;}
+        .rweb-linha-ficha{cursor:pointer;}
+        @media (max-width:1100px){.rweb-passos{grid-template-columns:1fr 1fr;}.rweb-rep-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
+        @media (max-width:640px){.rweb-passos,.rweb-rep-kpis{grid-template-columns:1fr;}}
+      </style>
+      <div class="rweb-passos"${aberto ? "" : " hidden"}>
+        ${passo(1, "passo1-gestao-contratos.png", "Abra <strong>Gestão de contratos</strong> na aba <strong>Todos os Contratos</strong>.")}
+        ${passo(2, "passo2-periodo.png?v=2", "Em <strong>Selecionar período</strong>, marque <strong>Data de liberação</strong> e clique em <strong>Últimos 90 dias</strong>.")}
+        ${passo(3, "passo3-baixar-excel.png", "<strong>Baixar Excel</strong> &gt; Modelo antigo, por comissão &gt; <strong>Todos os contratos</strong>.")}
+      </div>`;
+    let corpo = "";
+    if (s.repasseLendo) corpo = this.carregandoHtml("Lendo o relatório da Webro…");
+    else if (s.repasseErro) corpo = `<div class="tvig-empty">${this.esc(s.repasseErro)}</div>`;
+    else if (!rep) corpo = `<div class="tvig-empty">Nenhum relatório enviado.</div>`;
+    else if (!fila.length) {
+      if (s.filaErro) corpo = `<div class="tvig-empty">${this.esc(s.filaErro)} <button type="button" class="btn btn-primary" style="margin-left:8px;" onclick="RecebimentosWebroApp.garantirFila(true)">Tentar de novo</button></div>`;
+      else {
+        corpo = this.carregandoHtml("Carregando a fila de cobrança para cruzar com o relatório…");
+        setTimeout(() => this.garantirFila(), 0);
+      }
+    } else {
+      const cruz = this.cruzarRepasse();
+      const todas = cruz.linhas;
+      const conferem = todas.filter((l) => l.confere);
+      const semOcc = this.semOcorrenciaWebro(cruz);
+      // Lançamento automático: ao cruzar o relatório com a fila, grava sozinho o Aguardando Baixa Webro.
+      if (semOcc.length && !s.lancando) setTimeout(() => this.lancarBaixasWebro(true), 0);
+      const linhas = s.repasseFiltro === "todos" ? todas : conferem;
+      const valor = conferem.reduce((t, l) => t + (Number(l.webro.comissao) || 0), 0);
+      const seg = (id, rot, n) => `<button type="button" class="ml-tab${s.repasseFiltro === id ? " is-active" : ""}" onclick="RecebimentosWebroApp.filtroRepasse('${id}')">${rot} <small>${n}</small></button>`;
+      const avisoLanc = s.lancando
+        ? `<p class="rweb-note" style="color:#105436;font-weight:700;">Lançando Aguardando Baixa Webro em ${semOcc.length} título(s)…</p>`
+        : (s.lancMsg ? `<p class="rweb-note" style="color:${s.lancErro ? "#b91c1c" : "#105436"};font-weight:700;">${this.esc(s.lancMsg)}</p>` : "");
+      corpo = `
+        ${avisoLanc}
+        <div class="rweb-rep-kpis">
+          <div class="ccom-kpi"><span>Comissões disponíveis</span><strong>${rep.linhas.length}</strong><small>No relatório da Webro, Moura Leite</small></div>
+          <div class="ccom-kpi"><span>Clientes na fila com a tag</span><strong>${cruz.candidatos}</strong><small>0% Pago, Boleto WEBRO ou baixa Webro</small></div>
+          <div class="ccom-kpi rweb-kpi-alerta"><span>Pendentes de repasse</span><strong>${conferem.length}</strong><small>Valor da Webro igual ao do Integra</small></div>
+          <div class="ccom-kpi rweb-kpi-alerta"><span>Valor pendente</span><strong>${this.esc(this.money(valor))}</strong><small>Soma das comissões que conferem</small></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;flex-wrap:wrap;">
+          <div class="ml-tabs" role="tablist" style="margin:0;">${seg("confere", "Valor confere", conferem.length)}${seg("todos", "Mesmo cliente e unidade", todas.length)}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-excel" style="height:36px;" ${linhas.length ? "" : "disabled"} onclick="RecebimentosWebroApp.exportarRepasse()"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>
+          </div>
+        </div>
+        <div class="cc-scroll">
+          <table class="cc-table rweb-rep-table">
+            <thead><tr>
+              <th>Cliente</th><th>Título</th><th>Unidade</th><th>Tag na fila</th><th>Operador</th>
+              <th class="is-center">Parcela Webro</th><th class="is-center">Pago na Webro</th><th class="is-right">Comissão Webro</th>
+              <th class="is-center">Parcela Integra</th><th class="is-center">Vencimento</th><th class="is-right">Sem juros (Integra)</th><th>Situação</th>
+            </tr></thead>
+            <tbody>${linhas.length ? linhas.map((l) => {
+              const p = l.parcela;
+              const outras = !p && l.parcelas.length ? l.parcelas.map((x) => x.numero + ": " + this.money(x.semJuros)).join(" · ") : "";
+              return `<tr class="rweb-linha-ficha" title="Abrir a ficha do cliente" onclick="RecebimentosWebroApp.abrirFicha('${this.esc(l.customerId)}', '${this.esc(l.titulo)}')">
+                <td title="${this.esc(l.webro.pagador)}">${this.esc(l.cliente)}</td>
+                <td>${this.esc(l.titulo)}</td>
+                <td title="Webro: ${this.esc(l.webro.empreendimento)} · ${this.esc(l.webro.unidade)}">${this.esc(l.unidade)}</td>
+                <td>${this.esc(l.tag)}</td>
+                <td>${this.esc(l.operador)}</td>
+                <td class="is-center">${this.esc(l.webro.parcela || "—")}</td>
+                <td class="is-center">${this.esc(this.fmtDate(l.webro.pagamento))}</td>
+                <td class="is-right">${this.esc(this.money(l.webro.comissao))}</td>
+                <td class="is-center">${p ? this.esc(p.numero + (p.tipo ? " (" + p.tipo + ")" : "")) : "—"}</td>
+                <td class="is-center">${p ? this.esc(this.fmtDate(p.vencimento)) : "—"}</td>
+                <td class="is-right"${outras ? ` title="Parcelas vencidas no Integra, sem juros: ${this.esc(outras)}"` : ""}>${p ? this.esc(this.money(p.semJuros)) : "—"}</td>
+                <td><span class="ccom-sit ${l.confere ? "ccom-sit-pago" : "ccom-sit-prog"}">${l.confere ? "Valor confere" : "Valor diferente"}</span></td>
+              </tr>`;
+            }).join("") : `<tr><td colspan="12" style="text-align:center;padding:30px;">Nenhum cliente da fila com essa comissão disponível na Webro.</td></tr>`}</tbody>
+          </table>
+        </div>`;
+    }
+    return `
+      <div class="search-filter-panel tvig-params ccom-params">
+        <h3 class="tvig-section-title">Repasse pendente da Webro</h3>
+        <div class="ccom-filters"><div class="tvig-filter-actions" style="display:flex;gap:8px;flex-wrap:wrap;">${upload}
+          <button type="button" class="btn btn-secondary" style="height:36px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;" aria-expanded="${aberto ? "true" : "false"}" onclick="RecebimentosWebroApp.alternarInstrucoes()">
+            <i data-lucide="${aberto ? "chevron-up" : "help-circle"}" style="width:14px;height:14px;"></i> ${aberto ? "Fechar instruções" : "Instruções para atualizar"}
+          </button></div></div>
+        ${rep ? `<p class="rweb-note">${this.esc(rep.arquivo)} · ${rep.total} linha(s) no arquivo · ${rep.linhas.length} com comissão disponível da Moura Leite · enviado em ${this.esc(this.fmtDate(String(rep.quando).slice(0, 10)))}</p>` : ""}
+        ${nota}
+      </div>
+      ${corpo}`;
+  },
+
+  /** Carregamento padrão do Integra: círculo girando e barra verde. */
+  carregandoHtml(texto) {
+    return `<style>
+        .rweb-load .loading-progress-bar{width:8%;animation:rweb-carga 25s ease-out forwards;}
+        @keyframes rweb-carga{from{width:8%}to{width:92%}}
+      </style>
+      <div class="ml-load rweb-load">
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-status-text">${this.esc(texto)}</div>
+        <div class="ml-load-track"><div class="loading-progress-bar"></div></div>
+      </div>`;
+  },
+
+  /**
+   * A fila de cobrança é montada pela tela da Fila. Se ela ainda não foi aberta nesta sessão,
+   * monta aqui mesmo (usa a fila pronta do dia quando existe) e espera a lista ficar pronta.
+   */
+  async garantirFila(tentarDeNovo) {
+    if ((window.rawClientList || []).length) return true;
+    if (this._filaEsperando && !tentarDeNovo) return false;
+    this._filaEsperando = true;
+    this.state.filaErro = "";
+    if (tentarDeNovo) this.render();
+    try {
+      if (typeof window.loadDashboardData === "function") {
+        Promise.resolve(window.loadDashboardData()).catch((e) => console.warn("[Recebimentos Webro] fila", e));
+      } else {
+        throw new Error("A fila de cobrança não está disponível.");
+      }
+      const limite = Date.now() + 4 * 60 * 1000;
+      while (!(window.rawClientList || []).length && Date.now() < limite) {
+        await new Promise((r) => setTimeout(r, 800));
+      }
+      if (!(window.rawClientList || []).length) throw new Error("A fila de cobrança demorou demais para carregar.");
+    } catch (e) {
+      this.state.filaErro = (e && e.message) || String(e);
+    }
+    this._filaEsperando = false;
+    if (this.state.aba === "repasse") this.render();
+    return !this.state.filaErro;
+  },
+
+  /** Abre a ficha do cliente no título da linha. */
+  abrirFicha(customerId, titulo) {
+    if (!customerId || typeof window.viewCustomerCard !== "function") return;
+    window.viewCustomerCard(customerId, titulo || null);
+  },
+
+  /** Linhas que ainda não têm a ocorrência Aguardando Baixa Webro (valor confere e tag 0% Pago ou Boleto WEBRO). */
+  semOcorrenciaWebro(cruz) {
+    const porTitulo = new Map();
+    ((cruz && cruz.linhas) || []).forEach((l) => {
+      if (!l.confere || !l.customerId || !l.titulo || !l.webro.pagamento) return;
+      if (l.tag === "Aguardando Webro" || l.tag === "Pendente Repasse Webro") return;
+      const k = String(l.customerId) + "|" + String(l.titulo);
+      if (!porTitulo.has(k)) porTitulo.set(k, []);
+      porTitulo.get(k).push(l);
+    });
+    return [...porTitulo.values()];
+  },
+
+  /** Grava, em Ocorrências e Promessas, o canal Aguardando Baixa Webro com a data paga na Webro. */
+  async lancarBaixasWebro(auto) {
+    if (this.state.lancando) return;
+    const grupos = this.semOcorrenciaWebro(this.cruzarRepasse());
+    if (!grupos.length) return;
+    const w = window;
+    if (!w.AppState || typeof w.saveNotesToFirebase !== "function" || typeof w.mergeOccurrenceLists !== "function"
+      || typeof w.getCustomerNotesList !== "function" || typeof w.normalizeCustomerNotesKey !== "function") {
+      this.state.lancMsg = "As ocorrências ainda não carregaram. Atualize a página para lançar o Aguardando Baixa Webro.";
+      this.state.lancErro = true;
+      return;
+    }
+    // Não repete o mesmo lote na mesma sessão (evita laço se algum título não puder ser gravado).
+    const assin = grupos.map((g) => g[0].customerId + "|" + g[0].titulo).sort().join(",");
+    if (auto && this._ultimoLancAuto === assin) return;
+    this._ultimoLancAuto = assin;
+    this.state.lancando = true;
+    this.render();
+    const hoje = this.iso(new Date());
+    const autor = (w.AppState.currentUser && w.AppState.currentUser.name) || "Operador";
+    let feitos = 0;
+    const falhas = [];
+    if (!w.AppState.notes) w.AppState.notes = {};
+    for (const itens of grupos) {
+      const l0 = itens[0];
+      const pagamento = itens.map((l) => l.webro.pagamento).sort().pop();
+      const data = pagamento > hoje ? hoje : pagamento;
+      const partes = itens.map((l) => "PARCELA " + (l.parcela ? l.parcela.numero + (l.parcela.tipo ? " (" + l.parcela.tipo + ")" : "") : l.webro.parcela)
+        + " PAGA NA WEBRO EM " + this.fmtDate(l.webro.pagamento) + ", COMISSÃO R$ " + this.money(l.webro.comissao));
+      const occ = {
+        id: (w.crypto && typeof w.crypto.randomUUID === "function") ? w.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2),
+        date: new Date().toISOString(),
+        author: autor,
+        saleId: String(l0.titulo),
+        receivableBillId: String(l0.titulo),
+        contractId: null,
+        unitId: null,
+        text: ("BAIXA WEBRO PELO RELATÓRIO DETALHADO DA WEBRO: " + partes.join("; ") + ". AGUARDANDO O REPASSE.").toUpperCase(),
+        promiseDate: data,
+        promiseStatus: "Pendente",
+        reminder: null,
+        canal: "Aguardando Baixa Webro",
+        iniciativa: null,
+        promisedInstallments: [],
+        pinned: false,
+        webroBaixa: true,
+        colenciPix: false,
+        colenciPrazo: null,
+        reuniaoSemanalTerceirizada: false,
+        origem: "relatorio-webro",
+        updatedAt: new Date().toISOString(),
+        attachments: []
+      };
+      try {
+        const chave = w.normalizeCustomerNotesKey(l0.customerId);
+        const atual = w.getCustomerNotesList(w.AppState.notes, chave) || [];
+        const repetida = atual.some((n) => n && n.status !== "Cancelada" && typeof w.isWebroBaixaCanal === "function" && w.isWebroBaixaCanal(n.canal)
+          && String(n.saleId || "") === occ.saleId && String(n.promiseDate || "").slice(0, 10) === data);
+        if (repetida) continue;
+        w.AppState.notes[chave] = w.mergeOccurrenceLists(atual, [occ]);
+        await w.saveNotesToFirebase(l0.customerId);
+        feitos += 1;
+      } catch (e) {
+        falhas.push(l0.cliente + " (" + l0.titulo + ")");
+        console.warn("[Repasse Webro] ocorrência", l0.titulo, e);
+      }
+    }
+    this.state.lancando = false;
+    this.state.lancErro = !!falhas.length;
+    this.state.lancMsg = (feitos ? feitos + " título(s) receberam Aguardando Baixa Webro automaticamente, com a data paga na Webro." : "")
+      + (falhas.length ? (feitos ? " " : "") + "Não foi possível gravar: " + falhas.join(", ") + "." : "");
+    this.render();
+  },
+
+  alternarInstrucoes() {
+    const s = this.state;
+    s.instrAberto = !(s.instrAberto != null ? s.instrAberto : !s.repasse);
+    this.render();
+  },
+
+  abasHtml() {
+    const a = this.state.aba;
+    const b = (id, rot, ic) => `<button type="button" role="tab" class="ml-tab${a === id ? " is-active" : ""}" aria-selected="${a === id}" onclick="RecebimentosWebroApp.trocarAba('${id}')"><i data-lucide="${ic}"></i> ${rot}</button>`;
+    return `<div class="ml-tabs" role="tablist" style="margin:0 0 12px;">${b("sienge", "Recebimentos no Sienge", "banknote")}${b("repasse", "Repasse pendente", "file-search")}</div>`;
+  },
+
   render() {
     const root = document.getElementById("recebimentos-webro-root");
     if (!root) return;
     const s = this.state;
+    if (s.aba === "repasse") {
+      root.innerHTML = `<div class="ccom-page">${this.abasHtml()}${this.repasseHtml()}</div>`;
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
     const period = (s.de && s.ate) ? (this.fmtDate(s.de) + " a " + this.fmtDate(s.ate)) : "";
     const rows = s.rows || [];
     const recebido = rows.reduce((sum, r) => sum + (Number(r.valorRecebido) || 0), 0);
@@ -548,6 +1058,7 @@ const RecebimentosWebroApp = {
     const condicoes = (s.condicoes || []).join(", ");
     root.innerHTML = `
       <div class="ccom-page">
+        ${this.abasHtml()}
         <div class="search-filter-panel tvig-params ccom-params">
           <h3 class="tvig-section-title">Recebimentos Webro</h3>
           <p class="rweb-note">A consulta começa pelo recebimento da parcela do cliente marcada como Parcela Webro. O título e o contrato (CVMOURALEI) identificam o empreendimento e a unidade, e a tela cruza com a comissão da Moura Leite para mostrar o que a Webro precisa repassar.</p>
@@ -617,6 +1128,12 @@ const RecebimentosWebroApp = {
   init() {
     const root = document.getElementById("recebimentos-webro-root");
     if (!root) return;
+    if (!this.state.inited && !this.state.repasse) {
+      try {
+        const salvo = JSON.parse(localStorage.getItem(this.REPASSE_KEY) || "null");
+        if (salvo && Array.isArray(salvo.linhas)) this.state.repasse = salvo;
+      } catch (e) {}
+    }
     this.state.inited = true;
     this.render();
   }
@@ -626,4 +1143,177 @@ window.RecebimentosWebroApp = RecebimentosWebroApp;
 
 document.addEventListener("tabChanged", function (e) {
   if (e.detail === "recebimentos-webro") RecebimentosWebroApp.init();
+});
+
+/* Repasse Webro vencido: aviso para a Analista de Pagadoria I.
+   Quem tem a fila de cobrança carregada grava, em webro_repasse_pendente, os títulos com a tag
+   Pendente Repasse Webro (baixa Webro sem repasse depois do prazo de 3 dias úteis) e apaga os que saíram dela.
+   No login, a Analista de Pagadoria I lê essa lista e recebe o pop-up "Checar repasse". */
+const WebroRepasseAviso = {
+  COL: "webro_repasse_pendente",
+  _existentes: null,
+  _gravados: {},
+  _rodando: false,
+
+  hoje() {
+    return typeof window.localDateStr === "function" ? window.localDateStr(new Date()) : new Date().toISOString().slice(0, 10);
+  },
+
+  /** Último dia útil antes de hoje: lista vista nesse dia ou hoje ainda vale (cobre o fim de semana). */
+  diaUtilAnterior() {
+    let d = this.hoje();
+    if (typeof window.addDaysIso !== "function") return d;
+    for (let i = 0; i < 10; i++) {
+      d = window.addDaysIso(d, -1);
+      if (typeof window.isBusinessDayIso !== "function" || window.isBusinessDayIso(d)) return d;
+    }
+    return d;
+  },
+
+  docId(titulo) {
+    return String(titulo || "").replace(/[^\w-]/g, "_").slice(0, 80);
+  },
+
+  async publicar() {
+    if (this._rodando) return;
+    const fila = window.rawClientList || [];
+    const fc = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fila.length || !fc || !db || typeof window.getWebroBaixaStatus !== "function") return;
+    this._rodando = true;
+    try {
+      if (!this._existentes) {
+        const snap = await fc.getDocs(fc.collection(db, this.COL));
+        this._existentes = new Set();
+        snap.forEach((d) => this._existentes.add(d.id));
+      }
+      const hoje = this.hoje();
+      const vistos = new Set();
+      for (const c of fila) {
+        if (!c || !c.saleId) continue;
+        const id = this.docId(c.saleId);
+        if (!id || vistos.has(id)) continue;
+        vistos.add(id);
+        const status = window.getWebroBaixaStatus(c);
+        if (status === "PENDENTE") {
+          const occ = typeof window.getActiveWebroBaixaOccurrence === "function" ? window.getActiveWebroBaixaOccurrence(c) : null;
+          const baixa = occ ? String(occ.promiseDate || "").slice(0, 10) : "";
+          const assin = hoje + "|" + baixa;
+          if (this._gravados[id] === assin) continue;
+          await fc.setDoc(fc.doc(db, this.COL, id), {
+            titulo: String(c.saleId),
+            customerId: String(c.customerId || ""),
+            cliente: String(c.customerName || ""),
+            unidade: (c.costCenterId ? c.costCenterId + " - " : "") + String(c.unitName || ""),
+            operador: String(c.assignedOperator || ""),
+            baixa,
+            vistoEm: hoje
+          });
+          this._gravados[id] = assin;
+          this._existentes.add(id);
+        } else if (this._existentes.has(id)) {
+          await fc.deleteDoc(fc.doc(db, this.COL, id));
+          this._existentes.delete(id);
+          delete this._gravados[id];
+        }
+      }
+    } catch (e) {
+      console.warn("[Repasse Webro] lista para a pagadoria", e);
+    } finally {
+      this._rodando = false;
+    }
+  },
+
+  usuario() {
+    const u = (typeof window.crmUsuarioAcesso === "function" && window.crmUsuarioAcesso()) || (window.AppState && window.AppState.currentUser) || null;
+    return u && (u.email || u.name) ? u : null;
+  },
+
+  /** Analista de Pagadoria I (não a II). */
+  ehAnalistaPagadoriaI(u) {
+    const n = String((u && (u.profile_name || u.profile || u.role)) || "")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+    if (!n.includes("ANALISTA") || !n.includes("PAGADORIA")) return false;
+    if (/\bII\b/.test(n) || /\b2\b/.test(n)) return false;
+    return /\bI\b/.test(n) || /\b1\b/.test(n);
+  },
+
+  chaveCiente(u) {
+    return "crm_webro_repasse_ciente_" + String(u.email || u.name).toLowerCase() + "_" + this.hoje();
+  },
+
+  async avisar() {
+    const u = this.usuario();
+    if (!u || !this.ehAnalistaPagadoriaI(u) || document.getElementById("webro-repasse-aviso")) return;
+    try { if (localStorage.getItem(this.chaveCiente(u)) === "1") return; } catch (e) {}
+    const fc = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fc || !db) return;
+    let itens = [];
+    try {
+      const snap = await fc.getDocs(fc.collection(db, this.COL));
+      const corte = this.diaUtilAnterior();
+      snap.forEach((d) => {
+        const v = d.data() || {};
+        if (String(v.vistoEm || "") >= corte) itens.push(v);
+      });
+    } catch (e) {
+      console.warn("[Repasse Webro] leitura do aviso", e);
+      return;
+    }
+    if (!itens.length) return;
+    itens.sort((a, b) => String(a.baixa || "").localeCompare(String(b.baixa || "")));
+    this.abrir(itens, u);
+  },
+
+  abrir(itens, u) {
+    const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const br = (iso) => { const s = String(iso || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4) : "—"; };
+    const pop = document.createElement("div");
+    pop.id = "webro-repasse-aviso";
+    pop.className = "apa-overlay";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-labelledby", "webro-repasse-titulo");
+    pop.innerHTML = `<div class="apa-preview-wrap" style="width:min(640px,100%);">
+      <div class="apa-card">
+        <div class="apa-card-head is-faixa"><h3 id="webro-repasse-titulo">Repasse Webro pendente</h3></div>
+        <div class="apa-card-corpo">
+          <p style="margin-top:12px;">Há títulos pendentes de baixa na Webro: a Webro recebeu e o repasse não entrou no prazo de 3 dias úteis. Checar repasse.</p>
+          ${itens.map((v) => `<div class="apa-item"><strong>Título ${esc(v.titulo)} · ${esc(v.cliente)}</strong><span>${esc(v.unidade)} · baixa na Webro em ${esc(br(v.baixa))}${v.operador ? " · " + esc(v.operador) : ""}</span></div>`).join("")}
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+            <button type="button" class="btn btn-secondary" id="webro-repasse-ciente">Ciente</button>
+            <button type="button" class="btn btn-primary" id="webro-repasse-checar">Checar repasse</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    document.body.appendChild(pop);
+    const fechar = () => {
+      try { localStorage.setItem(this.chaveCiente(u), "1"); } catch (e) {}
+      pop.remove();
+    };
+    pop.querySelector("#webro-repasse-ciente").addEventListener("click", fechar);
+    pop.querySelector("#webro-repasse-checar").addEventListener("click", () => {
+      fechar();
+      if (typeof window.switchTab === "function") window.switchTab("recebimentos-webro", "Recebimentos Webro");
+      setTimeout(() => { if (window.RecebimentosWebroApp) RecebimentosWebroApp.trocarAba("repasse"); }, 300);
+    });
+  }
+};
+
+window.WebroRepasseAviso = WebroRepasseAviso;
+
+document.addEventListener("DOMContentLoaded", function () {
+  // Quem tem a fila carregada mantém a lista atualizada; confere a cada 2 minutos.
+  setInterval(function () { WebroRepasseAviso.publicar(); }, 120000);
+  let tentativas = 0;
+  const tentar = function () {
+    tentativas += 1;
+    if (!WebroRepasseAviso.usuario() || !window.firebaseDb) {
+      if (tentativas < 30) setTimeout(tentar, 1000);
+      return;
+    }
+    WebroRepasseAviso.avisar();
+  };
+  setTimeout(tentar, 4000);
 });
