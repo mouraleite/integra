@@ -13,7 +13,7 @@ const https = require("https");
 const { conferirAcesso } = require("../../lib/integra-auth");
 
 const REPO = "mouraleite/integra";
-const BRANCHES_TESTE = ["develop", "Marcelo", "lucelia", "isabella_garcia"];
+const BRANCHES_TESTE = ["develop", "Marcelo", "lucelia", "isabella_garcia", "israel"];
 const FIRESTORE = "https://firestore.googleapis.com/v1/projects/crm-gestao-mldu/databases/(default)/documents";
 
 function responder(res, status, data) {
