@@ -3,6 +3,7 @@
 const rotas = {
   "sienge-proxy": require("./_lib/sienge-proxy"),
   "sienge-upload": require("./_lib/sienge-upload"),
+  "github-leitura": require("./_lib/github-leitura"),
   "sienge-builder-proxy": require("./_lib/sienge-builder-proxy"),
   "sync-customers": require("./_lib/sync-customers"),
   "sync-creditors": require("./_lib/sync-creditors"),
@@ -27,12 +28,12 @@ const rotas = {
   "publicar": require("./_lib/publicar")
 };
 
-const { conferirAcesso, modoBloqueio } = require("../lib/integra-auth");
+const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/integra-auth");
 
 // Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
 // As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-upload", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "sienge-proxy", "sienge-upload", "github-leitura", "sienge-builder-proxy", "sync-customers", "sync-creditors",
   "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
@@ -76,6 +77,11 @@ module.exports = async function handler(req, res) {
 
   if (ROTAS_COM_LOGIN.has(nome) && String(req.method || "").toUpperCase() !== "OPTIONS") {
     const acesso = await conferirAcesso(req);
+    // Com o bloqueio ligado, não basta ser conta Microsoft da empresa: precisa estar cadastrado e ativo no Integra.
+    if (acesso.ok && acesso.motivo === "ok" && modoBloqueio()) {
+      const ativo = await usuarioAtivoIntegra(acesso.email);
+      if (ativo === false) Object.assign(acesso, { ok: false, motivo: "nao-cadastrado-ou-inativo" });
+    }
     try { res.setHeader("X-Integra-Auth", acesso.motivo); } catch (e) {}
     if (!acesso.ok) {
       const bloquear = modoBloqueio();
@@ -91,9 +97,11 @@ module.exports = async function handler(req, res) {
         navegador: String(req.headers["user-agent"] || "").slice(0, 120)
       }));
       if (bloquear) {
-        res.statusCode = 401;
+        res.statusCode = acesso.motivo === "nao-cadastrado-ou-inativo" ? 403 : 401;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ error: "Faça login no Integra para acessar este recurso." }));
+        res.end(JSON.stringify({ error: acesso.motivo === "nao-cadastrado-ou-inativo"
+          ? "Seu usuário não está cadastrado ou está inativo no Integra."
+          : "Faça login no Integra para acessar este recurso." }));
         return;
       }
     }
