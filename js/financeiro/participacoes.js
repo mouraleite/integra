@@ -1107,7 +1107,7 @@ const ParticipacoesApp = {
     const map = {};
     rows.forEach((r) => {
       const k = keyFn(r) || "(em branco)";
-      if (!map[k]) map[k] = { key: k, rows: [], total: 0, _labels: [] };
+      if (!map[k]) map[k] = { key: k, groupKey: k, rows: [], total: 0, _labels: [] };
       map[k].rows.push(r);
       map[k].total += Number(r.valor) || 0;
       map[k]._labels.push(r.credor);
@@ -1758,12 +1758,12 @@ const ParticipacoesApp = {
         };
     ws.properties.showGridLines = false;
     ws.columns = [
-      { width: 12 }, { width: 14 }, { width: 36 }, { width: 48 }, { width: 22 }, { width: 14 }, { width: 10 }
+      { width: 12 }, { width: 14 }, { width: 36 }, { width: 48 }, { width: 22 }, { width: 32 }, { width: 14 }, { width: 10 }
     ];
     ws.getCell("A1").value = `Lançamentos — ${companyLabel}`;
     paint(ws.getCell("A1"), { font: { bold: true, size: 12 }, fill: "FFFFFFFF" });
-    ws.mergeCells("A1:G1");
-    const heads = ["Data", "Período", "Credor", "Detalhe", "Categoria", "Valor", "Doc"];
+    ws.mergeCells("A1:H1");
+    const heads = ["Data", "Período", "Credor", "Detalhe", "Categoria Ellenco", "Categoria Moura Leite", "Valor", "Doc"];
     const head = ws.getRow(3);
     heads.forEach((h, i) => {
       const cell = head.getCell(i + 1);
@@ -1781,13 +1781,14 @@ const ParticipacoesApp = {
       row.getCell(3).value = r.credor || "";
       row.getCell(4).value = r.detalhe || "";
       row.getCell(5).value = r.categoria || "";
-      row.getCell(6).value = Number(r.valor) || 0;
-      row.getCell(7).value = r.doc || "";
-      for (let c = 1; c <= 7; c++) {
+      row.getCell(6).value = this.catMlDaLinha(r);
+      row.getCell(7).value = Number(r.valor) || 0;
+      row.getCell(8).value = r.doc || "";
+      for (let c = 1; c <= 8; c++) {
         paint(row.getCell(c), {
           border: true,
-          align: { horizontal: c === 6 ? "right" : "left", wrapText: c === 4 },
-          numFmt: c === 6 ? "#,##0.00" : undefined
+          align: { horizontal: c === 7 ? "right" : "left", wrapText: c === 4 },
+          numFmt: c === 7 ? "#,##0.00" : undefined
         });
       }
     });
@@ -2184,11 +2185,11 @@ const ParticipacoesApp = {
 
     const views = [
       { id: "matriz", label: "Matriz", icon: "table" },
-      { id: "periodo", label: "Por período", icon: "calendar" },
-      { id: "credor", label: "Por credor", icon: "building-2" },
-      { id: "categoria", label: "Por categoria", icon: "tags" },
-      { id: "data", label: "Por data", icon: "clock" }
+      { id: "credor", label: "Por credor", icon: "building-2" }
     ];
+    if (this.groupBy !== "matriz" && this.groupBy !== "credor") this.groupBy = "matriz";
+    if (!this.catMl) this.carregarCatMl();
+    this._gruposVisiveis = this.groupBy === "credor" ? groups : [];
     const isMatriz = this.groupBy === "matriz";
     const mxInfo = temEmpresa && isMatriz ? this.matrixData() : null;
     const credCount = mxInfo ? mxInfo.creditors.length : 0;
@@ -2262,37 +2263,53 @@ const ParticipacoesApp = {
 
         ${ocupado ? this.cargaHtml() : ""}
         ${!ocupado && temEmpresa && this.groupBy === "matriz" ? this.matrixHtml() : ""}
-        ${!ocupado && temEmpresa && this.groupBy !== "matriz" && groups.length ? `
+        ${!ocupado && temEmpresa && this.groupBy === "credor" && groups.length ? `
+          <style>
+            .part-credor-row{cursor:pointer;}
+            .part-credor-row td:first-child{white-space:nowrap;}
+            .part-credor-seta{display:inline-flex;vertical-align:middle;margin-right:4px;color:#105436;}
+            .part-catml-btn{display:inline-flex;align-items:center;gap:4px;max-width:100%;height:24px;padding:0 8px;border:1px dashed #94a3b8;border-radius:6px;background:#fff;color:#475569;font-size:.7rem;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            .part-catml-btn.is-set{border-style:solid;border-color:#1b8253;background:#f0fdf4;color:#105436;}
+            .part-credor-acoes{display:flex;gap:8px;margin:0 0 8px;}
+            .part-credor-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;}
+          </style>
+          <div class="part-credor-acoes">
+            <button type="button" class="btn btn-secondary" onclick="ParticipacoesApp.abrirTodosCredores(true)"><i data-lucide="chevrons-down" style="width:14px;height:14px;"></i> Expandir todos</button>
+            <button type="button" class="btn btn-secondary" onclick="ParticipacoesApp.abrirTodosCredores(false)"><i data-lucide="chevrons-up" style="width:14px;height:14px;"></i> Recolher todos</button>
+          </div>
           <div class="cc-scroll part-groups" id="part-groups-scroll">
             <table class="cc-table part-expense-table">
               <colgroup>
-                <col style="width:88px">
-                ${this.groupBy === "periodo" ? "" : `<col style="width:120px">`}
-                <col style="width:26%"><col><col style="width:18%"><col style="width:120px">
+                <col style="width:88px"><col style="width:120px">
+                <col style="width:22%"><col><col style="width:14%"><col style="width:17%"><col style="width:120px">
               </colgroup>
               <thead>
                 <tr>
-                  <th>Data</th>
-                  ${this.groupBy === "periodo" ? "" : `<th>Período</th>`}
-                  <th>Credor</th><th>Detalhe</th><th>Categoria</th><th class="is-right">Valor</th>
+                  <th>Data</th><th>Período</th><th>Credor</th><th>Detalhe</th><th>Categoria Ellenco</th><th>Categoria Moura Leite</th><th class="is-right">Valor</th>
                 </tr>
               </thead>
-              ${groups.map((g) => `
+              ${groups.map((g, gi) => {
+                const aberto = !!this.credorAberto[g.groupKey];
+                const cat = this.catMlDe(g.groupKey);
+                const rotCat = this.rotuloCatMl(cat);
+                return `
                 <tbody>
-                  <tr class="part-group-row">
-                    <td colspan="${this.groupBy === "periodo" ? 4 : 5}">${this.esc(cap(g.key))} <span>${g.rows.length} lançamento(s)</span></td>
+                  <tr class="part-group-row part-credor-row" onclick="ParticipacoesApp.alternarCredor(${gi})" title="${aberto ? "Fechar" : "Abrir"} os lançamentos">
+                    <td colspan="5"><span class="part-credor-seta"><i data-lucide="${aberto ? "chevron-down" : "chevron-right"}" style="width:14px;height:14px;"></i></span>${this.esc(cap(g.key))} <span>${g.rows.length} lançamento(s)</span></td>
+                    <td><button type="button" class="part-catml-btn${cat ? " is-set" : ""}" title="${this.esc(rotCat || "Escolher a categoria Moura Leite deste credor")}" onclick="ParticipacoesApp.escolherCatMl(${gi}, event)">${cat ? this.esc(rotCat) : `<i data-lucide="plus" style="width:12px;height:12px;"></i> Escolher`}</button></td>
                     <td class="is-right">${this.fmt(g.total)}</td>
                   </tr>
-                  ${g.rows.map((r) => `<tr>
+                  ${aberto ? g.rows.map((r) => `<tr>
                     <td>${this.esc(r.date)}</td>
-                    ${this.groupBy === "periodo" ? "" : `<td>${this.esc(cap(this.periodLabel(r.periodo, "—")))}</td>`}
+                    <td>${this.esc(cap(this.periodLabel(r.periodo, "—")))}</td>
                     <td title="${this.esc(r.credor)}">${this.esc(r.credor)}</td>
                     <td title="${this.esc(r.detalhe || "")}">${this.esc(r.detalhe || "—")}</td>
                     <td title="${this.esc(r.categoria)}">${this.esc(r.categoria)}</td>
+                    <td title="${this.esc(rotCat)}">${this.esc(rotCat || "—")}</td>
                     <td class="is-right part-valor">${r.valor ? this.fmt(r.valor) : "—"}</td>
-                  </tr>`).join("")}
-                </tbody>
-              `).join("")}
+                  </tr>`).join("") : ""}
+                </tbody>`;
+              }).join("")}
             </table>
           </div>` : ""}
         ${!ocupado && temEmpresa && this.files.length && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
@@ -2302,6 +2319,168 @@ const ParticipacoesApp = {
     this.paintCompany();
     if (window.lucide) lucide.createIcons();
     this.restoreScroll(scroll);
+  },
+
+  /* ---------- Categoria Moura Leite por credor ----------
+     O operador escolhe, na linha do credor, um grupo de despesa do plano financeiro:
+     só contas de nível 3 que começam com 2 (ex.: 2.01.01 - TERRENOS). Fica gravado para toda a equipe. */
+  CAT_ML_DOC: ["config", "participacoes_categoria_ml"],
+  CAT_ML_LOCAL: "crm_part_categoria_ml_v1",
+  catMl: null,
+  credorAberto: {},
+
+  async carregarCatMl() {
+    if (this.catMl || this._catMlCarregando) return;
+    this._catMlCarregando = true;
+    let mapa = null;
+    try { mapa = JSON.parse(localStorage.getItem(this.CAT_ML_LOCAL) || "null"); } catch (e) { mapa = null; }
+    this.catMl = mapa && typeof mapa === "object" ? mapa : {};
+    try {
+      const fc = window.firebaseCollections;
+      if (window.firebaseDb && fc && fc.getDoc) {
+        const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.CAT_ML_DOC[0], this.CAT_ML_DOC[1]));
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        if (existe) {
+          const remoto = (snap.data() || {}).map;
+          if (remoto && typeof remoto === "object") this.catMl = remoto;
+          try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] categoria Moura Leite", e);
+    }
+    this._catMlCarregando = false;
+    if (this.groupBy === "credor") this.render();
+  },
+
+  /** Contas do plano financeiro de nível 3 que começam com 2 (2.01.01, 2.02.01...). */
+  async carregarGruposMl() {
+    if (this.gruposMl || this._gruposCarregando) return this.gruposMl || [];
+    this._gruposCarregando = true;
+    let cats = (window.PlanoFinanceiroApp && Array.isArray(PlanoFinanceiroApp.categories) && PlanoFinanceiroApp.categories.length) ? PlanoFinanceiroApp.categories : [];
+    try {
+      if (!cats.length && window.SiengeApiService && typeof SiengeApiService.getPaymentCategories === "function") {
+        cats = await SiengeApiService.getPaymentCategories() || [];
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] plano financeiro", e);
+      cats = [];
+    }
+    const vistos = new Set();
+    this.gruposMl = (cats || []).map((c) => {
+      const id = String((c && c.id) || "").trim().replace(/^\.+|\.+$/g, "");
+      const partes = id.split(".").filter(Boolean);
+      if (partes.length !== 3 || partes[0] !== "2" || vistos.has(id)) return null;
+      vistos.add(id);
+      return { id, label: String(c.name || c.description || c.financialCategoryName || "").trim().toUpperCase() };
+    }).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id, "pt-BR", { numeric: true }));
+    this._gruposCarregando = false;
+    return this.gruposMl;
+  },
+
+  /** Categoria gravada para a chave do credor (a mesma chave que agrupa o credor na tela). */
+  catMlDe(credorKey) {
+    const v = this.catMl && this.catMl[String(credorKey || "")];
+    return v && v.id ? v : null;
+  },
+
+  catMlDaLinha(r) {
+    return this.rotuloCatMl(this.catMlDe(this.credorGroupKey((r && r.credor) || "") || (r && r.credor)));
+  },
+
+  rotuloCatMl(v) {
+    return v ? v.id + " - " + v.label : "";
+  },
+
+  async gravarCatMl(credorKey, item) {
+    if (!this.catMl) this.catMl = {};
+    const quem = (window.AppState && AppState.currentUser) || {};
+    if (item) this.catMl[credorKey] = { id: item.id, label: item.label, por: String(quem.name || quem.email || ""), em: new Date().toISOString() };
+    else delete this.catMl[credorKey];
+    try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+    try {
+      const fc = window.firebaseCollections;
+      if (window.firebaseDb && fc && fc.setDoc) {
+        await fc.setDoc(fc.doc(window.firebaseDb, this.CAT_ML_DOC[0], this.CAT_ML_DOC[1]), { map: this.catMl });
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] gravar categoria Moura Leite", e);
+      alert("A categoria ficou salva só neste navegador. Não foi possível gravar no banco do Integra.");
+    }
+  },
+
+  alternarCredor(i) {
+    const g = (this._gruposVisiveis || [])[i];
+    if (!g) return;
+    const k = g.groupKey;
+    this.credorAberto[k] = !this.credorAberto[k];
+    this.render();
+  },
+
+  abrirTodosCredores(abrir) {
+    this.credorAberto = {};
+    if (abrir) (this._gruposVisiveis || []).forEach((g) => { this.credorAberto[g.groupKey] = true; });
+    this.render();
+  },
+
+  /** Janela com a lista pesquisável dos grupos de despesa (nível 3 que começa com 2). */
+  async escolherCatMl(i, ev) {
+    if (ev) ev.stopPropagation();
+    const g = (this._gruposVisiveis || [])[i];
+    if (!g) return;
+    const antigo = document.getElementById("part-catml-modal");
+    if (antigo) antigo.remove();
+    const pop = document.createElement("div");
+    pop.id = "part-catml-modal";
+    pop.style.cssText = "position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px;";
+    pop.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="part-catml-tit" style="width:min(560px,100%);background:#fff;border-radius:12px;box-shadow:0 20px 50px rgba(15,23,42,.25);padding:16px 18px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
+          <h3 id="part-catml-tit" style="margin:0;color:#105436;font-size:1rem;">Categoria Moura Leite</h3>
+          <button type="button" class="btn btn-fechar" id="part-catml-fechar">Fechar</button>
+        </div>
+        <p style="margin:0 0 10px;font-size:.8rem;color:#475569;">Credor: <strong>${this.esc(g.key)}</strong></p>
+        <div id="part-catml-box"><p style="font-size:.8rem;color:#64748b;">Carregando o plano financeiro...</p></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;">
+          <button type="button" class="btn btn-secondary" id="part-catml-limpar" ${this.catMlDe(g.groupKey) ? "" : "disabled"}>Remover categoria</button>
+          <button type="button" class="btn btn-primary" id="part-catml-salvar" disabled>Salvar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(pop);
+    const fechar = () => pop.remove();
+    pop.querySelector("#part-catml-fechar").addEventListener("click", fechar);
+    pop.addEventListener("click", (e) => { if (e.target === pop) fechar(); });
+    const grupos = await this.carregarGruposMl();
+    const box = pop.querySelector("#part-catml-box");
+    if (!box) return;
+    if (!grupos.length) {
+      box.innerHTML = `<p style="font-size:.8rem;color:#b91c1c;">Não foi possível carregar as contas do plano financeiro. Tente de novo em instantes.</p>`;
+      this.gruposMl = null;
+      return;
+    }
+    const atual = this.catMlDe(g.groupKey);
+    let escolhido = atual ? atual.id : "";
+    box.innerHTML = window.MlSelectUnico
+      ? MlSelectUnico.html({ id: "part-catml-sel", label: "Grupo de despesa (plano financeiro)", items: grupos, selectedId: escolhido, largura: "100%" })
+      : "";
+    if (window.lucide) lucide.createIcons();
+    const salvar = pop.querySelector("#part-catml-salvar");
+    if (window.MlSelectUnico) {
+      MlSelectUnico.bind("part-catml-sel", { onSelect: (id) => { escolhido = id; salvar.disabled = !id; } });
+    }
+    salvar.disabled = !escolhido;
+    salvar.addEventListener("click", async () => {
+      const item = grupos.find((x) => x.id === escolhido);
+      if (!item) return;
+      salvar.disabled = true;
+      await this.gravarCatMl(g.groupKey, item);
+      fechar();
+      this.render();
+    });
+    pop.querySelector("#part-catml-limpar").addEventListener("click", async () => {
+      await this.gravarCatMl(g.groupKey, null);
+      fechar();
+      this.render();
+    });
   },
 
   companyItems() {
