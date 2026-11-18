@@ -984,6 +984,9 @@
             <i data-lucide="chevron-down" class="nav-chevron"></i>
           </a>
           <ul class="nav-submenu" id="submenu-projetos" style="display: none;">
+            <li data-tab="projetos-aprovacao" data-module="mod_projetos">
+              <a onclick="switchTab('projetos-aprovacao', 'Aprovação')">Aprovação</a>
+            </li>
             <li data-tab="projetos-landbank" data-module="mod_projetos">
               <a onclick="switchTab('projetos-landbank', 'Landbank')">Landbank</a>
             </li>
@@ -3621,6 +3624,10 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
            </div>
         </div>
 
+      </section>
+
+      <section id="tab-projetos-aprovacao" class="tab-pane" style="display: none;">
+        <p class="tvig-empty">Painéis de aprovação em preparação.</p>
       </section>
 
       <section id="tab-projetos-landbank" class="tab-pane" style="display: none;">
@@ -8715,7 +8722,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/alertas-popup.js?v=1b52032dc6"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
   <script defer src="js/projetos/landbank.js?v=56d4c9eed3"></script>
-  <script defer src="js/nucleo/app.js?v=b8c3366c5b"></script>
+  <script defer src="js/nucleo/app.js?v=467920daef"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>

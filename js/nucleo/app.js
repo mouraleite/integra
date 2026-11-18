@@ -3852,7 +3852,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   if (tabId === 'engenharia-caucao' && typeof window.bootEngenhariaCaucao === 'function') {
     window.bootEngenhariaCaucao();
   }
-  if (tabId === 'projetos-landbank' && !window.hasCrmPerm('mod_projetos')) {
+  if ((tabId === 'projetos-landbank' || tabId === 'projetos-aprovacao') && !window.hasCrmPerm('mod_projetos')) {
     alert('Sem permissão para Projetos.');
     return;
   }
