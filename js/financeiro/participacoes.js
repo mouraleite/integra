@@ -2271,10 +2271,6 @@ const ParticipacoesApp = {
             .part-credor-acoes{display:flex;gap:8px;margin:0 0 8px;}
             .part-credor-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;}
           </style>
-          <div class="part-credor-acoes">
-            <button type="button" class="btn btn-secondary" onclick="ParticipacoesApp.abrirTodosCredores(true)"><i data-lucide="chevrons-down" style="width:14px;height:14px;"></i> Expandir todos</button>
-            <button type="button" class="btn btn-secondary" onclick="ParticipacoesApp.abrirTodosCredores(false)"><i data-lucide="chevrons-up" style="width:14px;height:14px;"></i> Recolher todos</button>
-          </div>
           <div class="cc-scroll part-groups" id="part-groups-scroll">
             <table class="cc-table part-expense-table">
               <colgroup>
@@ -2321,11 +2317,17 @@ const ParticipacoesApp = {
 
   /* ---------- Categoria Moura Leite por credor ----------
      O operador escolhe, na linha do credor, um grupo de despesa do plano financeiro:
-     só contas de nível 3 que começam com 2 (ex.: 2.01.01 - TERRENOS). Fica gravado para toda a equipe. */
-  CAT_ML_DOC: ["config", "participacoes_categoria_ml"],
-  CAT_ML_LOCAL: "crm_part_categoria_ml_v1",
+     só contas de nível 3 que começam com 2 (ex.: 2.01.01 - TERRENOS).
+     Cada credor tem o seu registro no Firebase, na coleção participacoes_credores. */
+  CAT_ML_COL: "participacoes_credores",
+  CAT_ML_LOCAL: "crm_part_categoria_ml_v2",
   catMl: null,
   credorAberto: {},
+
+  /** Id do registro do credor no Firebase (a chave do credor pode ter "/", que o Firebase não aceita no id). */
+  catMlDocId(credorKey) {
+    return encodeURIComponent(String(credorKey || "")).slice(0, 700) || "sem-credor";
+  },
 
   async carregarCatMl() {
     if (this.catMl || this._catMlCarregando) return;
@@ -2335,14 +2337,15 @@ const ParticipacoesApp = {
     this.catMl = mapa && typeof mapa === "object" ? mapa : {};
     try {
       const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDoc) {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.CAT_ML_DOC[0], this.CAT_ML_DOC[1]));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        if (existe) {
-          const remoto = (snap.data() || {}).map;
-          if (remoto && typeof remoto === "object") this.catMl = remoto;
-          try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
-        }
+      if (window.firebaseDb && fc && fc.getDocs && fc.collection) {
+        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.CAT_ML_COL));
+        const remoto = {};
+        snap.forEach((d) => {
+          const v = d.data() || {};
+          if (v.credorKey && v.categoriaMl && v.categoriaMl.id) remoto[v.credorKey] = Object.assign({}, v.categoriaMl, { por: v.por || "", em: v.em || "" });
+        });
+        this.catMl = remoto;
+        try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
       }
     } catch (e) {
       console.warn("[Prestação Ellenco] categoria Moura Leite", e);
@@ -2351,29 +2354,48 @@ const ParticipacoesApp = {
     if (this.groupBy === "credor") this.render();
   },
 
-  /** Contas do plano financeiro de nível 3 que começam com 2 (2.01.01, 2.02.01...). */
+  /** Código do plano no formato 2.01.01. O Sienge devolve sem ponto (20101): 1 dígito e depois pares. */
+  codigoPlano(raw) {
+    const t = String(raw == null ? "" : raw).trim().replace(/^\.+|\.+$/g, "");
+    if (!t || t.indexOf(".") >= 0 || !/^\d+$/.test(t)) return t;
+    const pares = t.slice(1).match(/.{1,2}/g) || [];
+    return [t[0]].concat(pares).join(".");
+  },
+
+  /** Contas do plano financeiro de nível 3 que começam com 2, com o grupo de nível 2 de cada uma. */
   async carregarGruposMl() {
-    if (this.gruposMl || this._gruposCarregando) return this.gruposMl || [];
-    this._gruposCarregando = true;
-    let cats = (window.PlanoFinanceiroApp && Array.isArray(PlanoFinanceiroApp.categories) && PlanoFinanceiroApp.categories.length) ? PlanoFinanceiroApp.categories : [];
-    try {
-      if (!cats.length && window.SiengeApiService && typeof SiengeApiService.getPaymentCategories === "function") {
-        cats = await SiengeApiService.getPaymentCategories() || [];
+    if (this.gruposMl && this.gruposMl.length) return this.gruposMl;
+    if (this._gruposPromessa) return this._gruposPromessa;
+    this._gruposPromessa = (async () => {
+      let cats = (window.PlanoFinanceiroApp && Array.isArray(PlanoFinanceiroApp.categories) && PlanoFinanceiroApp.categories.length) ? PlanoFinanceiroApp.categories : [];
+      try {
+        if (!cats.length && window.SiengeApiService && typeof SiengeApiService.getPaymentCategories === "function") {
+          cats = await SiengeApiService.getPaymentCategories() || [];
+        }
+      } catch (e) {
+        console.warn("[Prestação Ellenco] plano financeiro", e);
+        cats = [];
       }
-    } catch (e) {
-      console.warn("[Prestação Ellenco] plano financeiro", e);
-      cats = [];
-    }
-    const vistos = new Set();
-    this.gruposMl = (cats || []).map((c) => {
-      const id = String((c && c.id) || "").trim().replace(/^\.+|\.+$/g, "");
-      const partes = id.split(".").filter(Boolean);
-      if (partes.length !== 3 || partes[0] !== "2" || vistos.has(id)) return null;
-      vistos.add(id);
-      return { id, label: String(c.name || c.description || c.financialCategoryName || "").trim().toUpperCase() };
-    }).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id, "pt-BR", { numeric: true }));
-    this._gruposCarregando = false;
-    return this.gruposMl;
+      const nome = (c) => String((c && (c.name || c.description || c.financialCategoryName)) || "").trim().toUpperCase();
+      const pais = {};
+      (cats || []).forEach((c) => {
+        const cod = this.codigoPlano(c && c.id);
+        if (cod.split(".").length === 2 && cod.indexOf("2.") === 0) pais[cod] = nome(c);
+      });
+      const vistos = new Set();
+      const lista = (cats || []).map((c) => {
+        const id = this.codigoPlano(c && c.id);
+        const partes = id.split(".");
+        if (partes.length !== 3 || partes[0] !== "2" || vistos.has(id)) return null;
+        vistos.add(id);
+        const pai = partes[0] + "." + partes[1];
+        return { id, siengeId: String(c.id), label: nome(c), grupo: pai, grupoNome: pais[pai] || "" };
+      }).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id, "pt-BR", { numeric: true }));
+      this.gruposMl = lista;
+      this._gruposPromessa = null;
+      return lista;
+    })();
+    return this._gruposPromessa;
   },
 
   /** Categoria gravada para a chave do credor (a mesma chave que agrupa o credor na tela). */
@@ -2390,21 +2412,43 @@ const ParticipacoesApp = {
     return v ? v.id + " - " + v.label : "";
   },
 
-  async gravarCatMl(credorKey, item) {
-    if (!this.catMl) this.catMl = {};
+  /** Grava (ou apaga) a categoria no registro do credor no Firebase e confere lendo de volta. Devolve true se ficou gravado. */
+  async gravarCatMl(credorKey, item, credorNome) {
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.doc || !fc.setDoc || !fc.getDoc) {
+      alert("O banco do Integra não está disponível agora. A categoria não foi gravada.");
+      return false;
+    }
     const quem = (window.AppState && AppState.currentUser) || {};
-    if (item) this.catMl[credorKey] = { id: item.id, label: item.label, por: String(quem.name || quem.email || ""), em: new Date().toISOString() };
-    else delete this.catMl[credorKey];
-    try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+    const ref = fc.doc(window.firebaseDb, this.CAT_ML_COL, this.catMlDocId(credorKey));
+    const agora = new Date().toISOString();
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.setDoc) {
-        await fc.setDoc(fc.doc(window.firebaseDb, this.CAT_ML_DOC[0], this.CAT_ML_DOC[1]), { map: this.catMl });
+      if (item) {
+        await fc.setDoc(ref, {
+          credorKey: String(credorKey),
+          credor: String(credorNome || credorKey),
+          categoriaMl: { id: item.id, siengeId: item.siengeId || "", label: item.label },
+          por: String(quem.name || quem.email || ""),
+          em: agora
+        }, { merge: true });
+      } else if (fc.deleteDoc) {
+        await fc.deleteDoc(ref);
       }
+      const snap = await fc.getDoc(ref);
+      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+      const v = existe ? (snap.data() || {}) : null;
+      const ok = item ? !!(v && v.categoriaMl && v.categoriaMl.id === item.id) : !existe;
+      if (!ok) throw new Error("a leitura de conferência não trouxe o que foi gravado");
     } catch (e) {
       console.warn("[Prestação Ellenco] gravar categoria Moura Leite", e);
-      alert("A categoria ficou salva só neste navegador. Não foi possível gravar no banco do Integra.");
+      alert("Não foi possível gravar a categoria no banco do Integra (" + ((e && e.message) || e) + "). Tente de novo.");
+      return false;
     }
+    if (!this.catMl) this.catMl = {};
+    if (item) this.catMl[credorKey] = { id: item.id, siengeId: item.siengeId || "", label: item.label, por: String(quem.name || quem.email || ""), em: agora };
+    else delete this.catMl[credorKey];
+    try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+    return true;
   },
 
   alternarCredor(i) {
@@ -2421,61 +2465,134 @@ const ParticipacoesApp = {
     this.render();
   },
 
-  /** Janela com a lista pesquisável dos grupos de despesa (nível 3 que começa com 2). */
+  /** Janela para escolher o grupo de despesa (nível 3 do grupo 2 do plano financeiro). */
   async escolherCatMl(i, ev) {
     if (ev) ev.stopPropagation();
     const g = (this._gruposVisiveis || [])[i];
     if (!g) return;
     const antigo = document.getElementById("part-catml-modal");
     if (antigo) antigo.remove();
+    const atual = this.catMlDe(g.groupKey);
+    const contagem = {};
+    (g.rows || []).forEach((r) => { const c = r.categoria || "Outras"; contagem[c] = (contagem[c] || 0) + 1; });
+    const catEllenco = Object.keys(contagem).sort((a, b) => contagem[b] - contagem[a]).slice(0, 2).join(", ") || "—";
     const pop = document.createElement("div");
     pop.id = "part-catml-modal";
-    pop.style.cssText = "position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px;";
-    pop.innerHTML = `<div role="dialog" aria-modal="true" aria-labelledby="part-catml-tit" style="width:min(560px,100%);background:#fff;border-radius:12px;box-shadow:0 20px 50px rgba(15,23,42,.25);padding:16px 18px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;">
-          <h3 id="part-catml-tit" style="margin:0;color:#105436;font-size:1rem;">Categoria Moura Leite</h3>
-          <button type="button" class="btn btn-fechar" id="part-catml-fechar">Fechar</button>
+    pop.innerHTML = `<style>
+        #part-catml-modal{position:fixed;inset:0;z-index:9000;background:rgba(12,41,29,.55);display:flex;align-items:center;justify-content:center;padding:16px;}
+        #part-catml-modal .pcm-card{width:min(620px,100%);max-height:88vh;display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 20px 50px rgba(15,23,42,.3);overflow:hidden;}
+        #part-catml-modal .pcm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:#105436;}
+        #part-catml-modal .pcm-head h3{margin:0;font-size:1rem;color:#fff;}
+        #part-catml-modal .pcm-x{border:0;background:transparent;color:#fff;cursor:pointer;padding:4px;display:inline-flex;}
+        #part-catml-modal .pcm-body{padding:14px 18px;display:flex;flex-direction:column;gap:10px;min-height:0;overflow:hidden;}
+        #part-catml-modal .pcm-credor{border:1px solid #e2e8f0;background:#f8fafc;border-radius:8px;padding:10px 12px;}
+        #part-catml-modal .pcm-credor strong{display:block;color:#0f172a;font-size:.88rem;}
+        #part-catml-modal .pcm-credor span{display:block;margin-top:3px;color:#64748b;font-size:.75rem;}
+        #part-catml-modal .pcm-atual{font-size:.78rem;color:#105436;font-weight:700;}
+        #part-catml-modal .pcm-busca{height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 12px;font-size:.85rem;width:100%;box-sizing:border-box;}
+        #part-catml-modal .pcm-lista{border:1px solid #e2e8f0;border-radius:8px;overflow:auto;max-height:46vh;min-height:120px;}
+        #part-catml-modal .pcm-grupo{position:sticky;top:0;background:#e7f6ee;color:#105436;font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.03em;padding:6px 12px;}
+        #part-catml-modal .pcm-item{display:flex;align-items:center;gap:10px;width:100%;border:0;border-bottom:1px solid #f1f5f9;background:#fff;padding:9px 12px;text-align:left;cursor:pointer;font-size:.82rem;color:#1c2e24;}
+        #part-catml-modal .pcm-item:hover{background:#f0fdf4;}
+        #part-catml-modal .pcm-item.is-sel{background:#dcfce7;font-weight:700;}
+        #part-catml-modal .pcm-cod{flex:0 0 64px;font-family:ui-monospace,Consolas,monospace;color:#105436;font-size:.78rem;}
+        #part-catml-modal .pcm-ok{margin-left:auto;color:#1b8253;display:none;}
+        #part-catml-modal .pcm-item.is-sel .pcm-ok{display:inline-flex;}
+        #part-catml-modal .pcm-msg{padding:16px 12px;color:#64748b;font-size:.8rem;}
+        #part-catml-modal .pcm-msg.is-erro{color:#b91c1c;}
+        #part-catml-modal .pcm-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid #e2e8f0;background:#f8fafc;}
+        #part-catml-modal .pcm-foot .btn{height:38px;display:inline-flex;align-items:center;gap:6px;margin:0;}
+        #part-catml-modal .pcm-remover{border:0;background:transparent;color:#b91c1c;font-weight:700;font-size:.8rem;cursor:pointer;padding:0;}
+        #part-catml-modal .pcm-espaco{flex:1;}
+      </style>
+      <div class="pcm-card" role="dialog" aria-modal="true" aria-labelledby="part-catml-tit">
+        <div class="pcm-head">
+          <h3 id="part-catml-tit">Categoria Moura Leite</h3>
+          <button type="button" class="pcm-x" data-acao="fechar" aria-label="Fechar"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
         </div>
-        <p style="margin:0 0 10px;font-size:.8rem;color:#475569;">Credor: <strong>${this.esc(g.key)}</strong></p>
-        <div id="part-catml-box"><p style="font-size:.8rem;color:#64748b;">Carregando o plano financeiro...</p></div>
-        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:14px;">
-          <button type="button" class="btn btn-secondary" id="part-catml-limpar" ${this.catMlDe(g.groupKey) ? "" : "disabled"}>Remover categoria</button>
-          <button type="button" class="btn btn-primary" id="part-catml-salvar" disabled>Salvar</button>
+        <div class="pcm-body">
+          <div class="pcm-credor">
+            <strong>${this.esc(g.key)}</strong>
+            <span>${(g.rows || []).length} lançamento(s) · ${this.esc(this.fmt(g.total))} · Categoria Ellenco: ${this.esc(catEllenco)}</span>
+          </div>
+          <div class="pcm-atual">${atual ? "Atual: " + this.esc(this.rotuloCatMl(atual)) : "Sem categoria Moura Leite."}</div>
+          <input type="search" class="pcm-busca" id="pcm-busca" placeholder="Buscar pelo código ou nome (ex.: 2.02.02 ou obras)" autocomplete="off" disabled>
+          <div class="pcm-lista" id="pcm-lista"><div class="pcm-msg">Carregando o plano financeiro do Sienge...</div></div>
+        </div>
+        <div class="pcm-foot">
+          ${atual ? `<button type="button" class="pcm-remover" data-acao="remover">Remover categoria</button>` : ""}
+          <span class="pcm-espaco"></span>
+          <button type="button" class="btn btn-secondary" data-acao="fechar">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="pcm-salvar" disabled><i data-lucide="check" style="width:14px;height:14px;"></i> Salvar</button>
         </div>
       </div>`;
     document.body.appendChild(pop);
-    const fechar = () => pop.remove();
-    pop.querySelector("#part-catml-fechar").addEventListener("click", fechar);
-    pop.addEventListener("click", (e) => { if (e.target === pop) fechar(); });
+    if (window.lucide) lucide.createIcons();
+    const tecla = (e) => { if (e.key === "Escape") fechar(); };
+    const fechar = () => { document.removeEventListener("keydown", tecla); pop.remove(); };
+    document.addEventListener("keydown", tecla);
+    pop.addEventListener("click", (e) => {
+      if (e.target === pop) { fechar(); return; }
+      const b = e.target.closest("[data-acao]");
+      if (b && b.dataset.acao === "fechar") fechar();
+    });
+    const salvar = pop.querySelector("#pcm-salvar");
+    const lista = pop.querySelector("#pcm-lista");
+    const busca = pop.querySelector("#pcm-busca");
+    const remover = pop.querySelector('[data-acao="remover"]');
+    if (remover) remover.addEventListener("click", async () => {
+      remover.disabled = true;
+      remover.textContent = "Removendo...";
+      const ok = await this.gravarCatMl(g.groupKey, null, g.key);
+      if (!ok) { remover.disabled = false; remover.textContent = "Remover categoria"; return; }
+      fechar();
+      this.render();
+    });
+
     const grupos = await this.carregarGruposMl();
-    const box = pop.querySelector("#part-catml-box");
-    if (!box) return;
+    if (!document.body.contains(pop)) return;
     if (!grupos.length) {
-      box.innerHTML = `<p style="font-size:.8rem;color:#b91c1c;">Não foi possível carregar as contas do plano financeiro. Tente de novo em instantes.</p>`;
-      this.gruposMl = null;
+      lista.innerHTML = `<div class="pcm-msg is-erro">Não foi possível carregar o plano financeiro do Sienge. Feche e tente de novo em instantes.</div>`;
       return;
     }
-    const atual = this.catMlDe(g.groupKey);
     let escolhido = atual ? atual.id : "";
-    box.innerHTML = window.MlSelectUnico
-      ? MlSelectUnico.html({ id: "part-catml-sel", label: "Grupo de despesa (plano financeiro)", items: grupos, selectedId: escolhido, largura: "100%" })
-      : "";
-    if (window.lucide) lucide.createIcons();
-    const salvar = pop.querySelector("#part-catml-salvar");
-    if (window.MlSelectUnico) {
-      MlSelectUnico.bind("part-catml-sel", { onSelect: (id) => { escolhido = id; salvar.disabled = !id; } });
-    }
-    salvar.disabled = !escolhido;
+    const fold = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const pintar = () => {
+      const q = fold(busca.value).trim();
+      const qDig = q.replace(/\D/g, "");
+      const vis = grupos.filter((x) => !q || fold(x.id + " " + x.label + " " + x.grupoNome).indexOf(q) >= 0 || (qDig && x.id.replace(/\D/g, "").indexOf(qDig) === 0));
+      if (!vis.length) { lista.innerHTML = `<div class="pcm-msg">Nenhuma conta encontrada para essa busca.</div>`; return; }
+      let ultimo = "";
+      lista.innerHTML = vis.map((x) => {
+        const cab = x.grupo !== ultimo ? `<div class="pcm-grupo">${this.esc(x.grupo)}${x.grupoNome ? " - " + this.esc(x.grupoNome) : ""}</div>` : "";
+        ultimo = x.grupo;
+        return cab + `<button type="button" class="pcm-item${x.id === escolhido ? " is-sel" : ""}" data-id="${this.esc(x.id)}">
+            <span class="pcm-cod">${this.esc(x.id)}</span><span>${this.esc(x.label)}</span>
+            <span class="pcm-ok"><i data-lucide="check" style="width:16px;height:16px;"></i></span></button>`;
+      }).join("");
+      if (window.lucide) lucide.createIcons();
+    };
+    lista.addEventListener("click", (e) => {
+      const it = e.target.closest(".pcm-item");
+      if (!it) return;
+      escolhido = it.dataset.id;
+      lista.querySelectorAll(".pcm-item").forEach((el) => el.classList.toggle("is-sel", el.dataset.id === escolhido));
+      salvar.disabled = !escolhido || !!(atual && atual.id === escolhido);
+    });
+    lista.addEventListener("dblclick", (e) => { if (e.target.closest(".pcm-item") && !salvar.disabled) salvar.click(); });
+    busca.disabled = false;
+    busca.addEventListener("input", pintar);
+    pintar();
+    busca.focus();
+    const sel = lista.querySelector(".pcm-item.is-sel");
+    if (sel) sel.scrollIntoView({ block: "center" });
     salvar.addEventListener("click", async () => {
       const item = grupos.find((x) => x.id === escolhido);
       if (!item) return;
       salvar.disabled = true;
-      await this.gravarCatMl(g.groupKey, item);
-      fechar();
-      this.render();
-    });
-    pop.querySelector("#part-catml-limpar").addEventListener("click", async () => {
-      await this.gravarCatMl(g.groupKey, null);
+      salvar.textContent = "Gravando...";
+      const ok = await this.gravarCatMl(g.groupKey, item, g.key);
+      if (!ok) { salvar.disabled = false; salvar.textContent = "Salvar"; return; }
       fechar();
       this.render();
     });
