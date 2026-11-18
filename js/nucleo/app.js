@@ -4217,6 +4217,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   });
 
   if (tabId === 'projetos-landbank') window.carregarLandbank();
+  if (tabId === 'projetos-aprovacao') window.iniciarPlanejamentoProjetos();
 
   // Carregar dados específicos da aba
   if (tabId === "construcao-home") {

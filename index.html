@@ -3627,7 +3627,35 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
       </section>
 
       <section id="tab-projetos-aprovacao" class="tab-pane" style="display: none;">
-        <p class="tvig-empty">Painéis de aprovação em preparação.</p>
+        <h2>Planejamento</h2>
+        <form id="projetos-planejamento-filtro" class="search-filter-panel">
+          <div class="form-group">
+            <label for="projetos-planejamento-obra">Obra</label>
+            <select id="projetos-planejamento-obra" required disabled>
+              <option value="">Selecione a obra</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="projetos-planejamento-unidade">Unidade construtiva</label>
+            <input id="projetos-planejamento-unidade" type="text" inputmode="numeric" pattern="[0-9]+" required>
+          </div>
+          <button class="btn btn-primary" type="submit" disabled>Consultar planejamento</button>
+        </form>
+        <p id="projetos-planejamento-status" class="tvig-empty" role="status"></p>
+        <div id="projetos-planejamento-lista" class="table-container" hidden>
+          <table class="custom-table" aria-label="Cronograma de planejamento">
+            <thead>
+              <tr>
+                <th scope="col">Código</th>
+                <th scope="col">Atividade</th>
+                <th scope="col">Início</th>
+                <th scope="col">Término</th>
+                <th scope="col">Dias úteis</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </section>
 
       <section id="tab-projetos-landbank" class="tab-pane" style="display: none;">
@@ -8715,14 +8743,15 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
   <script defer src="js/nucleo/data.js?v=2193"></script>
-  <script defer src="js/nucleo/sienge-api.js?v=eecc180e03"></script>
+  <script defer src="js/nucleo/sienge-api.js?v=cbe8d0db8f"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=1b52032dc6"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
   <script defer src="js/projetos/landbank.js?v=56d4c9eed3"></script>
-  <script defer src="js/nucleo/app.js?v=467920daef"></script>
+  <script defer src="js/projetos/planejamento.js?v=72438d9f6b"></script>
+  <script defer src="js/nucleo/app.js?v=3259401e12"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>

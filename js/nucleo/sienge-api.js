@@ -1659,6 +1659,27 @@ function normalizeSiengeCustomer(c) {
 // Interface de Acesso aos Serviços
 // -----------------------------------------------
 const SiengeApiService = {
+  async getBuildingPlanningTasks(buildingId, buildingUnitId) {
+    if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
+      throw new Error("Informe os códigos da obra e da unidade construtiva.");
+    }
+    const limit = 200;
+    const tasks = [];
+    const path = `/building-projects/${buildingId}/sheets/${buildingUnitId}/tasks`;
+    let offset = 0;
+    while (true) {
+      const page = await siengeFetch(`${path}?offset=${offset}&limit=${limit}`);
+      const count = page.resultSetMetadata?.count;
+      if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
+        throw new Error("Resposta de planejamento inválida.");
+      }
+      tasks.push(...page.results);
+      offset += page.results.length;
+      if (offset >= count) return tasks;
+      if (page.results.length === 0) throw new Error("O Sienge retornou uma página incompleta.");
+    }
+  },
+
 
   // 1. Empresas
   async getCompanies(forceRefresh = false) {
