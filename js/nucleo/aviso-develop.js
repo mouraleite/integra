@@ -370,6 +370,22 @@
     });
   }
 
+  // Leitura do GitHub: pelo servidor do Integra (/api/github-leitura, com a chave da Vercel, funciona com o
+  // repositório privado). Se a chave ainda não foi cadastrada (503 semToken), lê direto do GitHub, como antes.
+  let leituraDireta = false;
+  async function lerGithub(caminho, headers) {
+    if (!leituraDireta) {
+      try {
+        const r = await fetch("/api/github-leitura?c=" + encodeURIComponent(caminho), { headers, cache: "no-store" });
+        if (r.status !== 503) return r;
+        leituraDireta = true;
+      } catch (e) {
+        leituraDireta = true;
+      }
+    }
+    return fetch(API + "/" + caminho, { headers, cache: "no-store" });
+  }
+
   // Consulta condicional (ETag): se nada mudou, o GitHub responde 304.
   async function pedir(url) {
     const chave = "integra_gh_" + url;
@@ -377,7 +393,7 @@
     try { salvo = JSON.parse(ler(chave, sessionStorage) || "null"); } catch (e) { salvo = null; }
     const headers = { Accept: "application/vnd.github+json" };
     if (salvo && salvo.etag) headers["If-None-Match"] = salvo.etag;
-    const res = await fetch(url, { headers, cache: "no-store" });
+    const res = await lerGithub(String(url).replace(API + "/", ""), headers);
     if (res.status === 304 && salvo) return salvo.corpo;
     if (!res.ok) return salvo ? salvo.corpo : null;
     const corpo = await res.json();
@@ -404,7 +420,7 @@
   async function comparar(shaMain, shaBranch) {
     const chave = "integra_cmp3_" + shaMain.slice(0, 12) + "_" + shaBranch.slice(0, 12);
     try { const s = JSON.parse(ler(chave, sessionStorage) || "null"); if (s) return s; } catch (e) {}
-    const res = await fetch(API + "/compare/" + shaMain + "..." + shaBranch, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+    const res = await lerGithub("compare/" + shaMain + "..." + shaBranch, { Accept: "application/vnd.github+json" });
     if (!res.ok) return null;
     const j = await res.json();
     const corpo = {
@@ -422,7 +438,7 @@
     const chave = "integra_msg_" + sha.slice(0, 12);
     const s = ler(chave, sessionStorage);
     if (s != null) return s;
-    const res = await fetch(API + "/commits/" + sha, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+    const res = await lerGithub("commits/" + sha, { Accept: "application/vnd.github+json" });
     if (!res.ok) return "";
     const j = await res.json();
     const msg = String((j.commit && j.commit.message) || "");

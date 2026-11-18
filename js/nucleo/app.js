@@ -171,14 +171,28 @@ window.persistLargeCacheIfRoom = function(key, value) {
           if (profile) this.setRequestHeader("X-Crm-Profile", profile);
         }
       } catch (e) {}
+      let precisaRenovar = false;
       try {
         const auth = window.MouraAuth;
-        const token = crmIsOwnApiUrl(this._crmApiUrl) && auth && typeof auth.getIntegraTokenSync === "function"
+        const propria = crmIsOwnApiUrl(this._crmApiUrl);
+        const token = propria && auth && typeof auth.getIntegraTokenSync === "function"
           ? auth.getIntegraTokenSync()
           : "";
         if (token) this.setRequestHeader("X-Integra-Token", token);
+        // Login guardado vencido (página parada muito tempo): renova antes de enviar,
+        // senão o servidor recusa a chamada quando o bloqueio sem login estiver ligado.
+        else if (propria && auth && typeof auth.getIntegraToken === "function") precisaRenovar = true;
       } catch (e) {}
-      return _xhrSend.apply(this, arguments);
+      if (!precisaRenovar) return _xhrSend.apply(this, arguments);
+      const xhr = this;
+      const args = arguments;
+      Promise.resolve()
+        .then(() => window.MouraAuth.getIntegraToken())
+        .catch(() => "")
+        .then((novo) => {
+          try { if (novo) xhr.setRequestHeader("X-Integra-Token", novo); } catch (e) {}
+          _xhrSend.apply(xhr, args);
+        });
     };
   }
 })();

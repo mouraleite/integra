@@ -10,10 +10,19 @@ const CentralEmailApp = {
     { token: "{{unidade}}", label: "Unidade", grupo: "Imóvel" },
     { token: "{{empreendimento}}", label: "Empreendimento", grupo: "Imóvel" },
     { token: "{{cidade}}", label: "Cidade", grupo: "Imóvel" },
+    { token: "{{titulo}}", label: "Título", grupo: "Imóvel" },
     { token: "{{vencimento}}", label: "Vencimento", grupo: "Parcelas" },
     { token: "{{texto_abertas}}", label: "Parcelas em aberto", grupo: "Parcelas" },
     { token: "{{ordinal_proxima}}", label: "Próxima parcela", grupo: "Parcelas" },
-    { token: "{{vencimento_proxima}}", label: "Vencimento da próxima", grupo: "Parcelas" }
+    { token: "{{vencimento_proxima}}", label: "Vencimento da próxima", grupo: "Parcelas" },
+    { token: "{{quadro_parcelas}}", label: "Quadro de parcelas vencidas", grupo: "Parcelas" },
+    { token: "{{extrato}}", label: "Extrato em anexo (PDF)", grupo: "Anexo" }
+  ],
+
+  TEXTO_EXTRATO: "Segue em anexo o extrato financeiro atualizado.",
+  PARCELAS_EXEMPLO: [
+    { numero: 3, tipo: "E2", vencimento: "2026-10-10", dias: 39, semJuros: 340.2, corrigido: 356.87 },
+    { numero: 4, tipo: "E2", vencimento: "2026-11-10", dias: 8, semJuros: 340.2, corrigido: 342.1 }
   ],
 
   EXEMPLO: {
@@ -25,7 +34,8 @@ const CentralEmailApp = {
     vencimento: "10/10/2026",
     texto_abertas: "01 parcela em aberto",
     ordinal_proxima: "2ª",
-    vencimento_proxima: "10/11"
+    vencimento_proxima: "10/11",
+    titulo: "16752"
   },
 
   esc(v) {
@@ -160,8 +170,58 @@ const CentralEmailApp = {
       vencimento: this.dataDeMs(client && client.oldestDueDateMs) || "—",
       texto_abertas: texto,
       ordinal_proxima: this.ordinal(qtd + 1),
-      vencimento_proxima: "—"
+      vencimento_proxima: "—",
+      titulo: String((client && client.saleId) || "").trim() || "—"
     };
+  },
+
+  /** Parcelas vencidas do título com o valor sem juros e o corrigido (base do Sienge carregada na fila). */
+  parcelasDe(client) {
+    const lista = typeof window.listInstallmentsForSiCheck === "function" ? window.listInstallmentsForSiCheck(client) : [];
+    return (lista || []).map((i) => {
+      const sem = Number(i.correctedValueWithoutAdditions != null ? i.correctedValueWithoutAdditions : (i.currentBalance || i.originalValue));
+      const cor = Number(i.correctedValueWithAdditions != null ? i.correctedValueWithAdditions : sem);
+      return {
+        numero: String(i.installmentNumber || i.number || i.installmentId || ""),
+        tipo: String(i.conditionType || ""),
+        vencimento: String(i.dueDate || i.due || "").slice(0, 10),
+        dias: Number(i.daysOfDelay) || 0,
+        semJuros: Number.isFinite(sem) ? Math.round(sem * 100) / 100 : 0,
+        corrigido: Number.isFinite(cor) ? Math.round(cor * 100) / 100 : 0
+      };
+    }).filter((x) => x.dias > 0 && x.semJuros > 0)
+      .sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)));
+  },
+
+  money(n) {
+    return "R$ " + (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  /** Quadro igual ao que o servidor coloca no e-mail. */
+  quadroHtml(parcelas) {
+    const lista = (parcelas || []).slice(0, 60);
+    if (!lista.length) return `<em style="color:#64748b;">(sem parcelas vencidas carregadas)</em>`;
+    const td = "padding:6px 10px;border:1px solid #d1d5db;font-size:13px;";
+    const th = td + "background:#105436;color:#ffffff;text-align:left;";
+    let tSem = 0;
+    let tCor = 0;
+    const linhas = lista.map((p) => {
+      tSem += Number(p.semJuros) || 0;
+      tCor += Number(p.corrigido) || 0;
+      return `<tr><td style="${td}">${this.esc(p.numero + (p.tipo ? " (" + p.tipo + ")" : ""))}</td><td style="${td}">${this.esc(this.dataBr(p.vencimento))}</td><td style="${td}text-align:right;">${this.esc(p.dias)}</td><td style="${td}text-align:right;">${this.esc(this.money(p.semJuros))}</td><td style="${td}text-align:right;">${this.esc(this.money(p.corrigido))}</td></tr>`;
+    }).join("");
+    return `<table style="border-collapse:collapse;margin:8px 0;"><thead><tr><th style="${th}">Parcela</th><th style="${th}">Vencimento</th><th style="${th}">Dias em atraso</th><th style="${th}">Valor sem juros</th><th style="${th}">Valor corrigido</th></tr></thead><tbody>${linhas}<tr><td colspan="3" style="${td}font-weight:bold;">Total</td><td style="${td}text-align:right;font-weight:bold;">${this.esc(this.money(tSem))}</td><td style="${td}text-align:right;font-weight:bold;">${this.esc(this.money(tCor))}</td></tr></tbody></table>`;
+  },
+
+  /** Texto do e-mail em HTML (o mesmo que o servidor monta): escapa o texto e coloca quadro e extrato. */
+  htmlEmail(texto, ctx, parcelas) {
+    let t = this.aplicar(String(texto || "").split("{{quadro_parcelas}}").join("\u0000Q\u0000").split("{{extrato}}").join("\u0000E\u0000"), ctx);
+    t = this.esc(t).replace(/\r?\n/g, "<br>");
+    return t.split("\u0000Q\u0000").join(this.quadroHtml(parcelas)).split("\u0000E\u0000").join(this.esc(this.TEXTO_EXTRATO));
+  },
+
+  temExtrato(t) {
+    return /\{\{extrato\}\}/.test(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
   },
 
   // Bom dia até 11h59, boa tarde até 17h59, boa noite depois, pela hora em que o e-mail é montado.
@@ -172,6 +232,7 @@ const CentralEmailApp = {
 
   aplicar(texto, ctx) {
     let s = String(texto || "");
+    if (ctx === "assunto") ctx = null;
     s = s.split("{{saudacao}}").join(this.saudacao());
     s = s.replace(/\{\{retorno:(\d+)\}\}/g, (_, n) => this.dataMais(Number(n)));
     const dados = ctx || this.EXEMPLO;
@@ -278,6 +339,7 @@ const CentralEmailApp = {
   setAba(id) {
     this.state.aba = id === "fila" ? "fila" : "templates";
     this.render();
+    if (this.state.aba === "fila") this.lerEnviosDoDia().then(() => { if (this.state.aba === "fila") this.render(); });
   },
 
   abasHtml() {
@@ -325,15 +387,16 @@ const CentralEmailApp = {
       const linhas = gente.map((c, i) => `<tr>
         <td>${this.esc(c.customerName || "—")}</td>
         <td>${this.esc(c.unitName || "—")}</td>
-        <td>${this.esc(this.destinatarios(t, c).para.join(", ") || "Sem e-mail na ficha")}</td>
+        <td>${this.esc(this.destinatarios(t, c).para.join(", ") || (t.destino === "fixo" ? "—" : "E-mail do cliente no Sienge"))}</td>
+        <td>${(() => { const e = this.envioDe(t, c); if (!e) return `<span class="cem-env">Aguardando</span>`; if (e.status === "enviado") return `<span class="cem-env ok" title="${this.esc(e.para || "")}">Enviado ${this.esc(String(e.em || "").slice(11, 16))}</span>`; return `<span class="cem-env erro" title="${this.esc(e.erro || "")}">Erro</span>`; })()}</td>
         <td class="is-right cem-acoes"><button type="button" class="tvig-ico" title="Ver e-mail" onclick="CentralEmailApp.verCliente('${this.esc(t.id)}', ${i})"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></td>
       </tr>`).join("");
       return `<section class="cem-bloco">
         <h4>${this.esc(t.nome)}</h4>
         <p>${this.esc(this.rotuloTag(t.tag))} · ${this.esc(t.diasVencido)} dia(s) depois de vencido · ${gente.length} cliente(s) hoje${t.cc ? " · Cópia: " + this.esc(t.cc) : ""}</p>
         <table class="cem-tabela">
-          <thead><tr><th>Cliente</th><th>Unidade</th><th>E-mail</th><th class="is-right">Ações</th></tr></thead>
-          <tbody>${linhas || `<tr><td colspan="4">Ninguém completa esse atraso hoje.</td></tr>`}</tbody>
+          <thead><tr><th>Cliente</th><th>Unidade</th><th>E-mail</th><th>Envio de hoje</th><th class="is-right">Ações</th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="5">Ninguém completa esse atraso hoje.</td></tr>`}</tbody>
         </table>
       </section>`;
     }).join("");
@@ -411,7 +474,7 @@ const CentralEmailApp = {
             <p class="cem-legenda">${atual && atual.status === "aprovado" ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga." : "Ao salvar, a régua fica desligada até o administrador aprovar."}</p>
             <label class="cem-bloco-campo">Texto<textarea id="cem-corpo" class="cem-campo">${this.esc(atual ? atual.corpo : "")}</textarea></label>
             <p class="cem-legenda">Prévia com um cliente de exemplo. Na fila do dia, nome, unidade, empreendimento, cidade e vencimento saem do contrato.</p>
-            <pre id="cem-previa" class="cem-previa"></pre>
+            <div id="cem-previa" class="cem-previa"></div>
           </div>
           <aside class="cem-vars-lado">
             <h4>Variáveis</h4>
@@ -487,9 +550,11 @@ const CentralEmailApp = {
     const corpo = document.getElementById("cem-corpo");
     const assunto = document.getElementById("cem-assunto");
     if (!previa) return;
-    const titulo = this.aplicar(assunto && assunto.value, this.EXEMPLO);
-    const texto = this.aplicar(corpo && corpo.value, this.EXEMPLO);
-    previa.textContent = (titulo ? "Título: " + titulo + "\n\n" : "") + texto;
+    const titulo = this.aplicar(String((assunto && assunto.value) || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), this.EXEMPLO);
+    const anexo = /\{\{extrato\}\}/.test(String((corpo && corpo.value) || "") + String((assunto && assunto.value) || ""));
+    previa.innerHTML = (titulo ? `<strong>Título:</strong> ${this.esc(titulo)}<br><br>` : "")
+      + this.htmlEmail(corpo && corpo.value, this.EXEMPLO, this.PARCELAS_EXEMPLO)
+      + (anexo ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato ${this.esc(this.EXEMPLO.titulo)}.pdf (anexado no envio)</span>` : "");
   },
 
   async salvar(id) {
@@ -584,20 +649,20 @@ const CentralEmailApp = {
         <h3 id="cem-titulo">${this.esc(titulo)}</h3>
         <button type="button" class="btn btn-fechar" onclick="CentralEmailApp.fecharModal()">Fechar</button>
       </div>
-      <div class="cem-body"><pre id="cem-leitura" class="cem-previa"></pre></div>
+      <div class="cem-body"><div id="cem-leitura" class="cem-previa"></div></div>
       <div class="cem-foot"><button type="button" class="btn btn-primary" onclick="CentralEmailApp.copiar()">Copiar</button></div>
     </div>`;
     document.body.appendChild(pop);
-    const pre = document.getElementById("cem-leitura");
-    if (pre) pre.textContent = texto;
+    const caixa = document.getElementById("cem-leitura");
+    if (caixa) caixa.innerHTML = texto;
   },
 
   verTemplate(id) {
     const t = this.achar(id);
     if (!t) return;
-    const assunto = this.aplicar(t.assunto, this.EXEMPLO);
-    const corpo = this.aplicar(t.corpo, this.EXEMPLO);
-    this.abrirLeitura(t.nome, (assunto ? assunto + "\n\n" : "") + corpo);
+    const assunto = this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), this.EXEMPLO);
+    this.abrirLeitura(t.nome, (assunto ? `<strong>${this.esc(assunto)}</strong><br><br>` : "") + this.htmlEmail(t.corpo, this.EXEMPLO, this.PARCELAS_EXEMPLO)
+      + (this.temExtrato(t) ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato em PDF anexado no envio</span>` : ""));
   },
 
   verCliente(id, indice) {
@@ -606,19 +671,99 @@ const CentralEmailApp = {
     const c = this.clientesDoTemplate(t)[indice];
     if (!c) return;
     const ctx = this.contextoCliente(c);
-    const assunto = this.aplicar(t.assunto, ctx);
-    const corpo = this.aplicar(t.corpo, ctx);
+    const assunto = this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), ctx);
     const dest = this.destinatarios(t, c);
-    const cab = (dest.para.length ? "Para: " + dest.para.join(", ") + "\n" : "") + (dest.cc.length ? "Cópia: " + dest.cc.join(", ") + "\n" : "");
-    this.abrirLeitura(c.customerName || t.nome, (cab ? cab + "\n" : "") + (assunto ? assunto + "\n\n" : "") + corpo);
+    const cab = (dest.para.length ? "Para: " + this.esc(dest.para.join(", ")) + "<br>" : (t.destino === "fixo" ? "" : "Para: e-mail do cliente no Sienge<br>"))
+      + (dest.cc.length ? "Cópia: " + this.esc(dest.cc.join(", ")) + "<br>" : "");
+    this.abrirLeitura(c.customerName || t.nome, `<span style="color:#64748b;">${cab}</span><br>` + (assunto ? `<strong>${this.esc(assunto)}</strong><br><br>` : "")
+      + this.htmlEmail(t.corpo, ctx, this.parcelasDe(c))
+      + (this.temExtrato(t) ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato ${this.esc(ctx.titulo)}.pdf</span>` : ""));
   },
 
   async copiar() {
-    const pre = document.getElementById("cem-leitura");
-    const texto = pre ? pre.textContent : "";
+    const caixa = document.getElementById("cem-leitura");
+    if (!caixa) return;
+    const html = caixa.innerHTML;
+    const texto = caixa.innerText;
     try {
-      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(texto);
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([texto], { type: "text/plain" }) })]);
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(texto);
+      }
     } catch (e) {}
+  },
+
+  /* ---------- Envio automático das réguas ligadas ----------
+     Quando a fila do dia está carregada, manda ao servidor os clientes de cada régua aprovada e ligada.
+     O servidor monta o e-mail pelo template aprovado, anexa o extrato e envia; um envio por régua, cliente e título por dia.
+     Só roda na produção: os ambientes de teste usam dados reais e não podem mandar e-mail para cliente. */
+  hojeIso() {
+    return this.iso(new Date());
+  },
+
+  naProducao() {
+    return String(location.hostname || "").toLowerCase() === "crm-gestao.vercel.app";
+  },
+
+  async lerEnviosDoDia() {
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.query || !fc.where) return {};
+    const mapa = {};
+    try {
+      const snap = await fc.getDocs(fc.query(fc.collection(window.firebaseDb, "central_email_envios"), fc.where("dia", "==", this.hojeIso())));
+      snap.forEach((d) => {
+        const v = d.data() || {};
+        mapa[v.templateId + "|" + v.customerId + "|" + v.titulo] = v;
+      });
+    } catch (e) {
+      console.warn("[Central e-mail] envios do dia", e);
+    }
+    this.state.envios = mapa;
+    return mapa;
+  },
+
+  envioDe(t, c) {
+    const m = this.state.envios || {};
+    return m[t.id + "|" + String(c.customerId || "") + "|" + String(c.saleId || "")] || null;
+  },
+
+  async dispararDoDia() {
+    if (this._disparando || !this.naProducao()) return;
+    if (!(window.rawClientList || []).length) return;
+    const chave = "crm_cem_disparo_" + this.hojeIso();
+    try { if (Number(localStorage.getItem(chave) || 0) > Date.now() - 30 * 60 * 1000) return; } catch (e) {}
+    this._disparando = true;
+    try {
+      if (!this.state.pronto) await this.carregar();
+      const ligados = this.state.templates.filter((t) => t.status === "aprovado" && t.ativo);
+      if (!ligados.length) return;
+      const feitos = await this.lerEnviosDoDia();
+      const itens = [];
+      ligados.forEach((t) => {
+        this.clientesDoTemplate(t).forEach((c) => {
+          if (!c || !c.customerId || !c.saleId) return;
+          const v = feitos[t.id + "|" + String(c.customerId) + "|" + String(c.saleId)];
+          if (v && v.status === "enviado") return;
+          const ctx = this.contextoCliente(c);
+          delete ctx.titulo;
+          itens.push({ templateId: t.id, customerId: String(c.customerId), titulo: String(c.saleId), ctx, parcelas: this.parcelasDe(c) });
+        });
+      });
+      try { localStorage.setItem(chave, String(Date.now())); } catch (e) {}
+      for (let i = 0; i < itens.length; i += 8) {
+        try {
+          const res = await fetch("/api/central-email-enviar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itens: itens.slice(i, i + 8) }) });
+          if (res.status === 503) break;
+        } catch (e) {
+          console.warn("[Central e-mail] envio", e);
+        }
+      }
+      if (itens.length) await this.lerEnviosDoDia();
+      if (document.getElementById("central-email-root") && this.state.aba === "fila") this.render();
+    } finally {
+      this._disparando = false;
+    }
   },
 
   pendentes() {
@@ -771,4 +916,8 @@ document.addEventListener("DOMContentLoaded", function () {
     app.avisar();
   };
   setTimeout(tentar, 2500);
+  // Envio automático das réguas: confere a cada 2 minutos se a fila do dia já está carregada.
+  setInterval(function () {
+    if (window.CentralEmailApp) CentralEmailApp.dispararDoDia().catch(() => {});
+  }, 120000);
 });
