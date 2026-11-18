@@ -118,13 +118,15 @@
         const start = Date.parse(task.startDate);
         const finish = Date.parse(task.finishDate);
         const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
-        const measured = measurements?.get(task.id);
-        const overdue = measurements && Number.isFinite(finish) && !(measured >= 100)
-          ? Math.max(0, (today - finish) / dayMs)
-          : null;
+        const recorded = measurements?.get(task.id);
+        const measured = recorded ?? (measurements && !task.summary ? 0 : null);
+        const elapsedDays = (today - start) / dayMs;
+        const overdue = days === null || measured === null
+          ? null
+          : measured >= 100 ? 0 : Math.max(0, Math.floor(elapsedDays - days * Math.max(0, measured) / 100));
         const values = [task.presentationId, task.description, dateLabel(task.startDate),
           dateLabel(task.finishDate), task.duration, days, days === null ? null : monthFormat.format(days / 30.4375),
-          overdue, measured === undefined ? null : percentageFormat.format(measured / 100)];
+          overdue, measured === null ? null : percentageFormat.format(measured / 100)];
         for (const value of values) row.insertCell().textContent = value ?? '—';
         const description = row.cells[1];
         description.style.paddingInlineStart = (1.25 + (level - 1) * 0.75) + 'rem';
