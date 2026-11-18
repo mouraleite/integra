@@ -767,29 +767,52 @@ const PagarReembolsoApp = {
     };
     let billId = "";
     let created = null;
+    const avisos = [];
+    const textoRateio = (lista) => lista.map((r) => r.costCenterId + " " + String(r.percentage).replace(".", ",") + "%").join(" · ");
     try {
-      let ultimoErro = null;
-      for (let c = 0; c < candidatos.length; c++) {
-        payload.units = [{ unitId: String(candidatos[c]), costCenterId: parseInt(ccId, 10), percentage: 100, principal: "S" }];
-        try {
-          created = await this.siengeJson("/bills", {
-            method: "POST",
-            headers: {
-              Authorization: this.siengeAuth(),
-              Accept: "application/json",
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-          });
-          ultimoErro = null;
-          break;
-        } catch (erroUnidade) {
-          ultimoErro = erroUnidade;
-          const msg = (erroUnidade && erroUnidade.message) || "";
-          if (!/n[aã]o est[aá] cadastrad/i.test(msg) || c === candidatos.length - 1) throw erroUnidade;
+      const criar = async () => {
+        let ultimoErro = null;
+        for (let c = 0; c < candidatos.length; c++) {
+          payload.units = [{ unitId: String(candidatos[c]), costCenterId: parseInt(ccId, 10), percentage: 100, principal: "S" }];
+          try {
+            created = await this.siengeJson("/bills", {
+              method: "POST",
+              headers: {
+                Authorization: this.siengeAuth(),
+                Accept: "application/json",
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify(payload)
+            });
+            return;
+          } catch (erroUnidade) {
+            ultimoErro = erroUnidade;
+            const msg = (erroUnidade && erroUnidade.message) || "";
+            if (!/n[aã]o est[aá] cadastrad/i.test(msg) || c === candidatos.length - 1) throw erroUnidade;
+          }
         }
+        if (ultimoErro) throw ultimoErro;
+      };
+      try {
+        await criar();
+      } catch (erroRateio) {
+        // Rateio recusado (plano financeiro não liberado num dos centros, centro de outra empresa ou soma ≠ 100%):
+        // tenta de novo com 100% no centro de custo do título e avisa qual rateio foi recusado.
+        const msg = (erroRateio && erroRateio.message) || "";
+        const doRateio = /par[aâ]metro 665|n[aã]o est[aá] autorizado|vinculados a empresa|percentage|percentual/i.test(msg);
+        const tentado = textoRateio(payload.budgetCategories.map((b) => ({ costCenterId: b.costCenterId, percentage: b.percentage })));
+        const unico = parseInt(ccId, 10);
+        if (!doRateio || (payload.budgetCategories.length === 1 && payload.budgetCategories[0].costCenterId === unico)) {
+          throw new Error(msg + " (rateio enviado: " + tentado + ")");
+        }
+        payload.budgetCategories = [{ costCenterId: unico, paymentCategoriesId: this.CONTA, percentage: 100 }];
+        try {
+          await criar();
+        } catch (e2) {
+          throw new Error(((e2 && e2.message) || e2) + " (rateio enviado: " + unico + " 100%; antes: " + tentado + ")");
+        }
+        avisos.push("Lançado 100% no centro de custo " + unico + ": o Sienge recusou o rateio " + tentado + " (" + msg + ").");
       }
-      if (ultimoErro) throw ultimoErro;
       billId = created.body && (created.body.id || created.body.billId);
       if (!billId) {
         const loc = created.res.headers.get("Location") || created.res.headers.get("location") || "";
@@ -806,7 +829,6 @@ const PagarReembolsoApp = {
       });
       throw e;
     }
-    const avisos = [];
     try {
       await this.enviarDepositoItau(billId);
     } catch (e) {
