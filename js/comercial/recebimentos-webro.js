@@ -16,7 +16,7 @@ const RecebimentosWebroApp = {
     condicoes: [],
     webroSemComissao: 0,
     recebimentos: 0,
-    aba: "sienge",
+    aba: "repasse", // a aba Recebimentos no Sienge saiu; a tela é só o Repasse pendente
     repasse: null,
     repasseErro: "",
     repasseLendo: false,
@@ -546,7 +546,7 @@ const RecebimentosWebroApp = {
   /* ---------- Aba Repasse pendente: relatório detalhado da Webro x fila de cobrança ---------- */
 
   trocarAba(aba) {
-    this.state.aba = aba === "repasse" ? "repasse" : "sienge";
+    this.state.aba = "repasse";
     this.render();
   },
 
@@ -1036,6 +1036,7 @@ const RecebimentosWebroApp = {
   },
 
   abasHtml() {
+    return ""; // uma aba só: sem barra de abas
     const a = this.state.aba;
     const b = (id, rot, ic) => `<button type="button" role="tab" class="ml-tab${a === id ? " is-active" : ""}" aria-selected="${a === id}" onclick="RecebimentosWebroApp.trocarAba('${id}')"><i data-lucide="${ic}"></i> ${rot}</button>`;
     return `<div class="ml-tabs" role="tablist" style="margin:0 0 12px;">${b("sienge", "Recebimentos no Sienge", "banknote")}${b("repasse", "Repasse pendente", "file-search")}</div>`;
