@@ -12498,14 +12498,25 @@ window.applyAdvFiltersTo = (sourceList) => {
         if (window.advFilters.queueGroups && window.advFilters.queueGroups.length > 0 && typeof window.getFilaQueueGroup === "function") {
             const G = window.FILA_QUEUE_GROUPS || {};
             const wanted = new Set();
+            // Tags de baixa Webro não são grupo da fila: valem pelo status da ocorrência Aguardando Baixa Webro.
+            const webroWanted = new Set();
             window.advFilters.queueGroups.forEach((key) => {
-                if (G[key] != null) wanted.add(G[key]);
+                if (key === "WEBRO_AGUARDANDO") webroWanted.add("AGUARDANDO");
+                else if (key === "WEBRO_PENDENTE") webroWanted.add("PENDENTE");
+                else if (G[key] != null) wanted.add(G[key]);
             });
-            if (wanted.size) {
+            if (wanted.size || webroWanted.size) {
                 const thresholdJuridico = typeof window.getEnvioJuridicoThreshold === "function"
                   ? window.getEnvioJuridicoThreshold()
                   : 151;
-                filteredList = filteredList.filter((c) => wanted.has(window.getFilaQueueGroup(c, thresholdJuridico)));
+                filteredList = filteredList.filter((c) => {
+                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) return true;
+                    if (webroWanted.size && typeof window.getWebroBaixaStatus === "function") {
+                        const st = window.getWebroBaixaStatus(c);
+                        if (st && webroWanted.has(st)) return true;
+                    }
+                    return false;
+                });
             }
         }
         if (window.advFilters.lotes && window.advFilters.lotes.length > 0) {
