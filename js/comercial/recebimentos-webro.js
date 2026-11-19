@@ -1178,15 +1178,15 @@ const WebroRepasseAviso = {
   async publicar() {
     if (this._rodando) return;
     const fila = window.rawClientList || [];
-    const fc = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fila.length || !fc || !db || typeof window.getWebroBaixaStatus !== "function") return;
+    // webro_repasse_pendente está no Supabase (área cobrança).
+    const tab = window.DadosCobranca ? window.DadosCobranca.tabela(this.COL) : null;
+    if (!fila.length || !tab || typeof window.getWebroBaixaStatus !== "function") return;
     this._rodando = true;
     try {
       if (!this._existentes) {
-        const snap = await fc.getDocs(fc.collection(db, this.COL));
+        const snap = await tab.listar({ colunas: "id" });
         this._existentes = new Set();
-        snap.forEach((d) => this._existentes.add(d.id));
+        snap.forEach((d) => this._existentes.add(String(d.id)));
       }
       const hoje = this.hoje();
       const vistos = new Set();
@@ -1201,7 +1201,7 @@ const WebroRepasseAviso = {
           const baixa = occ ? String(occ.promiseDate || "").slice(0, 10) : "";
           const assin = hoje + "|" + baixa;
           if (this._gravados[id] === assin) continue;
-          await fc.setDoc(fc.doc(db, this.COL, id), {
+          await tab.gravar(id, {
             titulo: String(c.saleId),
             customerId: String(c.customerId || ""),
             cliente: String(c.customerName || ""),
@@ -1213,7 +1213,7 @@ const WebroRepasseAviso = {
           this._gravados[id] = assin;
           this._existentes.add(id);
         } else if (this._existentes.has(id)) {
-          await fc.deleteDoc(fc.doc(db, this.COL, id));
+          await tab.excluir(id);
           this._existentes.delete(id);
           delete this._gravados[id];
         }
@@ -1247,15 +1247,13 @@ const WebroRepasseAviso = {
     const u = this.usuario();
     if (!u || !this.ehAnalistaPagadoriaI(u) || document.getElementById("webro-repasse-aviso")) return;
     try { if (localStorage.getItem(this.chaveCiente(u)) === "1") return; } catch (e) {}
-    const fc = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fc || !db) return;
+    if (!window.DadosCobranca) return;
     let itens = [];
     try {
-      const snap = await fc.getDocs(fc.collection(db, this.COL));
       const corte = this.diaUtilAnterior();
-      snap.forEach((d) => {
-        const v = d.data() || {};
+      const snap = await window.DadosCobranca.tabela(this.COL).listar({ filtros: [["visto_em", "gte", corte]] });
+      snap.forEach((v) => {
+        delete v.id; // o d.data() do Firestore não trazia o id
         if (String(v.vistoEm || "") >= corte) itens.push(v);
       });
     } catch (e) {
@@ -1310,7 +1308,7 @@ document.addEventListener("DOMContentLoaded", function () {
   let tentativas = 0;
   const tentar = function () {
     tentativas += 1;
-    if (!WebroRepasseAviso.usuario() || !window.firebaseDb) {
+    if (!WebroRepasseAviso.usuario() || !window.DadosCobranca) {
       if (tentativas < 30) setTimeout(tentar, 1000);
       return;
     }

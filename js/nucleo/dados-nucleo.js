@@ -67,7 +67,9 @@
     if (!novas.length) return 0;
     for (let i = 0; i < novas.length; i += 500) {
       const lote = novas.slice(i, i + 500);
-      const r = await sb().from(mapa.tabela).upsert(lote, { onConflict: conflito || chave });
+      // defaultToNull: false — num lote com linhas de campos diferentes, coluna ausente fica com o default do
+      // banco (ou o valor atual), em vez de virar null e esbarrar em coluna obrigatória.
+      const r = await sb().from(mapa.tabela).upsert(lote, { onConflict: conflito || chave, defaultToNull: false });
       if (r.error) {
         console.warn("[dados] não gravou " + mapa.tabela + ": " + r.error.message);
         throw r.error;

@@ -468,12 +468,11 @@ async function hydratePaidMapsFromDailyCache(todayStr) {
       }
     }
   } catch (e) {}
-  if (typeof window !== "undefined" && window.firebaseDb && window.firebaseCollections) {
+  if (typeof window !== "undefined" && window.DadosCobranca) {
     try {
-      const metaRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", day);
-      const metaSnap = await window.firebaseCollections.getDoc(metaRef);
-      if (metaSnap.exists()) {
-        const meta = metaSnap.data() || {};
+      // Supabase: ficha do dia em sienge_defaulters_history; comoTexto devolve paidMap/paidInstallmentIds como texto JSON (igual ao Firestore).
+      const meta = await window.DadosCobranca.lerCacheDia(day, { comoTexto: true });
+      if (meta) {
         applyPaidCacheFields(meta.paidMap, meta.paidInstallmentIds);
         if (window.paidMapHasBillDays && window.paidMapHasBillDays(window.getRecentPaidMap ? window.getRecentPaidMap() : null)) {
           return true;
@@ -784,17 +783,17 @@ window.salvarFilaProntaDoDia = function(rawList) {
   const payload = { date: today, rev: window.FILA_PRONTA_REV, count: rows.length, atFull: atFull, rows: rows };
   window._filaProntaCache = { date: today, rows: rows };
   IdbDefaultersCache.set("fila_pronta_" + today, payload).catch(() => {});
-  if (!window.firebaseDb || !window.firebaseCollections) return;
+  if (!window.DadosCobranca) return;
   const CHUNK = 400;
   const numChunks = Math.ceil(rows.length / CHUNK);
   (async () => {
     try {
-      const { doc, setDoc } = window.firebaseCollections;
+      // Supabase: mesmos ids do Firestore em sienge_defaulters_history; "data" vai como jsonb (sem JSON.stringify).
       for (let i = 0; i < numChunks; i++) {
         const slice = rows.slice(i * CHUNK, (i + 1) * CHUNK);
-        await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today + "_pronta_" + i), { data: JSON.stringify(slice) });
+        await window.DadosCobranca.gravarCacheDia(today + "_pronta_" + i, { data: slice });
       }
-      await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today + "_pronta"), {
+      await window.DadosCobranca.gravarCacheDia(today + "_pronta", {
         date: today,
         chunks: numChunks,
         count: rows.length,
@@ -803,7 +802,7 @@ window.salvarFilaProntaDoDia = function(rawList) {
       });
       console.log("%c[Fila] Fila pronta do dia salva (" + rows.length + " títulos).", "color:#105436;font-weight:bold;");
     } catch (e) {
-      console.warn("[Fila] Não salvou a fila pronta no Firebase", e);
+      console.warn("[Fila] Não salvou a fila pronta no Supabase", e);
     }
   })();
 };
@@ -878,22 +877,14 @@ window.carregarFilaProntaDoDia = async function() {
     const rows = serve(local);
     if (rows) return rows;
   } catch (e) {}
-  if (!window.firebaseDb || !window.firebaseCollections) return null;
+  if (!window.DadosCobranca) return null;
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const metaSnap = await getDoc(doc(window.firebaseDb, "sienge_defaulters_history", today + "_pronta"));
-    if (!metaSnap || !metaSnap.exists || !metaSnap.exists()) return null;
-    const meta = metaSnap.data() || {};
+    // Supabase: ficha "<dia>_pronta" + blocos "<dia>_pronta_N" lidos e concatenados pela camada (data já é jsonb).
+    const lido = await window.DadosCobranca.lerBlocosDia(today, "pronta");
+    if (!lido) return null;
+    const meta = lido.ficha || {};
     if (Number(meta.rev) !== window.FILA_PRONTA_REV || meta.date !== today) return null;
-    const chunks = Number(meta.chunks) || 0;
-    const rows = [];
-    for (let i = 0; i < chunks; i++) {
-      const snap = await getDoc(doc(window.firebaseDb, "sienge_defaulters_history", today + "_pronta_" + i));
-      if (snap && snap.exists && snap.exists()) {
-        const raw = snap.data() && snap.data().data;
-        if (raw) rows.push.apply(rows, JSON.parse(raw));
-      }
-    }
+    const rows = lido.lista;
     if (meta.count && rows.length < meta.count) return null;
     const prontas = serve({ date: today, rev: meta.rev, rows: rows, atFull: meta.atFull });
     if (prontas) {
@@ -2450,28 +2441,20 @@ const SiengeApiService = {
            }
 
            // B) Se não tem no IndexedDB, tenta o Firebase (útil para o primeiro acesso do dia no PC)
-           if (window.firebaseDb && window.firebaseCollections) {
+           if (window.DadosCobranca) {
                try {
-                 console.log(`%c[Sienge] ⏱ Verificando cache diário no Firestore...`, 'color:#f59e0b;font-weight:bold;');
-                 const metaRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", todayStr);
-                 const metaSnap = await window.firebaseCollections.getDoc(metaRef);
-                 
-                 if (metaSnap.exists()) {
-                   const meta = metaSnap.data();
+                 console.log(`%c[Sienge] ⏱ Verificando cache diário no Supabase...`, 'color:#f59e0b;font-weight:bold;');
+                 // Supabase: ficha "<dia>" + blocos "<dia>_chunk_N" lidos e concatenados pela camada (data já é jsonb).
+                 const lido = await window.DadosCobranca.lerBlocosDia(todayStr);
+
+                 if (lido) {
+                   const meta = lido.ficha || {};
+                   // paidMap / paidInstallmentIds voltam como jsonb; aqui o resto do código espera o texto JSON do Firestore.
+                   ["paidMap", "paidInstallmentIds"].forEach((k) => {
+                     if (meta[k] != null && typeof meta[k] !== "string") meta[k] = JSON.stringify(meta[k]);
+                   });
                    console.log(`%c[Sienge] ✅ Cache de hoje encontrado! Montando base...`, 'color:#10b981;font-weight:bold;');
-                   let result = [];
-                   const chunkPromises = [];
-                   for (let i = 0; i < meta.chunks; i++) {
-                     const chunkRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", `${todayStr}_chunk_${i}`);
-                     chunkPromises.push(window.firebaseCollections.getDoc(chunkRef));
-                   }
-                   
-                   const chunkSnaps = await Promise.all(chunkPromises);
-                   for (let ci = 0; ci < chunkSnaps.length; ci++) {
-                     const snap = chunkSnaps[ci];
-                     if (snap.exists()) result.push(...JSON.parse(snap.data().data));
-                     if (ci > 0 && ci % 2 === 0) await new Promise((r) => setTimeout(r, 0));
-                   }
+                   let result = lido.lista;
 
                    if (!filaCacheDoDiaServe(meta.cacheRev)) {
                      console.warn('%c[Sienge] ⚠️ Cache da fila desatualizado — buscando o saldo em aberto de novo.', 'color:#f59e0b;font-weight:bold;');
@@ -2559,19 +2542,19 @@ const SiengeApiService = {
             console.warn("[Sienge] paidMap diário", e);
           }
           
-          if (window.firebaseDb && window.firebaseCollections) {
+          if (window.DadosCobranca) {
               const CHUNK_SIZE = 100;
               const numChunks = Math.ceil(result.length / CHUNK_SIZE);
-              
+
               (async () => {
                 if (fetchGen !== this._defaultersFetchGen) return;
                 try {
-                  console.log(`%c[Firebase] Salvando cache diário no Firestore em ${numChunks} blocos...`, 'color:#3b82f6;');
+                  console.log(`%c[Supabase] Salvando cache diário em ${numChunks} blocos...`, 'color:#3b82f6;');
+                  // Supabase: mesmos ids do Firestore; "data" vai como jsonb (sem JSON.stringify).
                   const promises = [];
                   for (let i = 0; i < numChunks; i++) {
                     const chunkData = result.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                    const docRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", `${todayStr}_chunk_${i}`);
-                    promises.push(window.firebaseCollections.setDoc(docRef, { data: JSON.stringify(chunkData) }));
+                    promises.push(window.DadosCobranca.gravarCacheDia(`${todayStr}_chunk_${i}`, { data: chunkData }));
                   }
                   await Promise.all(promises);
                   
@@ -2581,8 +2564,8 @@ const SiengeApiService = {
                   }
                   const paidInstStr = serializePaidInstallmentIds();
                   
-                  const metaRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", todayStr);
-                  await window.firebaseCollections.setDoc(metaRef, { 
+                  // paidMap / paidInstallmentIds em texto JSON: a camada faz JSON.parse para jsonb.
+                  await window.DadosCobranca.gravarCacheDia(todayStr, {
                       date: todayStr, 
                       chunks: numChunks, 
                       timestampStr: timestampStr,
@@ -2592,12 +2575,12 @@ const SiengeApiService = {
                       companyIds: fetchedCompanyIds,
                       cacheRev: DEFAULTERS_CACHE_REV,
                       batimentoPedidoEm: new Date().toISOString(),
-                      createdAt: window.firebaseCollections.serverTimestamp ? window.firebaseCollections.serverTimestamp() : new Date().toISOString()
+                      createdAt: new Date().toISOString()
                   });
                   fetch("/api/estoque-batimento?pedido=1", { method: "GET", keepalive: true }).catch(() => {});
-                  console.log(`%c[Firebase] Cache diário (${todayStr}) salvo com sucesso no Firestore!`, 'color:#3b82f6;font-weight:bold;');
+                  console.log(`%c[Supabase] Cache diário (${todayStr}) salvo com sucesso!`, 'color:#3b82f6;font-weight:bold;');
                 } catch (e) {
-                  console.error("[Firebase] Erro ao salvar cache no Firestore (limite de cota atingido):", e);
+                  console.error("[Supabase] Erro ao salvar o cache diário:", e);
                 }
               })();
               
@@ -2759,18 +2742,18 @@ const SiengeApiService = {
         await IdbDefaultersCache.set(`defaulters_${todayStr}`, localCache);
       }
     } catch (e) {}
-    if (s_apiMode === "simulado" || !window.firebaseDb || !window.firebaseCollections) return;
+    if (s_apiMode === "simulado" || !window.DadosCobranca) return;
     try {
-        const metaRef = window.firebaseCollections.doc(window.firebaseDb, "sienge_defaulters_history", todayStr);
-        const metaSnap = await window.firebaseCollections.getDoc(metaRef);
-        if (metaSnap.exists()) {
+        // Supabase: updateDoc só se a ficha do dia existir -> lerCacheDia + gravarCacheDia com merge.
+        const meta = await window.DadosCobranca.lerCacheDia(todayStr);
+        if (meta) {
             const patch = { paidMap: paidMapStr };
             if (instStr) patch.paidInstallmentIds = instStr;
-            await window.firebaseCollections.updateDoc(metaRef, patch);
-            console.log('%c[Firebase] PaidMap atualizado no cache diário.', 'color:#3b82f6;');
+            await window.DadosCobranca.gravarCacheDia(todayStr, patch, { merge: true });
+            console.log('%c[Supabase] PaidMap atualizado no cache diário.', 'color:#3b82f6;');
         }
     } catch(e) {
-        console.error("[Firebase] Erro ao atualizar PaidMap no cache:", e);
+        console.error("[Supabase] Erro ao atualizar PaidMap no cache:", e);
     }
   },
 
@@ -4594,14 +4577,13 @@ const SiengeApiService = {
         source_count: bills.length
       };
 
-      if (window.firebaseCollections && window.firebaseDb) {
+      if (window.DadosCobranca) {
         try {
-          const docRef = window.firebaseCollections.doc(window.firebaseDb, 'inadimplencia_snapshots', dateStr);
+          const tabSnaps = window.DadosCobranca.tabela('inadimplencia_snapshots');
           // Não sobrescrever um snapshot cheio com carga parcial (causa o “buraco” no gráfico)
           try {
-            const existingSnap = await window.firebaseCollections.getDoc(docRef);
-            if (existingSnap && existingSnap.exists()) {
-              const prev = existingSnap.data() || {};
+            const prev = await tabSnaps.obter(dateStr);
+            if (prev) {
               const prevVal = Number(prev.total_value) || 0;
               const prevCnt = Number(prev.total_count) || 0;
               const thinnerValue = prevVal > 0 && totalValue < prevVal * 0.85;
@@ -4628,13 +4610,13 @@ const SiengeApiService = {
           } catch (readPrevErr) {
             console.warn("[Firebase] Não foi possível comparar snapshot anterior:", readPrevErr);
           }
-          await window.firebaseCollections.setDoc(docRef, payload, { merge: true });
-          console.log(`[Firebase] Snapshot de dashboard (${dateStr}) salvo no Firestore com sucesso.`);
+          await tabSnaps.gravar(dateStr, payload, { merge: true });
+          console.log(`[Supabase] Snapshot de dashboard (${dateStr}) salvo com sucesso.`);
         } catch (fbErr) {
-          console.error("[Firebase] Erro ao salvar snapshot no Firestore:", fbErr);
+          console.error("[Supabase] Erro ao salvar snapshot:", fbErr);
         }
       } else {
-          console.error("[Firebase] Firebase não inicializado, impossível salvar snapshot.");
+          console.error("[Supabase] Camada de dados não inicializada, impossível salvar snapshot.");
       }
 
     } catch (e) {
@@ -4644,32 +4626,42 @@ const SiengeApiService = {
 
   // 29. Sincronizar Histórico de Sub Judice no Firebase
   async syncSubjudiceHistory(bills) {
-    if (!window.firebaseDb || !window.firebaseCollections) return;
+    if (!window.DadosCobranca) return;
     try {
-      console.log("[Firebase] Sincronizando histórico Sub Judice...");
-      const { collection, getDocs, doc, setDoc, query, where } = window.firebaseCollections;
-      
-      const q = query(collection(window.firebaseDb, "sienge_customers"), where("is_subjudice", "==", true));
-      const snap = await getDocs(q);
-      const currentFirebaseSubjudice = new Map();
-      snap.forEach(d => currentFirebaseSubjudice.set(d.id, d.data()));
-      
-      const siengeSubjudice = new Set();
-      bills.forEach(b => {
-         if (b.subjudice === 'S') siengeSubjudice.add(String(b.customerId || b.clientId));
+      console.log("[Supabase] Sincronizando histórico Sub Judice...");
+      const tabClientes = window.DadosCobranca.tabela("sienge_customers");
+
+      const marcados = await tabClientes.listar({
+        filtros: [["is_subjudice", "eq", true]],
+        colunas: "id, is_subjudice, subjudice_entry_date, subjudice_exit_date"
       });
-      
+      const currentFirebaseSubjudice = new Map();
+      marcados.forEach(d => currentFirebaseSubjudice.set(String(d.id), d));
+
+      const siengeSubjudice = new Set();
+      const nomes = {};
+      bills.forEach(b => {
+         if (b.subjudice === 'S') {
+           const id = String(b.customerId || b.clientId);
+           siengeSubjudice.add(id);
+           if (!nomes[id]) nomes[id] = b.customerName || b.clientName || "";
+         }
+      });
+
       const todayStr = new Date().toISOString();
       const batchPromises = [];
-      
+
       for (const cId of siengeSubjudice) {
          if (!currentFirebaseSubjudice.has(cId)) {
-             const docRef = doc(window.firebaseDb, "sienge_customers", cId);
-             batchPromises.push(setDoc(docRef, {
+             const marca = {
                  is_subjudice: true,
                  subjudice_entry_date: todayStr,
                  subjudice_exit_date: null
-             }, { merge: true }));
+             };
+             // Supabase: name é obrigatório na tabela; se o cliente ainda não está no espelho (o setDoc merge
+             // criava o doc só com a marca), cria a linha com o nome que veio no título.
+             batchPromises.push(tabClientes.gravar(cId, marca, { merge: true }).catch(() =>
+               tabClientes.gravar(cId, Object.assign({ name: nomes[cId] || ("Cliente " + cId) }, marca), { merge: true })));
          }
       }
       
@@ -4680,8 +4672,7 @@ const SiengeApiService = {
       for (const [cId, data] of currentFirebaseSubjudice.entries()) {
          if (quedaFirebase) break;
          if (!siengeSubjudice.has(cId)) {
-             const docRef = doc(window.firebaseDb, "sienge_customers", cId);
-             batchPromises.push(setDoc(docRef, {
+             batchPromises.push(tabClientes.gravar(cId, {
                  is_subjudice: false,
                  subjudice_exit_date: todayStr
              }, { merge: true }));

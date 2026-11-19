@@ -41,6 +41,15 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      grava notas do próprio usuário, de TODOS ou compartilhadas com ele. Arquivos (Storage) seguem no Firebase até a
      Fase 4. Outras áreas que leem `config/*` direto no Firebase (cobrança, financeiro, contábil, jurídico, engenharia,
      fiscal) passam para `DadosNucleo.lerConfig/gravarConfig` quando a área delas for migrada.
+   - **Cobrança e jurídico (feito no código, falta testar com login):** `js/cobranca/mapas-cobranca.js` e
+     `js/cobranca/dados-cobranca.js` (`window.DadosCobranca`: notas por cliente via RPC, NEX, registro, motivos,
+     cache diário de inadimplência). Migrados: notas de cobrança e jurídicas (sem shards; o merge que era
+     `runTransaction` fica na RPC), NEX, renegociação, processos, custas, boletos, documentos de assinatura,
+     registro, snapshots de inadimplência e o espelho `sienge_customers` no front; e as leituras de `config/*` das
+     telas de cobrança/jurídico. Importador: `ferramentas/migracao/importar-cobranca.js` (`--sem-teste`,
+     `--dias-cache`). Pendências: o cache local `crm_moura_notes` deve ser descartado na virada; "sincronizar
+     tudo" não apaga mais notas; o registro grava ~2,6 MB numa chamada (conferir limite da API no teste);
+     datas vazias voltam ausentes em vez de `""`.
    Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
 4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,

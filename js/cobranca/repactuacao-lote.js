@@ -1120,10 +1120,10 @@ const RepactuacaoLoteApp = {
   },
 
   async carregarSalva() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || typeof fc.getDoc !== "function") return;
+    if (!window.DadosNucleo) return;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "repactuacao_planilha"));
+      // config/repactuacao_planilha: documento inteiro numa linha de configuracoes.
+      const snap = await window.DadosNucleo.lerConfig("repactuacao_planilha");
       if (!snap || typeof snap.exists !== "function" || !snap.exists()) return;
       const d = snap.data() || {};
       const porMes = Object.assign({}, d.porMes && typeof d.porMes === "object" ? d.porMes : {});
@@ -1148,8 +1148,9 @@ const RepactuacaoLoteApp = {
   },
 
   async salvarPlanilha(file, buf) {
+    // A planilha continua no Storage do Firebase (arquivos migram na Fase 4); o registro vai para o Supabase.
     const fc = window.firebaseCollections;
-    if (!window.firebaseStorage || !window.firebaseDb || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL || !fc.setDoc) return;
+    if (!window.firebaseStorage || !window.DadosNucleo || !fc || !fc.ref || !fc.uploadBytes || !fc.getDownloadURL) return;
     const ym = this.state.adjustMonth || "";
     if (!/^\d{4}-\d{2}$/.test(ym)) return;
     this.state.salvando = true;
@@ -1167,10 +1168,9 @@ const RepactuacaoLoteApp = {
         titulos: new Set(this.state.rows.map((r) => r.titulo)).size,
         adjustMonth: ym
       };
-      const ref = fc.doc(window.firebaseDb, "config", "repactuacao_planilha");
       let porMes = Object.assign({}, this.state.planilhas || {});
       try {
-        const snap = await fc.getDoc(ref);
+        const snap = await window.DadosNucleo.lerConfig("repactuacao_planilha");
         if (snap && typeof snap.exists === "function" && snap.exists()) {
           const d = snap.data() || {};
           porMes = Object.assign({}, d.porMes && typeof d.porMes === "object" ? d.porMes : {}, porMes);
@@ -1189,7 +1189,7 @@ const RepactuacaoLoteApp = {
         }
       } catch (e) {}
       porMes[ym] = salvo;
-      await fc.setDoc(ref, { porMes: porMes }, { merge: true });
+      await window.DadosNucleo.gravarConfig("repactuacao_planilha", { porMes: porMes }, { merge: true });
       this.state.planilhas = porMes;
       this.state.salvo = salvo;
       this.state.fileMonth = ym;

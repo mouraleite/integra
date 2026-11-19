@@ -855,12 +855,10 @@ ComprasControleApp.baseCobre = function (chunks, start, end, companyIds) {
 };
 
 ComprasControleApp.lerMetaBase = async function () {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || typeof fx.getDoc !== "function" || typeof fx.doc !== "function") return null;
-  const snap = await fx.getDoc(fx.doc(db, "sienge_defaulters_history", "_cfin_meta"));
-  if (!snap || !snap.exists || !snap.exists()) return null;
-  const meta = snap.data() || {};
+  // sienge_defaulters_history está no Supabase (área cobrança).
+  if (!window.DadosCobranca) return null;
+  const meta = await window.DadosCobranca.lerCacheDia("_cfin_meta");
+  if (!meta) return null;
   if (!meta.ready || !meta.start || !meta.end || !Array.isArray(meta.chunks) || !meta.chunks.length) return null;
   return meta;
 };
@@ -869,12 +867,11 @@ ComprasControleApp.lerBlocoBase = async function (id) {
   if (!id) return [];
   this._cfinBlocos = this._cfinBlocos || {};
   if (this._cfinBlocos[id]) return this._cfinBlocos[id];
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  const snap = await fx.getDoc(fx.doc(db, "sienge_defaulters_history", id));
+  // comoTexto: data volta como texto JSON, como no Firestore.
+  const doc = await window.DadosCobranca.lerCacheDia(id, { comoTexto: true });
   let bills = [];
-  if (snap && snap.exists && snap.exists()) {
-    try { bills = JSON.parse((snap.data() || {}).data || "[]"); } catch (e) { bills = []; }
+  if (doc) {
+    try { bills = JSON.parse(doc.data || "[]"); } catch (e) { bills = []; }
   }
   if (!Array.isArray(bills)) bills = [];
   this._cfinBlocos[id] = bills;

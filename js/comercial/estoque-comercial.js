@@ -985,8 +985,8 @@ const EstoqueComercialApp = {
     if (!this.fbReady()) return;
     this._pedidoBatimento = true;
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today), {
+      // Cache diário da carteira no Supabase (área cobrança); o resto do estoque continua no Firebase.
+      await window.DadosCobranca.gravarCacheDia(today, {
         batimentoPedidoEm: new Date().toISOString()
       }, { merge: true });
       fetch("/api/estoque-batimento?pedido=1", { method: "GET", keepalive: true }).catch(() => {});
@@ -1608,9 +1608,9 @@ const EstoqueComercialApp = {
       ? `Forçando o que falta… ${falta} empreendimento(s) na conferência, e a posição do dia no servidor.`
       : "Forçando a posição do dia no servidor…");
     try {
-      if (this.fbReady()) {
-        const { doc, setDoc } = window.firebaseCollections;
-        await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today), {
+      if (window.DadosCobranca) {
+        // Cache diário da carteira no Supabase (área cobrança).
+        await window.DadosCobranca.gravarCacheDia(today, {
           batimentoPedidoEm: new Date().toISOString()
         }, { merge: true });
       }

@@ -1643,12 +1643,12 @@ const MarketingBudgetApp = {
   },
 
   async lerPerfilCliente(id) {
-    const fc = window.firebaseCollections;
     let p = null;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    if (window.DadosCobranca) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "sienge_customers", String(id)));
-        if (snap.exists()) p = this.perfilDe(snap.data());
+        // sienge_customers está no Supabase (área cobrança).
+        const c = await window.DadosCobranca.tabela("sienge_customers").obter(String(id));
+        if (c) p = this.perfilDe(c);
       } catch (e) {}
     }
     if ((!p || p.sexo === "?" || (p.sexo !== "PJ" && !p.nasc)) && typeof window.siengeFetchWithRetry === "function") {

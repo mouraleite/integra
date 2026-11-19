@@ -30,28 +30,23 @@ const RegistroApp = {
     this.lerRemoto();
   },
 
-  /* O último arquivo fica no banco do Integra (coleção registro_cadastro), para toda a equipe e qualquer computador.
-     Fica dividido em partes de até 600 mil caracteres por causa do limite de cada documento. */
+  /* O último arquivo fica no banco do Integra (Supabase: ficha em registro_cadastro + uma linha por unidade em
+     registro_cadastro_linhas), para toda a equipe e qualquer computador. */
   COLECAO: "registro_cadastro",
 
   async lerRemoto() {
-    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
+    for (let i = 0; i < 40 && !window.DadosCobranca; i++) {
       await new Promise((r) => setTimeout(r, 250));
     }
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return;
+    const D = window.DadosCobranca;
+    if (!D) return;
     try {
-      const meta = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"));
-      const existe = meta && (typeof meta.exists === "function" ? meta.exists() : meta.exists);
-      if (!existe) return;
-      const m = meta.data() || {};
+      // Primeiro só a ficha, para não baixar todas as linhas quando o arquivo local já é o mais novo.
+      const m = await D.lerRegistroCadastro({ soFicha: true });
+      if (!m) return;
       if (!m.quando || (this.state.quando && String(m.quando) <= String(this.state.quando) && this.state.linhas.length)) return;
-      let texto = "";
-      for (let i = 0; i < (Number(m.partes) || 0); i++) {
-        const parte = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual_" + i));
-        texto += String(((parte && parte.data && parte.data()) || {}).dados || "");
-      }
-      const linhas = JSON.parse(texto || "[]");
+      const completo = await D.lerRegistroCadastro();
+      const linhas = completo && completo.linhas;
       if (!Array.isArray(linhas) || !linhas.length) return;
       this.state.linhas = linhas;
       this.state.arquivo = m.arquivo || "";
@@ -65,19 +60,10 @@ const RegistroApp = {
   },
 
   async gravarRemoto() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return false;
+    if (!window.DadosCobranca) return false;
     try {
-      const texto = JSON.stringify(this.state.linhas);
-      const TAM = 600000;
-      const partes = Math.max(1, Math.ceil(texto.length / TAM));
-      for (let i = 0; i < partes; i++) {
-        await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual_" + i), { dados: texto.slice(i * TAM, (i + 1) * TAM) });
-      }
-      // A ficha principal só é trocada no fim: se o envio parar no meio, continua valendo o arquivo anterior inteiro.
-      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"), {
-        arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, partes, unidades: this.state.linhas.length
-      });
+      // Ficha + linhas numa transação só (RPC substituir_registro_cadastro): se falhar, continua valendo o arquivo anterior.
+      await window.DadosCobranca.salvarRegistroCadastro(this.state.arquivo, this.state.quando, this.state.por, this.state.linhas);
       return true;
     } catch (e) {
       console.warn("[Registro] gravação no banco", e);

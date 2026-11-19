@@ -99,10 +99,9 @@ const PagarReembolsoApp = {
     return typeof window.hasCrmPerm === "function" && window.hasCrmPerm("sub_fin_cr_pagar_reembolso_editar") === true;
   },
 
+  // Tabela custas_judiciais no Supabase (área cobrança/jurídico): listar / gravar(id, obj, {merge}) / excluir.
   fb() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.collection || !fc.getDocs || !fc.doc || !fc.setDoc) return null;
-    return fc;
+    return window.DadosCobranca ? window.DadosCobranca.tabela("custas_judiciais") : null;
   },
 
   init() {
@@ -188,13 +187,11 @@ const PagarReembolsoApp = {
       return;
     }
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "custas_judiciais"));
+      const snap = await fc.listar();
       const itens = [];
       const usados = [];
       const testes = [];
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        data.id = d.id;
+      snap.forEach((data) => {
         if (this.testeExcluido(data)) {
           testes.push(data.id);
           return;
@@ -202,8 +199,8 @@ const PagarReembolsoApp = {
         if (data.documentNumber) usados.push(String(data.documentNumber));
         itens.push(data);
       });
-      if (testes.length && fc.deleteDoc) {
-        await Promise.all(testes.map((id) => fc.deleteDoc(fc.doc(window.firebaseDb, "custas_judiciais", id)).catch(() => {})));
+      if (testes.length) {
+        await Promise.all(testes.map((id) => fc.excluir(id).catch(() => {})));
       }
       this.documentosUsados = usados;
       await this.completarProcessos(itens);
@@ -374,7 +371,7 @@ const PagarReembolsoApp = {
       if (cliente) patch.customerName = cliente;
       if (!Object.keys(patch).length) return;
       try {
-        await fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), patch, { merge: true });
+        await fc.gravar(item.id, patch, { merge: true });
       } catch (e) {}
     }));
   },
@@ -652,10 +649,10 @@ const PagarReembolsoApp = {
     if (Array.isArray(PP.items) && PP.items.length) return PP.items;
     let lista = [];
     try { lista = JSON.parse(localStorage.getItem(PP.STORAGE_KEY || "crm_parcerias_v1") || "[]") || []; } catch (e) { lista = []; }
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    if (window.DadosNucleo) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "partner_parametrizations"));
+        // config/partner_parametrizations: montado da tabela parcerias ({ list: texto JSON }).
+        const snap = await window.DadosNucleo.lerConfig("partner_parametrizations");
         if (snap.exists()) {
           const raw = snap.data().list;
           const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -1023,7 +1020,7 @@ const PagarReembolsoApp = {
     if (!fc) return;
     const quando = new Date().toISOString();
     const u = (window.AppState && AppState.currentUser) || {};
-    await Promise.all(grupo.map((item) => fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), {
+    await Promise.all(grupo.map((item) => fc.gravar(item.id, {
       billId: String(billId),
       documentNumber: doc,
       notes: notes,
@@ -1080,7 +1077,7 @@ const PagarReembolsoApp = {
           if (info.pago && fc && item.id) {
             const dados = { reemPago: true, reemConferidoEm: new Date().toISOString() };
             if (info.pagoEm) dados.pagoEm = info.pagoEm;
-            fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), dados, { merge: true }).catch(() => {});
+            fc.gravar(item.id, dados, { merge: true }).catch(() => {});
           }
         } catch (e) {
           item.reemPago = false;

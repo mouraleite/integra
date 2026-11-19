@@ -113,9 +113,8 @@ const DocAssinaturaApp = {
       }
     }
     try {
-      if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.addDoc) return;
-      const { collection, addDoc } = window.firebaseCollections;
-      const ref = await addDoc(collection(window.firebaseDb, this.COL), {
+      if (!window.DadosCobranca) return;
+      const novoId = await window.DadosCobranca.tabela(this.COL).criar({
         tipo: row.tipo,
         tipoLabel: row.tipoLabel,
         cliente: row.cliente,
@@ -136,7 +135,7 @@ const DocAssinaturaApp = {
         createdAt: row.createdAt,
         status: row.status
       });
-      row.id = ref.id;
+      row.id = novoId;
       const atual = this.lerLocal().map((x) => (x.createdAt === row.createdAt && x.userId === row.userId && x.tipo === row.tipo ? row : x));
       this.gravarLocal(atual);
       await this.guardarPdf(row, dados && dados.bytes);
@@ -145,10 +144,10 @@ const DocAssinaturaApp = {
     }
   },
 
+  // O PDF continua no Storage do Firebase (arquivos migram na Fase 4); o pdfUrl é gravado no Supabase.
   async guardarPdf(row, bytes) {
     if (!row || !bytes) return;
     const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     if (!window.firebaseStorage || !fx || !fx.ref || !fx.uploadBytes || !fx.getDownloadURL) return;
     try {
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -161,8 +160,8 @@ const DocAssinaturaApp = {
       this.gravarLocal(atual);
       const item = this.itens.find((x) => String(x.id) === String(row.id));
       if (item) item.pdfUrl = row.pdfUrl;
-      if (db && fx.doc && fx.updateDoc && !String(row.id).startsWith("local-")) {
-        await fx.updateDoc(fx.doc(db, this.COL, row.id), { pdfUrl: row.pdfUrl });
+      if (window.DadosCobranca && !String(row.id).startsWith("local-")) {
+        await window.DadosCobranca.tabela(this.COL).gravar(row.id, { pdfUrl: row.pdfUrl }, { merge: true });
       }
       if (document.getElementById("docs-ass-body")) this.pintar();
     } catch (e) {
@@ -414,16 +413,16 @@ const DocAssinaturaApp = {
     this.itens = this.itens.filter((r) => String(r.id) !== chave);
     this.gravarLocal(this.lerLocal().filter((r) => String(r.id) !== chave));
     this.pintar();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || chave.indexOf("local-") === 0) return;
+    if (chave.indexOf("local-") === 0) return;
     try {
-      if (fx.deleteDoc && fx.doc) await fx.deleteDoc(fx.doc(db, this.COL, chave));
+      if (window.DadosCobranca) await window.DadosCobranca.tabela(this.COL).excluir(chave);
     } catch (e) {
       console.error("[Assinatura] excluir", e);
     }
+    // O PDF ainda está no Storage do Firebase.
+    const fx = window.firebaseCollections;
     try {
-      if (fx.deleteObject && fx.ref && window.firebaseStorage) {
+      if (fx && fx.deleteObject && fx.ref && window.firebaseStorage) {
         const path = "assinaturas/" + chave.replace(/[^\w\-]+/g, "_") + ".pdf";
         await fx.deleteObject(fx.ref(window.firebaseStorage, path));
       }
@@ -436,10 +435,8 @@ const DocAssinaturaApp = {
     this.pintar();
     let nuvem = [];
     try {
-      if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COL));
-        snap.forEach((d) => nuvem.push(Object.assign({ id: d.id }, d.data() || {})));
+      if (window.DadosCobranca) {
+        nuvem = await window.DadosCobranca.tabela(this.COL).listar();
       } else {
         this.aviso = "A lista compartilhada ainda não respondeu. Os documentos desta máquina continuam visíveis.";
       }
@@ -769,10 +766,8 @@ const DocAssinaturaApp = {
     const id = String(row.id || "");
     const patch = { status: "lancado", lancadoEm: row.lancadoEm };
     this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === id ? Object.assign({}, x, patch) : x)));
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.updateDoc || !fx.doc || id.indexOf("local-") === 0) return;
-    try { await fx.updateDoc(fx.doc(db, this.COL, id), patch); } catch (e) {}
+    if (!window.DadosCobranca || id.indexOf("local-") === 0) return;
+    try { await window.DadosCobranca.tabela(this.COL).gravar(id, patch, { merge: true }); } catch (e) {}
   },
 
   async reconciliarDistratos() {
@@ -936,11 +931,7 @@ const DocAssinaturaApp = {
     if (this.itens && this.itens.length) return;
     let nuvem = [];
     try {
-      if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COL));
-        snap.forEach((d) => nuvem.push(Object.assign({ id: d.id }, d.data() || {})));
-      }
+      if (window.DadosCobranca) nuvem = await window.DadosCobranca.tabela(this.COL).listar();
     } catch (e) {}
     this.itens = this.unir(nuvem, this.lerLocal());
   },

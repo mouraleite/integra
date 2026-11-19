@@ -268,38 +268,33 @@ const CustasJudiciaisApp = {
     return Array.from(box.querySelectorAll("[data-cj-tipo]:checked")).map((el) => el.value).filter(Boolean);
   },
 
+  // Só para os anexos (Storage do Firebase; os arquivos migram na Fase 4). As custas estão no Supabase.
   fb() {
     const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.collection || !fc.getDocs || !fc.doc || !fc.setDoc) return null;
+    if (!window.firebaseStorage || !fc || !fc.ref) return null;
     return fc;
+  },
+
+  tabela() {
+    return window.DadosCobranca ? window.DadosCobranca.tabela("custas_judiciais") : null;
   },
 
   async carregar(geracao) {
     const lista = document.getElementById("cj-lista");
     const chave = this.chave();
-    const fc = this.fb();
+    const tab = this.tabela();
     if (geracao != null && geracao !== this._geracao) return;
-    if (!fc) {
+    if (!tab) {
       this.itens = [];
-      if (lista) lista.innerHTML = `<p class="cj-nota">Não consegui ler as custas: o Firebase não está disponível.</p>`;
+      if (lista) lista.innerHTML = `<p class="cj-nota">Não consegui ler as custas: o banco de dados não está disponível.</p>`;
       return;
     }
     try {
-      const col = fc.collection(window.firebaseDb, "custas_judiciais");
-      let snap;
-      try {
-        snap = await fc.getDocs(fc.query(col, fc.where("customerId", "==", chave.cid), fc.where("saleId", "==", chave.sid)));
-      } catch (e) {
-        const msg = String((e && e.message) || e);
-        if (!/index|índice/i.test(msg)) throw e;
-        snap = await fc.getDocs(fc.query(col, fc.where("customerId", "==", chave.cid)));
-      }
+      const snap = await tab.listar({ filtros: [["customer_id", "eq", String(chave.cid)], ["sale_id", "eq", String(chave.sid)]] });
       if (geracao != null && geracao !== this._geracao) return;
       const itens = [];
-      snap.forEach((d) => {
-        const data = d.data() || {};
+      snap.forEach((data) => {
         if (String(data.saleId || "") !== chave.sid) return;
-        data.id = d.id;
         itens.push(data);
       });
       itens.sort((a, b) => String(b.data || "").localeCompare(String(a.data || "")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -577,12 +572,12 @@ const CustasJudiciaisApp = {
   async garantirCatalogo() {
     if (this._catalogoPronto) return;
     this._catalogoPronto = true;
-    const fc = this.fb();
-    if (!fc) return;
+    const tab = this.tabela();
+    if (!tab) return;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "custas_judiciais"));
+      const snap = await tab.listar({ colunas: "id, tipos, descricao" });
       const extra = [];
-      snap.forEach((d) => this.tiposDoItem(d.data()).forEach((t) => extra.push(t)));
+      snap.forEach((d) => this.tiposDoItem(d).forEach((t) => extra.push(t)));
       this._catalogo = extra;
       if (document.getElementById("cj-tipos")) this.pintarTipos();
     } catch (e) {}
@@ -734,8 +729,9 @@ const CustasJudiciaisApp = {
       alert("Anexe a custa e o comprovante.");
       return;
     }
+    const tab = this.tabela();
+    if (!tab) { alert("O banco de dados não está disponível."); return; }
     const fc = this.fb();
-    if (!fc) { alert("O Firebase não está disponível."); return; }
     this.salvando = true;
     const btn = document.getElementById("cj-salvar");
     if (btn) btn.disabled = true;
@@ -771,10 +767,10 @@ const CustasJudiciaisApp = {
         payload.createdBy = payload.updatedBy;
         payload.billId = "";
       }
-      await fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", id), payload, { merge: true });
+      await tab.gravar(id, payload, { merge: true });
       const removidos = [].concat(atual && atual.guias || [], atual && atual.comprovantes || [], atual && atual.anexos || [])
         .filter((a) => a && (this.guiasTirar.indexOf(a.url) >= 0 || this.comprovantesTirar.indexOf(a.url) >= 0 || this.anexosTirar.indexOf(a.url) >= 0));
-      if (removidos.length && fc.deleteObject && fc.ref && window.firebaseStorage) {
+      if (removidos.length && fc && fc.deleteObject) {
         await Promise.all(removidos.map((a) => {
           if (!a.path) return Promise.resolve();
           return fc.deleteObject(fc.ref(window.firebaseStorage, a.path)).catch(function() {});
@@ -798,17 +794,18 @@ const CustasJudiciaisApp = {
       ? await window.mouraConfirm("Excluir esta custa e os anexos?")
       : confirm("Excluir esta custa e os anexos?");
     if (!ok) return;
+    const tab = this.tabela();
+    if (!tab) { alert("O banco de dados não está disponível."); return; }
     const fc = this.fb();
-    if (!fc || !fc.deleteDoc) { alert("O Firebase não está disponível."); return; }
     try {
       const arquivos = [].concat(item.guias || [], item.comprovantes || [], item.anexos || []);
-      if (fc.deleteObject && fc.ref && window.firebaseStorage) {
+      if (fc && fc.deleteObject) {
         await Promise.all(arquivos.map((a) => {
           if (!a || !a.path) return Promise.resolve();
           return fc.deleteObject(fc.ref(window.firebaseStorage, a.path)).catch(function() {});
         }));
       }
-      await fc.deleteDoc(fc.doc(window.firebaseDb, "custas_judiciais", id));
+      await tab.excluir(id);
       await this.carregar();
     } catch (e) {
       alert("Não consegui excluir a custa: " + ((e && e.message) || e));

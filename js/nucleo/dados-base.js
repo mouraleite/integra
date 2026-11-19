@@ -4,6 +4,10 @@
    - Ler: o contrário; o conteúdo de "extra" volta como campos do objeto.
    Tipos: ms (epoch em ms <-> timestamptz), iso (texto ISO <-> timestamptz), data (AAAA-MM-DD <-> date),
           bool (vira true/false), bool01 (grava boolean, devolve 1/0), num, int, texto, json (sem conversão).
+          Acrescentados para a área cobrança (não mudam os tipos acima):
+          horaSP (texto "AAAA-MM-DD HH:MM:SS.mmm" sem fuso, hora de São Paulo <-> timestamptz; volta no mesmo formato),
+          dataBR ("DD/MM/AAAA" ou AAAA-MM-DD -> date; volta "DD/MM/AAAA"),
+          textos (lista de textos <-> text[]; ao contrário de "ids", não converte "123" em número na volta).
    Funciona no navegador (window.DadosBase) e no Node (require), para o importador da Fase 4 usar os mesmos mapas. */
 (function (raiz, fabrica) {
   if (typeof module === "object" && module.exports) module.exports = fabrica();
@@ -35,6 +39,14 @@
         const ms = paraMs(v);
         return ms ? new Date(ms).toISOString() : null;
       }
+      case "horaSP": {
+        if (vazio(v)) return null;
+        const m = typeof v === "string" && v.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)$/);
+        // Sem fuso: hora de São Paulo (UTC-3; sem horário de verão desde 2019).
+        const ms = m ? Date.parse(m[1] + "T" + m[2] + "-03:00") : paraMs(v);
+        return ms ? new Date(ms).toISOString() : null;
+      }
+      case "dataBR":
       case "data": {
         if (vazio(v)) return null;
         const s = String(v);
@@ -56,8 +68,10 @@
         return tipo === "int" ? Math.round(n) : n;
       }
       case "texto":
+      case "idTexto":
         return v === undefined || v === null ? null : String(v);
       case "ids":
+      case "textos":
         return Array.isArray(v) ? v.filter(function (x) { return x !== null && x !== undefined; }).map(String) : null;
       default:
         return v === undefined ? null : v;
@@ -73,19 +87,30 @@
         return new Date(Date.parse(v)).toISOString();
       case "bool01":
         return v ? 1 : 0;
+      case "horaSP": {
+        const ms = Date.parse(v);
+        if (!ms) return null;
+        return new Date(ms - 3 * 3600000).toISOString().replace("T", " ").replace("Z", "");
+      }
+      case "dataBR": {
+        const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? m[3] + "/" + m[2] + "/" + m[1] : v;
+      }
       case "num":
       case "int":
         return typeof v === "string" ? Number(v) : v;
       case "ids":
         return Array.isArray(v) ? v.map(numeroSePuder) : v;
+      case "idTexto": // id que era número no Firestore: grava texto, devolve número
+        return numeroSePuder(v);
       default:
         return v;
     }
   }
 
-  // "123" -> 123 (ids que no Firestore eram número); o resto fica texto.
+  // "123" -> 123 (ids que no Firestore eram número); o resto fica texto (inclusive "0012").
   function numeroSePuder(v) {
-    return typeof v === "string" && /^-?\d{1,15}$/.test(v) ? Number(v) : v;
+    return typeof v === "string" && /^-?(0|[1-9]\d{0,14})$/.test(v) ? Number(v) : v;
   }
 
   function campos(mapa) {
