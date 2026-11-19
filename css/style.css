@@ -12594,5 +12594,5 @@ div.cem-previa { white-space: normal; }
 }
 .planejamento-gantt-barra span { display: block; block-size: 100%; background: #19784d; }
 
-.planejamento-tabela-scroll { max-height: min(27rem, 55vh); overflow: auto; }
+.planejamento-tabela-scroll { max-height: min(36rem, 70vh); overflow: auto; }
 .planejamento-tabela-scroll th { position: sticky; inset-block-start: 0; z-index: 1; background: #eff6f1; }
