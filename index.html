@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=8a3849c718">
+  <link rel="stylesheet" href="css/style.css?v=2221b5ef28">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -3644,22 +3644,24 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
         </div>
         <div id="projetos-planejamento-lista" class="table-container" hidden>
           <h3 class="planejamento-tabela-titulo">Tarefas planejadas</h3>
-          <table class="custom-table" aria-label="Cronograma de planejamento">
-            <thead>
-              <tr>
-                <th scope="col">Código</th>
-                <th scope="col">Atividade</th>
-                <th scope="col">Início</th>
-                <th scope="col">Término</th>
-                <th scope="col">Dias úteis</th>
-                <th scope="col">Dias corridos</th>
-                <th scope="col">Meses</th>
-                <th scope="col" title="Dias corridos desde o início planejado, descontando a duração proporcional ao percentual medido.">Dias de atraso</th>
-                <th scope="col">Percentual medido acumulado</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+          <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Tarefas planejadas">
+            <table class="custom-table" aria-label="Cronograma de planejamento">
+              <thead>
+                <tr>
+                  <th scope="col">Código</th>
+                  <th scope="col">Atividade</th>
+                  <th scope="col">Início</th>
+                  <th scope="col">Término</th>
+                  <th scope="col">Dias úteis</th>
+                  <th scope="col">Dias corridos</th>
+                  <th scope="col">Meses</th>
+                  <th scope="col" title="Dias corridos desde o início planejado, descontando a duração proporcional ao percentual medido.">Dias de atraso</th>
+                  <th scope="col">Percentual medido acumulado</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </div>
         <section id="projetos-planejamento-gantt" class="planejamento-gantt" aria-labelledby="projetos-planejamento-gantt-titulo" hidden>
           <div class="planejamento-gantt-cabecalho">
