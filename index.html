@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=3d4f03cde0">
+  <link rel="stylesheet" href="css/style.css?v=2f6474b743">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -3711,23 +3711,52 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
             </label>
           </div>
           <p id="projetos-orcamento-status" class="tvig-empty" role="status"></p>
-          <div id="projetos-orcamento-tabela" class="table-container" hidden>
-            <h3 class="planejamento-tabela-titulo">Estrutura orçamentária</h3>
-            <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Estrutura orçamentária">
-              <table class="custom-table" aria-label="Itens do orçamento">
-                <thead>
-                  <tr>
-                    <th scope="col">Código EDT</th>
-                    <th scope="col">Item</th>
-                    <th scope="col">Unidade</th>
-                    <th scope="col">Quantidade</th>
-                    <th scope="col">Preço unitário</th>
-                    <th scope="col">Valor orçado</th>
-                  </tr>
-                </thead>
-                <tbody></tbody>
-              </table>
+          <section id="projetos-orcamento-resumo" hidden aria-label="Visão geral do orçamento">
+            <div class="orcamento-visao">
+              <div class="orcamento-kpis">
+                <div><span>Orçado</span><strong id="projetos-orcamento-total">—</strong></div>
+                <div><span>Tendência</span><strong>—</strong></div>
+                <div><span>IDT</span><strong>—</strong></div>
+                <div><span>Desvio tendência</span><strong>—</strong></div>
+              </div>
+              <section class="orcamento-por-etapa" aria-labelledby="projetos-orcamento-etapas-titulo">
+                <div class="orcamento-etapas-topo">
+                  <h3 id="projetos-orcamento-etapas-titulo">Orçado por etapa</h3>
+                  <button id="projetos-orcamento-limpar-etapa" class="btn btn-secondary btn-sm" type="button" hidden>Limpar etapa</button>
+                </div>
+                <div id="projetos-orcamento-grafico" class="orcamento-barras"></div>
+              </section>
             </div>
+          </section>
+          <div id="projetos-orcamento-tabela" hidden>
+            <div class="table-container orcamento-matriz">
+              <h3 class="planejamento-tabela-titulo">Estrutura orçamentária</h3>
+              <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Estrutura orçamentária">
+                <table class="custom-table" aria-label="Itens do orçamento">
+                  <thead><tr>
+                    <th scope="col">Estrutura orçamentária</th>
+                    <th scope="col">Avanço financeiro</th>
+                    <th scope="col">Orçado</th>
+                    <th scope="col">Tendência</th>
+                    <th scope="col">Comprometido</th>
+                    <th scope="col">Desvio tendência</th>
+                    <th scope="col">Desvio comprometido</th>
+                    <th scope="col">Realizado</th>
+                    <th scope="col">A realizar</th>
+                    <th scope="col">Previsão</th>
+                  </tr></thead>
+                  <tbody></tbody>
+                  <tfoot><tr>
+                    <th scope="row">Total da planilha</th><td>—</td><td id="projetos-orcamento-total-tabela">—</td>
+                    <td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>
+                  </tr></tfoot>
+                </table>
+              </div>
+            </div>
+            <section class="table-container orcamento-documentos">
+              <h3 class="planejamento-tabela-titulo">Documentos financeiros</h3>
+              <p>Os documentos e os indicadores financeiros dependem da integração com o relatório financeiro do Sienge.</p>
+            </section>
           </div>
         </div>
       </section>
@@ -8825,7 +8854,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
   <script defer src="js/projetos/landbank.js?v=56d4c9eed3"></script>
   <script defer src="js/projetos/planejamento.js?v=c4bd088291"></script>
-  <script defer src="js/projetos/orcamento.js?v=686cdabd71"></script>
+  <script defer src="js/projetos/orcamento.js?v=24cfa2b0e8"></script>
   <script defer src="js/nucleo/app.js?v=3259401e12"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>

@@ -12607,3 +12607,54 @@ div.cem-previa { white-space: normal; }
 .planejamento-filtros-tarefas label { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
 .planejamento-filtros-tarefas select { max-inline-size: min(23rem, 50vw); padding: 0.3rem; }
 .planejamento-filtros-tarefas p { margin: 0; font-size: 0.875rem; }
+
+/* Orçamento de Aprovação */
+.orcamento-visao {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 3fr);
+  gap: 1rem;
+  margin-block: 1rem;
+}
+.orcamento-kpis { display: grid; gap: 0.55rem; }
+.orcamento-kpis > div, .orcamento-por-etapa {
+  padding: 0.85rem;
+  background: var(--color-white);
+  border: 1px solid #dce7e0;
+  border-radius: var(--border-radius-md);
+}
+.orcamento-kpis > div { display: flex; flex-direction: column; justify-content: center; }
+.orcamento-kpis span { font-size: 0.82rem; color: #52655a; }
+.orcamento-kpis strong { color: #285b9a; font-size: 1.22rem; margin-top: 0.25rem; }
+.orcamento-etapas-topo { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.orcamento-etapas-topo h3 { margin: 0; font-size: 1rem; color: var(--color-primary); }
+.orcamento-barras { max-height: 23rem; overflow: auto; margin-top: 0.6rem; }
+.orcamento-barra-etapa {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1.5fr) minmax(2rem, 2fr) minmax(5.5rem, auto);
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  border: 0;
+  padding: 0.45rem;
+  text-align: start;
+  background: transparent;
+  color: #1c2e24;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.orcamento-barra-etapa:hover, .orcamento-barra-etapa[aria-pressed="true"] { background: #eef5fc; }
+.orcamento-barra-etapa strong { text-align: end; white-space: nowrap; }
+.orcamento-barra-faixa { background: #edf2f8; border-radius: 3px; height: 0.8rem; }
+.orcamento-barra-faixa span { display: block; height: 100%; border-radius: inherit; background: #4383c7; }
+.orcamento-matriz .custom-table { min-width: 72rem; font-variant-numeric: tabular-nums; }
+.orcamento-matriz .custom-table th, .orcamento-matriz .custom-table td { padding: 0.55rem 0.7rem; }
+.orcamento-matriz .custom-table th:first-child { min-width: 20rem; }
+.orcamento-matriz .custom-table td:not(:first-child) { text-align: end; white-space: nowrap; }
+.orcamento-matriz .orcamento-grupo, .orcamento-matriz tfoot { background: #f0f4f2; font-weight: 700; }
+.orcamento-grupo button { margin-inline-end: 0.4rem; }
+.orcamento-documentos { margin-block: 1rem; }
+.orcamento-documentos p { margin: 0; padding: 0 1.25rem 1rem; color: #52655a; }
+@media (max-width: 760px) {
+  .orcamento-visao { grid-template-columns: 1fr; }
+  .orcamento-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
