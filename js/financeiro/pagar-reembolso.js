@@ -645,29 +645,77 @@ const PagarReembolsoApp = {
     if (st) st.cachedCostCenters = list || [];
   },
 
-  /* Rateio pela Parametrização de parceiros, só com centros de custo da mesma empresa do título
-     (o Sienge recusa centro de outra empresa) e com a soma fechando exatamente 100%. */
-  rateio(ccId, companyId) {
+  /* Parcerias da Parametrização de parceiros. Se a tela ainda não foi aberta, lê do banco sem gravar nada. */
+  async parcerias() {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (!PP) return [];
+    if (Array.isArray(PP.items) && PP.items.length) return PP.items;
+    let lista = [];
+    try { lista = JSON.parse(localStorage.getItem(PP.STORAGE_KEY || "crm_parcerias_v1") || "[]") || []; } catch (e) { lista = []; }
+    const fc = window.firebaseCollections;
+    if (window.firebaseDb && fc && fc.getDoc) {
+      try {
+        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "partner_parametrizations"));
+        if (snap.exists()) {
+          const raw = snap.data().list;
+          const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
+          if (Array.isArray(nuvem) && nuvem.length) lista = nuvem;
+        }
+      } catch (e) {
+        console.warn("[PagarReembolso] parcerias do banco indisponíveis, usando cache local.", e);
+      }
+    }
+    return (Array.isArray(lista) ? lista : []).map((p) => (typeof PP.normalizeItem === "function" ? PP.normalizeItem(JSON.parse(JSON.stringify(p))) : p));
+  },
+
+  /* Rateio da Parametrização de parceiros (aba Obras e centros + Rateio DFC), como na prestação de contas:
+     só os centros da obra marcados em "Entra na conta"; o % da conta 2.03.02.11 vai para o centro do parceiro
+     e o restante para o centro da obra. Centro de outra empresa fica de fora (o Sienge recusa).
+     Sem parceria cadastrada para a obra, a conta fora da parceria ou sociedade: 100% no centro do título. */
+  async rateio(ccId, companyId) {
     const digits = String(ccId || "").replace(/\D/g, "");
     const base = parseInt(digits, 10);
     const sozinho = [{ costCenterId: base, percentage: 100 }];
     const PP = window.ParametrizacaoParceiroApp;
-    const PC = window.PrestacaoContasApp;
-    const obra = PP && typeof PP.obraFromCc === "function" ? PP.obraFromCc(digits) : digits.slice(0, -2);
-    let map = null;
-    if (PC && typeof PC.padraoObra === "function") map = PC.padraoObra(obra);
-    if (!map) return sozinho;
-    const centros = PP && typeof PP.allCostCenters === "function" ? (PP.allCostCenters() || []) : [];
-    const empresaDe = (id) => {
-      const cc = centros.find((c) => String(c && c.id).replace(/\D/g, "") === String(id));
-      return cc && typeof PP.empresaDoCentro === "function" ? String(PP.empresaDoCentro(cc) || "") : "";
-    };
+    if (!PP || !digits) return sozinho;
+    const so = (id) => String(id == null ? "" : id).replace(/\D/g, "");
+    const obraCod = typeof PP.obraFromCc === "function" ? PP.obraFromCc(digits) : digits.slice(0, -2);
+    const lista = await this.parcerias();
+    let part = null;
+    let obra = null;
+    lista.some((p) => (p.obras || []).some((o) => {
+      const tem = (o.costCenters || []).some((c) => so(c.id) === digits);
+      if (tem || String(o.code) === obraCod) { part = p; obra = o; }
+      return tem;
+    }));
+    if (!part || !obra || (typeof PP.isSociedade === "function" && PP.isSociedade(part))) return sozinho;
+    if (typeof PP.accountEntersPartnership === "function" && !PP.accountEntersPartnership(part, obra, this.CONTA)) return sozinho;
+    let pct = typeof PP.partnerPctForObra === "function" ? Number(PP.partnerPctForObra(part, obra, this.CONTA)) : NaN;
+    if (!Number.isFinite(pct)) pct = Number(obra.defaultPartnerShare) || 0;
+    if (!(pct > 0)) return sozinho;
+    pct = Math.min(100, pct);
+    const catalogo = typeof PP.catalogoCentros === "function" ? PP.catalogoCentros() : new Map();
     const empresa = String(companyId || "");
-    const ids = Object.keys(map).filter((id) => {
-      if (!parseInt(id, 10) || !(Number(map[id]) > 0)) return false;
-      if (String(id).replace(/\D/g, "") === digits) return true;
-      return !!empresa && empresaDe(id) === empresa;
+    const centros = (obra.costCenters || []).filter((c) => {
+      const id = so(c.id);
+      if (!id || c.inAccount === false) return false;
+      if (id === digits) return true;
+      const cat = catalogo.get(id);
+      const dono = cat && typeof PP.empresaDoCentro === "function" ? PP.empresaDoCentro(cat) : "";
+      return !empresa || !dono || dono === empresa;
     });
+    if (!centros.some((c) => so(c.id) === digits)) return sozinho;
+    const papel = (c) => (typeof PP.papelDoCentro === "function" ? PP.papelDoCentro(c) : "obra");
+    const parceiros = centros.filter((c) => papel(c) === "terrenista");
+    const daObra = centros.filter((c) => papel(c) !== "terrenista");
+    if (!parceiros.length) return sozinho;
+    const map = {};
+    parceiros.forEach((c) => { map[so(c.id)] = pct / parceiros.length; });
+    if (pct < 100) {
+      if (!daObra.length) return sozinho;
+      daObra.forEach((c) => { map[so(c.id)] = (100 - pct) / daObra.length; });
+    }
+    const ids = Object.keys(map).filter((id) => map[id] > 0);
     if (!ids.length) return sozinho;
     const peso = ids.reduce((s, id) => s + Number(map[id]), 0);
     // Em centésimos de ponto: a soma dá 10000 certinho e a sobra do arredondamento vai para o maior.
@@ -732,7 +780,7 @@ const PagarReembolsoApp = {
     const notes = this.observacao(grupo);
     const dep = await this.departamentoTesouraria();
     await this.garantirCentros();
-    const rateio = this.rateio(ccId, companyId);
+    const rateio = await this.rateio(ccId, companyId);
     await this.completarUnidades([primeiro]);
     const CJ = window.CustasJudiciaisApp;
     const nomeUnidade = (CJ && typeof CJ.limparUnidade === "function" ? CJ.limparUnidade(primeiro.unitName, ccId) : String(primeiro.unitName || "").trim());
