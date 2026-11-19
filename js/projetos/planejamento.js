@@ -4,6 +4,44 @@
     return parts ? [parts[3], parts[2], parts[1]].join('/') : '—';
   };
 
+  function agruparAtividades(tasks, measurements, completo) {
+    const ancestors = [];
+    const entries = tasks.map(task => {
+      const level = Number.isSafeInteger(task.level) && task.level > 0 ? task.level : 1;
+      while (ancestors.length && ancestors.at(-1).level >= level) ancestors.pop();
+      const entry = {
+        task, level, parent: ancestors.at(-1), expanded: true,
+        description: task.description || String(task.presentationId),
+        weight: 0, weightedProgress: 0, unknownProgress: false
+      };
+      ancestors.push(entry);
+      return entry;
+    });
+
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      const { task, parent } = entry;
+      const recorded = measurements?.get(String(task.id));
+      if (entry.weight > 0) {
+        entry.measured = recorded ?? (entry.unknownProgress ? null : entry.weightedProgress / entry.weight);
+      } else if (task.summary) {
+        entry.measured = recorded ?? null;
+        entry.unknownProgress = entry.measured === null;
+      } else {
+        entry.measured = recorded ?? (completo ? 0 : null);
+        entry.weight = task.duration > 0 ? task.duration : 1;
+        entry.weightedProgress = entry.weight * (entry.measured ?? 0);
+        entry.unknownProgress = entry.measured === null;
+      }
+      if (parent) {
+        parent.weight += entry.weight;
+        parent.weightedProgress += entry.weightedProgress;
+        parent.unknownProgress ||= entry.unknownProgress;
+      }
+    }
+    return entries;
+  }
+
   const dayMs = 86400000;
   const todayFormat = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' });
   const monthFormat = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -114,17 +152,14 @@
       const today = Date.parse(todayFormat.format(new Date()));
       tasks.sort((a, b) => a.presentationId - b.presentationId);
       const rows = document.createDocumentFragment();
-      const ancestors = [];
-      for (const task of tasks) {
-        const level = Number.isSafeInteger(task.level) && task.level > 0 ? task.level : 1;
-        while (ancestors.length && ancestors.at(-1).level >= level) ancestors.pop();
-        const parent = ancestors.at(-1);
+      taskRows = agruparAtividades(tasks, measurements, Boolean(measurements && !measurementError));
+      for (const entry of taskRows) {
+        const { task, parent, level, measured } = entry;
         const row = document.createElement('tr');
+        entry.row = row;
         const start = Date.parse(task.startDate);
         const finish = Date.parse(task.finishDate);
         const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
-        const recorded = measurements?.get(String(task.id));
-        const measured = recorded ?? (measurements && !measurementError && !task.summary ? 0 : null);
         const elapsedDays = (today - start) / dayMs;
         const overdue = days === null || measured === null
           ? null
@@ -141,7 +176,6 @@
         description.style.paddingInlineStart = (1.25 + (level - 1) * 0.75) + 'rem';
         if (task.summary) description.style.fontWeight = '700';
 
-        const entry = { row, parent, level, expanded: true, description: task.description || String(task.presentationId) };
         if (parent && !parent.toggle) {
           const toggle = document.createElement('button');
           toggle.type = 'button';
@@ -154,8 +188,6 @@
           parent.row.cells[1].prepend(toggle);
           parent.toggle = toggle;
         }
-        ancestors.push(entry);
-        taskRows.push(entry);
         rows.append(row);
       }
       body.append(rows);
