@@ -475,9 +475,10 @@ const FluxoCaixaDiarioApp = {
     if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return false;
     if (!m.conta) return true;
     const key = this.accountKey({ companyId: m.companyId, number: m.conta });
-    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key);
+    const norm = this.normNum(m.conta);
+    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm));
     if (acc) return this.accountIncluded(acc);
-    return !(this._bloq && this._bloq.has(this.normNum(m.conta))) && this.flags[key] !== false;
+    return !(this._bloq && this._bloq.has(norm)) && this.flags[key] !== false;
   },
 
   async carregarHistorico() {
@@ -1152,6 +1153,48 @@ const FluxoCaixaDiarioApp = {
     return d === "993916" || d === "0993916";
   },
 
+  /** Credores parceiros de Avaré: Agua do Burrinho e Lalim Participações. */
+  ehParceiroAvare(credor) {
+    const n = String(credor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    return /BURRINHO/.test(n) || /LALIM/.test(n);
+  },
+
+  /**
+   * Conta bancária de saída para os parceiros de Avaré (Agua do Burrinho e Lalim):
+   * - Centros de custo 13700 e 13800 (Fase 1): conta 99466-6
+   * - Centros de custo 13900 e 14000 (Fase 2): conta 98746-2
+   */
+  contaSaidaParceiroAvare(item) {
+    if (!item) return null;
+    const credor = item.credor || item.party || item.favorecido || "";
+    if (!this.ehParceiroAvare(credor)) return null;
+
+    const ccs = [];
+    if (item.ccId) ccs.push(String(item.ccId));
+    if (item.cc) ccs.push(String(item.cc));
+    if (Array.isArray(item.shares)) {
+      item.shares.forEach((s) => { if (s && s.cc) ccs.push(String(s.cc)); });
+    }
+    const txt = [item.ccNome, item.historico, item.documento, item.plano, item.departamento].filter(Boolean).join(" ");
+
+    // Centro de custo 13700 e 13800 -> conta 99466-6
+    if (ccs.some((c) => c === "13700" || c === "13800" || c === "13701" || c === "13801") ||
+        /\b13700\b|\b13800\b/i.test(txt)) {
+      return "99466-6";
+    }
+
+    // Centro de custo 13900 e 14000 (Fase 2) -> conta 98746-2
+    if (ccs.some((c) => c === "13900" || c === "14000" || c === "13901" || c === "14001") ||
+        /\b13900\b|\b14000\b/i.test(txt)) {
+      return "98746-2";
+    }
+
+    if (/FASE\s*(?:I\b|1\b)/i.test(txt)) return "99466-6";
+    if (/FASE\s*(?:II\b|2\b)/i.test(txt)) return "98746-2";
+
+    return null;
+  },
+
   ehRepasse(item) {
     const nomes = [];
     if (item && item.plano) nomes.push(item.plano);
@@ -1172,11 +1215,15 @@ const FluxoCaixaDiarioApp = {
     const ccs = new Set(lista.map((x) => String(x.cc)));
     if (item && item.ccId) ccs.add(String(item.ccId));
     const empresa1 = !item || item.companyId == null || item.companyId === "" || String(item.companyId) === "1";
-    if (empresa1 && this.ehRepasse(item) && [...ccs].some((cc) => this.ccBaseAvare(cc))) return 1;
+    if (empresa1 && this.ehRepasse(item) && [...ccs].some((cc) => this.ccBaseAvare(cc))) {
+      if (this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
+      return 1;
+    }
     const rateio = this.paresAvare().some(([a, b]) => ccs.has(a) && ccs.has(b));
     return lista.reduce((s, x) => {
       const cc = String(x.cc || "");
       if (!excl.has(cc)) return s;
+      if (empresa1 && this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
       // Pago pela conta final 1-6, mas o centro é da parceria de Avaré.
       // O dinheiro saiu da conta que está no caixa. A transferência da conta da parceria
       // para a 1-6 entra no mesmo caixa e zera essa dívida. Não tirar só o pagamento.
@@ -1741,9 +1788,13 @@ const FluxoCaixaDiarioApp = {
       const valor = Number.isFinite(saldo) && saldo > 0 ? saldo : (Number(r.valor) || 0);
       if (!(valor > 0)) return;
       const rateio = rateios[r.titulo + "|" + (r.parcela || "")];
+      const shares = rateio && rateio.length ? rateio : (r.ccId ? [{ cc: String(r.ccId), share: 1 }] : []);
+      const contaParceiro = this.contaSaidaParceiroAvare(Object.assign({}, r, { shares }));
+      const conta = contaParceiro || r.conta || "";
+      const cid = (contaParceiro && "1") || r.companyId || "";
       pay.push({
         key,
-        shares: rateio && rateio.length ? rateio : (r.ccId ? [{ cc: String(r.ccId), share: 1 }] : []),
+        shares,
         date: pagamento,
         vencimento: due,
         deslocadoDe: pagamento !== due ? due : "",
@@ -1754,14 +1805,14 @@ const FluxoCaixaDiarioApp = {
         documento: r.documento || "",
         docId: r.docId || "",
         docNome: r.docNome || "",
-        companyId: r.companyId || "",
+        companyId: cid,
         plano: r.plano || "",
         departamento: r.departamento || "",
         ccId: r.ccId || "",
         ccNome: r.ccNome || "",
         natureza: r.natureza,
         tipoBaixa: r.tipoBaixa || "",
-        conta: r.conta || "",
+        conta,
         operacao: r.operacao || ""
       });
     });
@@ -1911,11 +1962,17 @@ const FluxoCaixaDiarioApp = {
     this.movs.forEach((m) => {
       const day = byDay[m.date];
       if (!day || !day.real) return;
+      const contaParceiro = this.contaSaidaParceiroAvare(m);
+      if (contaParceiro && !m.conta) {
+        m.conta = contaParceiro;
+        m.companyId = "1";
+      }
       if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return;
       if (m.conta) {
         const key = this.accountKey({ companyId: m.companyId, number: m.conta });
-        const acc = accByKey[key];
-        const ok = acc ? this.accountIncluded(acc) : (!this._bloq.has(this.normNum(m.conta)) && this.flags[key] !== false);
+        const norm = this.normNum(m.conta);
+        const acc = accByKey[key] || (this.accounts || []).find((a) => String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm);
+        const ok = acc ? this.accountIncluded(acc) : (!this._bloq.has(norm) && this.flags[key] !== false);
         if (!ok) return;
       }
       const fora = this.shareFora(m.shares, excl, m);
@@ -1940,6 +1997,7 @@ const FluxoCaixaDiarioApp = {
     this.payItems.forEach((p) => {
       const day = byDay[p.date];
       if (!day || day.real) return;
+      if (p.conta && !this.movContaEntra(p)) return;
       const fora = this.shareFora(p.shares, excl, p);
       const v = p.valor * (1 - fora);
       if (v < 0.005) return;
@@ -2433,6 +2491,7 @@ const FluxoCaixaDiarioApp = {
           <div><span style="color:#64748b;">Situação</span><div>${situacao}</div></div>
           <div><span style="color:#64748b;">Centro de custo</span><div>${caixaEsc(item.ccNome || "—")}</div></div>
           <div><span style="color:#64748b;">Plano financeiro</span><div>${caixaEsc(item.plano || "—")}</div></div>
+          ${item.conta ? `<div><span style="color:#64748b;">Conta de saída</span><div style="font-weight:700;color:#c2410c;">${caixaEsc(this.contaLabel(item))}</div></div>` : ""}
         </div>
         ${bill.notes ? `<p style="margin:12px 0 0;font-size:0.84rem;"><strong>Observação:</strong> ${caixaEsc(bill.notes)}</p>` : ""}
         <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Forma de pagamento</h4>
@@ -2472,8 +2531,9 @@ const FluxoCaixaDiarioApp = {
     if (it && it.conta) {
       const bank = this.bankInfo(it.companyId, it.conta);
       const key = this.accountKey({ companyId: it.companyId || "", number: it.conta });
-      const acc = (this.accounts || []).find((a) => this.accountKey(a) === key);
-      const nome = acc && acc.name && this.normNum(acc.name) !== this.normNum(it.conta) ? acc.name : "";
+      const norm = this.normNum(it.conta);
+      const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(it.companyId || "") && this.normNum(a.number) === norm));
+      const nome = acc && acc.name && this.normNum(acc.name) !== norm ? acc.name : "";
       const tipo = (it.tipoConta || this.ladoConta(it.companyId, it.conta)) === "investimento" ? "Investimento" : "Conta corrente";
       return [tipo, it.conta, nome, bank.bancoLabel].filter(Boolean).join(" · ");
     }
@@ -2525,13 +2585,14 @@ const FluxoCaixaDiarioApp = {
 
   /** Vencimento original, PMP de 3 meses e o motivo da data no caixa. */
   dicaLinha(it) {
-    if (!it || this.ehPagar(it)) return "";
+    if (!it) return "";
+    const ehPagar = this.ehPagar(it);
     const linhas = [];
     if (it.vencimento) linhas.push("<b>Vencimento original</b> " + caixaEsc(caixaFmtDate(it.vencimento)));
-    if (it.unidades && it.unidades.length > 1) {
+    if (!ehPagar && it.unidades && it.unidades.length > 1) {
       linhas.push("<b>Mesmo título</b> nas unidades " + caixaEsc(it.unidades.join(" e ")) + ". A parcela entra uma vez no caixa.");
     }
-    if (!it.real && !it.outra) {
+    if (!it.real && !it.outra && !ehPagar) {
       const pmp = Number(it.pmp) || 0;
       const quando = pmp > 0 ? pmp + " dia(s) depois do vencimento" : (pmp < 0 ? Math.abs(pmp) + " dia(s) antes do vencimento" : "no próprio vencimento");
       linhas.push("<b>PMP</b> " + caixaEsc(String(pmp)) + " dia(s) · média de 3 meses, paga " + caixaEsc(quando));
@@ -2548,6 +2609,9 @@ const FluxoCaixaDiarioApp = {
       linhas.push(it.deslocadoDe
         ? caixaEsc("O pagamento foi para o dia útil " + caixaFmtDate(it.date) + ".")
         : caixaEsc("Pagamento previsto em " + caixaFmtDate(it.date) + "."));
+    }
+    if (it.conta) {
+      linhas.push(`<b>Conta ${ehPagar ? "de saída" : "de entrada"} prevista:</b> ` + caixaEsc(this.contaLabel(it)));
     }
     return linhas.join("<br>");
   },
@@ -3213,8 +3277,9 @@ const FluxoCaixaDiarioApp = {
 
   linhaDetalhe(it, cls, click) {
     const dica = this.dicaLinha(it);
+    const tagConta = it && it.conta ? `<span class="cxd-extra">C/C ${caixaEsc(it.conta)}</span>` : "";
     return `<tr class="${cls}${click ? " cxd-click" : ""}" ${click || ""}>
-      <td class="cxd-desc cxd-tip">${caixaEsc(this.resumoLinha(it))}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
+      <td class="cxd-desc cxd-tip">${caixaEsc(this.resumoLinha(it))}${tagConta}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
       <td class="cxd-num">${caixaMoney(it.valor)}</td>
     </tr>`;
   },
