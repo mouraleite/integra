@@ -24,7 +24,8 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
    do próprio Supabase); sem política, ninguém acessa.
    Modelo de política para as próximas tabelas:
    `using ((select privado.tem_permissao('sub_fin_cr_fila_cobranca_visualizar')))`.
-2. **Tabelas relacionais**, desenhadas a partir do relatório do export: uma tabela por coleção, colunas tipadas para o
+2. **Tabelas relacionais (criadas):** ver `docs/mapa-tabelas/README.md` (mapa por área e decisões pendentes) e
+   `supabase/CONVENCOES.md`. Desenho original: uma tabela por coleção, colunas tipadas para o
    que é filtrado e somado, `extra jsonb` para campos raros. `config/*` vira tabelas de cadastro + `configuracoes(chave, valor)`.
    Notas em shards viram uma linha por nota. `increment` e `runTransaction` viram funções SQL. `onSnapshot` vira Realtime.
    Storage: buckets espelhando as pastas atuais; registros guardam o caminho do arquivo, não a URL do Firebase.
