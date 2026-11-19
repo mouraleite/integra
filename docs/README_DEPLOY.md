@@ -65,6 +65,13 @@ O site publica `index.html`, `vistoria.html`, `js/`, `css/`, `assets/`, `api/`, 
 
 Para publicar, rode **Publicar versão** no GitHub. O `deploy.bat` na raiz continua fazendo o mesmo fluxo na máquina. O envio de emergência continua em `deploy_emergencia.bat`.
 
+## Branch `migracao-supabase` (fora do fluxo de deploy)
+A branch `migracao-supabase` é a migração do Firebase para o Supabase. Ela publica num projeto separado da Vercel
+(time **mouraleite**, projeto `integra`), não no crm-gestao. O `deploy.bat` e o workflow **Publicar versão** não
+devem empurrar a `main` para ela: não incluir essa branch na etapa 6 do `deploy.bat`.
+Nessa branch o `vercel.json` está sem `crons`, para as rotinas diárias não rodarem em dobro; eles voltam na virada.
+Plano: `docs/MIGRACAO_SUPABASE.md`.
+
 ## Cópias antigas de deploy
 - `arquivo/legado/deploy_vercel.bat` — substituído por `deploy.bat`
 - `arquivo/legado/deploy_vercel_direto.bat` — substituído por `deploy_emergencia.bat`

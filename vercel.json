@@ -18,15 +18,5 @@
     { "source": "/assinaturas-rydoo/:path*", "destination": "/assets/assinaturas-rydoo/:path*" },
     { "source": "/robo-pacote/:path*", "destination": "/ferramentas/robo-pacote/:path*" },
     { "source": "/engenharia-caucao.js", "destination": "/js/engenharia/engenharia-caucao.js" }
-  ],
-  "crons": [
-    {
-      "path": "/api/morning-warmup",
-      "schedule": "0 10 * * *"
-    },
-    {
-      "path": "/api/estoque-batimento",
-      "schedule": "0 10 * * *"
-    }
   ]
 }
