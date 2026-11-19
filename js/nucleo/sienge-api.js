@@ -1694,7 +1694,12 @@ const SiengeApiService = {
     const pending = new Set(taskIds.map(String));
     const measured = new Map();
     const unitId = String(Number(buildingUnitId));
-    const filters = new URLSearchParams({ buildingId, buildingUnitId: unitId });
+    const filters = new URLSearchParams({
+      buildingId,
+      buildingUnitId: unitId,
+      measurementStartDate: "01/01/2000",
+      measurementEndDate: "01/01/2200"
+    });
     let logs;
     try {
       logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
