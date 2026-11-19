@@ -1659,7 +1659,7 @@ function normalizeSiengeCustomer(c) {
 // -----------------------------------------------
 // Interface de Acesso aos Serviços
 // -----------------------------------------------
-async function getBuildingPlanningPages(path, firstPage) {
+async function getBuildingProjectPages(path, firstPage) {
   const limit = 200;
   const separator = path.includes("?") ? "&" : "?";
   const results = [];
@@ -1668,7 +1668,7 @@ async function getBuildingPlanningPages(path, firstPage) {
     const page = offset === 0 && firstPage ? firstPage : await siengeFetch(`${path}${separator}offset=${offset}&limit=${limit}`);
     const count = page.resultSetMetadata?.count;
     if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
-      throw new Error("Resposta de planejamento inválida.");
+      throw new Error("Resposta de obra inválida.");
     }
     if (page.resultSetMetadata.offset != null && Number(page.resultSetMetadata.offset) !== offset) {
       throw new Error("O Sienge retornou um deslocamento diferente do solicitado.");
@@ -1681,11 +1681,23 @@ async function getBuildingPlanningPages(path, firstPage) {
 }
 
 const SiengeApiService = {
+  async getBuildingBudgetSheets(buildingId) {
+    if (!/^\d+$/.test(String(buildingId))) throw new Error("Informe o código da obra.");
+    return getBuildingProjectPages(`/building-cost-estimations/${buildingId}/sheets`);
+  },
+
+  async getBuildingBudgetItems(buildingId, buildingUnitId) {
+    if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
+      throw new Error("Informe os códigos da obra e da unidade construtiva.");
+    }
+    return getBuildingProjectPages(`/building-cost-estimations/${buildingId}/sheets/${buildingUnitId}/items`);
+  },
+
   async getBuildingPlanningTasks(buildingId, buildingUnitId) {
     if (!/^\d+$/.test(String(buildingId)) || !/^\d+$/.test(String(buildingUnitId))) {
       throw new Error("Informe os códigos da obra e da unidade construtiva.");
     }
-    return getBuildingPlanningPages(`/building-projects/${buildingId}/sheets/${buildingUnitId}/tasks`);
+    return getBuildingProjectPages(`/building-projects/${buildingId}/sheets/${buildingUnitId}/tasks`);
   },
 
   async getBuildingPlanningMeasurements(buildingId, buildingUnitId, taskIds) {
@@ -1703,7 +1715,7 @@ const SiengeApiService = {
     });
     let logs;
     try {
-      logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
+      logs = await getBuildingProjectPages(`/building-projects/progress-logs?${filters}`);
     } catch (error) {
       error.measurementStage = "lista";
       throw error;
@@ -1723,7 +1735,7 @@ const SiengeApiService = {
         const page = await siengeFetch(path);
         if (!Array.isArray(page.results)) throw new Error("Resposta de itens de medição inválida.");
         items = page.resultSetMetadata?.count > page.results.length
-          ? await getBuildingPlanningPages(path, page) : page.results;
+          ? await getBuildingProjectPages(path, page) : page.results;
       } catch (error) {
         error.measurementStage = "itens";
         itemError = error;

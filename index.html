@@ -3627,71 +3627,109 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
       </section>
 
       <section id="tab-projetos-aprovacao" class="tab-pane" style="display: none;">
-        <h2>Planejamento</h2>
-        <form id="projetos-planejamento-filtro" class="search-filter-panel">
+        <div class="search-filter-panel">
           <div class="form-group">
             <label for="projetos-planejamento-obra">Obra</label>
-            <select id="projetos-planejamento-obra" required disabled>
+            <select id="projetos-planejamento-obra" form="projetos-planejamento-filtro" required disabled>
               <option value="">Selecione a obra</option>
             </select>
           </div>
-          <button class="btn btn-primary" type="submit" disabled>Consultar planejamento</button>
-        </form>
-        <p id="projetos-planejamento-status" class="tvig-empty" role="status"></p>
-        <div id="projetos-planejamento-filtros-tarefas" class="planejamento-filtros-tarefas" hidden>
-          <label for="projetos-planejamento-filtro-grupo">Agrupamento
-            <select id="projetos-planejamento-filtro-grupo">
-              <option value="">Todos os grupos</option>
-            </select>
-          </label>
-          <label for="projetos-planejamento-filtro-marco">
-            <input id="projetos-planejamento-filtro-marco" type="checkbox"> Somente tarefas marco (*)
-          </label>
-          <p id="projetos-planejamento-filtro-status" role="status"></p>
         </div>
-        <div id="projetos-planejamento-hierarquia" role="group" aria-label="Níveis do planejamento" hidden>
-          <button type="button" class="btn btn-secondary btn-sm" data-expand="true">Expandir tudo</button>
-          <button type="button" class="btn btn-secondary btn-sm" data-expand="false">Recolher tudo</button>
+        <div class="planejamento-filtros-tarefas" role="group" aria-label="Painéis de Aprovação">
+          <button id="projetos-aprovacao-abrir-planejamento" type="button" class="btn btn-primary btn-sm" aria-pressed="true" aria-controls="projetos-aprovacao-planejamento">Planejamento</button>
+          <button id="projetos-aprovacao-abrir-orcamento" type="button" class="btn btn-secondary btn-sm" aria-pressed="false" aria-controls="projetos-aprovacao-orcamento">Orçamento</button>
         </div>
-        <div id="projetos-planejamento-lista" class="table-container" hidden>
-          <h3 class="planejamento-tabela-titulo">Tarefas planejadas</h3>
-          <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Tarefas planejadas">
-            <table class="custom-table" aria-label="Cronograma de planejamento">
-              <thead>
-                <tr>
-                  <th scope="col">Código</th>
-                  <th scope="col">Atividade</th>
-                  <th scope="col">Início</th>
-                  <th scope="col">Término</th>
-                  <th scope="col">Dias úteis</th>
-                  <th scope="col">Dias corridos</th>
-                  <th scope="col">Meses</th>
-                  <th scope="col" title="Dias corridos desde o início planejado, descontando a duração proporcional ao percentual medido.">Dias de atraso</th>
-                  <th scope="col">Percentual medido acumulado</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+        <div id="projetos-aprovacao-planejamento">
+          <h2>Planejamento</h2>
+          <form id="projetos-planejamento-filtro" class="search-filter-panel">
+            <button class="btn btn-primary" type="submit" disabled>Consultar planejamento</button>
+          </form>
+          <p id="projetos-planejamento-status" class="tvig-empty" role="status"></p>
+          <div id="projetos-planejamento-filtros-tarefas" class="planejamento-filtros-tarefas" hidden>
+            <label for="projetos-planejamento-filtro-grupo">Agrupamento
+              <select id="projetos-planejamento-filtro-grupo">
+                <option value="">Todos os grupos</option>
+              </select>
+            </label>
+            <label for="projetos-planejamento-filtro-marco">
+              <input id="projetos-planejamento-filtro-marco" type="checkbox"> Somente tarefas marco (*)
+            </label>
+            <p id="projetos-planejamento-filtro-status" role="status"></p>
           </div>
-        </div>
-        <section id="projetos-planejamento-gantt" class="planejamento-gantt" aria-labelledby="projetos-planejamento-gantt-titulo" hidden>
-          <div class="planejamento-gantt-cabecalho">
-            <h3 id="projetos-planejamento-gantt-titulo">Cronograma de atividades</h3>
-            <div class="planejamento-gantt-legenda">
-              <span>Período planejado</span>
-              <span>Avanço medido</span>
+          <div id="projetos-planejamento-hierarquia" role="group" aria-label="Níveis do planejamento" hidden>
+            <button type="button" class="btn btn-secondary btn-sm" data-expand="true">Expandir tudo</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-expand="false">Recolher tudo</button>
+          </div>
+          <div id="projetos-planejamento-lista" class="table-container" hidden>
+            <h3 class="planejamento-tabela-titulo">Tarefas planejadas</h3>
+            <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Tarefas planejadas">
+              <table class="custom-table" aria-label="Cronograma de planejamento">
+                <thead>
+                  <tr>
+                    <th scope="col">Código</th>
+                    <th scope="col">Atividade</th>
+                    <th scope="col">Início</th>
+                    <th scope="col">Término</th>
+                    <th scope="col">Dias úteis</th>
+                    <th scope="col">Dias corridos</th>
+                    <th scope="col">Meses</th>
+                    <th scope="col" title="Dias corridos desde o início planejado, descontando a duração proporcional ao percentual medido.">Dias de atraso</th>
+                    <th scope="col">Percentual medido acumulado</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
             </div>
           </div>
-          <div class="planejamento-gantt-scroll" tabindex="0" role="region" aria-label="Gráfico de Gantt">
-            <div class="planejamento-gantt-grade">
-              <div class="planejamento-gantt-linha planejamento-gantt-datas">
-                <div class="planejamento-gantt-atividade">Atividade</div>
-                <div class="planejamento-gantt-eixo"></div>
+          <section id="projetos-planejamento-gantt" class="planejamento-gantt" aria-labelledby="projetos-planejamento-gantt-titulo" hidden>
+            <div class="planejamento-gantt-cabecalho">
+              <h3 id="projetos-planejamento-gantt-titulo">Cronograma de atividades</h3>
+              <div class="planejamento-gantt-legenda">
+                <span>Período planejado</span>
+                <span>Avanço medido</span>
               </div>
-              <div class="planejamento-gantt-linhas"></div>
+            </div>
+            <div class="planejamento-gantt-scroll" tabindex="0" role="region" aria-label="Gráfico de Gantt">
+              <div class="planejamento-gantt-grade">
+                <div class="planejamento-gantt-linha planejamento-gantt-datas">
+                  <div class="planejamento-gantt-atividade">Atividade</div>
+                  <div class="planejamento-gantt-eixo"></div>
+                </div>
+                <div class="planejamento-gantt-linhas"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div id="projetos-aprovacao-orcamento" hidden>
+          <h2>Orçamento</h2>
+          <div class="planejamento-filtros-tarefas">
+            <button id="projetos-orcamento-consultar" class="btn btn-primary" type="button" disabled>Consultar orçamento</button>
+            <label for="projetos-orcamento-planilha">Planilha
+              <select id="projetos-orcamento-planilha" disabled>
+                <option value="">Selecione a planilha</option>
+              </select>
+            </label>
+          </div>
+          <p id="projetos-orcamento-status" class="tvig-empty" role="status"></p>
+          <div id="projetos-orcamento-tabela" class="table-container" hidden>
+            <h3 class="planejamento-tabela-titulo">Estrutura orçamentária</h3>
+            <div class="planejamento-tabela-scroll" tabindex="0" role="region" aria-label="Estrutura orçamentária">
+              <table class="custom-table" aria-label="Itens do orçamento">
+                <thead>
+                  <tr>
+                    <th scope="col">Código EDT</th>
+                    <th scope="col">Item</th>
+                    <th scope="col">Unidade</th>
+                    <th scope="col">Quantidade</th>
+                    <th scope="col">Preço unitário</th>
+                    <th scope="col">Valor orçado</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
             </div>
           </div>
-        </section>
+        </div>
       </section>
 
       <section id="tab-projetos-landbank" class="tab-pane" style="display: none;">
@@ -8779,7 +8817,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
   <script defer src="js/nucleo/data.js?v=2193"></script>
-  <script defer src="js/nucleo/sienge-api.js?v=1a83f898bc"></script>
+  <script defer src="js/nucleo/sienge-api.js?v=f9d99c4fc2"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
@@ -8787,6 +8825,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
   <script defer src="js/projetos/landbank.js?v=56d4c9eed3"></script>
   <script defer src="js/projetos/planejamento.js?v=c4bd088291"></script>
+  <script defer src="js/projetos/orcamento.js?v=686cdabd71"></script>
   <script defer src="js/nucleo/app.js?v=3259401e12"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>
