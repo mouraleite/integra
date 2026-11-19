@@ -461,13 +461,9 @@ const TitulosIncompletosAviso = {
   },
 
   async ler() {
-    const fc = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fc || !db || typeof fc.getDoc !== "function" || typeof fc.doc !== "function") return null;
-    const snap = await fc.getDoc(fc.doc(db, "titulos_incompletos_batimento", "atual"));
-    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    if (!existe) return null;
-    return snap.data() || null;
+    // titulos_incompletos_batimento no Supabase: doc "atual" (primeiros em texto JSON, como antes) ou null.
+    if (!window.DadosFinanceiro) return null;
+    return (await window.DadosFinanceiro.lerTitulosIncompletos()) || null;
   },
 
   textoDias(n) {

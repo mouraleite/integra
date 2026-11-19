@@ -81,6 +81,8 @@ function montar(pasta, usuariosBanco) {
   conf.push({ chave: "config/fluxos_processo", valor: { excluidos: fluxosDoc.excluidos || [], seq: fluxosDoc.seq || 0, updatedAt: fluxosDoc.updatedAt || null } });
   lerColecao(pasta, "settings").forEach((d) => conf.push({ chave: "settings/" + d.id, valor: d.data }));
   lerColecao(pasta, "config_stages").forEach((d) => conf.push({ chave: "config_stages/" + d.id, valor: d.data }));
+  // Coleções pequenas guardadas inteiras (cartão Clara). O cache compras_dashboard_cache não é importado: o painel refaz.
+  lerColecao(pasta, "cartao_clara").forEach((d) => conf.push({ chave: "cartao_clara/" + d.id, valor: d.data }));
   add("configuracoes", conf.map((c) => ({ chave: c.chave, valor: c.valor === undefined ? null : c.valor })), "chave");
 
   // ---- perfis (permissões) e usuários completos

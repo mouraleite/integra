@@ -61,6 +61,17 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      com a service role; limite de tamanho e por IP). `vistoria-app/` usa o login Microsoft dele para pegar o token.
      Importador: `ferramentas/migracao/importar-engenharia.js` (`--sem-caches`). Banco: fusão profunda
      (`privado.jsonb_fundir_profundo`) no controle do estoque; mapa vazio zera o campo, como no Firestore.
+   - **Financeiro, fiscal, contábil, compras e marketing (feito no código, falta testar com login):**
+     `js/financeiro/mapas-financeiro.js` e `dados-financeiro.js` (`window.DadosFinanceiro`, 38 tabelas e 11 RPCs).
+     Migrados: caixa diário (posição, movimentos, radar, valor a receber), contas pagas, antecipações, lotes de
+     pagamento, participações, contas de parceria, credores do Sienge, DFC, resultado de caixa, Rydoo, mútuo, notas
+     fiscais, marketing, títulos incompletos; anexos jurídicos (tabela nova `anexos_juridicos`, que tinha ficado fora
+     do inventário) e `cartao_clara`/`compras_dashboard_cache` guardados inteiros em `configuracoes`
+     (`DadosNucleo.listarDocs`). Importador: `ferramentas/migracao/importar-financeiro.js`.
+     **Com isso o front não faz mais nenhuma chamada ao Firestore**; do Firebase sobra só o Storage (Fase 4).
+     Mudanças: a coleção antiga `creditors` deixou de ser usada como reserva (só `sienge_creditors`); `updatedAt`
+     de algumas tabelas passa a ser a hora do servidor; a camada compara JSON com chaves ordenadas para não
+     regravar valores iguais.
    Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
 4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,

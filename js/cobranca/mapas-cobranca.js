@@ -287,6 +287,16 @@
         operador: "operador", baixa: ["baixa", "data"], vistoEm: ["visto_em", "data"],
       },
     },
+    // Metadados dos anexos jurídicos por cliente (arquivo no Storage em storagePath).
+    anexos_juridicos: {
+      tabela: "anexos_juridicos",
+      campos: {
+        customerId: ["customer_id", "texto"], fileId: ["file_id", "texto"], originalName: "original_name", ext: "ext",
+        size: ["size", "int"], tags: ["tags", "textos"], dateOverride: "date_override",
+        targetCustomerId: ["target_customer_id", "texto"], targetCustomerIds: ["target_customer_ids", "textos"],
+        storagePath: "storage_path", uploadedAt: ["uploaded_at", "iso"],
+      },
+    },
   };
 
   const ajudantes = { identidadeNota, carimboNota, mesclarNotas, tipoCacheDia, JSON_TEXTO };

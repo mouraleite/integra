@@ -3094,11 +3094,10 @@ const CessaoPopup = {
   },
 
   async guardarAutenticacao(codigo, hash, arquivo, info) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) throw new Error("O Firebase não está disponível para guardar a prova do documento.");
+    // documentos_autenticados no Supabase (id = código).
+    if (!window.DadosNucleo) throw new Error("A camada de dados não está disponível para guardar a prova do documento.");
     const dados = info || this.dadosAutenticacao();
-    await fx.setDoc(fx.doc(db, "documentos_autenticados", codigo), {
+    await window.DadosNucleo.tabela("documentos_autenticados").gravar(codigo, {
       tipo: "cessao",
       tipoNome: dados.tipo,
       codigo,

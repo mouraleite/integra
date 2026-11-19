@@ -1,6 +1,6 @@
 /* Fiscal › Enviar nota: o operador informa o pedido de compra, sobe a nota (e boleto ou outros anexos) e confirma
    a data e a forma de pagamento. O envio entra na fila do operador fiscal (Fiscal › Inserir nota), que lança no Sienge.
-   Firestore: fiscal_notas_envio/{id} · Storage: fiscal-notas/{id}/… */
+   Supabase: fiscal_notas_envio (uma linha por envio, id = o do app) · Storage (Firebase): fiscal-notas/{id}/… */
 window.FilaNotasFiscais = {
   COL: "fiscal_notas_envio",
   FORMAS: ["Boleto", "PIX", "Transferência (TED)", "Débito em conta", "Cartão de crédito", "Outra"],
@@ -15,10 +15,15 @@ window.FilaNotasFiscais = {
     excluida: { rot: "Excluído", cls: "is-off" }
   },
 
+  // Só para o Storage do Firebase (anexos); os dados estão no Supabase (ver tab).
   fb() {
-    const db = window.firebaseDb;
     const f = window.firebaseCollections;
-    return db && f && f.doc ? { db, f } : null;
+    return f ? { f } : null;
+  },
+
+  // Tabelas da área fiscal no Supabase (fiscal_notas_envio, fiscal_notas_aprendizado).
+  tab(nome) {
+    return window.DadosFinanceiro ? window.DadosFinanceiro.tabela(nome || this.COL) : null;
   },
 
   usuario() {
@@ -49,9 +54,9 @@ window.FilaNotasFiscais = {
   },
 
   async excluir(id) {
-    const fb = this.fb();
-    if (!fb || typeof fb.f.deleteDoc !== "function") throw new Error("Firebase indisponível");
-    await fb.f.deleteDoc(fb.f.doc(fb.db, this.COL, id));
+    const tab = this.tab();
+    if (!tab) throw new Error("Banco de dados indisponível");
+    await tab.excluir(id);
   },
 
   aberta(item) {
@@ -141,11 +146,9 @@ window.FilaNotasFiscais = {
   },
 
   async listar() {
-    const fb = this.fb();
-    if (!fb) throw new Error("Firebase indisponível");
-    const { collection, getDocs, query, orderBy, limit } = fb.f;
-    const snap = await getDocs(query(collection(fb.db, this.COL), orderBy("criadoEm", "desc"), limit(400)));
-    return snap.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+    const tab = this.tab();
+    if (!tab) throw new Error("Banco de dados indisponível");
+    return tab.listar({ ordem: ["criado_em", "desc"], limite: 400 });
   },
 
   /** Acompanha a fila em tempo real (um listener só, compartilhado entre Enviar nota e Inserir nota). */
@@ -154,16 +157,17 @@ window.FilaNotasFiscais = {
     if (!this._ouvintes.includes(fn)) this._ouvintes.push(fn);
     const copia = () => this._ultimo.map((x) => JSON.parse(JSON.stringify(x)));
     if (this._unsub) { if (this._ultimo) fn(copia()); return; }
-    const fb = this.fb();
-    if (!fb || !fb.f.onSnapshot) return;
-    const { collection, query, orderBy, limit, onSnapshot } = fb.f;
-    this._unsub = onSnapshot(query(collection(fb.db, this.COL), orderBy("criadoEm", "desc"), limit(400)), (snap) => {
-      this._ultimo = snap.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+    if (!window.DadosFinanceiro) return;
+    // Como o onSnapshot: no erro o listener para e o próximo ouvir() liga de novo.
+    const parar = window.DadosFinanceiro.ouvirFilaNotas(({ docs }) => {
+      this._ultimo = docs;
       this._ouvintes.forEach((cb) => { try { cb(copia()); } catch (e) { console.warn("[Fila notas]", e); } });
     }, (e) => {
       console.warn("[Fila notas] tempo real indisponível", e);
-      this._unsub = null;
+      try { parar(); } catch (x) {}
+      if (this._unsub === parar) this._unsub = null;
     });
+    this._unsub = parar;
   },
 
   novoId() {
@@ -171,18 +175,18 @@ window.FilaNotasFiscais = {
   },
 
   async salvar(id, dados) {
-    const fb = this.fb();
-    if (!fb) throw new Error("Firebase indisponível");
-    await fb.f.setDoc(fb.f.doc(fb.db, this.COL, id), JSON.parse(JSON.stringify(dados)), { merge: true });
+    const tab = this.tab();
+    if (!tab) throw new Error("Banco de dados indisponível");
+    await tab.gravar(id, JSON.parse(JSON.stringify(dados)), { merge: true });
   },
 
   /** Cada devolução do fiscal vira um caso para as conferências seguintes do mesmo fornecedor. */
   async aprender(item, patch) {
-    const fb = this.fb();
-    if (!fb) return;
+    const tab = this.tab("fiscal_notas_aprendizado");
+    if (!tab) return;
     const forn = item && item.fornecedor || {};
     const id = `AP${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
-    await fb.f.setDoc(fb.f.doc(fb.db, "fiscal_notas_aprendizado", id), {
+    await tab.gravar(id, {
       em: Date.now(),
       pedido: item.pedido || "",
       fornecedorId: String(forn.id || ""),
@@ -199,10 +203,9 @@ window.FilaNotasFiscais = {
 
   async listarAprendizado() {
     if (this._casos) return this._casos;
-    const fb = this.fb();
-    if (!fb || !fb.f.getDocs) return [];
-    const snap = await fb.f.getDocs(fb.f.query(fb.f.collection(fb.db, "fiscal_notas_aprendizado"), fb.f.limit(120)));
-    this._casos = snap.docs.map((d) => d.data());
+    const tab = this.tab("fiscal_notas_aprendizado");
+    if (!tab) return [];
+    this._casos = await tab.listar({ limite: 120 });
     return this._casos;
   },
 

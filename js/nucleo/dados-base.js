@@ -11,6 +11,9 @@
           Acrescentados para a área engenharia/comercial (não mudam nada acima; só valem para mapas que os usam):
           storagePath (URL de download do Firebase Storage <-> CAMINHO do objeto no bucket; ver caminhoStorage/urlStorage),
           storagePaths (lista de URLs <-> text[] de caminhos).
+          Acrescentados para a área financeiro/fiscal/marketing (não mudam nada acima; só valem para mapas que os usam):
+          simNao (flag 'S'/'N' do Sienge <-> boolean; volta "S"/"N"),
+          jsonTexto (texto com JSON <-> jsonb; grava o objeto parseado, volta texto com JSON.stringify).
           Campo com ponto no nome ("app.responsavelEmail"): objeto aninhado do front <-> coluna achatada. Na gravação, as
           subchaves mapeadas vão para as colunas e o resto do objeto (se sobrar) vai para extra com o nome de cima; objeto
           null zera as colunas. Na leitura o objeto é remontado. Mapas sem ponto no nome do campo não mudam.
@@ -128,6 +131,16 @@
       case "ids":
       case "textos":
         return Array.isArray(v) ? v.filter(function (x) { return x !== null && x !== undefined; }).map(String) : null;
+      case "simNao":
+        if (v === undefined || v === null || v === "") return null;
+        if (typeof v === "string") return ["s", "sim", "true", "1"].indexOf(v.trim().toLowerCase()) >= 0;
+        return !!v;
+      case "jsonTexto": {
+        if (v === undefined || v === null) return null;
+        if (typeof v !== "string") return v; // já veio como objeto/lista
+        if (!v.trim()) return null;
+        try { return JSON.parse(v); } catch (e) { return null; } // texto que não é JSON: fica em extra
+      }
       default:
         return v === undefined ? null : v;
     }
@@ -162,6 +175,10 @@
         return urlStorage(v);
       case "storagePaths":
         return Array.isArray(v) ? v.map(urlStorage) : v;
+      case "simNao":
+        return v ? "S" : "N";
+      case "jsonTexto":
+        return JSON.stringify(v);
       default:
         return v;
     }

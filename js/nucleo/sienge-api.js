@@ -2052,67 +2052,20 @@ const SiengeApiService = {
     return cats.some((fc) => wanted.includes(String(fc && fc.costCenterId))) || wanted.includes(String((m && m.costCenterId) || ""));
   },
 
+  // caixa_movimentos no Supabase: cabeçalho + uma linha por movimento (as partes _pN do Firestore acabaram).
   async _lerMesCaixa(companyId, ym) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.getDoc) return null;
-    const id = String(companyId) + "_" + ym;
+    if (!window.DadosFinanceiro) return null;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_movimentos", id));
-      if (!snap || typeof snap.exists !== "function" || !snap.exists()) return null;
-      const data = snap.data() || {};
-      const partes = Math.max(1, Number(data.partes) || 1);
-      let rows = Array.isArray(data.movimentos) ? data.movimentos.slice() : [];
-      for (let i = 2; i <= partes; i++) {
-        const pedaco = await fx.getDoc(fx.doc(db, "caixa_movimentos", id + "_p" + i));
-        if (pedaco && typeof pedaco.exists === "function" && pedaco.exists()) {
-          const extra = pedaco.data() || {};
-          if (Array.isArray(extra.movimentos)) rows = rows.concat(extra.movimentos);
-        }
-      }
-      return rows;
+      return await window.DadosFinanceiro.lerMesCaixa(companyId, ym);
     } catch (e) {
       return null;
     }
   },
 
   async _gravarMesCaixa(companyId, ym, rows) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.setDoc || ym > "2025-12") return;
-    const lista = Array.isArray(rows) ? rows : [];
-    const fatias = [];
-    let atual = [];
-    let tamanho = 2;
-    lista.forEach((row) => {
-      const pedaco = JSON.stringify(row || {});
-      if (atual.length && tamanho + pedaco.length > 700000) {
-        fatias.push(atual);
-        atual = [];
-        tamanho = 2;
-      }
-      atual.push(row);
-      tamanho += pedaco.length + 1;
-    });
-    if (atual.length || !fatias.length) fatias.push(atual);
-    const id = String(companyId) + "_" + ym;
-    const em = new Date().toISOString();
-    await fx.setDoc(fx.doc(db, "caixa_movimentos", id), {
-      companyId: String(companyId),
-      ym: ym,
-      n: lista.length,
-      partes: fatias.length,
-      em: em,
-      movimentos: fatias[0] || []
-    });
-    for (let i = 1; i < fatias.length; i++) {
-      await fx.setDoc(fx.doc(db, "caixa_movimentos", id + "_p" + (i + 1)), {
-        companyId: String(companyId),
-        ym: ym,
-        parte: i + 1,
-        movimentos: fatias[i]
-      });
-    }
+    if (!window.DadosFinanceiro || ym > "2025-12") return;
+    // RPC gravar_caixa_movimentos_mes: troca o mês inteiro (sem fatiar em 700 KB como no Firestore).
+    await window.DadosFinanceiro.gravarMesCaixa(companyId, ym, Array.isArray(rows) ? rows : []);
   },
 
   async _lerOuBuscarMesCaixa(companyId, ym, opts) {
@@ -2176,27 +2129,19 @@ const SiengeApiService = {
   },
 
   async _baseCaixaPronta(companyId) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.getDoc) return false;
+    if (!window.DadosFinanceiro) return false;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_movimentos", String(companyId) + "_base"));
-      if (!snap || typeof snap.exists !== "function" || !snap.exists()) return false;
-      return String((snap.data() || {}).ate || "") >= "2025-12";
+      const base = await window.DadosFinanceiro.lerBaseCaixa(companyId);
+      if (!base) return false;
+      return String(base.ate || "") >= "2025-12";
     } catch (e) {
       return false;
     }
   },
 
   async _marcarBaseCaixa(companyId) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.setDoc) return;
-    await fx.setDoc(fx.doc(db, "caixa_movimentos", String(companyId) + "_base"), {
-      companyId: String(companyId),
-      ate: "2025-12",
-      em: new Date().toISOString()
-    });
+    if (!window.DadosFinanceiro) return;
+    await window.DadosFinanceiro.marcarBaseCaixa(companyId, "2025-12");
   },
 
   async _empresasDaBaseCaixa() {
@@ -2232,7 +2177,7 @@ const SiengeApiService = {
   },
 
   async prepararBaseMovimentosCaixa() {
-    if (s_apiMode === "simulado" || !window.firebaseDb || !window.firebaseCollections) return;
+    if (s_apiMode === "simulado" || !window.DadosFinanceiro) return;
     if (this._baseCaixaRodando) return;
     this._baseCaixaRodando = true;
     let chave = "";
@@ -2289,7 +2234,7 @@ const SiengeApiService = {
   async getBankMovements(startDate, endDate, opts = {}) {
     const start = String(startDate || "").slice(0, 10);
     const end = String(endDate || "").slice(0, 10);
-    const usarBase = !opts.skipBase && s_apiMode !== "simulado" && opts.companyId && window.firebaseDb && window.firebaseCollections;
+    const usarBase = !opts.skipBase && s_apiMode !== "simulado" && opts.companyId && window.DadosFinanceiro;
     if (!usarBase || !start || !end || start > end) return this._bankMovementsSienge(start, end, opts);
     this._caixaConsulta += 1;
     try {

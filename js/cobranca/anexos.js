@@ -1898,15 +1898,20 @@ const AnexosDB = {
   storeName: 'customerAttachments',
   collectionName: 'anexos_juridicos',
 
+  // Só o Storage continua no Firebase; os metadados estão no Supabase (tabela anexos_juridicos).
   firebase() {
     const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !window.firebaseStorage || !fc
-      || !fc.collection || !fc.getDocs || !fc.query || !fc.where || !fc.doc
-      || !fc.getDoc || !fc.setDoc || !fc.deleteDoc || !fc.ref || !fc.uploadBytes
+    if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes
       || !fc.getDownloadURL || !fc.deleteObject) {
-      throw new Error('Firebase indisponível para sincronizar os anexos jurídicos.');
+      throw new Error('Armazenamento indisponível para sincronizar os anexos jurídicos.');
     }
     return fc;
+  },
+
+  // anexos_juridicos no Supabase: uma linha por anexo (id = o antigo id do doc no Firestore).
+  tabela() {
+    if (!window.DadosCobranca) throw new Error('Camada de dados indisponível para sincronizar os anexos jurídicos.');
+    return window.DadosCobranca.tabela(this.collectionName);
   },
   
   async init() {
@@ -1982,7 +1987,7 @@ const AnexosDB = {
     };
     const docId = this.firebaseDocId(customerId, fileId);
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.collectionName, docId), payload);
+      await this.tabela().gravar(docId, payload);
     } catch (e) {
       try {
         await fc.deleteObject(storageRef);
@@ -1997,14 +2002,13 @@ const AnexosDB = {
   async load(customerId, options) {
     const cid = String(customerId);
     const fc = this.firebase();
-    const snapshot = await fc.getDocs(fc.query(
-      fc.collection(window.firebaseDb, this.collectionName),
-      fc.where('customerId', '==', cid)
-    ));
+    const linhas = await this.tabela().listar({ filtros: [['customer_id', 'eq', cid]] });
     const cloudFiles = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data() || {};
-      cloudFiles.push({ ...data, id: String(data.fileId || docSnap.id), _docId: docSnap.id });
+    linhas.forEach((linha) => {
+      const data = Object.assign({}, linha);
+      const docId = String(data.id);
+      delete data.id;
+      cloudFiles.push({ ...data, id: String(data.fileId || docId), _docId: docId });
     });
 
     let localFiles = [];
@@ -2056,7 +2060,7 @@ const AnexosDB = {
     } catch (e) {
       await Promise.all(saved.map(async (file) => {
         try {
-          await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, file._docId));
+          await this.tabela().excluir(file._docId);
           await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
         } catch (cleanupError) {
           console.warn('[Anexos] Falha ao limpar um upload incompleto:', cleanupError);
@@ -2072,7 +2076,7 @@ const AnexosDB = {
     if (file.storagePath) {
       await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
     }
-    await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, docId));
+    await this.tabela().excluir(docId);
   }
 };
 

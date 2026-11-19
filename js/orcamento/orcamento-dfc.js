@@ -595,25 +595,17 @@ const OrcamentoDfcApp = {
   },
 
   async lerRealizadoSalvo(fim, empresas, ate) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    // dfc_realizado (+ _itens) no Supabase (window.DadosFinanceiro): o doc "c<empresa>" volta no formato atual
+    // (payload = texto JSON das linhas compactas, partes = []).
+    const D = window.DadosFinanceiro;
     const out = {};
-    if (!fx || !db || !fim || typeof fx.getDoc !== "function") return out;
+    if (!D || !fim) return out;
     const lerUm = async (emp) => {
-      const snap = await fx.getDoc(fx.doc(db, "dfc_realizado", this.docRealizado(emp)));
-      if (!this.docExiste(snap)) return;
-      const x = snap.data() || {};
+      const x = await D.lerRealizadoDfc(this.docRealizado(emp).slice(1));
+      if (!x) return;
       if (String(x.fim || "") !== String(fim)) return;
       if (String(x.ate || "") !== String(ate || fim)) return;
-      let texto = x.payload || "";
-      if (Array.isArray(x.partes) && x.partes.length) {
-        const blocos = await Promise.all(x.partes.map(async (pid) => {
-          const p = await fx.getDoc(fx.doc(db, "dfc_realizado", pid));
-          return this.docExiste(p) ? String((p.data() || {}).texto || "") : null;
-        }));
-        if (blocos.some((b) => b == null)) return;
-        texto = blocos.join("");
-      }
+      const texto = x.payload || "";
       let cru = [];
       try { cru = JSON.parse(texto || "[]"); } catch (e) { cru = []; }
       if (!Array.isArray(cru)) return;
@@ -635,34 +627,12 @@ const OrcamentoDfcApp = {
   },
 
   async salvarRealizadoEmpresa(companyId, fim, rows, ate) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !companyId) return false;
+    const D = window.DadosFinanceiro;
+    if (!D || !companyId) return false;
     const compacto = (rows || []).map((r) => [r.gid, r.code, this.ccNorm(r.cc), r.i, Math.round((Number(r.v) || 0) * 100) / 100, String(r.ccn || ""), String(r.cn || "")]);
-    const texto = JSON.stringify(compacto);
-    const id = this.docRealizado(companyId);
-    const LIM = 400000;
-    const ids = [];
-    if (texto.length > LIM) {
-      for (let i = 0, n = 0; i < texto.length; i += LIM, n++) {
-        const pid = this.docRealizado(companyId, n);
-        ids.push(pid);
-        await fx.setDoc(fx.doc(db, "dfc_realizado", pid), { tipo: "parte", pai: id, texto: texto.slice(i, i + LIM) });
-      }
-    }
-    await fx.setDoc(fx.doc(db, "dfc_realizado", id), {
-      empresa: String(companyId),
-      fim: fim,
-      ate: String(ate || fim),
-      v: 3,
-      em: new Date().toISOString(),
-      n: compacto.length,
-      payload: ids.length ? "" : texto,
-      partes: ids
-    });
-    for (let n = ids.length; n < 20; n++) {
-      fx.deleteDoc(fx.doc(db, "dfc_realizado", this.docRealizado(companyId, n))).catch(function () {});
-    }
+    // RPC gravar_dfc_realizado: troca o cabeçalho "c<empresa>" e os itens numa transação (antes: setDoc do doc,
+    // das partes __pN e deleteDoc das sobras).
+    await D.gravarRealizadoDfc(this.docRealizado(companyId).slice(1), fim, String(ate || fim), compacto);
     return true;
   },
 
@@ -2047,10 +2017,9 @@ const OrcamentoDfcApp = {
       return (por && typeof por === "object" && Object.keys(por).length) || (doc.contas && Object.keys(doc.contas).length);
     });
     if (jaTem) return;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.query !== "function" || typeof fx.where !== "function") return;
-    const snap = await fx.getDocs(fx.query(fx.collection(db, "resultado_caixa"), fx.where("tipo", "==", "forecast")));
+    // resultado_caixa no Supabase: where("tipo", "==", "forecast") com snapshot de imitação.
+    if (!window.DadosFinanceiro) return;
+    const snap = await window.DadosFinanceiro.listarResultadoCaixa({ tipo: "forecast" });
     const nuvem = {};
     snap.forEach((docSnap) => {
       const id = docSnap.id || "";
@@ -2783,7 +2752,7 @@ const OrcamentoDfcApp = {
     const marca = this.modoV1xV2() ? "V1 x V2 · V2" : (this.usaV2() ? "V2" : "V1");
     const estado = this.erro
       ? " · " + this.erro
-      : (this._nuvemOk ? " · salvo no Firebase" : (this._nuvemMsg ? " · " + this._nuvemMsg : ""));
+      : (this._nuvemOk ? " · salvo na nuvem" : (this._nuvemMsg ? " · " + this._nuvemMsg : ""));
     const outra = this._v2 && this._v1
       ? (" · " + (this.usaV2() ? "V1 " + (this._v1.fileName || "base") : "V2 " + (this._v2.fileName || "arquivo")))
       : "";
@@ -3237,55 +3206,34 @@ const OrcamentoDfcApp = {
     }
   },
 
+  // dfc_orcamento (+ _linhas) está no Supabase (window.DadosFinanceiro; as funções esperam o cliente ficar pronto).
+  // O nome firebasePronto ficou por compatibilidade.
   async firebasePronto() {
-    for (let i = 0; i < 40; i++) {
-      const fx = window.firebaseCollections;
-      if (window.firebaseDb && fx && typeof fx.setDoc === "function" && typeof fx.getDoc === "function") return true;
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    return false;
+    return !!window.DadosFinanceiro;
   },
 
   async salvarOrcamentoNuvem(pack, idDoc) {
     if (!pack) return;
     const pronto = await this.firebasePronto();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!pronto || !fx || !db) {
+    const D = window.DadosFinanceiro;
+    if (!pronto || !D) {
       this._nuvemOk = false;
       this._nuvemMsg = "";
-      this.erro = "Os valores estão nesta tela, mas o Firebase não estava disponível.";
+      this.erro = "Os valores estão nesta tela, mas a nuvem não estava disponível.";
       this.paintMeta();
       if (document.getElementById("orc-dfc-body")) this.paintBody();
       return;
     }
-    const texto = JSON.stringify(pack.lines || []);
     const id = idDoc || (pack.versao === "2" ? "2027_v2" : "2027_v1");
-    const LIM = 300000;
-    const ids = [];
+    const n = (pack.lines || []).length;
+    const savedAt = pack.savedAt || Date.now();
     try {
-      if (texto.length > LIM) {
-        for (let i = 0, n = 0; i < texto.length; i += LIM, n++) {
-          const pid = id + "__p" + n;
-          ids.push(pid);
-          await fx.setDoc(fx.doc(db, "dfc_orcamento", pid), { tipo: "parte", pai: id, texto: texto.slice(i, i + LIM) });
-        }
-      }
-      await fx.setDoc(fx.doc(db, "dfc_orcamento", id), {
-        fileName: pack.fileName || "",
-        savedAt: pack.savedAt || Date.now(),
-        year: 2027,
-        n: (pack.lines || []).length,
-        payload: ids.length ? "" : texto,
-        partes: ids
-      });
-      const snap = await fx.getDoc(fx.doc(db, "dfc_orcamento", id));
-      const gravado = this.docExiste(snap) ? (snap.data() || {}) : null;
-      if (!gravado || Number(gravado.n) !== (pack.lines || []).length || Number(gravado.savedAt) !== Number(pack.savedAt)) {
-        throw new Error("o Firebase não confirmou a gravação");
-      }
-      for (let n = ids.length; n < 20; n++) {
-        fx.deleteDoc(fx.doc(db, "dfc_orcamento", id + "__p" + n)).catch(function () {});
+      // RPC gravar_dfc_orcamento: troca o cabeçalho e as linhas numa transação (antes: setDoc do doc, das partes
+      // __pN e deleteDoc das sobras). Confere a quantidade gravada e relê o savedAt, como antes.
+      const gravadas = await D.gravarOrcamentoDfc(id, { fileName: pack.fileName || "", savedAt: savedAt, year: 2027, lines: pack.lines || [] });
+      const gravado = await D.lerOrcamentoDfc(id);
+      if (Number(gravadas) !== n || !gravado || Number(gravado.savedAt) !== Number(pack.savedAt)) {
+        throw new Error("a nuvem não confirmou a gravação");
       }
       this._nuvemOk = true;
       this._nuvemMsg = "";
@@ -3293,28 +3241,19 @@ const OrcamentoDfcApp = {
     } catch (e) {
       this._nuvemOk = false;
       this._nuvemMsg = "";
-      this.erro = "Não ficou salvo no Firebase: " + ((e && e.message) || "falha na gravação") + ".";
+      this.erro = "Não ficou salvo na nuvem: " + ((e && e.message) || "falha na gravação") + ".";
     }
     this.paintMeta();
     if (document.getElementById("orc-dfc-body")) this.paintBody();
   },
 
   async lerDocOrcamento(id) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDoc !== "function") return null;
-    const snap = await fx.getDoc(fx.doc(db, "dfc_orcamento", id));
-    if (!this.docExiste(snap)) return null;
-    const x = snap.data() || {};
-    let texto = x.payload || "";
-    if (Array.isArray(x.partes) && x.partes.length) {
-      const blocos = await Promise.all(x.partes.map(async (pid) => {
-        const p = await fx.getDoc(fx.doc(db, "dfc_orcamento", pid));
-        return this.docExiste(p) ? String((p.data() || {}).texto || "") : null;
-      }));
-      if (blocos.some((b) => b == null)) return null;
-      texto = blocos.join("");
-    }
+    const D = window.DadosFinanceiro;
+    if (!D) return null;
+    // Doc no formato atual: payload = texto JSON das linhas, partes = [].
+    const x = await D.lerOrcamentoDfc(id);
+    if (!x) return null;
+    const texto = x.payload || "";
     let lines = [];
     try { lines = JSON.parse(texto || "[]"); } catch (e) { return null; }
     if (!Array.isArray(lines) || !lines.length) return null;
@@ -3384,7 +3323,7 @@ const OrcamentoDfcApp = {
       this._custom = pack;
       this._ignorarNuvem = false;
       this._nuvemOk = false;
-      this._nuvemMsg = "Salvando a V2 no Firebase…";
+      this._nuvemMsg = "Salvando a V2 na nuvem…";
       this.varRs = true;
       this.gravarChave(this.LS_V2, pack);
     } catch (err) {

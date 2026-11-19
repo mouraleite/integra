@@ -87,6 +87,7 @@ const OBRIGATORIAS = {
   processos_contra_motivos: ["nome"], custas_judiciais: ["customer_id", "sale_id"], boletos_honorarios: ["competencia"],
   boletos_pagamentos: ["rec_id", "competencia"], boletos_baixa_banco: ["titulo"], nex_letters: ["doc_id", "item_id", "customer_id"],
   reneg_propostas: ["customer_id", "sale_id"], relacionamento_docs_assinatura: ["tipo"], webro_repasse_pendente: ["titulo"],
+  anexos_juridicos: ["customer_id", "file_id"],
 };
 
 function idLegado(customerId, n) {
@@ -263,6 +264,9 @@ function montar(pasta, opcoes) {
   add("relacionamento_docs_assinatura", umPorUm("relacionamento_docs_assinatura"));
   add("webro_repasse_pendente", umPorUm("webro_repasse_pendente", null, (o) => ({ criado: o.baixa || null })));
 
+  // ---- anexos_juridicos: metadados por arquivo (o arquivo vai pelo copiar-storage); id do doc mantido
+  add("anexos_juridicos", umPorUm("anexos_juridicos", (d) => Object.assign({ fileId: d.id }, d.data), (o) => ({ criado: o.uploadedAt || null })));
+
   // ---- registro_cadastro: ficha "atual" + partes atual_N (pedaços de um texto JSON) -> RPC substituir_registro_cadastro
   const reg = lerColecao(pasta, "registro_cadastro");
   const ficha = (reg.find((d) => d.id === "atual") || {}).data;
@@ -309,7 +313,8 @@ function montar(pasta, opcoes) {
 const ORDEM = ["sienge_customers", "sienge_defaulters_history", "inadimplencia_snapshots", "customer_notes", "jud_notes",
   "processos_judiciais", "processos_contra_motivos", "processos_contra", "custas_judiciais", "boletos_honorarios",
   "boletos_pagamentos", "boletos_baixa_banco", "nex_letters", "reneg_propostas", "reneg_liberacao",
-  "relacionamento_docs_assinatura", "registro_cadastro", "registro_cadastro_linhas", "webro_repasse_pendente"];
+  "relacionamento_docs_assinatura", "registro_cadastro", "registro_cadastro_linhas", "webro_repasse_pendente",
+  "anexos_juridicos"];
 
 async function principal() {
   const pasta = arg("export");

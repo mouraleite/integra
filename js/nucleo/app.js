@@ -10508,21 +10508,10 @@ window.ensureFilaPmpIndex = async function() {
     const est = window.EstoqueComercialApp;
     if (est && est.state && Array.isArray(est.state.units) && est.state.units.length) {
       units = est.state.units;
-    } else if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, "caixa_posicao"));
-      let best = "";
-      const buckets = {};
-      snap.forEach((d) => {
-        if (d.id === "_meta") return;
-        const data = d.data() || {};
-        const date = String(data.date || "");
-        if (!date || !Array.isArray(data.rows)) return;
-        if (!buckets[date]) buckets[date] = [];
-        buckets[date].push.apply(buckets[date], data.rows);
-        if (date > best) best = date;
-      });
-      rows = best ? buckets[best] : [];
+    } else if (window.DadosFinanceiro) {
+      // caixa_posicao no Supabase: só a foto mais recente (antes lia a coleção inteira e ficava com o maior dia).
+      const foto = await window.DadosFinanceiro.lerCaixaPosicaoRecente({ colunas: "id, d, cid, un, pmp" });
+      rows = Array.isArray(foto.rows) ? foto.rows : [];
       if (!rows.length) {
         // estoque_comercial no Supabase: uma linha por unidade (só as colunas que o índice de PMP usa).
         if (window.DadosEngenharia) {

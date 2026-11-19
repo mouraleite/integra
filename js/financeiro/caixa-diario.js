@@ -130,8 +130,10 @@ const CaixaPosicaoStore = {
   FB: "caixa_posicao",
   CHUNK: 120,
 
+  // caixa_posicao está no Supabase (window.DadosFinanceiro): uma linha por unidade por dia (os chunks <dia>_<n> e o
+  // _meta sumiram). Os nomes fb*/FB ficaram por compatibilidade.
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseCollections);
+    return !!window.DadosFinanceiro;
   },
 
   async loadEstoqueUnits() {
@@ -139,58 +141,33 @@ const CaixaPosicaoStore = {
       if (!EstoqueComercialApp.state.units.length) await EstoqueComercialApp.init();
       if (EstoqueComercialApp.state.units.length) return EstoqueComercialApp.state.units;
     }
-    // Estoque no Supabase (estoque_comercial: uma linha por unidade). caixa_posicao continua no Firebase.
+    // Estoque no Supabase (estoque_comercial: uma linha por unidade).
     if (!window.DadosEngenharia) return [];
     return window.DadosEngenharia.listarUnidadesEstoque();
   },
 
   async saveFromUnits(units, date) {
-    if (!this.fbReady()) throw new Error("Firebase indisponível.");
-    const { doc, setDoc } = window.firebaseCollections;
+    if (!this.fbReady()) throw new Error("Supabase indisponível.");
     const rows = (units || [])
       .filter((u) => {
         const code = String(u.commercialStock || "").toUpperCase();
         return code === "V" || code === "O" || u.contractId || u.contractNumber;
       })
       .map((u) => caixaSlim(u, date));
-    const nChunks = Math.max(1, Math.ceil(rows.length / this.CHUNK) || 1);
-    const writes = [];
-    for (let c = 0; c < nChunks; c++) {
-      writes.push(setDoc(doc(window.firebaseDb, this.FB, `${date}_${c}`), {
-        date, chunk: c, rows: rows.slice(c * this.CHUNK, (c + 1) * this.CHUNK), updatedAt: new Date().toISOString()
-      }));
-    }
-    writes.push(setDoc(doc(window.firebaseDb, this.FB, "_meta"), {
-      lastDate: date, chunks: nChunks, count: rows.length, updatedAt: new Date().toISOString()
-    }, { merge: true }));
-    await Promise.all(writes);
+    // RPC gravar_caixa_posicao: apaga o dia e insere as linhas numa transação (antes: setDoc dos chunks + _meta).
+    await window.DadosFinanceiro.gravarCaixaPosicao(date, rows);
     return rows;
   },
 
   async loadDate(date) {
     if (!this.fbReady() || !date) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, this.FB));
-    const rows = [];
-    snap.forEach((d) => {
-      if (d.id === "_meta") return;
-      const data = d.data() || {};
-      if (String(data.date) === String(date) && Array.isArray(data.rows)) rows.push(...data.rows);
-    });
-    return rows;
+    return window.DadosFinanceiro.lerCaixaPosicao(date);
   },
 
   async listDates() {
     if (!this.fbReady()) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, this.FB));
-    const set = new Set();
-    snap.forEach((d) => {
-      if (d.id === "_meta") return;
-      const data = d.data() || {};
-      if (data.date) set.add(String(data.date));
-    });
-    return [...set].sort().reverse();
+    // Da mais recente para a mais antiga (como o sort().reverse() de antes).
+    return window.DadosFinanceiro.listarDatasCaixaPosicao();
   }
 };
 
@@ -401,14 +378,15 @@ const FluxoCaixaDiarioApp = {
     try { local = JSON.parse(localStorage.getItem("cxd_radar_" + id) || "null"); } catch (e) { local = null; }
     if (this.radarDocId() !== pedido) return;
     this.radar = local && local.ym === this.mesRadar() ? local : null;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.getDoc) return;
+    // caixa_radar no Supabase (window.DadosFinanceiro).
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_radar", id));
+      const lido = await D.tabela("caixa_radar").obter(id);
       if (this.radarDocId() !== pedido) return;
-      if (snap && typeof snap.exists === "function" && snap.exists()) {
-        const nuvem = snap.data() || null;
+      if (lido) {
+        const nuvem = Object.assign({}, lido);
+        delete nuvem.id;
         if (nuvem && (!this.radar || String(nuvem.em || "") >= String(this.radar.em || ""))) this.radar = nuvem;
       }
     } catch (e) {}
@@ -436,13 +414,11 @@ const FluxoCaixaDiarioApp = {
     };
     this.radar = doc;
     try { localStorage.setItem("cxd_radar_" + this.radarDocId(), JSON.stringify(doc)); } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (fx && db && fx.setDoc) {
+    if (window.DadosFinanceiro) {
       try {
-        await fx.setDoc(fx.doc(db, "caixa_radar", this.radarDocId()), doc);
+        await window.DadosFinanceiro.tabela("caixa_radar").gravar(this.radarDocId(), doc); // setDoc sem merge
       } catch (e) {
-        alert("O radar ficou gravado neste navegador. O Firebase não guardou esta cópia.");
+        alert("O radar ficou gravado neste navegador. A nuvem não guardou esta cópia.");
       }
     }
     this.render();
@@ -629,19 +605,20 @@ const FluxoCaixaDiarioApp = {
 
   /** Lê o que o batimento (ou a última atualização manual) gravou. */
   async carregarVr() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    // caixa_valor_receber (+ _itens) no Supabase: o snapshot de imitação traz os docs emp_<empresa> com itens em
+    // texto JSON, como antes (o _estado do cron não vem).
+    const D = window.DadosFinanceiro;
     const token = {};
     this._vrToken = token;
     this.vr = Object.assign({}, this.vr || {}, { carregando: true, erro: "" });
     if (this.aba === "receber") this.render();
-    if (!fx || !db || typeof fx.getDocs !== "function") {
-      this.vr = { carregando: false, erro: "O Firebase não está disponível.", docs: {} };
+    if (!D) {
+      this.vr = { carregando: false, erro: "O Supabase não está disponível.", docs: {} };
       if (this.aba === "receber") this.render();
       return;
     }
     try {
-      const snap = await fx.getDocs(fx.collection(db, this.VR_COL));
+      const snap = await D.listarValorReceber();
       if (this._vrToken !== token) return;
       const docs = {};
       snap.forEach((d) => {
@@ -665,8 +642,7 @@ const FluxoCaixaDiarioApp = {
   /** Botão Atualizar: busca no Sienge as empresas da tela e grava o resultado para todos. */
   async atualizarVr() {
     if (this.vr && this.vr.atualizando) return;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    const D = window.DadosFinanceiro;
     if (typeof window.siengeFetchWithRetry !== "function") { alert("A conexão com o Sienge não está disponível."); return; }
     const empresas = this.vrEmpresasAlvo();
     if (!empresas.length) { alert("Nenhuma empresa gerida pelo grupo para atualizar."); return; }
@@ -726,8 +702,9 @@ const FluxoCaixaDiarioApp = {
       const docs = Object.assign({}, (this.vr && this.vr.docs) || {});
       docs[String(cid)] = Object.assign({}, registro, { itens });
       this.vr.docs = docs;
-      if (fx && db && typeof fx.setDoc === "function") {
-        try { await fx.setDoc(fx.doc(db, this.VR_COL, "emp_" + cid), registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
+      if (D) {
+        // RPC gravar_caixa_valor_receber: troca o cabeçalho emp_<empresa> e os itens numa transação.
+        try { await D.gravarValorReceber(registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
       }
     }
     this.vr.atualizando = false;
@@ -1035,20 +1012,16 @@ const FluxoCaixaDiarioApp = {
   },
 
   /**
-   * Contas ligadas/desligadas, tipo e empreendimentos fora do caixa ficam no Firebase.
-   * Relê a cada consulta (outro operador pode ter mudado) e espera o Firebase subir; sem isso, abrir a
-   * tela logo após o login mostrava todas as contas ligadas.
+   * Contas ligadas/desligadas, tipo e empreendimentos fora do caixa ficam no Supabase
+   * (caixa_diario_config_contas / _cc_excluidos, montados no formato do doc saldo_inicial).
+   * Relê a cada consulta (outro operador pode ter mudado) e espera o Supabase subir (as funções da camada esperam
+   * o cliente); sem isso, abrir a tela logo após o login mostrava todas as contas ligadas.
    */
   async loadFlags() {
-    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDoc !== "function") return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_diario_config", "saldo_inicial"));
-      const data = snap.exists() ? (snap.data() || {}) : {};
+      const data = (await D.lerConfigCaixa()) || {};
       this.flags = Object.assign({}, data.contas || {}, this._flagsPendentes || {});
       this.tipos = Object.assign({}, data.tipos || {}, this._tiposPendentes || {});
       this.ccExcl = Object.assign({}, data.empreendimentosExcluidos || {}, this._ccPendentes || {});
@@ -1059,27 +1032,26 @@ const FluxoCaixaDiarioApp = {
   },
 
   async saveConfig(patch, erroMsg) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.setDoc !== "function") {
-      alert("O Firebase não está disponível. A alteração vale só nesta consulta.");
+    const D = window.DadosFinanceiro;
+    if (!D) {
+      alert("O Supabase não está disponível. A alteração vale só nesta consulta.");
       return false;
     }
     const user = (window.AppState && AppState.currentUser) || {};
     try {
-      await fx.setDoc(fx.doc(db, "caixa_diario_config", "saldo_inicial"), Object.assign({}, patch, {
-        updatedAt: new Date().toISOString(),
+      // Merge por chave (antes setDoc com merge): só as linhas do patch; atualizado_em vem do servidor.
+      await D.gravarConfigCaixa(Object.assign({}, patch, {
         updatedBy: user.name || user.email || ""
-      }), { merge: true });
+      }));
       return true;
     } catch (e) {
       console.error("[Caixa diário] gravar configuração", e);
-      alert(erroMsg || "Não consegui gravar a alteração no Firebase.");
+      alert(erroMsg || "Não consegui gravar a alteração na nuvem.");
       return false;
     }
   },
 
-  /** Enquanto a gravação não confirma, a mudança vale sobre o que vier do Firebase. */
+  /** Enquanto a gravação não confirma, a mudança vale sobre o que vier da nuvem. */
   async _salvarPendente(bucket, key, value, patch, erroMsg) {
     this[bucket] = this[bucket] || {};
     this[bucket][key] = value;
@@ -1203,7 +1175,7 @@ const FluxoCaixaDiarioApp = {
     this.ccExcl[co] = ids.map(String);
     this.rebuild();
     this.render();
-    await this._salvarPendente("_ccPendentes", co, this.ccExcl[co], { empreendimentosExcluidos: { [co]: this.ccExcl[co] } }, "Não consegui gravar os empreendimentos no Firebase.");
+    await this._salvarPendente("_ccPendentes", co, this.ccExcl[co], { empreendimentosExcluidos: { [co]: this.ccExcl[co] } }, "Não consegui gravar os empreendimentos na nuvem.");
   },
 
   accountKey(a) {
@@ -1233,14 +1205,14 @@ const FluxoCaixaDiarioApp = {
     this.flags[key] = !!on;
     this.rebuild();
     this.render();
-    await this._salvarPendente("_flagsPendentes", key, !!on, { contas: { [key]: !!on } }, "Não consegui gravar a marcação da conta no Firebase.");
+    await this._salvarPendente("_flagsPendentes", key, !!on, { contas: { [key]: !!on } }, "Não consegui gravar a marcação da conta na nuvem.");
   },
 
   async setTipo(key, tipo) {
     this.tipos[key] = tipo;
     this.accounts.forEach((a) => { if (this.accountKey(a) === key) a.tipo = tipo; });
     this.render();
-    await this._salvarPendente("_tiposPendentes", key, tipo, { tipos: { [key]: tipo } }, "Não consegui gravar o tipo da conta no Firebase.");
+    await this._salvarPendente("_tiposPendentes", key, tipo, { tipos: { [key]: tipo } }, "Não consegui gravar o tipo da conta na nuvem.");
   },
 
   async loadAccountTypes(companyId) {

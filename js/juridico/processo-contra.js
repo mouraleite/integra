@@ -67,11 +67,9 @@ const ProcessoContraApp = {
     return typeof window.hasCrmPerm === "function" && window.hasCrmPerm("sub_jur_geral_processo_contra_editar") === true;
   },
 
-  // Só para os credores (sienge_creditors / creditors, de outra área, ainda no Firebase).
-  fb() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.collection || !fc.getDocs || !fc.doc || !fc.setDoc) return null;
-    return fc;
+  // Credores gravados pelo cron (sienge_creditors no Supabase, área financeiro).
+  tabelaCredores() {
+    return window.DadosFinanceiro ? window.DadosFinanceiro.tabela("sienge_creditors") : null;
   },
 
   // Processos e motivos no Supabase (tabelas processos_contra e processos_contra_motivos).
@@ -646,26 +644,20 @@ const ProcessoContraApp = {
   },
 
   async lerCredoresFirebase() {
-    const fc = this.fb();
-    if (!fc) return [];
+    const tab = this.tabelaCredores();
+    if (!tab) return [];
     const itens = [];
     const vistos = new Set();
-    for (let i = 0; i < ["sienge_creditors", "creditors"].length; i++) {
-      const nome = ["sienge_creditors", "creditors"][i];
-      try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, nome));
-        if (snap && typeof snap.forEach === "function") {
-          snap.forEach((d) => {
-            const data = (d && d.data && d.data()) || {};
-            const c = this.normalizarCredor(Object.assign({ id: d.id }, data));
-            if (!c || !c.id || c.id.charAt(0) === "_" || !c.name || vistos.has(c.id)) return;
-            vistos.add(c.id);
-            itens.push(c);
-          });
-        }
-        if (itens.length) break;
-      } catch (e) {}
-    }
+    // A coleção legada "creditors" (fallback antigo) não foi para o Supabase: só sienge_creditors.
+    try {
+      const linhas = await tab.listar();
+      linhas.forEach((data) => {
+        const c = this.normalizarCredor(data);
+        if (!c || !c.id || c.id.charAt(0) === "_" || !c.name || vistos.has(c.id)) return;
+        vistos.add(c.id);
+        itens.push(c);
+      });
+    } catch (e) {}
     return itens;
   },
 

@@ -36,12 +36,22 @@
   // ---------------------------------------------------------------------------------------------
   // Memória do que foi lido, para gravar só o que mudou.
   const lido = {};
+  // JSON com as chaves em ordem: o jsonb do banco devolve os objetos com as chaves reordenadas, e sem isso
+  // um valor igual pareceria "mudado" e seria regravado a cada sincronização.
+  function estavel(v) {
+    if (Array.isArray(v)) return "[" + v.map(estavel).join(",") + "]";
+    if (v && typeof v === "object") {
+      return "{" + Object.keys(v).filter((k) => v[k] !== undefined).sort()
+        .map((k) => JSON.stringify(k) + ":" + estavel(v[k])).join(",") + "}";
+    }
+    return JSON.stringify(v === undefined ? null : v);
+  }
   function marca(tabela, id, linha) {
-    (lido[tabela] = lido[tabela] || {})[id] = JSON.stringify(linha);
+    (lido[tabela] = lido[tabela] || {})[id] = estavel(linha);
   }
   function mudou(tabela, id, linha) {
     const t = lido[tabela];
-    return !t || t[id] !== JSON.stringify(linha);
+    return !t || t[id] !== estavel(linha);
   }
 
   async function lerTabela(mapa, ordem) {
@@ -488,6 +498,14 @@
     return B.snapLista(docs);
   }
 
+  // Equivale a getDocs(collection(<colecao>)) para coleções pequenas guardadas inteiras em configuracoes
+  // (chave "<colecao>/<id>", ex.: compras_dashboard_cache, cartao_clara, settings). Uma leitura só.
+  async function listarDocs(colecao) {
+    const prefixo = colecao + "/";
+    const linhas = (await lerConfiguracoes(prefixo)).filter((l) => l.chave.indexOf("/", prefixo.length) < 0);
+    return B.snapLista(linhas.map((l) => B.snapDoc(l.chave.slice(prefixo.length), l.valor)));
+  }
+
   // Escuta mudanças em chaves de configuracoes. cb(chave, valorDoFront). Devolve função para parar.
   function ouvirConfiguracao(chaves, cb) {
     const alvo = new Set([].concat(chaves));
@@ -543,7 +561,15 @@
         if (atual) { delete atual.id; final = fundir(atual, final); }
       }
       const linha = B.paraLinha(mapa, final, id);
-      checar(await sb().from(mapa.tabela).upsert(linha, { onConflict: chave }));
+      let r = await sb().from(mapa.tabela).upsert(linha, { onConflict: chave });
+      if (r.error && r.error.code === "23502") {
+        // Coluna obrigatória recebeu null: tenta de novo sem os campos nulos (vale o default do banco ou o valor
+        // que já está na linha), como o Firestore, que aceitava campo nulo em qualquer lugar.
+        const semNulos = {};
+        Object.keys(linha).forEach((k) => { if (linha[k] !== null || k === chave) semNulos[k] = linha[k]; });
+        r = await sb().from(mapa.tabela).upsert(semNulos, { onConflict: chave });
+      }
+      checar(r);
       return id;
     }
 
@@ -607,6 +633,7 @@
     lerConfig: aposPronto(lerConfig),
     gravarConfig: aposPronto(gravarConfig),
     listarConfig: aposPronto(listarConfig),
+    listarDocs: aposPronto(listarDocs),
     ouvirConfiguracao,
     trocarConfiguracao: aposPronto(trocarConfiguracao),
     lerConfiguracao: aposPronto(async (chave) => { const r = await lerConfiguracao(chave); return r ? valorParaFront(chave, r.valor) : undefined; }),

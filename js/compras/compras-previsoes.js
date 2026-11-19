@@ -1700,22 +1700,16 @@ const ComprasPrevisoesApp = {
     items.push({ id: id, name: label, label: label });
   },
 
+  // Base de credores do Sienge no Supabase (sienge_creditors; só as colunas do nome). A coleção antiga "creditors"
+  // não foi migrada. O nome *Firebase ficou por compatibilidade.
   async lerCredoresFirebase() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     const items = [];
     const seen = {};
-    if (!fx || !db || typeof fx.getDocs !== "function" || typeof fx.collection !== "function") return items;
-    const nomes = ["sienge_creditors", "creditors"];
-    for (let i = 0; i < nomes.length; i++) {
-      try {
-        const snap = await fx.getDocs(fx.collection(db, nomes[i]));
-        if (snap && typeof snap.forEach === "function") {
-          snap.forEach((d) => this.empurrarCredor((d && d.data && d.data()) || {}, seen, items));
-        }
-        if (items.length) break;
-      } catch (e) {}
-    }
+    if (!window.DadosFinanceiro) return items;
+    try {
+      const lista = await window.DadosFinanceiro.tabela("sienge_creditors").listar({ colunas: "id, name, trade_name" });
+      lista.forEach((d) => this.empurrarCredor(d || {}, seen, items));
+    } catch (e) {}
     return items;
   },
 

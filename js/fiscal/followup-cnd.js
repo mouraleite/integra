@@ -232,13 +232,14 @@ const FollowupCndApp = {
       this.itens = local.itens;
       this._seq = Number(local.seq) || 0;
     }
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb) {
+    // config/followup_cnd no Supabase (documento genérico em configuracoes, chave "config/followup_cnd").
+    const DN = window.DadosNucleo;
+    if (!DN) {
       this.carregado = true;
       return;
     }
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "followup_cnd"));
+      const snap = await DN.lerConfig("followup_cnd");
       const remoto = snap && snap.exists && snap.exists() ? snap.data() : null;
       if (remoto && Array.isArray(remoto.itens) && Number(remoto.seq || 0) >= this._seq) {
         this.itens = remoto.itens;
@@ -254,11 +255,11 @@ const FollowupCndApp = {
     const seq = this._seq;
     const itens = this.itens.slice();
     try { localStorage.setItem(this.LS, JSON.stringify({ itens: itens, seq: seq })); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb) return Promise.resolve();
+    const DN = window.DadosNucleo;
+    if (!DN) return Promise.resolve();
     const job = this._gravando.then(async () => {
       if (seq !== FollowupCndApp._seq) return;
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "followup_cnd"), {
+      await DN.gravarConfig("followup_cnd", {
         itens: itens,
         seq: seq,
         updatedAt: new Date().toISOString()
