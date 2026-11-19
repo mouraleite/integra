@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=7bc7edd630">
+  <link rel="stylesheet" href="css/style.css?v=8a3849c718">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -3642,7 +3642,26 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
           <button type="button" class="btn btn-secondary btn-sm" data-expand="true">Expandir tudo</button>
           <button type="button" class="btn btn-secondary btn-sm" data-expand="false">Recolher tudo</button>
         </div>
+        <section id="projetos-planejamento-gantt" class="planejamento-gantt" aria-labelledby="projetos-planejamento-gantt-titulo" hidden>
+          <div class="planejamento-gantt-cabecalho">
+            <h3 id="projetos-planejamento-gantt-titulo">Cronograma de atividades</h3>
+            <div class="planejamento-gantt-legenda">
+              <span>Período planejado</span>
+              <span>Avanço medido</span>
+            </div>
+          </div>
+          <div class="planejamento-gantt-scroll" tabindex="0" role="region" aria-label="Gráfico de Gantt">
+            <div class="planejamento-gantt-grade">
+              <div class="planejamento-gantt-linha planejamento-gantt-datas">
+                <div class="planejamento-gantt-atividade">Atividade</div>
+                <div class="planejamento-gantt-eixo"></div>
+              </div>
+              <div class="planejamento-gantt-linhas"></div>
+            </div>
+          </div>
+        </section>
         <div id="projetos-planejamento-lista" class="table-container" hidden>
+          <h3 class="planejamento-tabela-titulo">Tarefas planejadas</h3>
           <table class="custom-table" aria-label="Cronograma de planejamento">
             <thead>
               <tr>
@@ -8754,7 +8773,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/alertas-popup.js?v=1b52032dc6"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
   <script defer src="js/projetos/landbank.js?v=56d4c9eed3"></script>
-  <script defer src="js/projetos/planejamento.js?v=bfb8afb357"></script>
+  <script defer src="js/projetos/planejamento.js?v=4aee6f72bb"></script>
   <script defer src="js/nucleo/app.js?v=3259401e12"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>

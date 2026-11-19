@@ -12523,3 +12523,73 @@ div.cem-previa { white-space: normal; }
 .ctit-selo.is-aberto { background: #fdecec; color: #b91c1c; }
 @media (max-width: 1000px) { .ctit-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ctit-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .ctit-kpis, .ctit-grade { grid-template-columns: 1fr; } .ctit-input { width: 100%; } .ctit-linha { flex-wrap: wrap; } }
+
+/* Cronograma de Aprovação */
+#projetos-planejamento-hierarquia { margin: 0.75rem 0; }
+.planejamento-gantt {
+  margin: 0.75rem 0 1rem;
+  border: 1px solid #dce7e0;
+  border-radius: var(--border-radius-md);
+  background: var(--color-white);
+}
+.planejamento-gantt-cabecalho {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+}
+.planejamento-gantt-cabecalho h3, .planejamento-tabela-titulo {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--color-primary);
+}
+.planejamento-tabela-titulo { padding: 0.85rem 1.25rem; }
+.planejamento-gantt-legenda { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem; }
+.planejamento-gantt-legenda span::before {
+  content: "";
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.65rem;
+  margin-inline-end: 0.3rem;
+  border-radius: 2px;
+  background: #d1e8dc;
+}
+.planejamento-gantt-legenda span:last-child::before { background: #19784d; }
+.planejamento-gantt-scroll { overflow: auto; max-height: 25rem; border-top: 1px solid #dce7e0; }
+.planejamento-gantt-grade { min-width: 60rem; }
+.planejamento-gantt-linha { display: grid; grid-template-columns: 20rem minmax(0, 1fr); border-bottom: 1px solid #edf2ee; }
+.planejamento-gantt-linha[hidden] { display: none; }
+.planejamento-gantt-datas { position: sticky; top: 0; z-index: 2; background: #eff6f1; font-weight: 700; }
+.planejamento-gantt-atividade {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  min-height: 2rem;
+  padding: 0.25rem 0.75rem;
+  border-inline-end: 1px solid #dce7e0;
+  font-size: 0.8rem;
+}
+.planejamento-gantt-atividade span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planejamento-gantt-toggle {
+  flex-shrink: 0;
+  border: 1px solid #c8ddcf;
+  border-radius: 4px;
+  padding: 0 0.35rem;
+  background: #eff6f1;
+  color: #105436;
+  cursor: pointer;
+}
+.planejamento-gantt-eixo, .planejamento-gantt-faixa { position: relative; margin-inline: 0.5rem 1rem; }
+.planejamento-gantt-eixo span { position: absolute; inset-block-start: 0.5rem; white-space: nowrap; font-size: 0.75rem; }
+.planejamento-gantt-barra {
+  position: absolute;
+  inset-block: 0.55rem;
+  min-inline-size: 2px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #d1e8dc;
+}
+.planejamento-gantt-barra span { display: block; block-size: 100%; background: #19784d; }

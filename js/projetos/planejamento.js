@@ -94,16 +94,84 @@
   const table = document.getElementById('projetos-planejamento-lista');
   const body = table.querySelector('tbody');
   const hierarchy = document.getElementById('projetos-planejamento-hierarquia');
+  const gantt = document.getElementById('projetos-planejamento-gantt');
+  const ganttAxis = gantt.querySelector('.planejamento-gantt-eixo');
+  const ganttRows = gantt.querySelector('.planejamento-gantt-linhas');
+  const monthLabel = new Intl.DateTimeFormat('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+
+  function renderizarGantt() {
+    const dated = taskRows.filter(({start, finish}) => Number.isFinite(start) && finish >= start);
+    if (!dated.length) return;
+    const first = new Date(Math.min(...dated.map(entry => entry.start)));
+    const last = new Date(Math.max(...dated.map(entry => entry.finish)));
+    const start = Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1);
+    const end = Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 1);
+    const monthCount = (last.getUTCFullYear() - first.getUTCFullYear()) * 12
+      + last.getUTCMonth() - first.getUTCMonth() + 1;
+    const step = Math.max(1, Math.ceil(monthCount / 8));
+    for (let month = 0; month < monthCount; month += step) {
+      const tick = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + month, 1));
+      const label = document.createElement('span');
+      label.style.insetInlineStart = (tick.getTime() - start) * 100 / (end - start) + '%';
+      label.textContent = monthLabel.format(tick);
+      ganttAxis.append(label);
+    }
+
+    const rows = document.createDocumentFragment();
+    for (const entry of taskRows) {
+      const line = document.createElement('div');
+      line.className = 'planejamento-gantt-linha';
+      const label = document.createElement('div');
+      label.className = 'planejamento-gantt-atividade';
+      label.style.paddingInlineStart = (0.75 + Math.min(entry.level - 1, 5) * 0.65) + 'rem';
+      const name = document.createElement('span');
+      name.textContent = entry.task.presentationId + ' · ' + entry.description;
+      name.title = name.textContent;
+      if (entry.toggle) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'planejamento-gantt-toggle';
+        toggle.addEventListener('click', () => entry.toggle.click());
+        entry.ganttToggle = toggle;
+        label.append(toggle);
+      }
+      label.append(name);
+      const track = document.createElement('div');
+      track.className = 'planejamento-gantt-faixa';
+      if (Number.isFinite(entry.start) && entry.finish >= entry.start) {
+        const bar = document.createElement('div');
+        bar.className = 'planejamento-gantt-barra';
+        bar.style.insetInlineStart = (entry.start - start) * 100 / (end - start) + '%';
+        bar.style.inlineSize = (entry.finish - entry.start + dayMs) * 100 / (end - start) + '%';
+        bar.title = dateLabel(entry.task.startDate) + ' a ' + dateLabel(entry.task.finishDate);
+        if (entry.measured !== null) {
+          const progress = document.createElement('span');
+          progress.style.inlineSize = Math.min(100, Math.max(0, entry.measured)) + '%';
+          bar.title += ' · ' + percentageFormat.format(entry.measured / 100) + ' medido';
+          bar.append(progress);
+        }
+        track.append(bar);
+      }
+      line.append(label, track);
+      rows.append(line);
+      entry.ganttRow = line;
+    }
+    ganttRows.append(rows);
+    gantt.hidden = false;
+  }
   let taskRows = [];
 
   function atualizarHierarquia() {
     for (const entry of taskRows) {
       const { row, parent, toggle, expanded } = entry;
       row.hidden = Boolean(parent && (parent.row.hidden || !parent.expanded));
+      if (entry.ganttRow) entry.ganttRow.hidden = row.hidden;
       if (toggle) {
-        toggle.setAttribute('aria-expanded', String(expanded));
-        toggle.setAttribute('aria-label', (expanded ? 'Recolher ' : 'Expandir ') + entry.description);
-        toggle.textContent = expanded ? '▾' : '▸';
+        for (const button of [toggle, entry.ganttToggle].filter(Boolean)) {
+          button.setAttribute('aria-expanded', String(expanded));
+          button.setAttribute('aria-label', (expanded ? 'Recolher ' : 'Expandir ') + entry.description);
+          button.textContent = expanded ? '▾' : '▸';
+        }
       }
     }
   }
@@ -126,6 +194,9 @@
     body.replaceChildren();
     taskRows = [];
     hierarchy.hidden = true;
+    gantt.hidden = true;
+    ganttAxis.replaceChildren();
+    ganttRows.replaceChildren();
     status.textContent = '';
   }
 
@@ -199,6 +270,8 @@
         entry.row = row;
         const start = Date.parse(task.startDate);
         const finish = Date.parse(task.finishDate);
+        entry.start = start;
+        entry.finish = finish;
         const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
         const elapsedDays = (today - start) / dayMs;
         const overdue = days === null || measured === null
@@ -236,6 +309,7 @@
         rows.append(row);
       }
       body.append(rows);
+      renderizarGantt();
       hierarchy.hidden = !taskRows.some(entry => entry.toggle);
       atualizarHierarquia();
       table.hidden = tasks.length === 0;
