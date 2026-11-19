@@ -1698,8 +1698,8 @@ const SiengeApiService = {
     const filters = new URLSearchParams({
       buildingId,
       buildingUnitId: unitId,
-      measurementStartDate: "01/01/2000",
-      measurementEndDate: "01/01/2200"
+      measurementStartDate: "2000-01-01",
+      measurementEndDate: "2200-01-01"
     });
     let logs;
     try {
