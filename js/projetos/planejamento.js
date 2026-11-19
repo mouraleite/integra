@@ -172,7 +172,7 @@
         const etapa = measurementError.measurementStage === 'itens' ? 'os itens' : 'a lista';
         const motivo = measurementError.status ? 'HTTP ' + measurementError.status : 'resposta inválida';
         status.textContent += ' Não foi possível ler ' + etapa + ' das medições (' + motivo + ').';
-        if (measurements?.size) status.textContent += ' Os percentuais exibidos podem estar desatualizados.';
+        if (measurements?.size) status.textContent += ' A tabela mostra apenas os percentuais confirmados.';
       }
     } catch (error) {
       if (current !== consulta) return;

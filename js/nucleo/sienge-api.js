@@ -1305,9 +1305,10 @@ async function siengeFetchDireto(endpoint) {
     }
   }
   const url = `${baseUrl}${endpoint}`;
+  const skipCache = endpoint.includes("payment-information") || /^\/building-projects\/(?:\d+\/)?progress-logs(?:[/?]|$)/.test(endpoint);
   const response = await fetch(url, {
     method: "GET",
-    cache: String(endpoint).indexOf("payment-information") >= 0 ? "no-store" : "default",
+    cache: skipCache ? "no-store" : "default",
     headers: {
       "Authorization": getBasicAuthHeader(),
       "Accept": "application/json",
@@ -1725,9 +1726,8 @@ const SiengeApiService = {
           ? await getBuildingPlanningPages(path, page) : page.results;
       } catch (error) {
         error.measurementStage = "itens";
-        itemError ??= error;
-        if (error.status === 401 || error.status === 403 || error.status === 429) break;
-        continue;
+        itemError = error;
+        break;
       }
       for (const item of items) {
         const value = item.cumulativePercentage;
