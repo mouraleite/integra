@@ -131,8 +131,12 @@
           : measured >= 100 ? 0 : Math.max(0, Math.floor(elapsedDays - days * Math.max(0, measured) / 100));
         const values = [task.presentationId, task.description, dateLabel(task.startDate),
           dateLabel(task.finishDate), task.duration, days, days === null ? null : monthFormat.format(days / 30.4375),
-          overdue, measured === null ? null : percentageFormat.format(measured / 100)];
+          overdue];
         for (const value of values) row.insertCell().textContent = value ?? '—';
+        const progressCell = row.insertCell();
+        progressCell.textContent = measured === null ? '—' : percentageFormat.format(measured / 100);
+        if (measured >= 100) progressCell.style.color = '#166534';
+        else if (overdue > 0) progressCell.style.color = '#b91c1c';
         const description = row.cells[1];
         description.style.paddingInlineStart = (1.25 + (level - 1) * 0.75) + 'rem';
         if (task.summary) description.style.fontWeight = '700';
