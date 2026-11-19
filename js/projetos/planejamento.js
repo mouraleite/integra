@@ -97,14 +97,17 @@
       const tasks = await window.SiengeApiService.getBuildingPlanningTasks(buildingId, '01');
       if (current !== consulta || !window.hasCrmPerm('mod_projetos')) return;
       let measurements = null;
+      let measurementError = null;
       if (tasks.length) {
         status.textContent = 'Consultando as medições no Sienge…';
         try {
-          measurements = await window.SiengeApiService.getBuildingPlanningMeasurements(
+          const result = await window.SiengeApiService.getBuildingPlanningMeasurements(
             buildingId, '01', tasks.map(task => task.id)
           );
+          measurements = result.measured;
+          measurementError = result.itemError;
         } catch (error) {
-          console.error('Falha ao consultar as medições do planejamento', error);
+          measurementError = error;
         }
       }
       if (current !== consulta || !window.hasCrmPerm('mod_projetos')) return;
@@ -121,7 +124,7 @@
         const finish = Date.parse(task.finishDate);
         const days = Number.isFinite(start) && finish >= start ? (finish - start) / dayMs + 1 : null;
         const recorded = measurements?.get(String(task.id));
-        const measured = recorded ?? (measurements && !task.summary ? 0 : null);
+        const measured = recorded ?? (measurements && !measurementError && !task.summary ? 0 : null);
         const elapsedDays = (today - start) / dayMs;
         const overdue = days === null || measured === null
           ? null
@@ -158,13 +161,18 @@
       status.textContent = tasks.length
         ? tasks.length + (tasks.length === 1 ? ' atividade encontrada.' : ' atividades encontradas.')
         : 'Nenhuma atividade encontrada para esta obra e unidade.';
-      if (tasks.length && !measurements) {
-        status.textContent += ' O Sienge não retornou as medições. Tente consultar novamente.';
-      } else if (tasks.length && !measurements.size) {
-        status.textContent += ' Nenhuma medição acumulada foi encontrada para essas atividades.';
-      } else if (measurements?.size) {
+      if (measurements?.size) {
         status.textContent += ' Medição acumulada encontrada para ' + measurements.size
           + (measurements.size === 1 ? ' atividade.' : ' atividades.');
+      } else if (tasks.length && !measurementError) {
+        status.textContent += ' Nenhuma medição acumulada foi encontrada para essas atividades.';
+      }
+      if (measurementError) {
+        console.error('Falha ao consultar as medições do planejamento', measurementError);
+        const etapa = measurementError.measurementStage === 'itens' ? 'os itens' : 'a lista';
+        const motivo = measurementError.status ? 'HTTP ' + measurementError.status : 'resposta inválida';
+        status.textContent += ' Não foi possível ler ' + etapa + ' das medições (' + motivo + ').';
+        if (measurements?.size) status.textContent += ' Os percentuais exibidos podem estar desatualizados.';
       }
     } catch (error) {
       if (current !== consulta) return;

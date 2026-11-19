@@ -1658,13 +1658,13 @@ function normalizeSiengeCustomer(c) {
 // -----------------------------------------------
 // Interface de Acesso aos Serviços
 // -----------------------------------------------
-async function getBuildingPlanningPages(path) {
+async function getBuildingPlanningPages(path, firstPage) {
   const limit = 200;
   const separator = path.includes("?") ? "&" : "?";
   const results = [];
   let offset = 0;
   while (true) {
-    const page = await siengeFetch(`${path}${separator}offset=${offset}&limit=${limit}`);
+    const page = offset === 0 && firstPage ? firstPage : await siengeFetch(`${path}${separator}offset=${offset}&limit=${limit}`);
     const count = page.resultSetMetadata?.count;
     if (!Array.isArray(page.results) || !Number.isSafeInteger(count) || count < 0) {
       throw new Error("Resposta de planejamento inválida.");
@@ -1693,8 +1693,16 @@ const SiengeApiService = {
     }
     const pending = new Set(taskIds.map(String));
     const measured = new Map();
-    const filters = new URLSearchParams({ buildingId, buildingUnitId: String(Number(buildingUnitId)) });
-    const logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
+    const unitId = String(Number(buildingUnitId));
+    const filters = new URLSearchParams({ buildingId, buildingUnitId: unitId });
+    let logs;
+    try {
+      logs = await getBuildingPlanningPages(`/building-projects/progress-logs?${filters}`);
+    } catch (error) {
+      error.measurementStage = "lista";
+      throw error;
+    }
+    let itemError = null;
     // Alguns registros não têm situação de aprovação. Excluir somente as medições reprovadas.
     const usable = logs.filter(log => log.statusApproval !== "REPROVADA" &&
       /^\d+$/.test(String(log.measurementNumber)));
@@ -1702,8 +1710,20 @@ const SiengeApiService = {
       Number(b.measurementNumber) - Number(a.measurementNumber));
     for (const log of usable) {
       if (!pending.size) break;
-      const path = `/building-projects/${buildingId}/progress-logs/${log.measurementNumber}/items/${buildingUnitId}`;
-      const items = await getBuildingPlanningPages(path);
+      const path = `/building-projects/${buildingId}/progress-logs/${log.measurementNumber}/items/${unitId}`;
+      let items;
+      try {
+        // A consulta de itens aceita a rota sem parâmetros de paginação.
+        const page = await siengeFetch(path);
+        if (!Array.isArray(page.results)) throw new Error("Resposta de itens de medição inválida.");
+        items = page.resultSetMetadata?.count > page.results.length
+          ? await getBuildingPlanningPages(path, page) : page.results;
+      } catch (error) {
+        error.measurementStage = "itens";
+        itemError ??= error;
+        if (error.status === 401 || error.status === 403 || error.status === 429) break;
+        continue;
+      }
       for (const item of items) {
         const value = item.cumulativePercentage;
         const percentage = value === null || value === undefined || value === "" ? NaN : Number(value);
@@ -1711,7 +1731,7 @@ const SiengeApiService = {
         if (Number.isFinite(percentage) && pending.delete(taskId)) measured.set(taskId, percentage);
       }
     }
-    return measured;
+    return { measured, itemError };
   },
 
   // 1. Empresas
