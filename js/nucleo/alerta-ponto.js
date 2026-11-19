@@ -53,9 +53,48 @@ const AlertaPonto = {
     return imp || u || null;
   },
 
+  /* Só a conta do Israel, e não quando ela está testando como outra conta. */
   ehIsrael() {
     const u = this.contaReal();
-    return !!(u && String(u.email || "").toLowerCase() === this.EMAIL);
+    if (!u || String(u.email || "").toLowerCase() !== this.EMAIL) return false;
+    const imp = typeof window.crmImpersonacaoAtual === "function" ? window.crmImpersonacaoAtual() : null;
+    return !imp;
+  },
+
+  /* O ciente também fica no banco, para valer depois do Ctrl+F5 e em outro computador. */
+  COLECAO: "alertas_ciente",
+  DOC: "ponto_israel",
+
+  async firebasePronto() {
+    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    const fc = window.firebaseCollections;
+    return window.firebaseDb && fc && fc.getDoc && fc.setDoc ? fc : null;
+  },
+
+  async lerRemoto() {
+    try {
+      const fc = await this.firebasePronto();
+      if (!fc) return;
+      const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, this.DOC));
+      const dados = snap && snap.exists() ? (snap.data() || {}) : {};
+      Object.keys(dados).forEach((k) => {
+        if (dados[k] === "ciente") this._visto[k.replace("_", ":")] = true;
+      });
+    } catch (e) {
+      console.warn("[AlertaPonto] não leu o ciente no banco", e);
+    }
+  },
+
+  async gravarRemoto(tipo, dia) {
+    try {
+      const fc = await this.firebasePronto();
+      if (!fc) return;
+      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, this.DOC), { [tipo + "_" + dia]: "ciente" }, { merge: true });
+    } catch (e) {
+      console.warn("[AlertaPonto] não gravou o ciente no banco", e);
+    }
   },
 
   /* Sexta da semana que contém hoje. Domingo usa a sexta que já passou. */
@@ -153,6 +192,7 @@ const AlertaPonto = {
       }
     }
     gravar(sessionStorage);
+    this.gravarRemoto(tipo, dia);
   },
 
   avisosDe(hoje) {
@@ -164,12 +204,14 @@ const AlertaPonto = {
     };
   },
 
-  verificar() {
+  async verificar() {
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
     }
     if (this.ehIsrael()) {
+      const antes = this.avisosDe(this.hoje());
+      if (antes.sexta || antes.mes) await this.lerRemoto();
       const avisos = this.avisosDe(this.hoje());
       if ((avisos.sexta || avisos.mes) && !document.getElementById("alerta-ponto")) this.abrir(avisos);
     }
