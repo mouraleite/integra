@@ -12596,3 +12596,14 @@ div.cem-previa { white-space: normal; }
 
 .planejamento-tabela-scroll { max-height: min(36rem, 70vh); overflow: auto; }
 .planejamento-tabela-scroll th { position: sticky; inset-block-start: 0; z-index: 1; background: #eff6f1; }
+
+.planejamento-filtros-tarefas:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  margin-block: 0.75rem;
+}
+.planejamento-filtros-tarefas label { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; }
+.planejamento-filtros-tarefas select { max-inline-size: min(23rem, 50vw); padding: 0.3rem; }
+.planejamento-filtros-tarefas p { margin: 0; font-size: 0.875rem; }

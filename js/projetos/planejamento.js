@@ -94,6 +94,10 @@
   const table = document.getElementById('projetos-planejamento-lista');
   const body = table.querySelector('tbody');
   const hierarchy = document.getElementById('projetos-planejamento-hierarquia');
+  const filters = document.getElementById('projetos-planejamento-filtros-tarefas');
+  const groupFilter = document.getElementById('projetos-planejamento-filtro-grupo');
+  const milestoneFilter = document.getElementById('projetos-planejamento-filtro-marco');
+  const filterStatus = document.getElementById('projetos-planejamento-filtro-status');
   const gantt = document.getElementById('projetos-planejamento-gantt');
   const ganttAxis = gantt.querySelector('.planejamento-gantt-eixo');
   const ganttRows = gantt.querySelector('.planejamento-gantt-linhas');
@@ -164,7 +168,7 @@
   function atualizarHierarquia() {
     for (const entry of taskRows) {
       const { row, parent, toggle, expanded } = entry;
-      row.hidden = Boolean(parent && (parent.row.hidden || !parent.expanded));
+      row.hidden = entry.filterVisible === false || Boolean(parent && (parent.row.hidden || !parent.expanded));
       if (entry.ganttRow) entry.ganttRow.hidden = row.hidden;
       if (toggle) {
         for (const button of [toggle, entry.ganttToggle].filter(Boolean)) {
@@ -187,12 +191,41 @@
   let carregandoObras = false;
   let consulta = 0;
 
+  function aplicarFiltrosTarefas() {
+    const selected = groupFilter.value === '' ? null : taskRows[Number(groupFilter.value)];
+    const milestonesOnly = milestoneFilter.checked;
+    let matches = 0;
+    for (const entry of taskRows) {
+      entry.inSelectedGroup = !selected || entry === selected || Boolean(entry.parent?.inSelectedGroup);
+      const milestone = /^(?:\s*\d+\s*[-–—]\s*)?\s*\*/.test(entry.description);
+      entry.filterVisible = entry.inSelectedGroup && (!milestonesOnly || milestone);
+      if (entry.filterVisible) matches += 1;
+    }
+    for (let index = taskRows.length - 1; index >= 0; index--) {
+      const { parent, filterVisible } = taskRows[index];
+      if (parent && filterVisible) {
+        parent.filterVisible = true;
+        if (selected || milestonesOnly) parent.expanded = true;
+      }
+    }
+    filterStatus.textContent = matches ? '' : 'Nenhuma tarefa corresponde aos filtros.';
+    atualizarHierarquia();
+  }
+
+  groupFilter.addEventListener('change', aplicarFiltrosTarefas);
+  milestoneFilter.addEventListener('change', aplicarFiltrosTarefas);
+
   function limparConsulta() {
     consulta += 1;
     button.disabled = !obrasCarregadas;
     table.hidden = true;
     body.replaceChildren();
     taskRows = [];
+    filters.hidden = true;
+    groupFilter.options.length = 1;
+    groupFilter.value = '';
+    milestoneFilter.checked = false;
+    filterStatus.textContent = '';
     hierarchy.hidden = true;
     gantt.hidden = true;
     ganttAxis.replaceChildren();
@@ -310,7 +343,14 @@
       }
       body.append(rows);
       renderizarGantt();
-      hierarchy.hidden = !taskRows.some(entry => entry.toggle);
+      taskRows.forEach((entry, index) => {
+        if (!entry.toggle) return;
+        const indent = ' '.repeat(Math.min(entry.level - 1, 5));
+        groupFilter.add(new Option(indent + entry.task.presentationId + ' · ' + entry.description, String(index)));
+      });
+      hierarchy.hidden = groupFilter.options.length === 1;
+      groupFilter.disabled = hierarchy.hidden;
+      filters.hidden = !taskRows.length;
       atualizarHierarquia();
       table.hidden = tasks.length === 0;
       status.textContent = tasks.length
