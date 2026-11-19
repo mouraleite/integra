@@ -487,7 +487,7 @@
 
   // ===== Solicitações de envio para a produção =====
   // O desenvolvedor, no ambiente de teste, clica em "Encaminhar para produção": grava um pedido em
-  // Firestore (coleção solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
+  // Supabase (tabela solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
   // (não quem está em "Ver como administrador") recebe um pop-up com o pedido e aprova ou recusa.
   // Aprovar só registra a decisão: a publicação continua sendo "juntar <branch> na main" + deploy.bat.
   const SOLIC = "solicitacoes_producao";
@@ -496,10 +496,11 @@
   let minhaSolic = null;
   let ouvindoSolic = false;
 
+  // Solicitações no Supabase (tabela solicitacoes_producao, via window.DadosEngenharia). solicitante {email, nome}
+  // é achatado em solicitante_email / solicitante_nome (filtros usam o nome da coluna).
   function fb() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    return fx && db ? { fx, db } : null;
+    const DE = window.DadosEngenharia;
+    return DE ? { tab: DE.tabela(SOLIC) } : null;
   }
 
   function adminReal() {
@@ -836,10 +837,9 @@
     const f = fb();
     if (!amb || !f) return;
     try {
-      const snap = await f.fx.getDocs(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("ambiente", "==", amb.chave)));
+      const lista = await f.tab.listar({ filtros: [["ambiente", "eq", amb.chave]] });
       let ultima = null;
-      snap.forEach((d) => {
-        const v = Object.assign({ id: d.id }, d.data());
+      lista.forEach((v) => {
         if (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm)) ultima = v;
       });
       minhaSolic = ultima;
@@ -915,8 +915,8 @@
         prints: {}
       }, r);
       try {
-        if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
-        else await f.fx.addDoc(f.fx.collection(f.db, SOLIC), pedido);
+        if (atualizando) await f.tab.gravar(minhaSolic.id, pedido, { merge: true });
+        else await f.tab.criar(pedido);
       } catch (e) {
         console.warn("[Encaminhar para produção] Falha ao gravar:", e);
         alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
@@ -939,14 +939,13 @@
   function ouvirMinhasDecisoes() {
     const email = emailReal();
     const f = fb();
-    if (ouvindoMinhas || !email || !f || typeof f.fx.onSnapshot !== "function") return;
+    if (ouvindoMinhas || !email || !f) return;
     ouvindoMinhas = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("solicitante.email", "==", email)), (snap) => {
+      f.tab.ouvir(({ docs }) => {
         const novas = [];
         let ultima = null;
-        snap.forEach((d) => {
-          const v = Object.assign({ id: d.id }, d.data());
+        docs.forEach((v) => {
           if (v.status !== "pendente" && v.avisoVisto === false) novas.push(v);
           const amb = ambienteAtual();
           if (amb && v.ambiente === amb.chave && (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm))) ultima = v;
@@ -956,9 +955,12 @@
         try { fechadas = JSON.parse(ler(AVISO_FECHADO, sessionStorage) || "[]"); } catch (e) { fechadas = []; }
         const mostrar = novas.filter((v) => fechadas.indexOf(v.id + ":" + v.status) < 0);
         if (mostrar.length && !document.getElementById("avsol-dev-aviso")) avisarDev(mostrar);
-      }, (e) => {
-        console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
-        ouvindoMinhas = false;
+      }, {
+        filtros: [["solicitante_email", "eq", email]],
+        aoErro: (e) => {
+          console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
+          ouvindoMinhas = false;
+        }
       });
     } catch (e) {
       ouvindoMinhas = false;
@@ -1013,7 +1015,7 @@
       const f = fb();
       if (!f) return;
       for (const s of lista) {
-        try { await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), { avisoVisto: true, avisoVistoEm: Date.now() }); } catch (e) {}
+        try { await f.tab.gravar(s.id, { avisoVisto: true, avisoVistoEm: Date.now() }, { merge: true }); } catch (e) {}
       }
     };
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(fundo);
@@ -1053,21 +1055,23 @@
   function ouvirPendentes() {
     if (ouvindoSolic || !adminReal()) return;
     const f = fb();
-    if (!f || typeof f.fx.onSnapshot !== "function") return;
+    if (!f) return;
     ouvindoSolic = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("status", "==", "pendente")), (snap) => {
-        const lista = [];
-        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+      f.tab.ouvir(({ docs }) => {
+        const lista = docs.slice();
         lista.sort((a, b) => Number(a.criadoEm) - Number(b.criadoEm));
         solicPendentes = lista;
         pintar();
         const vistos = vistas();
         const novas = lista.filter((s) => vistos.indexOf(s.id + ":" + s.criadoEm) < 0);
         if (novas.length && adminReal() && !document.getElementById("avsol-admin")) abrirSolicitacoes();
-      }, (e) => {
-        console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
-        ouvindoSolic = false;
+      }, {
+        filtros: [["status", "eq", "pendente"]],
+        aoErro: (e) => {
+          console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
+          ouvindoSolic = false;
+        }
       });
     } catch (e) {
       ouvindoSolic = false;
@@ -1179,11 +1183,11 @@
         const resto = (s.commits || []).slice(0, escolha.k);
         const parte = { versao: resultado.versao, ate: escolha.ate, em: Date.now(), por: quem.nome || quem.email, quantas: (s.commits || []).length - escolha.k };
         try {
-          await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), {
+          await f.tab.gravar(s.id, {
             commits: resto,
             totais: Object.assign({}, s.totais || {}, { commits: resto.length }),
             publicacoesParciais: (s.publicacoesParciais || []).concat(parte)
-          });
+          }, { merge: true });
         } catch (e) {
           console.warn("[Solicitações de envio] Falha ao gravar a publicação parcial:", e);
         }
@@ -1209,7 +1213,7 @@
       }
     }
     try {
-      await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), Object.assign({ status }, registro));
+      await f.tab.gravar(s.id, Object.assign({ status }, registro), { merge: true });
     } catch (e) {
       console.warn("[Solicitações de envio] Falha ao gravar a decisão:", e);
       if (status !== "publicado") {

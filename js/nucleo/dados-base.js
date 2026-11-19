@@ -8,6 +8,12 @@
           horaSP (texto "AAAA-MM-DD HH:MM:SS.mmm" sem fuso, hora de São Paulo <-> timestamptz; volta no mesmo formato),
           dataBR ("DD/MM/AAAA" ou AAAA-MM-DD -> date; volta "DD/MM/AAAA"),
           textos (lista de textos <-> text[]; ao contrário de "ids", não converte "123" em número na volta).
+          Acrescentados para a área engenharia/comercial (não mudam nada acima; só valem para mapas que os usam):
+          storagePath (URL de download do Firebase Storage <-> CAMINHO do objeto no bucket; ver caminhoStorage/urlStorage),
+          storagePaths (lista de URLs <-> text[] de caminhos).
+          Campo com ponto no nome ("app.responsavelEmail"): objeto aninhado do front <-> coluna achatada. Na gravação, as
+          subchaves mapeadas vão para as colunas e o resto do objeto (se sobrar) vai para extra com o nome de cima; objeto
+          null zera as colunas. Na leitura o objeto é remontado. Mapas sem ponto no nome do campo não mudam.
    Funciona no navegador (window.DadosBase) e no Node (require), para o importador da Fase 4 usar os mesmos mapas. */
 (function (raiz, fabrica) {
   if (typeof module === "object" && module.exports) module.exports = fabrica();
@@ -32,8 +38,57 @@
     return isNaN(t) ? null : t;
   }
 
+  // ---- Arquivos do Firebase Storage: o banco guarda o caminho do objeto, o front continua recebendo uma URL. ----
+  // URL de download do Firebase: https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<caminho codificado>?alt=media&token=...
+  // O token é descartado: a URL remontada (sem token) só abre enquanto as regras do Storage permitirem leitura pública
+  // (ou o navegador estiver logado no Firebase com permissão). Quando os arquivos forem para o Supabase Storage, basta
+  // trocar a montagem da URL com configurarStorage({ montarUrl: (caminho) => ... }) — o banco não muda.
+  const storage = {
+    bucket: "crm-gestao-mldu.firebasestorage.app",
+    montarUrl: null,
+  };
+  function configurarStorage(opcoes) {
+    if (opcoes && opcoes.bucket) storage.bucket = opcoes.bucket;
+    if (opcoes && opcoes.montarUrl !== undefined) storage.montarUrl = opcoes.montarUrl;
+    return { bucket: storage.bucket, montarUrl: storage.montarUrl };
+  }
+  // URL (ou caminho) -> caminho no bucket. null se for URL de outro lugar (quem chama decide; paraLinha manda para extra).
+  function caminhoStorage(v) {
+    if (vazio(v) || typeof v !== "string") return null;
+    const s = v.trim();
+    let m = s.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/([^/]+)\/o\/([^?#]+)/);
+    if (m) {
+      if (m[1] !== storage.bucket) return null;
+      try { return decodeURIComponent(m[2]); } catch (e) { return null; }
+    }
+    m = s.match(/^gs:\/\/([^/]+)\/(.+)$/) || s.match(/^https:\/\/storage\.googleapis\.com\/([^/]+)\/([^?#]+)/);
+    if (m) {
+      if (m[1] !== storage.bucket) return null;
+      try { return decodeURIComponent(m[2]); } catch (e) { return null; }
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return null; // outra URL (http, data:, blob:...)
+    return s.replace(/^\/+/, ""); // já é caminho
+  }
+  // caminho -> URL de download (sem token). URL já pronta volta como está.
+  function urlStorage(caminho) {
+    if (vazio(caminho)) return caminho;
+    const s = String(caminho);
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+    if (typeof storage.montarUrl === "function") return storage.montarUrl(s);
+    return "https://firebasestorage.googleapis.com/v0/b/" + storage.bucket + "/o/" + encodeURIComponent(s) + "?alt=media";
+  }
+
   function paraBanco(v, tipo) {
     switch (tipo) {
+      case "storagePath":
+        return caminhoStorage(v);
+      case "storagePaths": {
+        if (!Array.isArray(v)) return null;
+        const lista = v.filter(function (x) { return !vazio(x); });
+        const caminhos = lista.map(caminhoStorage);
+        // Um item que não é do bucket: a lista inteira fica em extra (não perde a URL externa).
+        return caminhos.some(function (c) { return c === null; }) ? null : caminhos;
+      }
       case "ms":
       case "iso": {
         const ms = paraMs(v);
@@ -103,6 +158,10 @@
         return Array.isArray(v) ? v.map(numeroSePuder) : v;
       case "idTexto": // id que era número no Firestore: grava texto, devolve número
         return numeroSePuder(v);
+      case "storagePath":
+        return urlStorage(v);
+      case "storagePaths":
+        return Array.isArray(v) ? v.map(urlStorage) : v;
       default:
         return v;
     }
@@ -117,10 +176,32 @@
     if (mapa._campos) return mapa._campos;
     const lista = Object.keys(mapa.campos || {}).map(function (campo) {
       const d = mapa.campos[campo];
-      return Array.isArray(d) ? { campo: campo, coluna: d[0], tipo: d[1] } : { campo: campo, coluna: d, tipo: null };
+      const c = Array.isArray(d) ? { campo: campo, coluna: d[0], tipo: d[1] } : { campo: campo, coluna: d, tipo: null };
+      if (campo.indexOf(".") > 0) c.caminho = campo.split("."); // campo aninhado (ver cabeçalho)
+      return c;
     });
     Object.defineProperty(mapa, "_campos", { value: lista, enumerable: false });
     return lista;
+  }
+
+  function objetoSimples(v) {
+    return !!v && typeof v === "object" && !Array.isArray(v);
+  }
+  // ler(obj, ["a","b"]) -> { tem, valor } (só propriedades próprias)
+  function ler(o, caminho) {
+    let atual = o;
+    for (let i = 0; i < caminho.length; i++) {
+      if (!objetoSimples(atual) || !Object.prototype.hasOwnProperty.call(atual, caminho[i])) return { tem: false };
+      atual = atual[caminho[i]];
+    }
+    return { tem: true, valor: atual };
+  }
+  // apaga a subchave e os objetos intermediários que ficarem vazios
+  function apagar(o, caminho) {
+    if (!objetoSimples(o)) return;
+    if (caminho.length === 1) { delete o[caminho[0]]; return; }
+    apagar(o[caminho[0]], caminho.slice(1));
+    if (objetoSimples(o[caminho[0]]) && !Object.keys(o[caminho[0]]).length) delete o[caminho[0]];
   }
 
   // objeto do front -> linha da tabela. "id" do documento vai para mapa.chave (padrão "id").
@@ -129,7 +210,12 @@
     const extra = {};
     const conhecidos = {};
     const chave = mapa.chave || "id";
+    const aninhados = {}; // raiz -> [campos aninhados] (só em mapas com "a.b")
     campos(mapa).forEach(function (c) {
+      if (c.caminho) {
+        (aninhados[c.caminho[0]] = aninhados[c.caminho[0]] || []).push(c);
+        return;
+      }
       conhecidos[c.campo] = true;
       if (!Object.prototype.hasOwnProperty.call(obj || {}, c.campo)) return;
       const v = obj[c.campo];
@@ -137,6 +223,27 @@
       linha[c.coluna] = convertido;
       // Valor que não cabe no tipo da coluna (ex.: objeto onde se esperava número) não se perde: vai para extra.
       if (convertido === null && !vazio(v) && c.tipo) extra[c.campo] = v;
+    });
+    Object.keys(aninhados).forEach(function (raiz) {
+      if (!Object.prototype.hasOwnProperty.call(obj || {}, raiz) || conhecidos[raiz]) return;
+      const v = obj[raiz];
+      if (v === null) { // objeto apagado: zera as colunas
+        aninhados[raiz].forEach(function (c) { linha[c.coluna] = null; });
+        conhecidos[raiz] = true;
+        return;
+      }
+      if (!objetoSimples(v)) return; // formato inesperado: vai inteiro para extra (abaixo)
+      conhecidos[raiz] = true;
+      const resto = JSON.parse(JSON.stringify(v));
+      aninhados[raiz].forEach(function (c) {
+        const sub = ler(v, c.caminho.slice(1));
+        if (!sub.tem) return;
+        const convertido = paraBanco(sub.valor, c.tipo);
+        linha[c.coluna] = convertido;
+        if (convertido === null && !vazio(sub.valor) && c.tipo) return; // fica no resto (extra)
+        apagar(resto, c.caminho.slice(1));
+      });
+      if (Object.keys(resto).length) extra[raiz] = resto;
     });
     Object.keys(obj || {}).forEach(function (k) {
       if (conhecidos[k] || k === "id" || obj[k] === undefined) return;
@@ -157,7 +264,16 @@
     campos(mapa).forEach(function (c) {
       if (Object.prototype.hasOwnProperty.call(linha, c.coluna)) {
         const v = doBanco(linha[c.coluna], c.tipo);
-        if (v !== null && v !== undefined) obj[c.campo] = v;
+        if (v === null || v === undefined) return;
+        if (!c.caminho) { obj[c.campo] = v; return; }
+        // campo aninhado: remonta o objeto (junto com o que tiver sobrado em extra)
+        let alvo = obj;
+        c.caminho.slice(0, -1).forEach(function (p) {
+          if (!objetoSimples(alvo[p])) alvo[p] = {};
+          else if (alvo === obj && alvo[p] === extra[p]) alvo[p] = Object.assign({}, alvo[p]); // não altera linha.extra
+          alvo = alvo[p];
+        });
+        alvo[c.caminho[c.caminho.length - 1]] = v;
       }
     });
     const chave = mapa.chave || "id";
@@ -211,5 +327,6 @@
   }
 
   return { paraLinha: paraLinha, paraObjeto: paraObjeto, paraBanco: paraBanco, doBanco: doBanco, paraMs: paraMs,
-           snapDoc: snapDoc, snapLista: snapLista, lerTudo: lerTudo, novoId: novoId, numeroSePuder: numeroSePuder };
+           snapDoc: snapDoc, snapLista: snapLista, lerTudo: lerTudo, novoId: novoId, numeroSePuder: numeroSePuder,
+           caminhoStorage: caminhoStorage, urlStorage: urlStorage, configurarStorage: configurarStorage };
 });

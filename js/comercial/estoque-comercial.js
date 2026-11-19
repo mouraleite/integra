@@ -639,8 +639,17 @@ const EstoqueComercialApp = {
     return true;
   },
 
+  // O estoque (estoque_comercial + controle _meta/_batimento_state/_conferencia_geral) está no Supabase
+  // (window.DadosEngenharia; cada função já espera o cliente ficar pronto). Os nomes fb*/Firebase ficaram por
+  // compatibilidade com o resto da tela.
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.doc);
+    return !!window.DadosEngenharia;
+  },
+
+  // Unidades de um empreendimento com o nome preenchido (antes ia no doc cc_*; agora vai em cada linha).
+  unidadesComNome(list, cc) {
+    const empName = (list[0] && list[0].enterpriseName) || this.empName(cc) || "";
+    return list.map((u) => (u && !u.enterpriseName && empName ? { ...u, enterpriseName: empName } : u));
   },
 
   async waitFirebase(ms) {
@@ -664,15 +673,15 @@ const EstoqueComercialApp = {
 
   async loadFirebase() {
     if (!this.fbReady()) return null;
-    const { doc, getDoc, getDocs, collection } = window.firebaseCollections;
     try {
-      const metaSnap = await getDoc(doc(window.firebaseDb, this.FB_COL, "_meta"));
-      const colSnap = await getDocs(collection(window.firebaseDb, this.FB_COL));
+      // Um doc cc_<cc>_0 por empreendimento (montado das linhas por unidade) + os docs de controle.
+      const colSnap = await window.DadosEngenharia.lerEstoqueDocs();
       const byId = new Map();
       const ccDone = [];
       let confServidor = null;
+      let metaSnap = null;
       colSnap.forEach(d => {
-        if (d.id === "_meta") return;
+        if (d.id === "_meta") { metaSnap = d; return; }
         const data = d.data() || {};
         if (d.id === "_conferencia_geral") {
           confServidor = data;
@@ -692,7 +701,7 @@ const EstoqueComercialApp = {
       this.adotarConferenciaServidor(confServidor);
       const units = [...byId.values()].map((x) => x.u);
       if (!units.length) return null;
-      const meta = metaSnap.exists() ? metaSnap.data() : {};
+      const meta = metaSnap && metaSnap.exists() ? metaSnap.data() : {};
       return {
         units,
         ccDone: [...new Set(ccDone.concat(meta.ccDone || []))],
@@ -714,7 +723,7 @@ const EstoqueComercialApp = {
 
   async saveFirebase() {
     if (!this.fbReady()) return false;
-    const { doc, setDoc, getDocs, collection, deleteDoc } = window.firebaseCollections;
+    const D = window.DadosEngenharia;
     try {
       if (!this._skipFinanceGuard) {
         const existing = await this.loadFirebase();
@@ -733,29 +742,14 @@ const EstoqueComercialApp = {
         grouped[cc].push(u);
       });
 
-      const keep = new Set(["_meta", "_batimento_state", "_conferencia_geral"]);
-      const writes = [];
+      // Uma RPC por empreendimento (5 de cada vez) troca as unidades do CC; os empreendimentos que saíram da lista
+      // são apagados (antes: setDoc dos cc_<cc>_<n> + deleteDoc das sobras). Os docs de controle ficam à parte.
+      const todas = [];
       Object.keys(grouped).forEach(cc => {
-        const list = grouped[cc];
-        const empName = (list[0] && list[0].enterpriseName) || this.empName(cc);
-        this.fbChunks(list).forEach((units, n) => {
-          const id = `cc_${cc}_${n}`;
-          keep.add(id);
-          writes.push(() => setDoc(doc(window.firebaseDb, this.FB_COL, id), {
-            enterpriseId: cc,
-            enterpriseName: empName || "",
-            chunk: n,
-            units: this.fbClean(units),
-            updatedAt: new Date().toISOString(),
-            date: this.todayStr()
-          }));
-        });
+        todas.push(...this.unidadesComNome(grouped[cc], cc));
       });
-      // Uns 70 documentos de ~300 KB de uma vez estouram a fila de escrita do SDK; vai de 5 em 5.
-      for (let i = 0; i < writes.length; i += 5) {
-        await Promise.all(writes.slice(i, i + 5).map((w) => w()));
-      }
-      await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+      await D.salvarEstoqueTudo(todas);
+      await D.mesclarControleEstoque("_meta", this.fbClean({
         date: this.todayStr(),
         ccDone: this.state.ccDone || [],
         complete: !!this.state.complete,
@@ -768,14 +762,7 @@ const EstoqueComercialApp = {
         unitsSavedDate: this.todayStr(),
         unitCount: this.state.units.length,
         updatedAt: new Date().toISOString()
-      }), { merge: true });
-
-      const existing = await getDocs(collection(window.firebaseDb, this.FB_COL));
-      const leftovers = [];
-      existing.forEach(d => {
-        if (!keep.has(d.id)) leftovers.push(deleteDoc(d.ref));
-      });
-      if (leftovers.length) await Promise.all(leftovers);
+      })); // merge (como o setDoc merge)
       this.state.firebaseOk = true;
       this.state.fbSaveError = null;
       return true;
@@ -815,7 +802,7 @@ const EstoqueComercialApp = {
           console.warn("[Estoque] unidades não gravaram no Firebase; o dia não fica marcado como concluído.", this.state.fbSaveError);
           return today;
         }
-        const { doc, setDoc } = window.firebaseCollections;
+        const D = window.DadosEngenharia;
         const meta = {
           date: today,
           batimentoAt: new Date().toISOString(),
@@ -825,16 +812,17 @@ const EstoqueComercialApp = {
           updatedAt: new Date().toISOString()
         };
         if (markDone) meta.batimentoDone = true;
-        await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), meta, { merge: true });
+        await D.mesclarControleEstoque("_meta", this.fbClean(meta)); // merge
         if (markDone) {
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_batimento_state"), {
+          // setDoc sem merge: substitui o doc inteiro.
+          await D.mesclarControleEstoque("_batimento_state", {
             date: today,
             cursor: 999999,
             processed: this.state.units.filter(u => this.isFinanceUnit(u)).length,
             skippedSettled: this.state.units.filter(u => this.isSettledUnit(u)).length,
             done: true,
             source: "manual"
-          });
+          }, { substituir: true });
         }
       } catch (e) {
         console.warn("[Estoque] meta do batimento do dia", e);
@@ -852,29 +840,14 @@ const EstoqueComercialApp = {
 
   async saveFirebaseCc(ccId) {
     if (!this.fbReady()) return false;
-    const { doc, setDoc, deleteDoc } = window.firebaseCollections;
+    const D = window.DadosEngenharia;
     const cc = String(ccId);
     const list = this.state.units.filter(u => String(u.enterpriseId) === cc);
     try {
-      const empName = (list[0] && list[0].enterpriseName) || this.empName(cc);
-      const chunks = this.fbChunks(list);
-      const writes = chunks.map((units, n) => setDoc(doc(window.firebaseDb, this.FB_COL, `cc_${cc}_${n}`), {
-        enterpriseId: cc,
-        enterpriseName: empName || "",
-        chunk: n,
-        units: this.fbClean(units),
-        updatedAt: new Date().toISOString(),
-        date: this.todayStr()
-      }));
-      await Promise.all(writes);
-      if (typeof deleteDoc === "function") {
-        const stale = [];
-        for (let n = chunks.length; n < chunks.length + 4; n++) {
-          stale.push(deleteDoc(doc(window.firebaseDb, this.FB_COL, `cc_${cc}_${n}`)).catch(() => {}));
-        }
-        await Promise.all(stale);
-      }
-      await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+      // Troca as unidades do empreendimento numa RPC (as que não vieram são apagadas; antes: setDoc dos
+      // cc_<cc>_<n> + deleteDoc dos pedaços que sobraram).
+      await D.salvarEstoqueCc(cc, this.unidadesComNome(list, cc));
+      await D.mesclarControleEstoque("_meta", this.fbClean({
         date: this.todayStr(),
         ccDone: this.state.ccDone || [],
         complete: !!this.state.complete,
@@ -883,7 +856,7 @@ const EstoqueComercialApp = {
         fetchedAt: this.state.fetchedAt || new Date().toISOString(),
         unitCount: this.state.units.length,
         updatedAt: new Date().toISOString()
-      }), { merge: true });
+      })); // merge
       this.state.firebaseOk = true;
       return true;
     } catch (e) {
@@ -985,7 +958,7 @@ const EstoqueComercialApp = {
     if (!this.fbReady()) return;
     this._pedidoBatimento = true;
     try {
-      // Cache diário da carteira no Supabase (área cobrança); o resto do estoque continua no Firebase.
+      // Cache diário da carteira no Supabase (área cobrança).
       await window.DadosCobranca.gravarCacheDia(today, {
         batimentoPedidoEm: new Date().toISOString()
       }, { merge: true });
@@ -1092,9 +1065,7 @@ const EstoqueComercialApp = {
     try {
       await this.waitFirebase(2000);
       if (!this.fbReady()) return null;
-      const { doc, getDoc } = window.firebaseCollections;
-      const metaSnap = await getDoc(doc(window.firebaseDb, this.FB_COL, "_meta"));
-      const meta = metaSnap.exists() ? metaSnap.data() : {};
+      const meta = (await window.DadosEngenharia.lerControleEstoque("_meta")) || {};
       const batimentoDate = meta.batimentoDate || null;
       const batimentoAt = meta.batimentoAt || meta.snapshotAt || meta.fetchedAt || null;
       const batimentoDone = meta.batimentoDone === true || meta.batimentoDone === "true";
@@ -2341,7 +2312,11 @@ const EstoqueComercialApp = {
   async loadLastCaixaOverlay() {
     if (!window.CaixaPosicaoStore || typeof CaixaPosicaoStore.listDates !== "function") return [];
     try {
-      if (!this.fbReady()) await this.waitFirebase(8000);
+      // A posição de caixa (caixa_posicao) continua no Firebase: espera o SDK do Firebase, não o Supabase.
+      const t0 = Date.now();
+      while (typeof CaixaPosicaoStore.fbReady === "function" && !CaixaPosicaoStore.fbReady() && Date.now() - t0 < 8000) {
+        await this.sleep(120);
+      }
       const dates = await CaixaPosicaoStore.listDates();
       if (!dates.length) return [];
       return await CaixaPosicaoStore.loadDate(dates[0]);
@@ -3878,8 +3853,8 @@ const EstoqueComercialApp = {
           }
         }
         if (this._confTituloTesteSuja && this.state.conferenciaGeral) {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_conferencia_geral"), this.fbClean(this.state.conferenciaGeral));
+          // setDoc sem merge: substitui o doc inteiro.
+          await window.DadosEngenharia.mesclarControleEstoque("_conferencia_geral", this.fbClean(this.state.conferenciaGeral), { substituir: true });
           this._confTituloTesteSuja = false;
         }
       } catch (e) {
@@ -4832,14 +4807,13 @@ const EstoqueComercialApp = {
       this.saveCache();
       if (!empSel && this.fbReady()) {
         try {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+          await window.DadosEngenharia.mesclarControleEstoque("_meta", this.fbClean({ // merge
             complete: !!this.state.complete,
             ccDone: this.state.ccDone || [],
             unitCount: this.state.units.length,
             fetchedAt: this.state.fetchedAt || new Date().toISOString(),
             updatedAt: new Date().toISOString()
-          }), { merge: true });
+          }));
         } catch (e) {
           console.warn("[Estoque] meta da carga", e);
         }

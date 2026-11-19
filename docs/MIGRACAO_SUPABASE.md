@@ -50,6 +50,17 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      `--dias-cache`). Pendências: o cache local `crm_moura_notes` deve ser descartado na virada; "sincronizar
      tudo" não apaga mais notas; o registro grava ~2,6 MB numa chamada (conferir limite da API no teste);
      datas vazias voltam ausentes em vez de `""`.
+   - **Engenharia, vistoria, comercial e orçamento (feito no código, falta testar com login):**
+     `js/engenharia/mapas-engenharia.js` e `dados-engenharia.js` (`window.DadosEngenharia`). Migrados: vistorias,
+     verificação de construção, avisos e batimento de vistoria, acompanhamento de obras, caução, estoque comercial
+     (uma linha por unidade; gravação por RPC), tabelas vigentes, orçamento e forecast, solicitações de produção e de
+     tag; e as pendências do núcleo em `anexos.js` e `js/contabil/*` (config). Campos de arquivo guardam o caminho
+     no Storage e voltam como URL pública do Firebase (sem token) até a Fase 4.
+     **Link público da vistoria** (`vistoria.html`, cliente sem login): rota `api/vistoria-publica` (GET devolve só os
+     campos da página e a coordenada do lote; POST valida respostas e caminhos das fotos e chama `enviar_vistoria`
+     com a service role; limite de tamanho e por IP). `vistoria-app/` usa o login Microsoft dele para pegar o token.
+     Importador: `ferramentas/migracao/importar-engenharia.js` (`--sem-caches`). Banco: fusão profunda
+     (`privado.jsonb_fundir_profundo`) no controle do estoque; mapa vazio zera o campo, como no Firestore.
    Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
 4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,

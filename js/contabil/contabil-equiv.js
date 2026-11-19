@@ -373,9 +373,9 @@ const ContabilEquiv = {
       if (raw) this.aplicar(JSON.parse(raw));
     } catch (e) {}
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDoc && fc.doc) {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "ctb_equiv"));
+      // config/ctb_equiv no Supabase (configuracoes, chave "config/ctb_equiv").
+      if (window.DadosNucleo) {
+        const snap = await window.DadosNucleo.lerConfig("ctb_equiv");
         if (snap && typeof snap.exists === "function" && snap.exists()) {
           const data = snap.data() || {};
           if ((Number(data.updatedAt) || 0) >= (this.state.updatedAt || 0)) this.aplicar(data);
@@ -395,9 +395,8 @@ const ContabilEquiv = {
       updatedAt: this.state.updatedAt
     };
     try { localStorage.setItem("crm_ctb_equiv", JSON.stringify(payload)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc || !fc.doc) return false;
-    await fc.setDoc(fc.doc(window.firebaseDb, "config", "ctb_equiv"), payload, { merge: true });
+    if (!window.DadosNucleo) return false;
+    await window.DadosNucleo.gravarConfig("ctb_equiv", payload, { merge: true });
     return true;
   },
 

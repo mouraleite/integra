@@ -501,6 +501,12 @@ window.crmTagsTodas = async function() {
 const CrmTagSolicitacoes = {
   COL: "tag_solicitacoes",
   _unsub: null,
+  _avisadas: new Set(), // solicitações já avisadas nesta sessão (o aviso_visto chega ao banco um pouco depois)
+
+  // Solicitações no Supabase (tabela tag_solicitacoes, via window.DadosEngenharia).
+  tab() {
+    return window.DadosEngenharia ? window.DadosEngenharia.tabela(this.COL) : null;
+  },
   _timer: null,
   _pendentes: [],
   _adiadas: new Set(),
@@ -526,19 +532,16 @@ const CrmTagSolicitacoes = {
   },
 
   verificar() {
-    if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
+    if (!this.tab()) return;
     if (!(window.AppState && AppState.currentUser)) return;
     this.ouvirMinhas();
     if (this._unsub || !this.podeAprovar()) return;
-    const { collection, query, where, onSnapshot } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, this.COL), where("status", "==", "Pendente"));
-    this._unsub = onSnapshot(q, (snap) => {
-      const lista = [];
-      snap.forEach((d) => lista.push({ id: d.id, ...(d.data() || {}) }));
+    this._unsub = this.tab().ouvir(({ docs }) => {
+      const lista = docs.slice();
       lista.sort((a, b) => String(a.criado_em || "").localeCompare(String(b.criado_em || "")));
       this._pendentes = lista;
       this.abrir(false);
-    }, (err) => console.warn("[Tags] solicitações", err));
+    }, { filtros: [["status", "eq", "Pendente"]], aoErro: (err) => console.warn("[Tags] solicitações", err) });
   },
 
   /** Avisa quem pediu quando a TAG for aprovada ou recusada. */
@@ -546,19 +549,18 @@ const CrmTagSolicitacoes = {
     if (this._unsubMinhas) return;
     const { email } = this.usuario();
     if (!email) return;
-    const { collection, query, where, onSnapshot, doc, updateDoc } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, this.COL), where("solicitado_por_email", "==", email));
-    this._unsubMinhas = onSnapshot(q, (snap) => {
-      snap.forEach((d) => {
-        const s = d.data() || {};
-        if (s.status === "Pendente" || s.aviso_visto) return;
-        updateDoc(doc(window.firebaseDb, this.COL, d.id), { aviso_visto: true }).catch(() => {});
+    const tab = this.tab();
+    this._unsubMinhas = tab.ouvir(({ docs }) => {
+      docs.forEach((s) => {
+        if (s.status === "Pendente" || s.aviso_visto || this._avisadas.has(s.id)) return;
+        this._avisadas.add(s.id);
+        tab.gravar(s.id, { aviso_visto: true }, { merge: true }).catch(() => {});
         const msg = s.status === "Aprovada"
           ? `Sua solicitação de TAG foi aprovada. A TAG "${s.tag_criada || s.tag_name}" já está disponível.`
           : `Sua solicitação da TAG "${s.tag_name}" não foi aprovada.` + (s.motivo_decisao ? `\nMotivo: ${s.motivo_decisao}` : "");
         setTimeout(() => alert(msg), 300);
       });
-    }, (err) => console.warn("[Tags] minhas solicitações", err));
+    }, { filtros: [["solicitado_por_email", "eq", email]], aoErro: (err) => console.warn("[Tags] minhas solicitações", err) });
   },
 
   async abrir(forcar) {
@@ -665,15 +667,14 @@ const CrmTagSolicitacoes = {
       if (parecidas.length && !confirm(`Existem ${parecidas.length} TAG(s) parecida(s), por exemplo "${parecidas[0].tag.name}".\nCriar "${nome}" mesmo assim?`)) return;
 
       const { email, nome: quem } = this.usuario();
-      // A TAG vai para o Supabase; a solicitação (tag_solicitacoes) continua no Firebase por enquanto.
-      const { doc, updateDoc } = window.firebaseCollections;
+      // A TAG (tags) e a solicitação (tag_solicitacoes) estão no Supabase.
       await window.DadosNucleo.tabela("tags").criar({
         name: nome, destino, status: "Ativa", created_by: email, solicitacao_id: id
       });
-      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+      await this.tab().gravar(id, {
         status: "Aprovada", tag_criada: nome, destino_final: destino,
         decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
-      });
+      }, { merge: true });
       if (window.AnexosApp && typeof AnexosApp.loadTagsAtivas === "function") AnexosApp.loadTagsAtivas(true);
       const telaTags = document.getElementById("tab-config-tags");
       if (telaTags && telaTags.classList.contains("active") && window.ConfigTagsApp) ConfigTagsApp.loadTags();
@@ -695,11 +696,10 @@ const CrmTagSolicitacoes = {
     }
     try {
       const { email, nome: quem } = this.usuario();
-      const { doc, updateDoc } = window.firebaseCollections;
-      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+      await this.tab().gravar(id, {
         status: "Recusada", motivo_decisao: String(motivo).trim(),
         decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
-      });
+      }, { merge: true });
     } catch (e) {
       alert("Não foi possível recusar: " + (e && e.message ? e.message : e));
     }

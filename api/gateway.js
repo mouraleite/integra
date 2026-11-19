@@ -28,7 +28,10 @@ const rotas = {
   // Login Microsoft -> token do Supabase. Confere o login dentro da própria rota (sempre bloqueia).
   "supabase-token": require("./_lib/supabase-token"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
-  "publicar": require("./_lib/publicar")
+  "publicar": require("./_lib/publicar"),
+  // Link público da vistoria (cliente sem login): fica FORA do ROTAS_COM_LOGIN de propósito.
+  // Protegido pelo id da vistoria + conferências na própria rota (status, caminho das fotos, limite por IP).
+  "vistoria-publica": require("./_lib/vistoria-publica")
 };
 
 const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/integra-auth");

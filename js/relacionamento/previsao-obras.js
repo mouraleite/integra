@@ -2,7 +2,7 @@
    Só leitura. Mostra a última previsão de término de obra e de TVO (colunas "Cliente" da Engenharia)
    e avisa quando essas duas datas mudaram, com as datas que valiam antes. */
 (function () {
-  const NUVEM = { colecao: "engenharia_acompanhamento", doc: "obras" };
+  // Previsões da Engenharia: tabela engenharia_acompanhamento no Supabase (window.DadosEngenharia.lerAcompanhamento).
   const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   /* Campos do Acompanhamento de obra da Engenharia, na ordem da linha do tempo. */
   const MARCOS = [
@@ -95,18 +95,15 @@
     async carregar() {
       this.estado = "carregando";
       this.render();
-      const fx = window.firebaseCollections;
-      const db = window.firebaseDb;
-      if (!fx || !db || typeof fx.getDoc !== "function") {
+      const DE = window.DadosEngenharia;
+      if (!DE) {
         this.estado = "erro";
         this.erro = "A conexão com o banco ainda não está pronta. Tente abrir a tela de novo.";
         this.render();
         return;
       }
       try {
-        const snap = await fx.getDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-        const data = existe ? (snap.data() || {}) : {};
+        const data = (await DE.lerAcompanhamento()) || {};
         this.linhas = (Array.isArray(data.linhas) ? data.linhas : [])
           .filter((r) => r && r.id && MARCOS.some((m) => this.iso(r[m.key])))
           .sort((a, b) => (this.iso(a.cliente) || "9999").localeCompare(this.iso(b.cliente) || "9999")

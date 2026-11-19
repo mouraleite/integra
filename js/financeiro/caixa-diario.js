@@ -139,16 +139,9 @@ const CaixaPosicaoStore = {
       if (!EstoqueComercialApp.state.units.length) await EstoqueComercialApp.init();
       if (EstoqueComercialApp.state.units.length) return EstoqueComercialApp.state.units;
     }
-    if (!this.fbReady()) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "estoque_comercial"));
-    const units = [];
-    snap.forEach((d) => {
-      if (d.id === "_meta" || d.id === "_batimento_state") return;
-      const data = d.data() || {};
-      if (Array.isArray(data.units)) units.push(...data.units);
-    });
-    return units;
+    // Estoque no Supabase (estoque_comercial: uma linha por unidade). caixa_posicao continua no Firebase.
+    if (!window.DadosEngenharia) return [];
+    return window.DadosEngenharia.listarUnidadesEstoque();
   },
 
   async saveFromUnits(units, date) {

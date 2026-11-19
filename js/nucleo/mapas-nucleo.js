@@ -126,7 +126,7 @@
         enterpriseId: ["enterprise_id", "texto"], chave: "chave", contractId: ["contract_id", "texto"],
         contractNumber: ["contract_number", "texto"], tag: "tag", destination: "destination", fileName: "file_name",
         description: "description", unitId: ["unit_id", "texto"], unitName: "unit_name", sentBy: "sent_by",
-        sentAt: ["sent_at", "ms"], source: "source", copiaIntegra: ["copia_integra", "texto"], storagePath: "storage_path",
+        sentAt: ["sent_at", "iso"], source: "source", copiaIntegra: ["copia_integra", "texto"], storagePath: "storage_path",
       },
     },
     auditoria_logs: {

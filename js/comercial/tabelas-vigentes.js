@@ -75,8 +75,13 @@ const TabelasVigentesApp = {
     return "tv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
   },
 
+  // Tabelas vigentes no Supabase (tabela tabelas_vigentes, via window.DadosEngenharia).
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.doc);
+    return !!window.DadosEngenharia;
+  },
+
+  tabelaNuvem() {
+    return window.DadosEngenharia.tabela(this.FB_COL);
   },
 
   fold(s) {
@@ -528,19 +533,13 @@ const TabelasVigentesApp = {
   async loadCloud() {
     if (!this.fbReady()) return;
     try {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, this.FB_COL));
-      const list = [];
-      snap.forEach((d) => {
-        if (!d.id || d.id.charAt(0) === "_") return;
-        list.push(Object.assign({ id: d.id }, d.data() || {}));
-      });
+      const list = (await this.tabelaNuvem().listar()).filter((d) => d && d.id && String(d.id).charAt(0) !== "_");
       if (list.length) {
         this.state.tables = list;
         this.saveLocal();
       }
     } catch (e) {
-      console.warn("[TabelasVigentes] Firebase", e);
+      console.warn("[TabelasVigentes] leitura", e);
     }
   },
 
@@ -548,8 +547,7 @@ const TabelasVigentesApp = {
     this.saveLocal();
     if (!this.fbReady()) return;
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      await setDoc(doc(window.firebaseDb, this.FB_COL, String(row.id)), row);
+      await this.tabelaNuvem().gravar(String(row.id), row); // substitui (setDoc sem merge)
     } catch (e) {
       console.warn("[TabelasVigentes] save", e);
     }
@@ -560,8 +558,7 @@ const TabelasVigentesApp = {
     this.saveLocal();
     if (!this.fbReady()) return;
     try {
-      const { doc, deleteDoc } = window.firebaseCollections;
-      await deleteDoc(doc(window.firebaseDb, this.FB_COL, String(id)));
+      await this.tabelaNuvem().excluir(String(id));
     } catch (e) {
       console.warn("[TabelasVigentes] delete", e);
     }

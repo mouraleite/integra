@@ -159,7 +159,9 @@
     const out = base && typeof base === "object" && !Array.isArray(base) ? Object.assign({}, base) : {};
     Object.keys(novo).forEach((k) => {
       const v = novo[k];
-      out[k] = v && typeof v === "object" && !Array.isArray(v) ? fundir(out[k], v) : v;
+      // Mapa vazio zera o campo (no Firestore, merge com {} grava {}); mapa com chaves funde.
+      const mapa = v && typeof v === "object" && !Array.isArray(v);
+      out[k] = mapa && Object.keys(v).length ? fundir(out[k], v) : v;
     });
     return out;
   }

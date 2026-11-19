@@ -9738,13 +9738,11 @@ window.cancelamentoExigencias = function(client) {
 window.cancelamentoCarregarPrevisaoObras = async function() {
   const c = window._cancelPrevObras;
   if (c && Date.now() - c.em < 10 * 60 * 1000) return c.mapa;
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || typeof fx.getDoc !== "function") return (c && c.mapa) || {};
+  // Supabase: tabela engenharia_acompanhamento (uma linha por CC), devolvida como o doc "obras" { linhas, savedAt }.
+  const DE = window.DadosEngenharia;
+  if (!DE) return (c && c.mapa) || {};
   try {
-    const snap = await fx.getDoc(fx.doc(db, "engenharia_acompanhamento", "obras"));
-    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-    const data = existe ? (snap.data() || {}) : {};
+    const data = (await DE.lerAcompanhamento()) || {};
     const mapa = {};
     (Array.isArray(data.linhas) ? data.linhas : []).forEach(function(r) {
       if (r && r.id) mapa[String(r.id).trim()] = r;
@@ -10526,14 +10524,15 @@ window.ensureFilaPmpIndex = async function() {
       });
       rows = best ? buckets[best] : [];
       if (!rows.length) {
-        const estSnap = await getDocs(collection(window.firebaseDb, "estoque_comercial"));
-        estSnap.forEach((d) => {
-          if (d.id === "_meta" || d.id === "_batimento_state") return;
-          const data = d.data() || {};
-          (data.units || []).forEach((u) => {
+        // estoque_comercial no Supabase: uma linha por unidade (só as colunas que o índice de PMP usa).
+        if (window.DadosEngenharia) {
+          const lista = await window.DadosEngenharia.listarUnidadesEstoque({
+            colunas: "id, enterprise_id, name, customer_id, receivable_bill_id, pmp3m"
+          });
+          lista.forEach((u) => {
             if (u && u.pmp3m != null) units.push(u);
           });
-        });
+        }
       }
     }
     window._filaPmpIdx = filaBuildPmpIndex(units, rows);
@@ -40216,11 +40215,12 @@ window.ensureFilaSignalsIndex = function() {
       else if (window.filaStageVazio(estagio) && window.relFotoEntries(data).length) remember(vazio, chaves, data, true);
       return chaves;
     };
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, "vistorias"));
-      snap.forEach((docSnap) => {
-        const data = Object.assign({ id: docSnap.id, _collection: "vistorias" }, docSnap.data() || {});
+    // vistorias e construction_checks no Supabase (window.DadosEngenharia).
+    if (window.DadosEngenharia) {
+      const DE = window.DadosEngenharia;
+      const lista = await DE.tabela("vistorias").listar();
+      lista.forEach((item) => {
+        const data = Object.assign({ id: item.id, _collection: "vistorias" }, item);
         if (data.isTest) return;
         const keys = typeof _vcDocIdentityKeys === "function" ? _vcDocIdentityKeys(data) : [];
         data._sortDate = typeof _vcPendingRequestDate === "function" ? _vcPendingRequestDate(data) : "";
@@ -40229,9 +40229,9 @@ window.ensureFilaSignalsIndex = function() {
         else guardarCasa(data, keys);
         pushAlbum(data, chaves);
       });
-      const checks = await getDocs(collection(window.firebaseDb, "construction_checks"));
-      checks.forEach((docSnap) => {
-        const data = Object.assign({ id: docSnap.id, _collection: "construction_checks" }, docSnap.data() || {});
+      const checks = await DE.tabela("construction_checks").listar();
+      checks.forEach((item) => {
+        const data = Object.assign({ id: item.id, _collection: "construction_checks" }, item);
         const keys = typeof _vcDocIdentityKeys === "function" ? _vcDocIdentityKeys(data) : [];
         const chaves = guardarCasa(data, keys);
         if (!stageForaDaFila(estagioDoc(data)) || window.relFotoEntries(data).length) pushAlbum(data, chaves);

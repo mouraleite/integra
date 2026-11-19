@@ -318,17 +318,9 @@ const MarketingBudgetApp = {
     try {
       let units = this.unitsEstoque(id);
       if (!units.length) {
-        const fc = window.firebaseCollections;
-        if (window.firebaseDb && fc && fc.getDoc && fc.doc) {
-          units = [];
-          for (let n = 0; n < 40; n++) {
-            const snap = await fc.getDoc(fc.doc(window.firebaseDb, "estoque_comercial", "cc_" + id + "_" + n));
-            const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-            if (!existe) break;
-            const data = snap.data() || {};
-            if (!Array.isArray(data.units) || !data.units.length) break;
-            units = units.concat(data.units);
-          }
+        // Estoque no Supabase (estoque_comercial: uma linha por unidade; antes docs cc_<id>_<n>).
+        if (window.DadosEngenharia) {
+          units = await window.DadosEngenharia.listarUnidadesEstoque({ enterpriseId: id });
         }
       }
       if (String(this.state.ccId) !== id) return;
@@ -342,24 +334,19 @@ const MarketingBudgetApp = {
     }
   },
 
-  /** Sem estoque nem carteira carregados nesta sessão, lê do Firebase quais empreendimentos têm unidades. */
+  /** Sem estoque nem carteira carregados nesta sessão, lê do Supabase (estoque_comercial) quais empreendimentos têm unidades. */
   async carregarUnidades() {
     const s = this.state;
     if (s.unidadesLidas || s.ccsComUnidade || this.idsComUnidade().size) return false;
-    const fc = window.firebaseCollections;
-    if (!(window.firebaseDb && fc && fc.getDocs)) return false;
+    const D = window.DadosEngenharia;
+    if (!D) return false;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "estoque_comercial"));
+      // Só id e empreendimento de cada unidade (select reduzido).
+      const units = await D.listarUnidadesEstoque({ colunas: "id, enterprise_id" });
       const ids = new Set();
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        if (d.id === "_meta") return;
-        const units = Array.isArray(data.units) ? data.units : [];
-        if (data.enterpriseId && units.length) ids.add(String(data.enterpriseId));
-        units.forEach((u) => {
-          const id = u && (u.enterpriseId || u.costCenterId);
-          if (id) ids.add(String(id));
-        });
+      units.forEach((u) => {
+        const id = u && (u.enterpriseId || u.costCenterId);
+        if (id) ids.add(String(id));
       });
       s.ccsComUnidade = [...ids];
       s.unidadesLidas = true;
