@@ -101,9 +101,9 @@ const AlertasPopupApp = {
     {
       id: "ponto-sexta",
       nome: "Pendências no cartão de ponto",
-      quando: "No login, na sexta-feira. Se a sexta for feriado, no dia útil anterior. Só nesse dia. Ciente dispensa o restante do dia.",
-      logica: "Pede para checar as pendências no cartão de ponto do time. Não abre nos outros dias da semana.",
-      quem: "israel@mouraleite.com.br.",
+      quando: "No login, na sexta-feira. Se a sexta for feriado, no dia útil anterior. Só nesse dia. Ciente dispensa o restante do dia, inclusive depois de Ctrl+F5 ou em outro computador.",
+      logica: "Pede para checar as pendências no cartão de ponto do time. Não abre nos outros dias da semana. O ciente fica gravado no banco do Integra.",
+      quem: "israel@mouraleite.com.br, só na própria conta. Testando como outra conta, não abre.",
       titulo: "Pendências no cartão de ponto",
       corpo: `<p>Cheque as pendências no cartão de ponto do time.</p>
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente.</p>`
@@ -111,9 +111,9 @@ const AlertasPopupApp = {
     {
       id: "ponto-fechamento",
       nome: "Validar o ponto do time",
-      quando: "No login, no dia 15. Se o dia 15 cair em feriado ou fim de semana, no próximo dia útil. Só nesse dia. Ciente dispensa o restante do dia.",
-      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Não fica aberto nos dias seguintes.",
-      quem: "israel@mouraleite.com.br.",
+      quando: "No login, no dia 15. Se o dia 15 cair em feriado ou fim de semana, no próximo dia útil. Só nesse dia. Ciente dispensa o restante do dia, inclusive depois de Ctrl+F5 ou em outro computador.",
+      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Não fica aberto nos dias seguintes. O ciente fica gravado no banco do Integra.",
+      quem: "israel@mouraleite.com.br, só na própria conta. Testando como outra conta, não abre.",
       titulo: "Validar o ponto do time",
       corpo: `<p>Valide o ponto do time. O mês fechou de 15/10/2026 até 14/11/2026.</p>
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente. Se a sexta cair no mesmo dia, os dois textos vêm no mesmo aviso.</p>`
