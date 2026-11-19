@@ -25,6 +25,8 @@ const rotas = {
   "antecipacoes-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
+  // Login Microsoft -> token do Supabase. Confere o login dentro da própria rota (sempre bloqueia).
+  "supabase-token": require("./_lib/supabase-token"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
   "publicar": require("./_lib/publicar")
 };
