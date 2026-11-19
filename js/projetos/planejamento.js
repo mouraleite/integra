@@ -4,6 +4,29 @@
     return parts ? [parts[3], parts[2], parts[1]].join('/') : '—';
   };
 
+  const pesosComuns = {
+    'FUNDIARIA': 7, 'DIRETRIZES': 5, 'PROJETOS CONCEITUAIS': 5,
+    'APROVACAO PREVIA': 12, 'GRAPROHAB': 22, 'REGISTRO': 10, 'FORMALIZACOES': 2
+  };
+  const pesosAbertos = { ...pesosComuns,
+    'PROJETOS EXECUTIVOS': 12, 'PROJETOS COMPLEMENTARES': 10, 'APROVACAO FINAL': 15
+  };
+  const pesosFechados = { ...pesosComuns,
+    'PROJETOS EXECUTIVOS': 9, 'PROJETOS COMPLEMENTARES': 8, 'APROVACAO FINAL': 12,
+    'ASSOCIACAO': 2, 'REGISTRO DA ASSOCIACAO': 2,
+    'DECRETO DE PERMISSAO DE USO': 2, 'APROVACAO DA ASSOCIACAO': 2
+  };
+
+  function etapaPlanejamento(description) {
+    return String(description ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .trim().replace(/^(?:\d+\s*[-–—]\s*|[-–—]\s*)/, '')
+      .replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').toUpperCase()
+      .replace('APROVACAO PREVIA DA PREFEITURA', 'APROVACAO PREVIA')
+      .replace('APROVACAO FINAL DA PREFEITURA', 'APROVACAO FINAL')
+      .replace(/^REGISTRO NO CARTORIO$/, 'REGISTRO')
+      .replace(/^REGISTRO DA ASSOCIACAO NO CARTORIO$/, 'REGISTRO DA ASSOCIACAO');
+  }
+
   function agruparAtividades(tasks, measurements, completo) {
     const ancestors = [];
     const entries = tasks.map(task => {
@@ -12,17 +35,27 @@
       const entry = {
         task, level, parent: ancestors.at(-1), expanded: true,
         description: task.description || String(task.presentationId),
-        weight: 0, weightedProgress: 0, unknownProgress: false
+        weight: 0, weightedProgress: 0, unknownProgress: false,
+        stageWeight: 0, weightedStageProgress: 0, unknownStageProgress: false
       };
       ancestors.push(entry);
       return entry;
     });
 
+    const etapas = entries.filter(entry => entry.level === 2);
+    const modeloFechado = etapas.some(entry => {
+      const etapa = etapaPlanejamento(entry.description);
+      return Object.hasOwn(pesosFechados, etapa) && !Object.hasOwn(pesosAbertos, etapa);
+    });
+    const pesos = modeloFechado ? pesosFechados : pesosAbertos;
+
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       const { task, parent } = entry;
       const recorded = measurements?.get(String(task.id));
-      if (entry.weight > 0) {
+      if (entry.stageWeight > 0) {
+        entry.measured = entry.unknownStageProgress ? null : entry.weightedStageProgress / entry.stageWeight;
+      } else if (entry.weight > 0) {
         entry.measured = recorded ?? (entry.unknownProgress ? null : entry.weightedProgress / entry.weight);
       } else if (task.summary) {
         entry.measured = recorded ?? null;
@@ -37,6 +70,13 @@
         parent.weight += entry.weight;
         parent.weightedProgress += entry.weightedProgress;
         parent.unknownProgress ||= entry.unknownProgress;
+        if (entry.level === 2) {
+          const etapa = etapaPlanejamento(entry.description);
+          const peso = Object.hasOwn(pesos, etapa) ? pesos[etapa] : 0;
+          parent.stageWeight += peso;
+          parent.weightedStageProgress += peso * (entry.measured ?? 0);
+          parent.unknownStageProgress ||= !peso || entry.measured === null;
+        }
       }
     }
     return entries;
@@ -170,6 +210,11 @@
         for (const value of values) row.insertCell().textContent = value ?? '—';
         const progressCell = row.insertCell();
         progressCell.textContent = measured === null ? '—' : percentageFormat.format(measured / 100);
+        if (entry.stageWeight > 0) {
+          progressCell.title = entry.unknownStageProgress
+            ? 'Há etapas sem peso correspondente ou sem medição disponível.'
+            : 'Avanço ponderado pelos pesos físicos das etapas do cronograma.';
+        }
         if (measured >= 100) progressCell.style.color = '#166534';
         else if (overdue > 0) progressCell.style.color = '#b91c1c';
         const description = row.cells[1];
