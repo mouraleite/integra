@@ -807,18 +807,22 @@ window.empresasCustomPayload = function() {
 };
 
 window.persistEmpresasCustomToFirebase = async function() {
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb || typeof window.mergeEmpresasCustom !== "function") return "";
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  let saved = "";
-  await fc.runTransaction(window.firebaseDb, async (tx) => {
-    const snap = await tx.get(docRef);
-    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    const cloud = exists ? (snap.data() || {}) : {};
-    const mem = window.empresasCustomPayload();
-    saved = window.mergeEmpresasCustom(mem, cloud.crm_empresas_custom || "{}");
-    tx.set(docRef, { crm_empresas_custom: saved }, { merge: true });
+  // Supabase: global.crm_empresas_custom virou a tabela empresas (uma linha por empresa), então não há
+  // runTransaction: lê as linhas, funde com a memória e grava pelo gravarConfig (só as linhas que mudaram).
+  const D = window.DadosNucleo;
+  if (!D || typeof window.mergeEmpresasCustom !== "function") return "";
+  const cloud = {};
+  (await D.tabela("empresas").listar()).forEach((o) => {
+    const item = Object.assign({}, o);
+    delete item.id;
+    cloud[String(o.id)] = item;
   });
+  const mem = window.empresasCustomPayload();
+  const saved = window.mergeEmpresasCustom(mem, JSON.stringify(cloud));
+  // O marcador "_v2" não é empresa: não pode virar linha na tabela.
+  const semMarcador = JSON.parse(saved);
+  delete semMarcador._v2;
+  await D.gravarConfig("global", { crm_empresas_custom: JSON.stringify(semMarcador) }, { merge: true });
   if (saved && typeof window._originalSetItem === "function") {
     try { window._originalSetItem.call(localStorage, "crm_empresas_custom", saved); } catch (e) {}
   }

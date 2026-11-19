@@ -29,7 +29,19 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
    que é filtrado e somado, `extra jsonb` para campos raros. `config/*` vira tabelas de cadastro + `configuracoes(chave, valor)`.
    Notas em shards viram uma linha por nota. `increment` e `runTransaction` viram funções SQL. `onSnapshot` vira Realtime.
    Storage: buckets espelhando as pastas atuais; registros guardam o caminho do arquivo, não a URL do Firebase.
-3. **Código por área**, nesta ordem: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
+3. **Código por área.** Andamento:
+   - **Núcleo (feito no código, falta testar com login):** camada `js/nucleo/dados-base.js` (conversão objeto <->
+     linha, também usada pelo importador), `js/nucleo/mapas-nucleo.js` (campo -> coluna) e `js/nucleo/dados-nucleo.js`
+     (`window.DadosNucleo`). `config/global` continua existindo para o app como espelho do localStorage, mas é montado
+     a partir de `configuracoes` + tabelas (`centros_custo`, `empresas`, `usuarios`, `perfis`...) e só as linhas que
+     mudaram são gravadas. Migrados: `app.js` (configuração, usuários/perfis, agenda, documentos autenticados, KMZ,
+     settings) e os outros arquivos de `js/nucleo/`. Importador: `ferramentas/migracao/importar-nucleo.js`.
+     Mudanças de comportamento: as "transações" de usuários/perfis (`crmTransacaoConfig`) leem e gravam sem trava
+     (gravam só as linhas alteradas); `empresas.js` idem; KMZ fica numa linha só (sem o doc `_quadras`); a agenda só
+     grava notas do próprio usuário, de TODOS ou compartilhadas com ele. Arquivos (Storage) seguem no Firebase até a
+     Fase 4. Outras áreas que leem `config/*` direto no Firebase (cobrança, financeiro, contábil, jurídico, engenharia,
+     fiscal) passam para `DadosNucleo.lerConfig/gravarConfig` quando a área delas for migrada.
+   Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
 4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,
    congelamento do Firebase, carga final, crons ligados, domínio apontado, merge na `main`.

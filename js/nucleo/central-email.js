@@ -298,10 +298,10 @@ const CentralEmailApp = {
   },
 
   async lerRemoto() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    // Supabase: config/central_email é montado a partir da tabela central_email_templates.
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "central_email"));
+      const snap = await window.DadosNucleo.lerConfig("central_email");
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe) return null;
       return this.normalizar((snap.data() || {}).templates);
@@ -322,10 +322,9 @@ const CentralEmailApp = {
   async gravar() {
     const dados = { templates: this.state.templates };
     try { localStorage.setItem("crm_central_email", JSON.stringify(dados)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "central_email"), dados, { merge: true });
+      await window.DadosNucleo.gravarConfig("central_email", dados, { merge: true });
     } catch (e) {
       console.warn("[Central e-mail] gravação", e);
     }
@@ -707,13 +706,11 @@ const CentralEmailApp = {
   },
 
   async lerEnviosDoDia() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.query || !fc.where) return {};
+    if (!window.DadosNucleo) return {};
     const mapa = {};
     try {
-      const snap = await fc.getDocs(fc.query(fc.collection(window.firebaseDb, "central_email_envios"), fc.where("dia", "==", this.hojeIso())));
-      snap.forEach((d) => {
-        const v = d.data() || {};
+      const envios = await window.DadosNucleo.tabela("central_email_envios").listar({ filtros: [["dia", "eq", this.hojeIso()]] });
+      envios.forEach((v) => {
         mapa[v.templateId + "|" + v.customerId + "|" + v.titulo] = v;
       });
     } catch (e) {

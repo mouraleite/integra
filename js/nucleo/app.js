@@ -4714,17 +4714,16 @@ async function auditCollectNoteRows(fromCloud) {
 }
 
 async function auditRowsFromAnexosMapa() {
-  if (!window.firebaseDb || !window.firebaseCollections) return [];
+  if (!window.DadosNucleo) return [];
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "anexos_mapa"));
+    // Supabase: anexos_mapa tem uma linha por envio (antes era um doc por empreendimento com o mapa byKey).
+    const envios = await window.DadosNucleo.tabela("anexos_mapa").listar();
     const rows = [];
-    snap.forEach(function(docu) {
-      const data = docu.data() || {};
-      const byKey = data.byKey && typeof data.byKey === "object" ? data.byKey : {};
-      const enterpriseId = String(data.enterpriseId || docu.id || "");
-      Object.keys(byKey).forEach(function(k) {
-        const rec = byKey[k];
+    const data = {}; // updatedAt do doc antigo foi descartado (vale o sentAt de cada envio)
+    envios.forEach(function(rec) {
+      const enterpriseId = String(rec.enterpriseId || "");
+      const k = rec.chave || rec.id;
+      (function() {
         if (!rec) return;
         const sentBy = String(rec.sentBy || "").trim();
         const tag = String(rec.tag || "").trim();
@@ -4756,7 +4755,7 @@ async function auditRowsFromAnexosMapa() {
             costCenterId: rec.enterpriseId || enterpriseId
           }
         });
-      });
+      })();
     });
     return rows;
   } catch (e) {
@@ -5913,9 +5912,9 @@ window.persistBackOfficePermsObject = function(obj) {
 
 window.uploadBackOfficePermsToFirebase = async function(obj) {
   if (!obj || typeof window.crmPermsHasAnyTrue !== "function" || !window.crmPermsHasAnyTrue(obj)) return;
-  if (!window.firebaseDb || !window.firebaseCollections) return;
-  const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "back_office_perms");
-  await window.firebaseCollections.setDoc(docRef, {
+  if (!window.DadosNucleo) return;
+  // Supabase: config/back_office_perms fica inteiro em configuracoes (chave "config/back_office_perms").
+  await window.DadosNucleo.gravarConfig("back_office_perms", {
     payload: JSON.stringify(obj),
     savedAt: Number(obj._savedAt) || Date.now(),
     profileId: window.CRM_BACK_OFFICE_PROFILE_ID
@@ -5940,9 +5939,8 @@ window.applyBackOfficePermsFromCloudPayload = function(cloudRaw) {
 };
 
 window.downloadBackOfficePermsFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections) return null;
-  const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "back_office_perms");
-  const snap = await window.firebaseCollections.getDoc(docRef);
+  if (!window.DadosNucleo) return null;
+  const snap = await window.DadosNucleo.lerConfig("back_office_perms");
   const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
   if (!exists) return null;
   const data = snap.data() || {};
@@ -6296,9 +6294,8 @@ window.crmUsersDocExists = function(snap) {
 
 window.mergeCrmUsersWithCloud = async function(localStr, globalStr) {
   let dedicated = "[]";
-  if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc) {
-    const ref = window.firebaseCollections.doc(window.firebaseDb, "config", "crm_users");
-    const snap = await window.firebaseCollections.getDoc(ref);
+  if (window.DadosNucleo) {
+    const snap = await window.DadosNucleo.lerConfig("crm_users");
     if (window.crmUsersDocExists(snap)) {
       const data = snap.data() || {};
       dedicated = data.list || data.crm_users || "[]";
@@ -6362,23 +6359,90 @@ window.incluirCacoNaLista = function(raw) {
 
 // Leitura de config/global (quase 1 MB) reaproveitada por alguns segundos: a tela Usuários e Perfis
 // pedia o mesmo documento duas vezes seguidas. Toda gravação nele descarta a leitura guardada.
+// Supabase: o documento é montado das tabelas por DadosNucleo.lerConfig("global") (mesmo formato de antes).
 window.crmLerConfigGlobal = function() {
-  const fc = window.firebaseCollections;
   const agora = Date.now();
   const g = window._crmGlobalLeitura;
   if (g && agora - g.at < 5000) return g.p;
-  const p = fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+  const p = window.DadosNucleo.lerConfig("global");
   window._crmGlobalLeitura = { at: agora, p: p };
   p.catch(() => { window._crmGlobalLeitura = null; });
   return p;
 };
 
+// Supabase: substitui o runTransaction do Firestore nos documentos de config/*. O "tx" lê com
+// DadosNucleo.lerConfig(id) e guarda as gravações, que vão para DadosNucleo.gravarConfig(id, ...) no fim.
+// Não é atômico nem repete em conflito (cada tabela de destino grava só as linhas que mudaram).
+// Para uma chave só de config/global, preferir DadosNucleo.trocarConfiguracao (esse sim repete em conflito).
+window.crmTransacaoConfig = async function(fn) {
+  if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
+  const gravacoes = [];
+  const tx = {
+    get: (id) => window.DadosNucleo.lerConfig(id, "config", { fresco: true }),
+    set: (id, dados, opcoes) => { gravacoes.push([id, dados, opcoes]); }
+  };
+  const ret = await fn(tx);
+  for (const g of gravacoes) {
+    if (g[0] === "global") window._crmGlobalLeitura = null;
+    await window.DadosNucleo.gravarConfig(g[0], g[1], g[2] || {});
+  }
+  return ret;
+};
+
+// Supabase: notas da agenda (agenda_personal_notes / agenda_recurring_notes). Id = "<NOME DO DONO>_<AAAA-MM-DD>".
+// Com a RLS só passa o que é do usuário atual, de "TODOS" ou compartilhado com ele (nucleo.md §26); o resto é
+// pulado aqui (antes gravava todas as chaves do localStorage e as alheias falhariam).
+window.crmAgendaPodeGravar = function(key, notes) {
+  let nome = "";
+  let email = "";
+  const u = window.AppState && window.AppState.currentUser;
+  if (u && u.name) {
+    nome = String(u.name).toUpperCase();
+    email = String(u.email || "").toLowerCase();
+  } else {
+    try {
+      const stored = JSON.parse(localStorage.getItem("currentUser"));
+      if (stored && stored.name) {
+        nome = String(stored.name).toUpperCase();
+        email = String(stored.email || "").toLowerCase();
+      }
+    } catch (e) {}
+  }
+  const dono = String(key || "").split("_")[0];
+  if (dono === "TODOS" || dono === "Todos") return true;
+  if (nome && dono === nome) return true;
+  return !!email && (Array.isArray(notes) ? notes : []).some((n) => n && Array.isArray(n.sharedWith) && n.sharedWith.includes(email));
+};
+
+// Grava { notes } no doc da agenda com merge (o merge mantém dono/usuario_id de quem criou).
+// Nota do próprio usuário leva usuario_id = id dele no Supabase (vem com o token, window.sbUsuario()):
+// é o que a regra de acesso confere para incluir/alterar. Notas de "TODOS" ficam sem dono.
+window.crmAgendaGravar = async function(tabela, key, notes) {
+  if (!window.DadosNucleo) return;
+  if (!window.crmAgendaPodeGravar(key, notes)) return;
+  const k = String(key);
+  const obj = { notes: notes || [] };
+  const i = k.indexOf("_");
+  if (i > 0) {
+    obj.dono = k.slice(0, i);
+    const dia = k.slice(i + 1);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dia)) obj.data = dia;
+  }
+  const dono = String(obj.dono || "").toUpperCase();
+  const u = window.AppState && window.AppState.currentUser;
+  if (dono && dono !== "TODOS" && u && String(u.name || "").toUpperCase() === dono) {
+    if (typeof window.sbToken === "function") await window.sbToken();
+    const eu = typeof window.sbUsuario === "function" ? window.sbUsuario() : null;
+    if (eu && eu.id) obj.usuario_id = eu.id;
+  }
+  return window.DadosNucleo.tabela(tabela).gravar(k, obj, { merge: true });
+};
+
 window.syncCrmUsersFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
-  const fc = window.firebaseCollections;
+  if (!window.DadosNucleo) return null;
   let dedicated = "[]";
   let globalUsers = "[]";
-  const dSnap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "crm_users"));
+  const dSnap = await window.DadosNucleo.lerConfig("crm_users");
   if (window.crmUsersDocExists(dSnap)) {
     const data = dSnap.data() || {};
     dedicated = data.list || data.crm_users || "[]";
@@ -6396,6 +6460,10 @@ window.syncCrmUsersFromFirebase = async function() {
   if (window.crmUsersDocExists(gSnap)) {
     const gData = gSnap.data() || {};
     globalUsers = gData.crm_users || "[]";
+    // Supabase: em config/global montado, removedEmails vem como texto JSON (vem de configuracoes).
+    if (typeof gData.removedEmails === "string") {
+      try { gData.removedEmails = JSON.parse(gData.removedEmails); } catch (e) { gData.removedEmails = []; }
+    }
     window.noteCrmUsersRemoved(gData.removedEmails);
     if (/caco@colenci\.com\.br/i.test(JSON.stringify(gData.removedEmails || []))) window._cacoPrecisaVolta = true;
   }
@@ -6424,8 +6492,7 @@ window.syncCrmUsersFromFirebase = async function() {
 };
 
 window.syncCrmProfilesFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
-  const fc = window.firebaseCollections;
+  if (!window.DadosNucleo) return null;
   const gSnap = await window.crmLerConfigGlobal();
   const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
   if (typeof window.absorbCrmProfileTombstones === "function") {
@@ -6486,13 +6553,12 @@ window.ensureCrmStorageRoom = function() {
 
 window.persistCrmProfilesNow = async function(profiles) {
   window._crmGlobalLeitura = null;
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e crie o perfil outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e crie o perfil outra vez.");
   }
   const mem = JSON.stringify(Array.isArray(profiles) ? profiles : []);
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const merged = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  const merged = await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const data = exists ? (snap.data() || {}) : {};
@@ -6536,17 +6602,16 @@ window.persistCrmProfilePermsNow = async function(profileId, perms) {
   window._crmGlobalLeitura = null;
   const id = String(profileId || "").trim();
   if (!id) throw new Error("Perfil sem identificador.");
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e salve as permissões outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e salve as permissões outra vez.");
   }
   const key = "crm_perms_" + id;
   const memObj = Object.assign({}, perms || {});
   delete memObj.__mirror_of__;
   if (!memObj._savedAt) memObj._savedAt = Date.now();
   const mem = JSON.stringify(memObj);
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const saved = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  const saved = await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const data = exists ? (snap.data() || {}) : {};
@@ -6584,14 +6649,14 @@ window.persistCrmUsersToFirebase = function(users) {
 
 window._writeCrmUsersNow = async function(mem) {
   window._crmGlobalLeitura = null;
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.setDoc) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e salve o usuário outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e salve o usuário outra vez.");
   }
-  const fc = window.firebaseCollections;
   let local = "[]";
   try { local = localStorage.getItem("crm_users") || "[]"; } catch (e) {}
-  const usersRef = fc.doc(window.firebaseDb, "config", "crm_users");
-  const globalRef = fc.doc(window.firebaseDb, "config", "global");
+  // Supabase: config/crm_users e config/global.crm_users vêm da mesma tabela usuarios (a segunda gravação não reenvia nada).
+  const usersRef = "crm_users";
+  const globalRef = "global";
   const writeMerged = async (dedicated, globalUsers) => {
     const merged = window.crmSomenteUsuariosDoAdministrador(
       window.mergeCrmUsers(mem, local),
@@ -6617,12 +6682,16 @@ window._writeCrmUsersNow = async function(mem) {
     return { merged, out };
   };
   let saved;
-  if (typeof fc.runTransaction === "function") {
-    saved = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  if (typeof window.crmTransacaoConfig === "function") {
+    saved = await window.crmTransacaoConfig(async (tx) => {
       const dSnap = await tx.get(usersRef);
       const gSnap = await tx.get(globalRef);
       const dData = window.crmUsersDocExists(dSnap) ? (dSnap.data() || {}) : {};
       const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
+      // Supabase: removedEmails de config/global vem como texto JSON (configuracoes).
+      if (typeof gData.removedEmails === "string") {
+        try { gData.removedEmails = JSON.parse(gData.removedEmails); } catch (e) { gData.removedEmails = []; }
+      }
       window.noteCrmUsersRemoved(dData.removedEmails);
       window.noteCrmUsersRemoved(gData.removedEmails);
       const dedicated = dData.list || dData.crm_users || "[]";
@@ -6638,13 +6707,13 @@ window._writeCrmUsersNow = async function(mem) {
   } else {
     let dedicated = "[]";
     let globalUsers = "[]";
-    const dSnap = await fc.getDoc(usersRef);
+    const dSnap = await window.DadosNucleo.lerConfig(usersRef);
     if (window.crmUsersDocExists(dSnap)) {
       const data = dSnap.data() || {};
       dedicated = data.list || data.crm_users || "[]";
       window.noteCrmUsersRemoved(data.removedEmails);
     }
-    const gSnap = await fc.getDoc(globalRef);
+    const gSnap = await window.DadosNucleo.lerConfig(globalRef);
     if (window.crmUsersDocExists(gSnap)) {
       const data = gSnap.data() || {};
       globalUsers = data.crm_users || "[]";
@@ -6654,8 +6723,8 @@ window._writeCrmUsersNow = async function(mem) {
     saved.merged = window.stripRemovedCrmUsers(saved.merged);
     try { saved.out = JSON.parse(saved.merged); } catch (e) { saved.out = []; }
     const removedEmails = window.crmUsersRemovedList();
-    await fc.setDoc(usersRef, { list: saved.merged, removedEmails: removedEmails, updatedAt: new Date().toISOString() }, { merge: true });
-    await fc.setDoc(globalRef, { crm_users: saved.merged, removedEmails: removedEmails }, { merge: true });
+    await window.DadosNucleo.gravarConfig(usersRef, { list: saved.merged, removedEmails: removedEmails, updatedAt: new Date().toISOString() }, { merge: true });
+    await window.DadosNucleo.gravarConfig(globalRef, { crm_users: saved.merged, removedEmails: removedEmails }, { merge: true });
   }
   const merged = saved.merged;
   const out = saved.out;
@@ -6787,12 +6856,11 @@ window.crmFinanciamentosMesclar = function(payloadRaw, cloudRaw) {
 };
 
 window.commitCrmGlobalConfig = async function(payload) {
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado.");
   }
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const cloud = exists ? (snap.data() || {}) : {};
@@ -6976,17 +7044,13 @@ window.mergedCaucaoLiberados = function(parts) {
 };
 
 window.persistCaucaoLiberadosNow = async function(map) {
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !window.firebaseDb) return null;
+  if (!window.DadosNucleo) return null;
   const mem = JSON.stringify(map && typeof map === "object" ? map : {});
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const merged = await fc.runTransaction(window.firebaseDb, async (tx) => {
-    const snap = await tx.get(docRef);
-    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    const cloud = exists ? ((snap.data() || {}).crm_engenharia_caucao_liberados_v1 || "{}") : "{}";
-    const next = window.mergedCaucaoLiberados([mem, cloud]);
-    tx.set(docRef, { crm_engenharia_caucao_liberados_v1: next }, { merge: true });
-    return next;
+  // Supabase: uma chave só de config/global -> trocarConfiguracao (relê e repete em conflito).
+  window._crmGlobalLeitura = null;
+  const merged = await window.DadosNucleo.trocarConfiguracao("crm_engenharia_caucao_liberados_v1", (atual) => {
+    const cloud = atual || "{}";
+    return window.mergedCaucaoLiberados([mem, cloud]);
   });
   try {
     const setter = window._originalSetItem || localStorage.setItem.bind(localStorage);
@@ -8554,17 +8618,17 @@ async function initializeApplication() {
          );
          
          // Agenda Personal Notes RT Listener
-         window.globalAgendaPersonalUnsubscribe = window.firebaseCollections.onSnapshot(
-             window.firebaseCollections.collection(window.firebaseDb, 'agenda_personal_notes'),
+         // Supabase: DadosNucleo.tabela(...).ouvir entrega {docs, mudancas:[{tipo, doc}]} (doc já é o objeto, com id).
+         if (window.DadosNucleo) window.globalAgendaPersonalUnsubscribe = window.DadosNucleo.tabela('agenda_personal_notes').ouvir(
              (snapshot) => {
                  let changed = false;
                  let personalNotes = JSON.parse(localStorage.getItem("crm_agenda_personal_notes")) || {};
-                 snapshot.docChanges().forEach(change => {
-                     if (change.type === 'removed') {
+                 snapshot.mudancas.forEach(change => {
+                     if (change.tipo === 'removed') {
                          delete personalNotes[change.doc.id];
                          changed = true;
                      } else {
-                         const incoming = change.doc.data().notes || [];
+                         const incoming = change.doc.notes || [];
                          const local = personalNotes[change.doc.id] || [];
                          personalNotes[change.doc.id] = (typeof window.mergeAgendaNoteAlarmState === 'function')
                              ? window.mergeAgendaNoteAlarmState(incoming, local)
@@ -8577,24 +8641,22 @@ async function initializeApplication() {
                      localStorage.setItem("crm_agenda_personal_notes", JSON.stringify(personalNotes));
                      window._isFirebaseSyncing = false;
                      if (window.renderAgendaPersonalNotes) window.renderAgendaPersonalNotes();
-                     console.log(`[Firebase RT] agenda_personal_notes atualizado em tempo real.`);
+                     console.log(`[Supabase RT] agenda_personal_notes atualizado em tempo real.`);
                  }
-             },
-             (error) => { console.error("[Firebase RT] Erro no listener de agenda_personal_notes:", error); }
+             }
          );
 
          // Agenda Recurring Notes RT Listener
-         window.globalAgendaRecurringUnsubscribe = window.firebaseCollections.onSnapshot(
-             window.firebaseCollections.collection(window.firebaseDb, 'agenda_recurring_notes'),
+         if (window.DadosNucleo) window.globalAgendaRecurringUnsubscribe = window.DadosNucleo.tabela('agenda_recurring_notes').ouvir(
              (snapshot) => {
                  let changed = false;
                  let recurringNotes = JSON.parse(localStorage.getItem("crm_agenda_recurring_notes")) || {};
-                 snapshot.docChanges().forEach(change => {
-                     if (change.type === 'removed') {
+                 snapshot.mudancas.forEach(change => {
+                     if (change.tipo === 'removed') {
                          delete recurringNotes[change.doc.id];
                          changed = true;
                      } else {
-                         recurringNotes[change.doc.id] = change.doc.data().notes || [];
+                         recurringNotes[change.doc.id] = change.doc.notes || [];
                          changed = true;
                      }
                  });
@@ -8603,10 +8665,9 @@ async function initializeApplication() {
                      localStorage.setItem("crm_agenda_recurring_notes", JSON.stringify(recurringNotes));
                      window._isFirebaseSyncing = false;
                      if (window.renderAgendaPersonalNotes) window.renderAgendaPersonalNotes();
-                     console.log(`[Firebase RT] agenda_recurring_notes atualizado em tempo real.`);
+                     console.log(`[Supabase RT] agenda_recurring_notes atualizado em tempo real.`);
                  }
-             },
-             (error) => { console.error("[Firebase RT] Erro no listener de agenda_recurring_notes:", error); }
+             }
          );
      } else {
          AppState.judNotes = JSON.parse(localStorage.getItem("crm_moura_jud_notes")) || {};
@@ -8694,15 +8755,14 @@ async function initializeApplication() {
       const personalNotes = JSON.parse(localStorage.getItem("crm_agenda_personal_notes")) || {};
       const recurringNotes = JSON.parse(localStorage.getItem("crm_agenda_recurring_notes")) || {};
       window._isFirebaseSyncing = false;
-      if (window.firebaseDb && window.firebaseCollections) {
+      if (window.DadosNucleo) {
           try {
+             // Supabase: crmAgendaGravar só envia as chaves do usuário atual / TODOS / compartilhadas com ele.
              for (const key of Object.keys(personalNotes)) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', key);
-                window.firebaseCollections.setDoc(docRef, { notes: personalNotes[key] || [] }, { merge: true }).catch(e => console.error(e));
+                window.crmAgendaGravar('agenda_personal_notes', key, personalNotes[key] || []).catch(e => console.error(e));
              }
              for (const key of Object.keys(recurringNotes)) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_recurring_notes', key);
-                window.firebaseCollections.setDoc(docRef, { notes: recurringNotes[key] || [] }, { merge: true }).catch(e => console.error(e));
+                window.crmAgendaGravar('agenda_recurring_notes', key, recurringNotes[key] || []).catch(e => console.error(e));
              }
           } catch(e) {
               console.error('Erro ao salvar agenda notes no Firebase', e);
@@ -9374,16 +9434,16 @@ window.cancelMotivosGravar = async function(catalogo) {
       localStorage.setItem(key, JSON.stringify({ catalogo: doc.catalogo, em: doc.em, pendente: !!pendente }));
     } catch (e) {}
   };
-  if (!window.firebaseDb || !window.firebaseCollections) {
+  if (!window.DadosNucleo) {
     gravarLocal(true);
     return { ok: false, catalogo: doc.catalogo, erro: "A base não está disponível nesta tela." };
   }
   gravarLocal(true);
   try {
-    const fc = window.firebaseCollections;
     const payload = {};
     payload[key] = JSON.stringify({ catalogo: doc.catalogo, em: doc.em });
-    await fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), payload, { merge: true });
+    // Supabase: a chave vira linhas em motivos_cancelamento (ver dados-nucleo.js).
+    await window.DadosNucleo.gravarConfig("global", payload, { merge: true });
     gravarLocal(false);
     return { ok: true, catalogo: doc.catalogo };
   } catch (e) {
@@ -9395,14 +9455,14 @@ window.cancelMotivosGravar = async function(catalogo) {
 window.cancelMotivosSincronizar = async function() {
   const key = window.CANCEL_MOTIVOS_KEY;
   const revInicio = window._motivosCancelRev || 0;
-  if (!window.firebaseDb || !window.firebaseCollections) return window.cancelMotivosLista();
+  if (!window.DadosNucleo) return window.cancelMotivosLista();
   try {
-    const fc = window.firebaseCollections;
-    const ref = fc.doc(window.firebaseDb, "config", "global");
-    const snap = await fc.getDoc(ref);
+    const snap = await window.DadosNucleo.lerConfig("global");
     if ((window._motivosCancelRev || 0) !== revInicio) return window.cancelMotivosLista();
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const cloud = exists ? window.cancelMotivosLerBruto((snap.data() || {})[key] || "null") : { extras: [], em: "", temCatalogo: false };
+    // Supabase: "em" vem do atualizado_em das linhas, em epoch ms; a comparação abaixo é por texto ISO.
+    if (cloud.em && /^\d+$/.test(cloud.em)) cloud.em = Number(cloud.em) ? new Date(Number(cloud.em)).toISOString() : "";
     const local = window.cancelMotivosLerLocal();
     const localVence = local.temCatalogo && (local.pendente || !cloud.temCatalogo || String(local.em || "") >= String(cloud.em || ""));
     const base = localVence ? local.catalogo : (cloud.temCatalogo ? cloud.catalogo : window.cancelMotivosLista());
@@ -16543,15 +16603,14 @@ function formatCpfCnpj(val) {
     
     // Buscar coordenadas do KMZ para exibir o botão do Google Earth.
     // Sem o Firebase a ficha segue com os dados do Sienge (título, datas e valores).
-    if (empIdToUse !== "N/D" && window.firebaseDb && window.firebaseCollections && window.firebaseCollections.doc && window.firebaseCollections.getDoc) {
-      const { doc, getDoc } = window.firebaseCollections;
-      const kmzRef = doc(window.firebaseDb, 'kmz_coordinates', empIdToUse);
-      getDoc(kmzRef).then(async docSnap => {
+    if (empIdToUse !== "N/D" && window.DadosNucleo) {
+      // Supabase: uma linha por empreendimento em kmz_coordinates (obter devolve o objeto ou null).
+      window.DadosNucleo.tabela('kmz_coordinates').obter(empIdToUse).then(async kmz => {
           let data = [];
           const span = document.getElementById("det-block-lot-span");
           if (!span) return;
-          const existe = docSnap && (typeof docSnap.exists === "function" ? docSnap.exists() : docSnap.exists);
-          if (existe) data = (docSnap.data() || {}).placemarks || [];
+          const existe = !!kmz;
+          if (existe) data = kmz.placemarks || [];
 
           let kmzMissing = false;
           if (!Array.isArray(data) || data.length === 0) kmzMissing = true;
@@ -23949,7 +24008,7 @@ async function renegSalvarProposta(results, extra) {
   if (extra && extra.codigo) {
     const anterior = window._renegPropostasMap && window._renegPropostasMap.get(id);
     if (anterior && anterior.codigoAuth && anterior.codigoAuth !== extra.codigo) {
-      fc.setDoc(fc.doc(window.firebaseDb, "documentos_autenticados", anterior.codigoAuth), { substituido: true }, { merge: true }).catch(function() {});
+      if (window.DadosNucleo) window.DadosNucleo.tabela("documentos_autenticados").gravar(anterior.codigoAuth, { substituido: true }, { merge: true }).catch(function() {});
     }
     dados.codigoAuth = extra.codigo;
     dados.reparcelamento = extra.reparcelamento || null;
@@ -24096,10 +24155,8 @@ function renegCarregarQrLib() {
 }
 
 async function renegGuardarProva(codigo, hash, info, payload) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.setDoc || !fx.doc) throw new Error("O Firebase não está disponível para guardar a prova do acordo.");
-  await fx.setDoc(fx.doc(db, "documentos_autenticados", codigo), {
+  if (!window.DadosNucleo) throw new Error("O Supabase não está disponível para guardar a prova do acordo.");
+  await window.DadosNucleo.tabela("documentos_autenticados").gravar(codigo, {
     tipo: "acordo",
     tipoNome: "Acordo",
     codigo: codigo,
@@ -24389,13 +24446,11 @@ async function renegMontarPdfAcordo(results, nomeArquivo, pixBytes) {
 }
 
 window.subirReparcelamentoPorCodigo = async function(codigo) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
   const vazio = { ok: false, motivo: "sem-reparcelamento" };
-  if (!codigo || !fx || !db || !fx.getDoc || !fx.doc) return vazio;
-  const snap = await fx.getDoc(fx.doc(db, "documentos_autenticados", codigo));
-  if (!snap || !snap.exists || !snap.exists()) return vazio;
-  const prova = snap.data() || {};
+  if (!codigo || !window.DadosNucleo) return vazio;
+  const docsAuth = window.DadosNucleo.tabela("documentos_autenticados");
+  const prova = await docsAuth.obter(codigo);
+  if (!prova) return vazio;
   if (prova.tipo !== "acordo" || !prova.reparcelamento) return vazio;
   if (prova.substituido) return { ok: false, motivo: "substituido" };
   if (prova.reparcelamentoEnviado) return { ok: false, motivo: "ja-enviado" };
@@ -24429,7 +24484,7 @@ window.subirReparcelamentoPorCodigo = async function(codigo) {
     if (res && res.simulated) {
       return { ok: false, motivo: "erro", detalhe: "O Integra está em modo simulado. O reparcelamento não foi enviado ao Sienge." };
     }
-    await fx.setDoc(fx.doc(db, "documentos_autenticados", codigo), {
+    await docsAuth.gravar(codigo, {
       reparcelamentoEnviado: true,
       reparcelamentoEnviadoEm: new Date().toISOString()
     }, { merge: true });
@@ -25749,13 +25804,9 @@ window.distratoCcCandidates = function() {
 window.ensureDistratoObrasCloud = function() {
   if (window._distObrasCloudTried) return;
   window._distObrasCloudTried = true;
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.getDoc) return;
-  fx.getDoc(fx.doc(db, "config", "global")).then((snap) => {
-    if (!snap || typeof snap.exists !== "function" || !snap.exists()) return;
-    const data = snap.data() || {};
-    const cloudRaw = data.crm_obras_andamento;
+  if (!window.DadosNucleo) return;
+  // Supabase: lê só a chave crm_obras_andamento de configuracoes (não precisa montar o config/global inteiro).
+  window.DadosNucleo.lerConfiguracao("crm_obras_andamento").then((cloudRaw) => {
     if (!cloudRaw) return;
     const cloud = typeof cloudRaw === "string" ? cloudRaw : JSON.stringify(cloudRaw);
     const local = localStorage.getItem("crm_obras_andamento") || "";
@@ -34812,9 +34863,8 @@ window.deleteAgendaPersonalNote = function(index, sourceKey) {
         allNotes[sourceKey].splice(index, 1);
         if (allNotes[sourceKey].length === 0) {
             delete allNotes[sourceKey];
-            if (window.firebaseDb && window.firebaseCollections) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', sourceKey);
-                window.firebaseCollections.setDoc(docRef, { notes: [] }, { merge: true }).catch(e => {});
+            if (window.DadosNucleo) {
+                window.crmAgendaGravar('agenda_personal_notes', sourceKey, []).catch(e => {});
             }
         }
         localStorage.setItem('crm_agenda_personal_notes', JSON.stringify(allNotes));
@@ -35108,9 +35158,8 @@ window.saveAgendaAlarm = function(dateStr, index, datetimeValue, sourceKey = '',
             notesList.splice(index, 1);
             if (notesList.length === 0) {
                 delete allNotes[currentStorageKey];
-                if (window.firebaseDb && window.firebaseCollections) {
-                    const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', currentStorageKey);
-                    window.firebaseCollections.setDoc(docRef, { notes: [] }, { merge: true }).catch(e => {});
+                if (window.DadosNucleo) {
+                    window.crmAgendaGravar('agenda_personal_notes', currentStorageKey, []).catch(e => {});
                 }
             }
             // Insere na chave do dia do alarme
@@ -38408,10 +38457,9 @@ window.ensureBoletoNotesTitulo4868Removed = async function() {
     try {
       const n = await window.purgeBoletoNotesTitulo4868();
       try { localStorage.setItem(flag, "1"); } catch (e) {}
-      if (window.firebaseDb && window.firebaseCollections) {
+      if (window.DadosNucleo) {
         try {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, "settings", "boleto_teste_purged_titulo_4868_v5"), {
+          await window.DadosNucleo.gravarSetting("boleto_teste_purged_titulo_4868_v5", {
             purgedAt: Date.now(),
             titulo: "4868",
             identities: window.getPurgedBoleto4868Identities()
@@ -38438,18 +38486,18 @@ window.ensureNexTitulo12753Removed = async function() {
       const titulo = String((it && (it.titulo || it.saleId)) || window.nexTituloFromKey(key) || "");
       return titulo === "12753";
     };
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_removed_titulo_12753");
-        const snap = await getDoc(flagRef);
+        // Supabase: marca de limpeza única em settings (configuracoes "settings/<id>").
+        const flagRef = "nex_removed_titulo_12753";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           await window.purgeNexItems(is12753, { localOnly: true });
           try { localStorage.setItem(flag, "1"); } catch (e) {}
           return 0;
         }
         const n = await window.purgeNexItems(is12753);
-        await setDoc(flagRef, { purgedAt: Date.now(), titulo: "12753" });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now(), titulo: "12753" });
         try { localStorage.setItem(flag, "1"); } catch (e) {}
         return n;
       } catch (e) {
@@ -38528,17 +38576,16 @@ window.ensureAllNexCleared = async function() {
       await window.purgeAllNexOccurrenceNotes();
       return n;
     };
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_cleared_all_20260828");
-        const snap = await getDoc(flagRef);
+        const flagRef = "nex_cleared_all_20260828";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           try { localStorage.setItem(flag, "1"); } catch (e) {}
           return 0;
         }
         const n = await run();
-        await setDoc(flagRef, { purgedAt: Date.now() });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now() });
         try { localStorage.setItem(flag, "1"); } catch (e) {}
         if (typeof window.renderNexFollowup === "function") window.renderNexFollowup();
         return n;
@@ -38655,17 +38702,16 @@ window.ensureNexTodayPurged = async function() {
   } catch (e) {}
   if (window._nexPurgePromise) return window._nexPurgePromise;
   window._nexPurgePromise = (async () => {
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_purged_2026-08-27");
-        const snap = await getDoc(flagRef);
+        const flagRef = "nex_purged_2026-08-27";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           try { localStorage.setItem("crm_nex_purged_2026-08-27", "1"); } catch (e) {}
           return 0;
         }
         const n = await window.purgeNexGeneratedOnDates(["2026-08-27"]);
-        await setDoc(flagRef, { purgedAt: Date.now(), date: "2026-08-27" });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now(), date: "2026-08-27" });
         try { localStorage.setItem("crm_nex_purged_2026-08-27", "1"); } catch (e) {}
         return n;
       } catch (e) {
@@ -45240,8 +45286,8 @@ window.persistEtapasFinanciamento = function() {
     if (gravou) localStorage.setItem("crm_moura_financiamento_at", at);
     else localStorage.removeItem("crm_moura_financiamento_at");
   } catch (e) {}
-  const fc = window.firebaseCollections;
-  if (fc && fc.doc && fc.setDoc && window.firebaseDb) {
+  // Supabase: grava as chaves em configuracoes (DadosNucleo.gravarConfig).
+  if (window.DadosNucleo) {
     let excluidas = window._finEtapasExcluidasMem || "";
     if (!excluidas) {
       try { excluidas = localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || ""; } catch (e) {}
@@ -45251,7 +45297,7 @@ window.persistEtapasFinanciamento = function() {
       crm_moura_financiamento_at: at
     };
     if (excluidas) doc.crm_moura_financiamento_excluidas = excluidas;
-    fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), doc, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
+    window.DadosNucleo.gravarConfig("global", doc, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
   }
   if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(console.error);
 };
@@ -46263,13 +46309,12 @@ async function saveDocPadrao(tipo) {
     if (elReneg) elReneg.value = data['doc-reneg-clauses'];
   }
   
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      const ref = doc(window.firebaseDb, 'settings', 'docpadrao_' + tipo);
-      await setDoc(ref, data);
+      // Supabase: settings/docpadrao_<tipo> fica inteiro em configuracoes.
+      await window.DadosNucleo.gravarSetting('docpadrao_' + tipo, data);
     } catch (e) {
-      console.error("Erro ao salvar documento padrão no Firebase", e);
+      console.error("Erro ao salvar documento padrão no Supabase", e);
     }
   }
   
@@ -46490,12 +46535,10 @@ async function loadDocPadraoTemplates() {
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
   };
   
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const { doc, getDoc } = window.firebaseCollections;
       for (const tipo of tipos) {
-        const ref = doc(window.firebaseDb, 'settings', 'docpadrao_' + tipo);
-        const snap = await getDoc(ref);
+        const snap = await window.DadosNucleo.lerSetting('docpadrao_' + tipo);
         if (snap.exists()) {
           const data = snap.data();
           localStorage.setItem(`crm_docpadrao_${tipo}`, JSON.stringify(data));
@@ -47262,11 +47305,9 @@ window.gerarTermoSuspensaoPdf = async function(customerId, saleId, opts) {
       } catch(e) {}
   }
   
-  if (!corpo && window.firebaseCollections && window.firebaseDb) {
+  if (!corpo && window.DadosNucleo) {
       try {
-          const { doc, getDoc } = window.firebaseCollections;
-          const fbRef = doc(window.firebaseDb, 'settings', 'docpadrao_suspensao');
-          const snap = await getDoc(fbRef);
+          const snap = await window.DadosNucleo.lerSetting('docpadrao_suspensao');
           if (snap.exists()) {
               const data = snap.data();
               localStorage.setItem('crm_docpadrao_suspensao', JSON.stringify(data));
@@ -48117,7 +48158,8 @@ async function uploadKMZ() {
       throw new Error("Os polígonos do centro foram lidos, mas a pasta Lotes não tem unidade no formato 13900-A-01.");
     }
 
-    const { doc, setDoc } = window.firebaseCollections;
+    if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
     const agora = new Date().toISOString();
     const gravar = codigos.filter((id) => grupos[id].lots.length);
     kmzCarga("Registrando coordenadas", 42);
@@ -48133,25 +48175,9 @@ async function uploadKMZ() {
         quadraCount: pack.quadras.length,
         updatedAt: agora
       };
-      const docRef = doc(window.firebaseDb, "kmz_coordinates", empId);
-      try {
-        await setDoc(docRef, payload);
-      } catch (e) {
-        await setDoc(docRef, {
-          empreendimento_id: empId,
-          placemarks: pack.lots,
-          quadras: [],
-          quadrasDoc: empId + "_quadras",
-          count: pack.lots.length,
-          quadraCount: pack.quadras.length,
-          updatedAt: agora
-        });
-        await setDoc(doc(window.firebaseDb, "kmz_coordinates", empId + "_quadras"), {
-          empreendimento_id: empId,
-          quadras: pack.quadras,
-          updatedAt: agora
-        });
-      }
+      // Supabase: placemarks e quadras ficam na mesma linha (jsonb); o doc "<id>_quadras" do limite de 1 MB
+      // do Firestore não é mais necessário.
+      await kmzTabela.gravar(empId, payload);
     }
 
     kmzCarga("Desenhando polígonos", 86);
@@ -48169,16 +48195,15 @@ async function uploadKMZ() {
 }
 
 window.desenharQuadrasKmz = async function(map, empId) {
-  if (!map || !empId || !window.firebaseDb || !window.firebaseCollections || typeof L === "undefined") return;
+  if (!map || !empId || !window.DadosNucleo || typeof L === "undefined") return;
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(empId)));
-    if (!snap.exists()) return;
-    const data = snap.data() || {};
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
+    const data = await kmzTabela.obter(String(empId));
+    if (!data) return;
     let quadras = Array.isArray(data.quadras) ? data.quadras : [];
     if (!quadras.length && data.quadrasDoc) {
-      const extra = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(data.quadrasDoc)));
-      if (extra.exists()) quadras = (extra.data() || {}).quadras || [];
+      const extra = await kmzTabela.obter(String(data.quadrasDoc));
+      if (extra) quadras = extra.quadras || [];
     }
     const pontos = (coords) => {
       return (window.parseKmzCoordPoints ? window.parseKmzCoordPoints(coords) : [])
@@ -48589,12 +48614,12 @@ window.abrirMapaKmz = async function(empId) {
 
   let data = {};
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", id));
-    if (snap.exists()) data = snap.data() || {};
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
+    const linha = await kmzTabela.obter(id);
+    if (linha) data = linha;
     if ((!data.quadras || !data.quadras.length) && data.quadrasDoc) {
-      const extra = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(data.quadrasDoc)));
-      if (extra.exists()) data.quadras = (extra.data() || {}).quadras || [];
+      const extra = await kmzTabela.obter(String(data.quadrasDoc));
+      if (extra) data.quadras = extra.quadras || [];
     }
   } catch (e) {
     console.warn("[KMZ] mapa", e);
@@ -48861,13 +48886,10 @@ async function loadKMZList() {
   });
 
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const base = collection(window.firebaseDb, "kmz_coordinates");
-    const querySnapshot = await getDocs(base);
+    const linhas = await window.DadosNucleo.tabela("kmz_coordinates").listar();
     const porId = {};
-    querySnapshot.forEach((docSnap) => {
-      const item = docSnap.data() || {};
-      const id = String(item.empreendimento_id || docSnap.id || "");
+    linhas.forEach((item) => {
+      const id = String(item.empreendimento_id || item.id || "");
       if (!/^\d{4,6}$/.test(id)) return;
       const lotes = Number(item.count !== undefined ? item.count : (item.placemarks ? item.placemarks.length : 0)) || 0;
       const poligonos = Number(item.quadraCount !== undefined ? item.quadraCount : (item.quadras ? item.quadras.length : 0)) || 0;
@@ -48900,11 +48922,11 @@ async function deleteKMZ(empId) {
   if (!confirm(`Tem certeza que deseja excluir o KMZ do empreendimento ${empId}? Isso removerá a visualização 3D do mapa.`)) return;
   
   try {
-    const { doc, deleteDoc, ref, deleteObject } = window.firebaseCollections;
-    
-    // Excluir do Firestore
-    const docRef = doc(window.firebaseDb, 'kmz_coordinates', empId);
-    await deleteDoc(docRef);
+    // O arquivo continua no Storage do Firebase (fora desta migração); as coordenadas vão para o Supabase.
+    const { ref, deleteObject } = window.firebaseCollections;
+
+    // Excluir do Supabase
+    await window.DadosNucleo.tabela("kmz_coordinates").excluir(empId);
 
     // Excluir do Storage
     const storageRef = ref(window.firebaseStorage, `kmz/${empId}.kmz`);
@@ -50276,17 +50298,15 @@ window.loadKmzPlacemarks = async function(empId) {
   })).filter((p) => p.lot_name && p.coordinates);
 
   try {
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, getDoc } = window.firebaseCollections;
-      const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", id));
-      if (snap.exists()) {
-        const data = snap.data() || {};
+    if (window.DadosNucleo) {
+      const data = await window.DadosNucleo.tabela("kmz_coordinates").obter(id);
+      if (data) {
         const marks = normalize(data.placemarks || data.points || []);
         if (marks.length) return marks;
       }
     }
   } catch (e) {
-    console.warn("[KMZ] Firebase:", e);
+    console.warn("[KMZ] Supabase:", e);
   }
 
   try {
@@ -55677,28 +55697,21 @@ window.persistCentrosCustoCustomToFirebase = async function() {
     window._ccCustomPersistAgain = true;
     return;
   }
-  if (!window.firebaseDb || !window.firebaseCollections) return;
-  const { doc, getDoc, setDoc } = window.firebaseCollections;
+  if (!window.DadosNucleo) return;
   window._ccCustomWritingCloud = true;
   try {
     const origSet = window._originalSetItem || localStorage.setItem.bind(localStorage);
     const localRaw = localStorage.getItem("crm_centros_custo_custom") || "{}";
     let dedicatedRaw = "";
+    // Supabase: config/centros_custo e global.crm_centros_custo_custom vêm da mesma tabela centros_custo;
+    // basta ler uma vez (globalRaw fica vazio).
     let globalRaw = "";
     try {
-      const dSnap = await getDoc(doc(window.firebaseDb, "config", "centros_custo"));
+      const dSnap = await window.DadosNucleo.lerConfig("centros_custo");
       const dExists = dSnap && (typeof dSnap.exists === "function" ? dSnap.exists() : dSnap.exists);
       if (dExists) {
         const d = dSnap.data() || {};
         dedicatedRaw = d.byId ? JSON.stringify(d.byId) : (d.crm_centros_custo_custom || "");
-      }
-    } catch (e) {}
-    try {
-      const gSnap = await getDoc(doc(window.firebaseDb, "config", "global"));
-      const gExists = gSnap && (typeof gSnap.exists === "function" ? gSnap.exists() : gSnap.exists);
-      if (gExists) {
-        const g = gSnap.data() || {};
-        globalRaw = g.crm_centros_custo_custom || "";
       }
     } catch (e) {}
     const cloudMerged = typeof window.mergeCentrosCustoCustom === "function"
@@ -55739,12 +55752,9 @@ window.persistCentrosCustoCustomToFirebase = async function() {
       window.applyCentrosCustoCustomPayload(json);
     }
     const payload = { byId: map, updatedAt: Date.now(), crm_centros_custo_custom: json };
-    await setDoc(doc(window.firebaseDb, "config", "centros_custo"), payload, { merge: false });
-    try {
-      await setDoc(doc(window.firebaseDb, "config", "global"), { crm_centros_custo_custom: json }, { merge: true });
-    } catch (e) {
-      console.warn("[CC custom] global setDoc falhou; documento dedicado permanece", e);
-    }
+    // Supabase: grava só as linhas alteradas de centros_custo (a RLS exige sub_cfg_apoio_centro_custo_editar).
+    // A cópia em config/global não existe mais (é a mesma tabela).
+    await window.DadosNucleo.gravarConfig("centros_custo", payload, { merge: false });
   } catch (e) {
     console.error("[CC custom] persist:", e);
   } finally {
@@ -55964,8 +55974,12 @@ window.mergePlanoImpostos = function(localStr, cloudStr) {
 window.syncGlobalConfigFromFirebase = async function() {
     try {
         if (typeof window.ensureCrmStorageRoom === "function") window.ensureCrmStorageRoom();
-        if (!window.firebaseDb || !window.firebaseCollections) return;
-        const snap = await window.firebaseCollections.getDocs(window.firebaseCollections.collection(window.firebaseDb, "config"));
+        if (!window.DadosNucleo) return;
+        // Supabase: só estes quatro documentos de config são usados aqui; ler cada um evita montar todos
+        // (DadosNucleo.listarConfig() também montaria central_email, obra_vgv, parcerias, fluxos...).
+        const lidos = await Promise.all(["global", "back_office_perms", "centros_custo", "crm_users"]
+            .map((id) => window.DadosNucleo.lerConfig(id)));
+        const snap = lidos.filter((d) => d && d.exists());
         let globalData = null;
         let backOfficeCloud = null;
         let centrosCustoCloud = null;
@@ -56570,14 +56584,13 @@ window.forceUploadLocalConfig = async function(silent = true) {
             }
         }
         
-        if (!window.firebaseDb || !window.firebaseCollections) throw new Error("Firebase não inicializado.");
+        if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
         if (typeof window.persistCentrosCustoCustomToFirebase === "function") {
           await window.persistCentrosCustoCustomToFirebase();
         }
-        const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "global");
         let crmUsersMerged = !payload.crm_users;
         try {
-          const snap = await window.firebaseCollections.getDoc(docRef);
+          const snap = await window.DadosNucleo.lerConfig("global");
           const cloud = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists) ? (snap.data() || {}) : {};
           if (typeof window.crmFinanciamentosMesclar === "function") {
             const mergedProc = window.crmFinanciamentosMesclar(payload.crm_moura_financiamentos_proc || "{}", cloud.crm_moura_financiamentos_proc || "{}");
@@ -56706,10 +56719,8 @@ window.forceUploadLocalConfig = async function(silent = true) {
           if (payload.crm_moura_condicoes_pagamento || cloud.crm_moura_condicoes_pagamento || (window.CondicoesPagamentoApp && CondicoesPagamentoApp.flags)) {
             let dedicatedRaw = "";
             try {
-              if (window.firebaseCollections.getDoc) {
-                const dSnap = await window.firebaseCollections.getDoc(
-                  window.firebaseCollections.doc(window.firebaseDb, "config", "condicoes_pagamento")
-                );
+              if (window.DadosNucleo) {
+                const dSnap = await window.DadosNucleo.lerConfig("condicoes_pagamento");
                 const dExists = dSnap && (typeof dSnap.exists === "function" ? dSnap.exists() : dSnap.exists);
                 if (dExists) {
                   const d = dSnap.data() || {};
@@ -56814,9 +56825,11 @@ window.syncAllNotesToFirebase = async function() {
         const personalNotes = JSON.parse(localStorage.getItem('crm_agenda_personal_notes') || '{}');
         for (const key of Object.keys(personalNotes)) {
             if (personalNotes[key] && personalNotes[key].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', key);
-                await window.firebaseCollections.setDoc(docRef, { notes: personalNotes[key] }, { merge: false });
-                await new Promise(r => setTimeout(r, 100));
+                // Supabase: só as chaves do usuário / TODOS / compartilhadas (RLS); merge mantém dono e usuario_id.
+                if (window.crmAgendaPodeGravar(key, personalNotes[key])) {
+                    await window.crmAgendaGravar('agenda_personal_notes', key, personalNotes[key]);
+                    await new Promise(r => setTimeout(r, 100));
+                }
             }
         }
         
@@ -56824,9 +56837,10 @@ window.syncAllNotesToFirebase = async function() {
         const recurringNotes = JSON.parse(localStorage.getItem('crm_agenda_recurring_notes') || '{}');
         for (const key of Object.keys(recurringNotes)) {
             if (recurringNotes[key] && recurringNotes[key].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_recurring_notes', key);
-                await window.firebaseCollections.setDoc(docRef, { notes: recurringNotes[key] }, { merge: false });
-                await new Promise(r => setTimeout(r, 100));
+                if (window.crmAgendaPodeGravar(key, recurringNotes[key])) {
+                    await window.crmAgendaGravar('agenda_recurring_notes', key, recurringNotes[key]);
+                    await new Promise(r => setTimeout(r, 100));
+                }
             }
         }
         
@@ -56932,7 +56946,7 @@ localStorage.setItem = function(key, value) {
         }
         if (window._fbConfigTimeout) clearTimeout(window._fbConfigTimeout);
         window._fbConfigTimeout = setTimeout(async () => {
-            if (window.firebaseDb && window.firebaseCollections) {
+            if (window.DadosNucleo) {
                 try {
                     let payload = {};
                     window.SYNC_KEYS.forEach(k => {
@@ -56945,10 +56959,9 @@ localStorage.setItem = function(key, value) {
                             payload[k] = localStorage.getItem(k);
                         }
                     }
-                    const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "global");
                     let crmUsersMerged = !payload.crm_users;
                     try {
-                      const snap = await window.firebaseCollections.getDoc(docRef);
+                      const snap = await window.DadosNucleo.lerConfig("global");
                       const cloud = snap && snap.exists() ? (snap.data() || {}) : {};
                       if (typeof window.crmFinanciamentosMesclar === "function") {
                         const mergedProc = window.crmFinanciamentosMesclar(payload.crm_moura_financiamentos_proc || "{}", cloud.crm_moura_financiamentos_proc || "{}");
@@ -57379,16 +57392,15 @@ window.applyRenegotiationText = function(prefix = '') {
 window.whatsappAlertsData = { clients: {}, lastCompletedMonth: "" };
 
 async function loadWhatsappAlerts() {
-    if (window.firebaseCollections && window.firebaseDb) {
+    if (window.DadosNucleo) {
         try {
-            const { doc, getDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, 'settings', 'whatsapp_alerts');
-            const snap = await getDoc(ref);
+            // Supabase: settings/whatsapp_alerts fica inteiro em configuracoes.
+            const snap = await window.DadosNucleo.lerSetting('whatsapp_alerts');
             if (snap.exists()) {
                 window.whatsappAlertsData = snap.data();
             }
         } catch (e) {
-            console.error("Erro ao carregar whatsapp_alerts do Firebase", e);
+            console.error("Erro ao carregar whatsapp_alerts do Supabase", e);
         }
     } else {
         // Fallback local
@@ -57405,13 +57417,11 @@ async function loadWhatsappAlerts() {
 }
 
 async function saveWhatsappAlerts() {
-    if (window.firebaseCollections && window.firebaseDb) {
+    if (window.DadosNucleo) {
         try {
-            const { doc, setDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, 'settings', 'whatsapp_alerts');
-            await setDoc(ref, window.whatsappAlertsData);
+            await window.DadosNucleo.gravarSetting('whatsapp_alerts', window.whatsappAlertsData);
         } catch (e) {
-            console.error("Erro ao salvar whatsapp_alerts no Firebase", e);
+            console.error("Erro ao salvar whatsapp_alerts no Supabase", e);
         }
     }
     localStorage.setItem("whatsapp_alerts_data", JSON.stringify(window.whatsappAlertsData));
@@ -57865,13 +57875,13 @@ window.userCanMarkSubjudiceIntegra = function(user) {
 window.loadSubjudiceIntegra = async function() {
   if (window.subjudiceIntegraLoaded) return;
   let data = null;
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const ref = window.firebaseCollections.doc(window.firebaseDb, "settings", "subjudice_integra");
-      const snap = await window.firebaseCollections.getDoc(ref);
+      // Supabase: settings/subjudice_integra fica inteiro em configuracoes.
+      const snap = await window.DadosNucleo.lerSetting("subjudice_integra");
       if (snap && typeof snap.exists === "function" && snap.exists()) data = snap.data();
     } catch (e) {
-      console.error("Erro ao carregar subjudice_integra do Firebase", e);
+      console.error("Erro ao carregar subjudice_integra do Supabase", e);
     }
   }
   if (!data) {
@@ -57889,12 +57899,11 @@ window.saveSubjudiceIntegra = async function() {
   try {
     localStorage.setItem("subjudice_integra_data", JSON.stringify(window.subjudiceIntegraData || { clients: {} }));
   } catch (e) {}
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const ref = window.firebaseCollections.doc(window.firebaseDb, "settings", "subjudice_integra");
-      await window.firebaseCollections.setDoc(ref, window.subjudiceIntegraData || { clients: {} });
+      await window.DadosNucleo.gravarSetting("subjudice_integra", window.subjudiceIntegraData || { clients: {} });
     } catch (e) {
-      console.error("Erro ao salvar subjudice_integra no Firebase", e);
+      console.error("Erro ao salvar subjudice_integra no Supabase", e);
     }
   }
 };

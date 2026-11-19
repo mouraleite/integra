@@ -4,11 +4,12 @@ const ConfigTagsApp = {
   currentTags: [],
   _loading: false,
 
-  waitFirebase(maxMs = 8000) {
+  // As TAGs estão no Supabase (tabela tags), via window.DadosNucleo.
+  waitDados(maxMs = 8000) {
     return new Promise((resolve) => {
       const started = Date.now();
       const tick = () => {
-        if (window.firebaseDb && window.firebaseCollections) {
+        if (window.DadosNucleo) {
           resolve(true);
           return;
         }
@@ -40,14 +41,14 @@ const ConfigTagsApp = {
     `);
 
     try {
-      const ready = await this.waitFirebase();
-      if (!ready) throw new Error("Firebase não inicializado. Recarregue a página (Ctrl+F5).");
+      const ready = await this.waitDados();
+      if (!ready) throw new Error("Banco de dados não inicializado. Recarregue a página (Ctrl+F5).");
 
-      const col = window.firebaseCollections.collection(window.firebaseDb, "tags");
-      const querySnapshot = await window.firebaseCollections.getDocs(col);
+      const linhas = await window.DadosNucleo.tabela("tags").listar();
       const tags = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data() || {};
+      linhas.forEach((docSnap) => {
+        const data = Object.assign({}, docSnap);
+        delete data.id;
         tags.push({
           id: docSnap.id,
           name: String(data.name || data.nome || data.tag || "").trim(),
@@ -238,19 +239,16 @@ const ConfigTagsApp = {
         || "");
 
     try {
-      const ready = await this.waitFirebase(3000);
-      if (!ready) throw new Error("Firebase não inicializado.");
+      const ready = await this.waitDados(3000);
+      if (!ready) throw new Error("Banco de dados não inicializado.");
 
       const tagData = { name: nome, destino, status, created_by: email };
 
       if (id) {
-        const docRef = window.firebaseCollections.doc(window.firebaseDb, "tags", String(id));
-        await window.firebaseCollections.updateDoc(docRef, tagData);
+        // updateDoc: só os campos de tagData mudam (merge sobre a linha atual).
+        await window.DadosNucleo.tabela("tags").gravar(String(id), tagData, { merge: true });
       } else {
-        await window.firebaseCollections.addDoc(
-          window.firebaseCollections.collection(window.firebaseDb, "tags"),
-          tagData
-        );
+        await window.DadosNucleo.tabela("tags").criar(tagData);
       }
 
       const overlay = document.getElementById("tag-modal-overlay");
@@ -267,10 +265,9 @@ const ConfigTagsApp = {
   async deleteTag(id) {
     if (!confirm("Tem certeza que deseja excluir esta TAG? Esta ação não pode ser desfeita.")) return;
     try {
-      const ready = await this.waitFirebase(3000);
-      if (!ready) throw new Error("Firebase não inicializado.");
-      const docRef = window.firebaseCollections.doc(window.firebaseDb, "tags", String(id));
-      await window.firebaseCollections.deleteDoc(docRef);
+      const ready = await this.waitDados(3000);
+      if (!ready) throw new Error("Banco de dados não inicializado.");
+      await window.DadosNucleo.tabela("tags").excluir(String(id));
       this.loadTags();
     } catch (e) {
       alert("Erro ao excluir TAG: " + e.message);
@@ -440,12 +437,12 @@ window.crmTagFiltrarTodas = function(el) {
 
 /** Todas as TAGs (ativas e inativas), para comparar. */
 window.crmTagsTodas = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections) return [];
-  const { collection, getDocs } = window.firebaseCollections;
-  const snap = await getDocs(collection(window.firebaseDb, "tags"));
+  // TAGs no Supabase (tabela tags).
+  if (!window.DadosNucleo) return [];
+  const linhas = await window.DadosNucleo.tabela("tags").listar();
   const tags = [];
-  snap.forEach((d) => {
-    const data = d.data() || {};
+  linhas.forEach((d) => {
+    const data = d;
     const name = String(data.name || data.nome || data.tag || "").trim();
     if (!name) return;
     const dest = String(data.destino || data.type || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -668,8 +665,9 @@ const CrmTagSolicitacoes = {
       if (parecidas.length && !confirm(`Existem ${parecidas.length} TAG(s) parecida(s), por exemplo "${parecidas[0].tag.name}".\nCriar "${nome}" mesmo assim?`)) return;
 
       const { email, nome: quem } = this.usuario();
-      const { collection, addDoc, doc, updateDoc } = window.firebaseCollections;
-      await addDoc(collection(window.firebaseDb, "tags"), {
+      // A TAG vai para o Supabase; a solicitação (tag_solicitacoes) continua no Firebase por enquanto.
+      const { doc, updateDoc } = window.firebaseCollections;
+      await window.DadosNucleo.tabela("tags").criar({
         name: nome, destino, status: "Ativa", created_by: email, solicitacao_id: id
       });
       await updateDoc(doc(window.firebaseDb, this.COL, id), {

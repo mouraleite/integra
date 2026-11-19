@@ -250,7 +250,7 @@
   }
 
   // ===== Alternador para os desenvolvedores (não administradores) =====
-  // Quem entra numa bolha fica registrado em Firestore (ambientes_dev/<e-mail>). Assim, na produção,
+  // Quem entra numa bolha fica registrado no Supabase (ambientes_dev: uma linha por e-mail e bolha). Assim, na produção,
   // essa pessoa também vê a bolha "Produção | Teste X" para ir e voltar na mesma tela.
   const DEV_COLECAO = "ambientes_dev";
   let meusAmbientes = null; // lista de chaves; null = ainda não consultado
@@ -270,28 +270,32 @@
 
   async function sincronizarDev() {
     const email = emailReal();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!email || !fx || !db) return;
+    if (!email || !window.DadosNucleo) return;
+    await window.DadosNucleo.pronto;
+    const sb = window.sb;
+    if (!sb) return;
     const atual = ambienteAtual();
-    if (atual && !registrouDev && typeof fx.setDoc === "function") {
+    if (atual && !registrouDev) {
       registrouDev = true;
       try {
-        await fx.setDoc(fx.doc(db, DEV_COLECAO, email), { email, ambientes: { [atual.chave]: Date.now() } }, { merge: true });
+        const r = await sb.from(DEV_COLECAO).upsert(
+          { email, ambiente: atual.chave, acessado_em: new Date().toISOString() },
+          { onConflict: "email,ambiente" }
+        );
+        if (r.error) throw r.error;
       } catch (e) {
         console.warn("[Ambientes de teste] Não foi possível registrar o acesso à bolha:", e);
       }
     }
-    if (meusAmbientes !== null || typeof fx.getDoc !== "function") return;
+    if (meusAmbientes !== null) return;
     const cache = ler("integra_meus_ambientes", sessionStorage);
     if (cache) {
       try { meusAmbientes = JSON.parse(cache); return; } catch (e) {}
     }
     try {
-      const snap = await fx.getDoc(fx.doc(db, DEV_COLECAO, email));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-      const d = existe ? snap.data() : null;
-      meusAmbientes = Object.keys((d && d.ambientes) || {}).filter((k) => AMBIENTES.some((a) => a.chave === k));
+      const r = await sb.from(DEV_COLECAO).select("ambiente").eq("email", email);
+      if (r.error) throw r.error;
+      meusAmbientes = (r.data || []).map((l) => l.ambiente).filter((k) => AMBIENTES.some((a) => a.chave === k));
       gravar("integra_meus_ambientes", JSON.stringify(meusAmbientes), sessionStorage);
     } catch (e) {
       meusAmbientes = [];

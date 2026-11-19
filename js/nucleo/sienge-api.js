@@ -610,14 +610,20 @@ const AuditService = {
   },
 
   _persistRemote: function(rec) {
+    // Supabase: auditoria_logs só aceita inclusão (sem política de update), por isso insert e não upsert.
     try {
-      if (!window.firebaseDb || !window.firebaseCollections) return;
-      const { doc, setDoc } = window.firebaseCollections;
-      setDoc(doc(window.firebaseDb, this.COLLECTION, String(rec.id)), rec).catch(function(e) {
-        console.warn("[Auditoria] Firestore", e);
+      const D = window.DadosNucleo;
+      if (!D) return;
+      const linha = D.tabela(this.COLLECTION).paraLinha(rec, String(rec.id));
+      D.pronto.then(function() {
+        return window.sb.from("auditoria_logs").insert(linha);
+      }).then(function(r) {
+        if (r && r.error) console.warn("[Auditoria] Supabase", r.error);
+      }).catch(function(e) {
+        console.warn("[Auditoria] Supabase", e);
       });
     } catch (e) {
-      console.warn("[Auditoria] Firestore", e);
+      console.warn("[Auditoria] Supabase", e);
     }
   },
 
@@ -695,26 +701,12 @@ const AuditService = {
 
   loadRemote: async function(maxRows) {
     const limitN = maxRows || 400;
-    if (!window.firebaseDb || !window.firebaseCollections) return [];
+    if (!window.DadosNucleo) return [];
     try {
-      const { collection, getDocs, query, orderBy, limit } = window.firebaseCollections;
-      const q = query(collection(window.firebaseDb, this.COLLECTION), orderBy("timestamp", "desc"), limit(limitN));
-      const snap = await getDocs(q);
-      const rows = [];
-      snap.forEach(function(d) { rows.push(d.data() || {}); });
-      return rows;
-    } catch (e) {
-      try {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COLLECTION));
-        const rows = [];
-        snap.forEach(function(d) { rows.push(d.data() || {}); });
-        rows.sort(function(a, b) { return String(b.timestamp || "").localeCompare(String(a.timestamp || "")); });
-        return rows.slice(0, limitN);
-      } catch (err) {
-        console.warn("[Auditoria] leitura Firestore", err);
-        return [];
-      }
+      return await window.DadosNucleo.tabela(this.COLLECTION).listar({ ordem: ["timestamp", "desc"], limite: limitN });
+    } catch (err) {
+      console.warn("[Auditoria] leitura Supabase", err);
+      return [];
     }
   }
 };
@@ -1085,8 +1077,11 @@ const ApiUsage = {
     if (!dates.length) return;
     const batch = this.pending;
     this.pending = {};
-    if (!window.firebaseDb || !window.firebaseCollections || typeof window.firebaseCollections.increment !== "function") return;
-    const { doc, setDoc, increment } = window.firebaseCollections;
+    // Supabase: a RPC incrementar_api_consumo soma os números (e funde objetos) no banco, então
+    // o payload vai com números puros no lugar do increment() do Firestore. date/updatedAt são ignorados.
+    const D = window.DadosNucleo;
+    if (!D) return;
+    const increment = (n) => n;
     for (const date of dates) {
       const pend = batch[date];
       if (!pend) continue;
@@ -1140,7 +1135,7 @@ const ApiUsage = {
       if (!Object.keys(payload.apis).length) delete payload.apis;
       if (!Object.keys(payload.users).length) delete payload.users;
       try {
-        await setDoc(doc(window.firebaseDb, this.COLLECTION, date), payload, { merge: true });
+        await D.incrementarApiConsumo(date, payload);
       } catch (e) {
         console.warn("[ApiUsage] flush", e);
         this.pending[date] = pend;
@@ -1193,21 +1188,30 @@ const ApiUsage = {
     const local = this.loadLocalDays();
     const byDate = {};
     local.forEach((d) => { if (d && d.date) byDate[d.date] = this.nestDottedFields(d); });
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, getDoc } = window.firebaseCollections;
+    if (window.DadosNucleo) {
       const today = this.todayIso();
+      const isoDe = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+      // Supabase: uma consulta só para os N dias (antes era um getDoc por dia).
+      const inicio = new Date();
+      inicio.setDate(inicio.getDate() - (limitN - 1));
+      let remotos = null;
+      try {
+        remotos = {};
+        const linhas = await window.DadosNucleo.tabela(this.COLLECTION).listar({ filtros: [["date", "gte", isoDe(inicio)]] });
+        linhas.forEach((l) => { remotos[String(l.id)] = l; });
+      } catch (e) {
+        remotos = null;
+      }
       for (let i = 0; i < limitN; i++) {
         const dt = new Date();
         dt.setDate(dt.getDate() - i);
-        const iso = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
-        try {
-          const snap = await getDoc(doc(window.firebaseDb, this.COLLECTION, iso));
-          const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-          if (exists) byDate[iso] = this.mergeDay(byDate[iso] || this.emptyDay(iso), Object.assign({}, snap.data() || {}, { date: iso }));
-          else if (!byDate[iso]) byDate[iso] = this.emptyDay(iso);
-        } catch (e) {
-          if (!byDate[iso]) byDate[iso] = this.emptyDay(iso);
-        }
+        const iso = isoDe(dt);
+        const remoto = remotos && remotos[iso];
+        if (remoto) {
+          const dados = Object.assign({}, remoto, { date: iso });
+          delete dados.id;
+          byDate[iso] = this.mergeDay(byDate[iso] || this.emptyDay(iso), dados);
+        } else if (!byDate[iso]) byDate[iso] = this.emptyDay(iso);
         if (iso === today && !byDate[iso]) byDate[iso] = this.emptyDay(iso);
       }
     }
@@ -1928,11 +1932,11 @@ const SiengeApiService = {
   /** Lê uma vez por sessão o cache de VGV que todos os usuários compartilham. */
   _vgvCompartilhado() {
     if (this._vgvFbLido) return this._vgvFbLido;
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc || !fc.doc) return Promise.resolve();
+    // Supabase: config/obra_vgv é montado a partir da tabela obra_vgv.
+    if (!window.DadosNucleo) return Promise.resolve();
     this._vgvFbLido = (async () => {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "obra_vgv"));
+        const snap = await window.DadosNucleo.lerConfig("obra_vgv");
         const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
         const obras = (existe && snap.data() && snap.data().obras) || {};
         this._vgvMem = this._vgvMem || {};
@@ -1951,10 +1955,9 @@ const SiengeApiService = {
   async _gravarVgvFirebase() {
     const pend = this._vgvParaFirebase;
     this._vgvParaFirebase = {};
-    const fc = window.firebaseCollections;
-    if (!pend || !Object.keys(pend).length || !window.firebaseDb || !fc || !fc.setDoc || !fc.doc) return;
+    if (!pend || !Object.keys(pend).length || !window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "obra_vgv"), { obras: pend, atualizadoEm: Date.now() }, { merge: true });
+      await window.DadosNucleo.gravarConfig("obra_vgv", { obras: pend, atualizadoEm: Date.now() }, { merge: true });
     } catch (e) {
       console.warn("[Sienge] gravar cache de VGV:", e);
     }

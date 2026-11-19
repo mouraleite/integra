@@ -339,11 +339,22 @@
     return loc;
   }
 
+  // Só para o Storage do Firebase (imagens dos chamados); os dados estão no Supabase (ver tabelaChamados).
   function fb() {
     const db = window.firebaseDb;
     const c = window.firebaseCollections;
     if (!db || !c) throw new Error("Firebase não inicializado. Recarregue a página.");
     return { db, c };
+  }
+
+  // Chamados no Supabase (tabela suporte_chamados; a RLS só entrega os próprios chamados, ou todos para o suporte).
+  function tabelaChamados() {
+    if (!window.DadosNucleo) throw new Error("Camada de dados não inicializada. Recarregue a página.");
+    return window.DadosNucleo.tabela(COLLECTION);
+  }
+  // Equivale ao updateDoc: lê a linha e grava só os campos do patch por cima.
+  function atualizarChamado(id, patch) {
+    return tabelaChamados().gravar(id, patch, { merge: true });
   }
 
   async function compressImage(file) {
@@ -644,7 +655,7 @@
 
   async function refreshUnreadBadge(forceNetwork) {
     const seq = ++unreadRefreshSeq;
-    if (!userKey() || !window.firebaseDb) {
+    if (!userKey() || !window.DadosNucleo) {
       applyUnreadUi(0);
       return;
     }
@@ -684,14 +695,12 @@
       if (!document.hidden) refreshUnreadBadge();
     });
     try {
-      const { db, c } = fb();
-      if (c.onSnapshot) {
+      const t = tabelaChamados();
+      if (t.ouvir) {
         let snapTimer = null;
-        window._suporteUnreadUnsub = c.onSnapshot(
-          c.collection(db, COLLECTION),
+        window._suporteUnreadUnsub = t.ouvir(
           (snap) => {
-            const list = [];
-            snap.forEach((d) => list.push(ticketFromSnap(d)));
+            const list = snap.docs.map((d) => ticketFromSnap(d));
             list.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
             clearTimeout(snapTimer);
             snapTimer = setTimeout(() => {
@@ -706,7 +715,8 @@
               }
             }, 600);
           },
-          () => { scheduleUnreadPoll(); }
+          // Se o tempo real falhar, volta à consulta periódica (como antes com o onSnapshot).
+          { aoErro: () => { scheduleUnreadPoll(); } }
         );
         return;
       }
@@ -716,7 +726,7 @@
 
   function startUnreadWatchWhenReady() {
     const tryStart = () => {
-      if (!userKey() || !window.firebaseDb || !window.firebaseCollections) {
+      if (!userKey() || !window.DadosNucleo) {
         setTimeout(tryStart, 1200);
         return;
       }
@@ -743,7 +753,7 @@
     draftFiles = [];
     replyDraftFiles = [];
     pasteOpts = null;
-    if (userKey() && window.firebaseDb) refreshUnreadBadge();
+    if (userKey() && window.DadosNucleo) refreshUnreadBadge();
   }
 
   function openModal() {
@@ -1012,7 +1022,6 @@
       btn.textContent = "Enviando…";
     }
     try {
-      const { db, c } = fb();
       const u = currentUser();
       const now = new Date().toISOString();
       const payload = {
@@ -1034,11 +1043,11 @@
         createdAt: now,
         updatedAt: now
       };
-      const refDoc = await c.addDoc(c.collection(db, COLLECTION), payload);
+      const novoId = await tabelaChamados().criar(payload);
       let imagens = [];
       if (draftFiles.length) {
-        imagens = await uploadImages(draftFiles, refDoc.id);
-        await c.updateDoc(c.doc(db, COLLECTION, refDoc.id), { imagens, updatedAt: new Date().toISOString() });
+        imagens = await uploadImages(draftFiles, novoId);
+        await atualizarChamado(novoId, { imagens, updatedAt: new Date().toISOString() });
       }
       closeModal();
       alert("Chamado enviado. Você pode acompanhar em “Acompanhar meus chamados”.");
@@ -1046,8 +1055,9 @@
     } catch (err) {
       console.error(err);
       const msg = String((err && err.message) || err || "");
-      const isPerm = /insufficient permissions|permission-denied|PERMISSION_DENIED/i.test(msg)
-        || (err && err.code === "permission-denied");
+      // Supabase: RLS barrando devolve "row-level security" / código 42501.
+      const isPerm = /insufficient permissions|permission-denied|PERMISSION_DENIED|row-level security/i.test(msg)
+        || (err && (err.code === "permission-denied" || err.code === "42501"));
       if (isPerm) {
         try {
           queuePendingTicket({
@@ -1130,10 +1140,7 @@
   }
 
   async function listAll() {
-    const { db, c } = fb();
-    const snap = await c.getDocs(c.collection(db, COLLECTION));
-    const list = [];
-    snap.forEach(docu => list.push(ticketFromSnap(docu)));
+    const list = (await tabelaChamados().listar()).map((docu) => ticketFromSnap(docu));
     list.sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")));
     rememberTickets(list);
     return list;
@@ -1212,8 +1219,7 @@
   }
 
   async function setArquivado(id, arquivar) {
-    const { db, c } = fb();
-    await c.updateDoc(c.doc(db, COLLECTION, id), {
+    await atualizarChamado(id, {
       arquivadoAt: arquivar ? new Date().toISOString() : null,
       arquivadoPor: arquivar ? userKey() : ""
     });
@@ -1312,10 +1318,9 @@
   }
 
   async function loadTicket(id) {
-    const { db, c } = fb();
-    const snap = await c.getDoc(c.doc(db, COLLECTION, id));
-    if (!snap.exists()) throw new Error("Chamado não encontrado.");
-    return Object.assign({ id: snap.id }, snap.data());
+    const t = await tabelaChamados().obter(id);
+    if (!t) throw new Error("Chamado não encontrado.");
+    return t;
   }
 
   async function openDetail(id, ctx) {
@@ -1409,7 +1414,7 @@
     };
     if (cached) paint(cached);
     try {
-      const t = await withTimeout(loadTicket(id), 12000, "O Firebase não respondeu. A conexão com o Firestore falhou.");
+      const t = await withTimeout(loadTicket(id), 12000, "O servidor não respondeu. A conexão com o banco de dados falhou.");
       if (t && t.id) ticketMap[t.id] = t;
       const reply = document.getElementById("suporte-reply");
       const digitando = (reply && String(reply.value || "").trim()) || replyDraftFiles.length;
@@ -1457,7 +1462,6 @@
         });
       }
       const imagens = (Array.isArray(t.imagens) ? t.imagens.slice() : []).concat(anexosMsg);
-      const { db, c } = fb();
       const nextStatus = opts.status || t.status;
       const patch = {
         mensagens,
@@ -1469,7 +1473,7 @@
         patch.arquivadoAt = null;
         patch.arquivadoPor = "";
       }
-      await c.updateDoc(c.doc(db, COLLECTION, id), patch);
+      await atualizarChamado(id, patch);
       replyDraftFiles = [];
       if (opts.asAdmin) {
         const box = document.getElementById("suporte-modal-box");
@@ -1521,8 +1525,7 @@
         ? { responsavelNome: "", responsavelEmail: "", responsavelEm: null, updatedAt: agora }
         : { responsavelNome: u.name || u.email || "", responsavelEmail: eu, responsavelEm: agora, updatedAt: agora };
       if (!liberar && t.status === "pendente") patch.status = "em_atendimento";
-      const { db, c } = fb();
-      await c.updateDoc(c.doc(db, COLLECTION, id), patch);
+      await atualizarChamado(id, patch);
       ticketMap[id] = Object.assign({}, t, patch);
       await openDetail(id, { admin: true });
       if (window.activeAppTab === "suporte") renderAdmin();
