@@ -802,19 +802,19 @@ window.startCustomerBackgroundSync = async function(force = false, quiet = false
     };
     
     if (!window.GlobalCustomerCache.data || window.GlobalCustomerCache.data.length === 0) {
-        setDynamicFieldsState(true, "Carregando base do Firebase...");
+        setDynamicFieldsState(true, "Carregando base...");
     }
     
     try {
         if (textEl && progEl) {
-            textEl.innerText = `Buscando no Firebase...`;
+            textEl.innerText = `Buscando no banco...`;
             progEl.style.width = `10%`;
         }
 
         // Se for force manual (clicou no botão), primeiro chama o worker para buscar Sienge -> Firebase
         if (force && !quiet) {
             if (textEl && progEl) {
-                textEl.innerText = `Sincronizando Sienge -> Firebase...`;
+                textEl.innerText = `Sincronizando Sienge -> banco...`;
                 progEl.style.width = `30%`;
             }
             try {
@@ -20093,7 +20093,7 @@ window.uploadOccurrenceAnexosToFirebase = async function(customerId, occId, file
   const list = Array.isArray(files) ? files.filter(Boolean) : [];
   if (!list.length) return [];
   if (!window.firebaseStorage || !window.firebaseCollections || !window.firebaseCollections.ref || !window.firebaseCollections.uploadBytes || !window.firebaseCollections.getDownloadURL) {
-    throw new Error("Firebase Storage não disponível. Não foi possível enviar o anexo.");
+    throw new Error("Armazenamento de arquivos não disponível. Não foi possível enviar o anexo.");
   }
   const { ref, uploadBytes, getDownloadURL } = window.firebaseCollections;
   const out = [];
@@ -20314,7 +20314,7 @@ async function saveCustomerOccurrence() {
         saveBtn.innerHTML = prevBtnHtml || '<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
         if (window.lucide) lucide.createIcons();
       }
-      alert("Não foi possível enviar o anexo para o Firebase. A ocorrência não foi gravada.\n" + ((upErr && upErr.message) || upErr));
+      alert("Não foi possível enviar o anexo para o armazenamento. A ocorrência não foi gravada.\n" + ((upErr && upErr.message) || upErr));
       return;
     }
     window.clearOccurrenceAnexos();
@@ -25208,7 +25208,7 @@ function generateAgreementPDF() {
     if (pack.aviso) alert(pack.aviso);
     let salva = null;
     try { salva = await renegSalvarProposta(results, { codigo: pack.codigo, reparcelamento: pack.reparcelamento }); }
-    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no Firebase: " + ((e && e.message) || e)); return; }
+    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no banco: " + ((e && e.message) || e)); return; }
     renegMontarAvisoProposta(salva, false);
     window.atualizarBotaoReneg();
     return;
@@ -25287,7 +25287,7 @@ function generateAgreementPDF() {
   if (modo === "proposta") {
     let salva = null;
     try { salva = await renegSalvarProposta(results); }
-    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no Firebase: " + ((e && e.message) || e)); return; }
+    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no banco: " + ((e && e.message) || e)); return; }
     renegMontarAvisoProposta(salva, false);
     window.atualizarBotaoReneg();
   } else {
@@ -47565,7 +47565,7 @@ window.uploadEmpreendimentoMapa = async function() {
       if (window.loadMapaList) window.loadMapaList();
   } catch (err) {
       statusDiv.style.color = "var(--color-danger)";
-      statusDiv.innerHTML = "âŒ Erro: " + (err && err.message ? err.message : 'Falha ao enviar ao Firebase Storage.');
+      statusDiv.innerHTML = "âŒ Erro: " + (err && err.message ? err.message : 'Falha ao enviar o arquivo.');
   }
 };
 
@@ -56680,7 +56680,7 @@ window.syncAllNotesToFirebase = async function() {
     
     // Supabase: todas as coleções daqui (notas da cobrança/jurídico e agenda) já estão no Supabase.
     if (!window.DadosCobranca || !window.DadosNucleo) {
-        setStatus('âŒ Firebase não está inicializado. Tente novamente em alguns instantes.', '#ef4444');
+        setStatus('âŒ O banco não está disponível. Tente novamente em alguns instantes.', '#ef4444');
         return;
     }
     
@@ -56745,7 +56745,7 @@ window.syncAllNotesToFirebase = async function() {
             }
         }
         
-        const msg = `âœ… Sincronização concluída! ${uploadedNotes} clientes com ocorrências, ${uploadedJud} com notas judiciais enviados para o Firebase.`;
+        const msg = `âœ… Sincronização concluída! ${uploadedNotes} clientes com ocorrências, ${uploadedJud} com notas judiciais enviados para o banco.`;
         setStatus(msg, '#16a34a');
         setTimeout(() => alert(msg + '\n\nAtualize a página na Vercel para ver os dados.'), 100);
         

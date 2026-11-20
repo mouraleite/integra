@@ -2113,14 +2113,14 @@ const SiengeApiService = {
     const de = String(startDate || "").slice(0, 7);
     const ate = String(endDate || "").slice(0, 7);
     if (!faltam.length) {
-      this._statusCaixa("Lendo " + de + " a " + ate + " no Firebase.");
+      this._statusCaixa("Lendo " + de + " a " + ate + " no banco.");
     } else {
       for (let i = 0; i < faltam.length; i++) {
         this._statusCaixa("Gravando " + (i + 1) + " de " + faltam.length + " mês(es) até 31/12/2025 da empresa " + companyId + ".");
         const got = await this._lerOuBuscarMesCaixa(companyId, faltam[i], opts);
         if (got && got.length) rows.push.apply(rows, got);
       }
-      this._statusCaixa("Meses até 31/12/2025 da empresa " + companyId + " lidos no Firebase. 2026 segue na API.");
+      this._statusCaixa("Meses até 31/12/2025 da empresa " + companyId + " lidos no banco. 2026 segue na API.");
     }
     return rows.filter((m) => {
       const d = this._dataMovCaixa(m);

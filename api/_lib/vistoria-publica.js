@@ -12,10 +12,13 @@
         do empreendimento é feito aqui, para não mandar os pontos de todos os lotes para o navegador.
    POST /api/vistoria-publica  { id, respostas: {possuiAgua, possuiEnergia, possuiEntulho, permiteAcesso,
                                  estagioObra, observacoes}, fotoFrente, fotoMeioFundo?, fotoFundoFrente? }
-        As fotos são o CAMINHO no Firebase Storage (vistorias/<id>/frente_<ts>.jpeg ...), não a URL.
+        As fotos são o CAMINHO no Storage (vistorias/<id>/frente_<ts>.jpeg ...), não a URL.
+   POST /api/vistoria-publica  { acao: "upload", id, caminho }  -> { url } link de upload assinado da foto (bucket
+        "arquivos" do Supabase); só para vistoria aberta e caminho no formato acima.
         200 { ok: true } | 400 dados inválidos | 404 não existe | 409 já enviada/concluída | 429 muitas tentativas.
         Chama public.enviar_vistoria com a service role. */
 const { supabaseAdmin } = require("../../lib/supabase-admin");
+const DadosBase = require("../../js/nucleo/dados-base.js");
 
 const MAX_IDS = 30;
 const MAX_CORPO = 16 * 1024;
@@ -200,6 +203,25 @@ function validarFoto(caminho, id, prefixo) {
   return esperado.test(caminho) ? { ok: true, valor: caminho } : { ok: false };
 }
 
+// POST { acao: "upload", id, caminho: "vistorias/<id>/<frente|meio_fundo|fundo_frente>_<ts>.jpeg" }
+// -> 200 { url } : link de upload assinado do bucket "arquivos" (uso único; a página faz PUT da foto nele).
+// Só para vistoria aberta e só nos caminhos que a página gera. js/nucleo/storage-supabase.js chama isto.
+async function prepararUpload(res, id, caminho) {
+  const valido = Object.keys(FOTOS).some((campo) => {
+    const v = validarFoto(caminho, id, FOTOS[campo]);
+    return v.ok && v.valor;
+  });
+  if (!valido) return responder(res, 400, { error: "Caminho da foto inválido." });
+  const db = supabaseAdmin();
+  const r = await db.from("vistorias").select("id, status").eq("id", id).maybeSingle();
+  if (r.error) throw r.error;
+  if (!r.data) return responder(res, 404, { error: "Vistoria não encontrada." });
+  if (!STATUS_ABERTOS.has(r.data.status)) return responder(res, 409, { error: "Esta vistoria já foi enviada." });
+  const up = await db.storage.from("arquivos").createSignedUploadUrl(DadosBase.chaveStorage(caminho));
+  if (up.error || !up.data || !up.data.signedUrl) throw (up.error || new Error("sem link de upload"));
+  return responder(res, 200, { url: up.data.signedUrl });
+}
+
 async function tratarPost(req, res) {
   let corpo;
   try {
@@ -209,6 +231,8 @@ async function tratarPost(req, res) {
   }
   const id = typeof (corpo && corpo.id) === "string" ? corpo.id.trim() : "";
   if (!ID_VALIDO.test(id)) return responder(res, 400, { error: "Vistoria inválida." });
+
+  if (corpo.acao === "upload") return prepararUpload(res, id, corpo.caminho);
 
   const respostas = validarRespostas(corpo.respostas);
   if (!respostas) return responder(res, 400, { error: "Preencha todas as perguntas do questionário." });

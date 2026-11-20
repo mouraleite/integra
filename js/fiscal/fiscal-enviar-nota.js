@@ -254,7 +254,7 @@ window.FilaNotasFiscais = {
   async subirAnexos(id, anexos) {
     const fb = this.fb();
     const { ref, uploadBytes, getDownloadURL } = (fb && fb.f) || {};
-    if (!window.firebaseStorage || !ref || !uploadBytes || !getDownloadURL) throw new Error("Firebase Storage indisponível");
+    if (!window.firebaseStorage || !ref || !uploadBytes || !getDownloadURL) throw new Error("Armazenamento de arquivos indisponível");
     const out = [];
     for (let i = 0; i < anexos.length; i++) {
       const a = anexos[i];
@@ -270,9 +270,10 @@ window.FilaNotasFiscais = {
 
   /** Baixa o anexo como File (para ler a nota e anexar no pedido do Sienge). */
   async baixar(a) {
-    const urls = [a.url];
-    const m = String(a.url || "").match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/[^/]+\/o\/(.+)$/);
-    if (m) urls.push(`/proxy-storage/${m[1]}`);
+    // Arquivo do Storage do Integra: pelo link /arquivo?p=... (mesma origem, leva o cookie do login).
+    const B = window.DadosBase;
+    const caminho = a.path || (B && B.caminhoStorage(String(a.url || "")));
+    const urls = caminho && B ? [B.urlStorage(caminho)] : [a.url];
     for (const u of urls) {
       try {
         const r = await fetch(u);

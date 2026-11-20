@@ -68,7 +68,7 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      fiscais, marketing, títulos incompletos; anexos jurídicos (tabela nova `anexos_juridicos`, que tinha ficado fora
      do inventário) e `cartao_clara`/`compras_dashboard_cache` guardados inteiros em `configuracoes`
      (`DadosNucleo.listarDocs`). Importador: `ferramentas/migracao/importar-financeiro.js`.
-     **Com isso o front não faz mais nenhuma chamada ao Firestore**; do Firebase sobra só o Storage (Fase 4).
+     **Com isso o front não faz mais nenhuma chamada ao Firestore**; o Storage também mudou na Fase 4.
      Mudanças: a coleção antiga `creditors` deixou de ser usada como reserva (só `sienge_creditors`); `updatedAt`
      de algumas tabelas passa a ser a hora do servidor; a camada compara JSON com chaves ordenadas para não
      regravar valores iguais.
@@ -81,14 +81,46 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      `estoque-batimento`, `caucao-batimento`, `reembolso-batimento` e `antecipacoes-batimento`. Os documentos divididos em
      partes viraram uma linha (base da caução, mês do comercial, vistoria do dia) ou uma RPC (contas pagas, antecipações,
      valor a receber, posição do caixa, estoque por empreendimento). As travas que eram `runTransaction` usam
-     `travar_caucao_batimento` e `trocar_configuracao`. Do Firebase o servidor só usa o Storage (`sienge-upload`, fotos
-     da vistoria), na Fase 4.
+     `travar_caucao_batimento` e `trocar_configuracao`. O Storage também saiu do Firebase na Fase 4
+     (ver abaixo).
      Já era assim antes: o `sync-creditors` não apaga os credores que saíram do Sienge (o estado nasce com
      `removidos: 0` e a limpeza só roda com `removidos` vazio).
    Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
-4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,
-   congelamento do Firebase, carga final, crons ligados, domínio apontado, merge na `main`.
+4. **Arquivos, carga e virada.**
+   - **Arquivos (feito no código):** bucket **privado** `arquivos` no Supabase (migration `202611201000_storage_arquivos.sql`),
+     com as mesmas pastas do Firebase. Gravar/ler/apagar só usuário ATIVO (RLS em `storage.objects`).
+     - O banco guarda o caminho (o mesmo de antes). A chave no bucket é `DadosBase.chaveStorage(caminho)` (sem acento;
+       caractere fora do aceito pelo Supabase vira `_`). No inventário de 20/11/2026 nenhum dos 690 arquivos precisou de troca.
+     - Telas: `js/nucleo/storage-supabase.js` substitui o `firebase-config.js` (apagado) e oferece as mesmas funções
+       (`ref`, `uploadBytes`, `getDownloadURL`, `deleteObject`, `listAll`, `getMetadata`) em `window.firebaseCollections`.
+     - Link de arquivo: `/arquivo?p=<caminho>` (`api/_lib/arquivo.js`). Confere o token do Supabase no cookie `integra_sb`
+       (gravado por `supabase-client.js`, só para o caminho `/arquivo`), confere usuário ativo e redireciona para um link
+       assinado de 5 minutos. O link não vence, pode ficar gravado. Até a virada, arquivo que ainda não está no Supabase
+       cai no Firebase (reserva); desligar com `STORAGE_FIREBASE_RESERVA=0` depois da cópia.
+     - Vistoria pública (sem login): a página pede a `/api/vistoria-publica` (`acao: "upload"`) um link de upload
+       assinado, só para `vistorias/<id>/...` de vistoria aberta.
+     - `sienge-upload` baixa o anexo do bucket com a service role. `/proxy-storage/...` antigo vira `/arquivo`.
+   - **Ferramentas:** `copiar-storage.js` (copia Firebase → bucket; reexecutável; `--conferir` compara por pasta;
+     `--reescrever` troca no banco os links antigos do Firebase por `/arquivo?p=...`) e `conferir-contagens.js`
+     (linhas esperadas pelos importadores × linhas no banco, por tabela).
+   - **Roteiro do ensaio** (pode repetir quantas vezes quiser; não mexe na produção atual):
+     1. Variáveis na Vercel (ver abaixo) e chave JWT importada no Supabase.
+     2. `node ferramentas/migracao/exportar-firestore.js` (export completo).
+     3. `importar-nucleo.js`, `importar-cobranca.js`, `importar-engenharia.js`, `importar-financeiro.js` com `--export <pasta>`.
+     4. `node ferramentas/migracao/copiar-storage.js --conferir --reescrever`.
+     5. `node ferramentas/migracao/conferir-contagens.js --export <pasta>`: nenhuma tabela "A MENOS".
+     6. Abrir o deploy da branch, entrar com a conta Microsoft e testar as telas de cada área (abrir, criar, editar,
+        excluir, anexar e abrir arquivo). Rodar as rotinas à mão com o `CRON_SECRET`
+        (`/api/morning-warmup`, `/api/estoque-batimento`, `/api/sync-creditors`).
+   - **Virada** (janela combinada, ninguém usando o Integra antigo):
+     1. Avisar a equipe e congelar a produção antiga (ex.: tirar o acesso ao crm-gestao.vercel.app ou pôr aviso).
+     2. Export final, os quatro importadores, `copiar-storage.js --conferir --reescrever` e `conferir-contagens.js`.
+     3. No projeto novo: `STORAGE_FIREBASE_RESERVA=0`, `GRAPH_MAIL_ENABLED` como na produção, devolver ao
+        `vercel.json` os crons da main (`/api/morning-warmup` e `/api/estoque-batimento`, `0 10 * * *`).
+     4. Merge da `migracao-supabase` na `main`, Production Branch do projeto novo = `main`, domínio apontado para ele.
+     5. Desligar os crons e o deploy do projeto antigo; manter o Firebase só leitura por um tempo e depois desligar.
+     6. Descartar o cache local antigo das notas (`crm_moura_notes`) no primeiro acesso (pendência da cobrança).
 
 ## Exportar o Firestore
 ```bat
@@ -121,4 +153,5 @@ foi feita em 19/11/2026; a carga completa entra na Fase 4.
   `CLICKSIGN_ACCESS_TOKEN`, `CLICKSIGN_HOST`, `CVCRM_EMAIL`, `CVCRM_HOST`, `CVCRM_TOKEN`, `SCOD_API_TOKEN`, `SCOD_HOST`,
   `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `GRAPH_MAILBOX`, `GRAPH_MAIL_ENABLED`, `GRAPH_TENANT_ID`, `PROXY_AUTH_MODE`,
   `GITHUB_PUBLICAR_TOKEN`, `PRESTACAO_CONTAS_DIR`.
-  Enquanto a branch ainda usa o Firebase, deixar `GRAPH_MAIL_ENABLED` desligado no projeto novo para não mandar e-mail em dobro.
+  Até a virada, deixar `GRAPH_MAIL_ENABLED` desligado no projeto novo para não mandar e-mail em dobro.
+- `STORAGE_FIREBASE_RESERVA`: vazio até a virada (arquivo não copiado abre no Firebase); `0` depois da cópia final.

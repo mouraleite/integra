@@ -919,7 +919,7 @@ const EstoqueComercialApp = {
         this.setProgress("Carregando a última classificação financeira…");
       }
     } else {
-      this.setProgress("Carregando a última atualização do Firebase…");
+      this.setProgress("Carregando a última atualização do banco…");
     }
 
     this.fillEnterprisesFromUnits();

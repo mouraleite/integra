@@ -8,44 +8,11 @@
      Project Settings > JWT Keys. Gerar com: node ferramentas/migracao/gerar-chave-jwt.js
    - SUPABASE_JWT_SECRET: o "Legacy JWT secret" do projeto (HS256). Só enquanto ele não for revogado.
    Esta rota sempre bloqueia quem não tem login; não depende de PROXY_AUTH_MODE. */
-const crypto = require("crypto");
 const { verificarToken } = require("../../lib/integra-auth");
 const { supabaseAdmin } = require("../../lib/supabase-admin");
+const { assinar } = require("../../lib/supabase-jwt");
 
 const DURACAO_S = 60 * 60;
-
-function b64url(buf) {
-  return Buffer.from(buf).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-
-let chaveCache = null;
-function chaveAssinatura() {
-  if (chaveCache) return chaveCache;
-  const jwk = String(process.env.SUPABASE_JWT_PRIVATE_KEY || "").trim();
-  if (jwk) {
-    const k = JSON.parse(jwk);
-    if (!k.kid || !k.d) throw new Error("SUPABASE_JWT_PRIVATE_KEY precisa ser a chave privada em JWK, com kid.");
-    chaveCache = { alg: "ES256", kid: k.kid, key: crypto.createPrivateKey({ key: k, format: "jwk" }) };
-    return chaveCache;
-  }
-  const segredo = String(process.env.SUPABASE_JWT_SECRET || "");
-  if (segredo) {
-    chaveCache = { alg: "HS256", key: segredo };
-    return chaveCache;
-  }
-  throw new Error("Falta SUPABASE_JWT_PRIVATE_KEY (ou SUPABASE_JWT_SECRET) nas variáveis de ambiente.");
-}
-
-function assinar(payload) {
-  const c = chaveAssinatura();
-  const cab = { alg: c.alg, typ: "JWT" };
-  if (c.kid) cab.kid = c.kid;
-  const corpo = b64url(JSON.stringify(cab)) + "." + b64url(JSON.stringify(payload));
-  const assinatura = c.alg === "ES256"
-    ? crypto.sign("sha256", Buffer.from(corpo), { key: c.key, dsaEncoding: "ieee-p1363" })
-    : crypto.createHmac("sha256", c.key).update(corpo).digest();
-  return corpo + "." + b64url(assinatura);
-}
 
 function responder(res, status, obj) {
   res.statusCode = status;

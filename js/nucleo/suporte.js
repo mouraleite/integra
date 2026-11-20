@@ -339,12 +339,12 @@
     return loc;
   }
 
-  // Só para o Storage do Firebase (imagens dos chamados); os dados estão no Supabase (ver tabelaChamados).
+  // Imagens dos chamados no Supabase Storage (js/nucleo/storage-supabase.js, mesmas funções do Firebase Storage);
+  // os dados estão no Supabase (ver tabelaChamados).
   function fb() {
-    const db = window.firebaseDb;
     const c = window.firebaseCollections;
-    if (!db || !c) throw new Error("Firebase não inicializado. Recarregue a página.");
-    return { db, c };
+    if (!c || !c.uploadBytes) throw new Error("Armazenamento de arquivos não inicializado. Recarregue a página.");
+    return { c };
   }
 
   // Chamados no Supabase (tabela suporte_chamados; a RLS só entrega os próprios chamados, ou todos para o suporte).
@@ -395,7 +395,7 @@
     let getDownloadURLFunc = c.getDownloadURL;
     let refFunc = c.ref;
     if (!uploadBytesFunc || !window.firebaseStorage) {
-      throw new Error("Storage do Firebase não disponível.");
+      throw new Error("Armazenamento de arquivos não disponível.");
     }
     const out = [];
     for (let i = 0; i < files.length; i++) {
@@ -1084,10 +1084,10 @@
           filesCount: draftFiles.length
         });
         alert(
-          "O Firebase bloqueou o envio do chamado (regras de segurança / Missing or insufficient permissions).\n\n"
+          "O banco bloqueou o envio do chamado (regras de acesso).\n\n"
           + "O chamado ficou salvo neste navegador para não se perder"
           + (mailOk ? " e o e-mail de suporte foi aberto com o texto." : ".")
-          + "\n\nPeça ao administrador liberar escrita na collection \"suporte_chamados\" (e Storage em suporte/) no Console do Firebase."
+          + "\n\nPeça ao administrador conferir as regras da tabela \"suporte_chamados\" e do armazenamento (pasta suporte/) no Supabase."
         );
       } else {
         alert("Não foi possível enviar o chamado: " + msg);

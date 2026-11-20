@@ -3733,7 +3733,7 @@ const MarketingConfigApp = {
       if (mudouCcs) B.state.consultado = false;
     }
     this.render();
-    if (!ok) alert("A configuração ficou salva só neste computador: não consegui gravar no Firebase. Tente salvar de novo.");
+    if (!ok) alert("A configuração ficou salva só neste computador: não consegui gravar no banco. Tente salvar de novo.");
   },
 
   editar(id) {

@@ -2292,7 +2292,7 @@ window.VerificarConstrucaoApp = {
             const { ref, listAll, getDownloadURL } = window.firebaseCollections;
             const storageRef = ref(window.firebaseStorage, `vistorias/${v.id}`);
 
-            document.getElementById('vc-validar-status').textContent = 'Buscando fotos no Firebase...';
+            document.getElementById('vc-validar-status').textContent = 'Buscando fotos...';
             const listRes = await listAll(storageRef);
             if (listRes.items.length === 0) {
                 throw new Error("Nenhuma foto encontrada para esta vistoria.");

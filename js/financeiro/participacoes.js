@@ -235,7 +235,8 @@ const ParticipacoesApp = {
   },
 
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseStorage && window.firebaseCollections);
+    // Arquivos no Supabase Storage (js/nucleo/storage-supabase.js, mesmas funções do Firebase Storage).
+    return !!(window.firebaseStorage && window.firebaseCollections && window.firebaseCollections.uploadBytes);
   },
 
   cloudDocId(companyId, closing) {

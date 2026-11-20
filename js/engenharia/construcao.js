@@ -416,7 +416,7 @@ window.ConstrucaoApp = {
     },
 
     async uploadFile(file, customerId) {
-        if (!window.firebaseStorage || !window.firebaseCollections) throw new Error("Firebase Storage não inicializado");
+        if (!window.firebaseStorage || !window.firebaseCollections) throw new Error("Armazenamento de arquivos não inicializado");
         
         // As functions do storage não foram expostas em firebaseCollections, vamos checar firebase-config.js
         // No firebase-config.js temos storageBucket importado, mas `uploadBytes` e `getDownloadURL` estão sendo exportados?

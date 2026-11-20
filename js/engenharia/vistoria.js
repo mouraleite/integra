@@ -25,10 +25,11 @@ let loadedVistorias = [];
 let watchId = null;
 
 // Dados da vistoria: rota do servidor /api/vistoria-publica (o banco Supabase não aceita acesso sem login).
-// As fotos continuam indo para o Firebase Storage (só o Storage usa o firebase-config.js aqui).
+// As fotos vão para o Storage do Supabase por link de upload assinado que a mesma rota gera
+// (js/nucleo/storage-supabase.js com window.STORAGE_SEM_LOGIN, ver vistoria.html).
 const API_VISTORIA = '/api/vistoria-publica';
 
-// Aguardar o Firebase Storage estar disponível (só para o upload das fotos)
+// Aguardar o módulo de arquivos estar disponível (só para o upload das fotos)
 async function waitForFirebase() {
     let retries = 50;
     while (!window.firebaseStorage && retries > 0) {

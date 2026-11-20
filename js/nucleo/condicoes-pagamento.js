@@ -306,7 +306,7 @@ const CondicoesPagamentoApp = {
       this.saveMsg = "Salvo";
       this.error = "";
     } else if (localOk) {
-      this.saveMsg = "Salvo neste navegador (Firebase indisponível)";
+      this.saveMsg = "Salvo neste navegador (banco indisponível)";
       this.error = "";
     } else {
       this.saveMsg = "";

@@ -1,10 +1,11 @@
 /* Envio de anexos grandes para o Sienge.
    A Vercel recusa requisições acima de ~4,5 MB (FUNCTION_PAYLOAD_TOO_LARGE), então o navegador
-   sobe o arquivo para o Firebase Storage (pasta anexos_temp/) e manda aqui só o link.
-   O servidor baixa o arquivo e faz o POST multipart no Sienge com as credenciais da Vercel. */
+   sobe o arquivo para o Storage do Integra (bucket "arquivos" do Supabase, pasta anexos_temp/) e manda aqui só o
+   link (/arquivo?p=...). O servidor baixa o arquivo com a service role e faz o POST multipart no Sienge com as
+   credenciais da Vercel. */
 const { encodeSiengePath } = require('./sienge-proxy');
-
-const BUCKET = 'crm-gestao-mldu.firebasestorage.app';
+const { supabaseAdmin } = require('../../lib/supabase-admin');
+const DadosBase = require('../../js/nucleo/dados-base.js');
 const LIMITE_ARQUIVO = 80 * 1024 * 1024;
 const DESTINO_OK = /^(units|customers)\/\d+\/attachments\?description=[^&]*$/;
 
@@ -30,16 +31,10 @@ function lerJson(req) {
   });
 }
 
-// Só aceita link de download do bucket do Integra, dentro de anexos_temp/.
-function linkValido(url) {
-  let u;
-  try { u = new URL(String(url || '')); } catch (e) { return false; }
-  if (u.protocol !== 'https:' || u.hostname !== 'firebasestorage.googleapis.com') return false;
-  const base = '/v0/b/' + BUCKET + '/o/';
-  if (!u.pathname.startsWith(base)) return false;
-  let objeto = '';
-  try { objeto = decodeURIComponent(u.pathname.slice(base.length)); } catch (e) { return false; }
-  return /^anexos_temp\/[\w.-]+$/.test(objeto);
+// Só aceita arquivo do bucket do Integra dentro de anexos_temp/. Devolve o caminho ou null.
+function caminhoValido(url) {
+  const caminho = DadosBase.caminhoStorage(String(url || ''));
+  return caminho && /^anexos_temp\/[\w.-]+$/.test(caminho) ? caminho : null;
 }
 
 module.exports = async function handler(req, res) {
@@ -51,7 +46,8 @@ module.exports = async function handler(req, res) {
 
   const destino = String(corpo.caminho || '');
   if (!DESTINO_OK.test(destino)) return responder(res, 400, { error: 'Destino do anexo inválido.' });
-  if (!linkValido(corpo.url)) return responder(res, 400, { error: 'Link do arquivo inválido.' });
+  const caminho = caminhoValido(corpo.url);
+  if (!caminho) return responder(res, 400, { error: 'Link do arquivo inválido.' });
 
   const user = process.env.SIENGE_API_USER || '';
   const pass = process.env.SIENGE_API_PASSWORD || '';
@@ -59,9 +55,9 @@ module.exports = async function handler(req, res) {
 
   let arquivo;
   try {
-    const r = await fetch(corpo.url);
-    if (!r.ok) return responder(res, 502, { error: 'Não foi possível ler o arquivo temporário (HTTP ' + r.status + ').' });
-    arquivo = Buffer.from(await r.arrayBuffer());
+    const r = await supabaseAdmin().storage.from('arquivos').download(DadosBase.chaveStorage(caminho));
+    if (r.error || !r.data) return responder(res, 502, { error: 'Não foi possível ler o arquivo temporário.' });
+    arquivo = Buffer.from(await r.data.arrayBuffer());
   } catch (e) {
     return responder(res, 502, { error: 'Falha ao ler o arquivo temporário.' });
   }

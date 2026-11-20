@@ -643,9 +643,11 @@
     return { topicos, resto: resto.join("\n") };
   }
 
-  // Só mostra imagem guardada no Firebase Storage do Integra.
+  // Só mostra imagem guardada no Storage do Integra (link /arquivo?p=...; o link antigo do Firebase ainda vale até a virada).
   function printSeguro(u) {
-    return /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(String(u || ""));
+    const s = String(u || "");
+    return /^\/arquivo\?p=[^"'<>\s]+$/.test(s)
+      || /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(s);
   }
 
   function htmlPrints(lista, editavel, sha) {

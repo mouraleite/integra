@@ -41,13 +41,13 @@
     return isNaN(t) ? null : t;
   }
 
-  // ---- Arquivos do Firebase Storage: o banco guarda o caminho do objeto, o front continua recebendo uma URL. ----
-  // URL de download do Firebase: https://firebasestorage.googleapis.com/v0/b/<bucket>/o/<caminho codificado>?alt=media&token=...
-  // O token é descartado: a URL remontada (sem token) só abre enquanto as regras do Storage permitirem leitura pública
-  // (ou o navegador estiver logado no Firebase com permissão). Quando os arquivos forem para o Supabase Storage, basta
-  // trocar a montagem da URL com configurarStorage({ montarUrl: (caminho) => ... }) — o banco não muda.
+  // ---- Arquivos (Supabase Storage, bucket privado "arquivos"): o banco guarda o CAMINHO do objeto (o mesmo do Firebase);
+  // o front recebe o link /arquivo?p=<caminho>, que a rota api/_lib/arquivo.js abre (confere o login pelo cookie e
+  // redireciona para um link assinado). Links antigos do Firebase Storage e do /proxy-storage ainda são reconhecidos.
   const storage = {
-    bucket: "crm-gestao-mldu.firebasestorage.app",
+    bucket: "arquivos",
+    // Buckets do Firebase cujos links viram caminho (dados antigos).
+    bucketsFirebase: ["crm-gestao-mldu.firebasestorage.app", "crm-gestao-mldu.appspot.com"],
     montarUrl: null,
   };
   function configurarStorage(opcoes) {
@@ -55,30 +55,39 @@
     if (opcoes && opcoes.montarUrl !== undefined) storage.montarUrl = opcoes.montarUrl;
     return { bucket: storage.bucket, montarUrl: storage.montarUrl };
   }
+  function decodificar(s) {
+    try { return decodeURIComponent(s); } catch (e) { return null; }
+  }
   // URL (ou caminho) -> caminho no bucket. null se for URL de outro lugar (quem chama decide; paraLinha manda para extra).
   function caminhoStorage(v) {
     if (vazio(v) || typeof v !== "string") return null;
     const s = v.trim();
-    let m = s.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/([^/]+)\/o\/([^?#]+)/);
-    if (m) {
-      if (m[1] !== storage.bucket) return null;
-      try { return decodeURIComponent(m[2]); } catch (e) { return null; }
-    }
+    // Link novo: /arquivo?p=<caminho> (relativo ou com o domínio do Integra).
+    let m = s.match(/^(?:https?:\/\/[^/]+)?\/arquivo\?(?:[^#]*&)?p=([^&#]+)/);
+    if (m) return decodificar(m[1].replace(/\+/g, "%20"));
+    m = s.match(/^(?:https?:\/\/[^/]+)?\/proxy-storage\/([^?#]+)/);
+    if (m) return decodificar(m[1]);
+    m = s.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/([^/]+)\/o\/([^?#]+)/);
+    if (m) return storage.bucketsFirebase.indexOf(m[1]) >= 0 ? decodificar(m[2]) : null;
     m = s.match(/^gs:\/\/([^/]+)\/(.+)$/) || s.match(/^https:\/\/storage\.googleapis\.com\/([^/]+)\/([^?#]+)/);
-    if (m) {
-      if (m[1] !== storage.bucket) return null;
-      try { return decodeURIComponent(m[2]); } catch (e) { return null; }
-    }
+    if (m) return storage.bucketsFirebase.indexOf(m[1]) >= 0 ? decodificar(m[2]) : null;
     if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return null; // outra URL (http, data:, blob:...)
     return s.replace(/^\/+/, ""); // já é caminho
   }
-  // caminho -> URL de download (sem token). URL já pronta volta como está.
+  // caminho -> link /arquivo?p=... URL já pronta volta como está.
   function urlStorage(caminho) {
     if (vazio(caminho)) return caminho;
     const s = String(caminho);
-    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s) || /^\/arquivo\?/.test(s)) return s;
     if (typeof storage.montarUrl === "function") return storage.montarUrl(s);
-    return "https://firebasestorage.googleapis.com/v0/b/" + storage.bucket + "/o/" + encodeURIComponent(s) + "?alt=media";
+    return "/arquivo?p=" + encodeURIComponent(s.replace(/^\/+/, ""));
+  }
+  // Caminho -> chave do objeto no Supabase Storage, que só aceita [A-Za-z0-9_/!-.*'() &$@=;:+,?]. Tira acentos e troca o
+  // resto por "_". Determinística e idempotente: front, servidor e a cópia dos arquivos (copiar-storage.js) usam esta.
+  function chaveStorage(caminho) {
+    let s = String(caminho || "").replace(/^\/+/, "");
+    s = s.normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return s.replace(/[^A-Za-z0-9_\/!\-.*'() &$@=;:+,]/g, "_");
   }
 
   function paraBanco(v, tipo) {
@@ -345,5 +354,5 @@
 
   return { paraLinha: paraLinha, paraObjeto: paraObjeto, paraBanco: paraBanco, doBanco: doBanco, paraMs: paraMs,
            snapDoc: snapDoc, snapLista: snapLista, lerTudo: lerTudo, novoId: novoId, numeroSePuder: numeroSePuder,
-           caminhoStorage: caminhoStorage, urlStorage: urlStorage, configurarStorage: configurarStorage };
+           caminhoStorage: caminhoStorage, urlStorage: urlStorage, chaveStorage: chaveStorage, configurarStorage: configurarStorage };
 });

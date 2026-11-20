@@ -3142,7 +3142,7 @@ const CessaoPopup = {
         const hash = await this.sha256Hex(out);
         await this.guardarAutenticacao(codigo, hash, arquivo, info);
       } catch (e) {
-        aviso = "O QR Code foi impresso, mas a prova não ficou salva no Firebase. " + (e && e.message ? e.message : "");
+        aviso = "O QR Code foi impresso, mas a prova não ficou salva no banco. " + (e && e.message ? e.message : "");
       }
       return { bytes: out, codigo, aviso };
     } catch (e) {

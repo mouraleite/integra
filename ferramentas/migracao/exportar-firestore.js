@@ -26,14 +26,9 @@ const SO = arg("--so") ? arg("--so").split(",").map((s) => s.trim()).filter(Bool
 const AMOSTRA = arg("--amostra") ? Number(arg("--amostra")) : null;
 const PAGINA = 500;
 
-// ---------- config do Firebase: lida do próprio front, para não duplicar chaves ----------
+// ---------- config do Firebase antigo (o front não usa mais o firebase-config.js) ----------
 function lerConfigFirebase() {
-  const txt = fs.readFileSync(path.join(RAIZ, "js", "nucleo", "firebase-config.js"), "utf8");
-  const bloco = /firebaseConfig\s*=\s*\{([\s\S]*?)\}/.exec(txt);
-  if (!bloco) throw new Error("Não achei firebaseConfig em js/nucleo/firebase-config.js");
-  const cfg = {};
-  for (const m of bloco[1].matchAll(/(\w+)\s*:\s*["']([^"']*)["']/g)) cfg[m[1]] = m[2];
-  return cfg;
+  return Object.assign({}, require("./firebase-legado"));
 }
 
 // ---------- lista de coleções: varre o código, porque o SDK cliente não lista coleções ----------

@@ -1,5 +1,5 @@
-// Cliente do Supabase no navegador (migração Firebase -> Supabase, branch migracao-supabase).
-// As telas ainda usam o Firebase; este cliente fica em window.sb para as áreas já migradas.
+// Cliente do Supabase no navegador (window.sb). Usado pelas camadas js/<area>/dados-*.js e pelos arquivos
+// (js/nucleo/storage-supabase.js; o cookie integra_sb abre os links /arquivo?p=...).
 // A chave abaixo é a "publishable": é pública por natureza. Quem protege os dados são as regras (RLS) do banco,
 // que só liberam o acesso com o token emitido por /api/supabase-token depois do login Microsoft.
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
@@ -11,6 +11,16 @@ const FOLGA_MS = 2 * 60 * 1000;
 let atual = { token: "", exp: 0, usuario: null };
 let buscando = null;
 let sb = null;
+
+// Os links de arquivo (/arquivo?p=..., ver api/_lib/arquivo.js) abrem em <img>, <a> e abas novas, que não levam
+// cabeçalho: o token vai num cookie que só vale para o caminho /arquivo.
+function gravarCookieArquivo(token, expMs) {
+  try {
+    const seg = token ? Math.max(0, Math.floor((expMs - Date.now()) / 1000)) : 0;
+    document.cookie = "integra_sb=" + encodeURIComponent(token || "") + "; Path=/arquivo; Max-Age=" + seg
+      + "; SameSite=Lax" + (location.protocol === "https:" ? "; Secure" : "");
+  } catch (e) {}
+}
 
 async function pedirToken() {
   const auth = window.MouraAuth;
@@ -28,6 +38,7 @@ async function pedirToken() {
   }
   const dados = await r.json();
   atual = { token: dados.token, exp: Number(dados.expira_em) * 1000, usuario: dados.usuario || null };
+  gravarCookieArquivo(atual.token, atual.exp);
   // Nesta versão do supabase-js o Realtime não lê o accessToken sozinho.
   try { if (sb) sb.realtime.setAuth(atual.token); } catch (e) {}
   return atual.token;
@@ -49,5 +60,7 @@ sb = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { accessToken: tokenSu
 window.sb = sb;
 window.sbToken = tokenSupabase;
 window.sbUsuario = () => atual.usuario;
-window.sbLimparToken = () => { atual = { token: "", exp: 0, usuario: null }; };
+window.sbLimparToken = () => { atual = { token: "", exp: 0, usuario: null }; gravarCookieArquivo("", 0); };
+// Mantém o cookie dos arquivos válido mesmo numa tela parada (só renova quando falta pouco para vencer).
+setInterval(() => { if (atual.token) tokenSupabase(); }, 5 * 60 * 1000);
 window.dispatchEvent(new Event("supabase-pronto"));
