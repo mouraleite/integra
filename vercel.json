@@ -2,7 +2,7 @@
   "functions": {
     "api/gateway.js": {
       "maxDuration": 60,
-      "includeFiles": "js/comercial/estoque-comercial.js"
+      "includeFiles": "{js/comercial/estoque-comercial.js,js/*/dados-*.js,js/*/mapas-*.js}"
     }
   },
   "redirects": [

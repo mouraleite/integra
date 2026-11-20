@@ -1,7 +1,4 @@
-const { initializeApp } = require("firebase/app");
-const {
-  getFirestore, doc, setDoc, getDoc, getDocs, collection, deleteDoc
-} = require("firebase/firestore");
+const { dados } = require("../../lib/dados-servidor");
 const { todayIsoSP } = require("../../lib/br-calendar");
 const { slimCaixaRow, isFinanceLike } = require("../../lib/caixa-snapshot");
 const {
@@ -27,23 +24,15 @@ const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toSt
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 const SIENGE_BULK_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api`;
 
-const firebaseConfig = {
-  apiKey: "AIzaSyBlBCaXn4y3sJDENW0GXw3ck_D2h3qknHc",
-  authDomain: "crm-gestao-mldu.firebaseapp.com",
-  projectId: "crm-gestao-mldu",
-  storageBucket: "crm-gestao-mldu.firebasestorage.app",
-  messagingSenderId: "1040392341069",
-  appId: "1:1040392341069:web:6acf1beb34af663cfffe04"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// Banco: Supabase (service role). Unidades em estoque_comercial (uma linha por unidade, gravadas por empreendimento
+// pela RPC substituir_estoque_comercial_cc); _meta, _batimento_state e _conferencia_geral em estoque_comercial_controle.
+const eng = () => dados().DadosEngenharia;
+const cob = () => dados().DadosCobranca;
+const lerControle = (id) => eng().lerControleEstoque(id);
+const gravarControle = (id, obj, mesclar) => eng().mesclarControleEstoque(id, semVazio(obj), { substituir: !mesclar });
 
 const FB_COL = "estoque_comercial";
 const STATE_ID = "_batimento_state";
-const FB_CHUNK = 400;
-/** Firestore recusa documento acima de 1 MiB. */
-const FB_DOC_BYTES = 650000;
 /** maxDuration é 60s. O restante fica para gravar e chamar a passagem seguinte. */
 const BUDGET_MS = 40000;
 /** Na conferência completa só começa um empreendimento novo até aqui (o maior levou 22s no teste: 18 + 22 + gravação < 60). */
@@ -73,9 +62,8 @@ function authorized(req) {
 
 /** A tela pede o batimento sem o segredo do cron. O botão de forçar fica valendo por 4 horas. */
 async function pedidoRecente(semFila) {
-  const snap = await getDoc(doc(db, "sienge_defaulters_history", todayIsoSP()));
-  if (!snap.exists()) return false;
-  const data = snap.data() || {};
+  const data = await cob().lerCacheDia(todayIsoSP(), { comoTexto: true });
+  if (!data) return false;
   const pronta = Number(data.chunks) > 0 && !!(data.paidMap || data.warmupDone || data.atFull || data.timestampStr);
   if (!semFila && !pronta) return false;
   const at = Date.parse(data.batimentoPedidoEm || "");
@@ -83,8 +71,7 @@ async function pedidoRecente(semFila) {
 }
 
 async function filaPronta(today) {
-  const filaMeta = await getDoc(doc(db, "sienge_defaulters_history", today));
-  const filaData = filaMeta.exists() ? (filaMeta.data() || {}) : null;
+  const filaData = await cob().lerCacheDia(today, { comoTexto: true });
   const cache = !!(filaData && Number(filaData.chunks) > 0 && (filaData.atFull || filaData.paidMap || filaData.timestampStr));
   return !!(filaData && (filaData.warmupDone || cache));
 }
@@ -187,8 +174,7 @@ async function loadCostCenters(today) {
 async function loadConferenciaGeral(today) {
   const vazio = { date: today, at: new Date().toISOString(), ccs: [], falhas: [], interrompido: false, rodando: true, origem: "batimento" };
   try {
-    const snap = await getDoc(doc(db, FB_COL, CONF_ID));
-    const data = snap.exists() ? (snap.data() || {}) : null;
+    const data = await lerControle(CONF_ID);
     if (!data || data.date !== today || !Array.isArray(data.ccs)) return vazio;
     return { ...vazio, ...data, falhas: Array.isArray(data.falhas) ? data.falhas.map(String) : [] };
   } catch (e) {
@@ -198,63 +184,28 @@ async function loadConferenciaGeral(today) {
 
 async function saveConferenciaGeral(geral) {
   let out = semVazio(geral);
-  // Firestore aceita até 1 MiB por documento. Se as listas de detalhe passarem disso, ficam só os totais.
+  // Mantém o limite antigo (o relatório vai inteiro numa linha jsonb): se o detalhe passar disso, ficam só os totais.
   if (JSON.stringify(out).length > 800000) {
     out = { ...out, ccs: out.ccs.map((c) => ({ ...c, titulosSemUnidade: [], unidadesSemTitulo: [] })), detalheCortado: true };
   }
-  await setDoc(doc(db, FB_COL, CONF_ID), out);
+  await gravarControle(CONF_ID, out);
 }
 
 async function loadUnits() {
-  const colSnap = await getDocs(collection(db, FB_COL));
-  const units = [];
-  colSnap.forEach((d) => {
-    if (d.id === "_meta" || d.id === STATE_ID) return;
-    const data = d.data() || {};
-    if (Array.isArray(data.units)) units.push(...data.units);
-  });
-  return units;
+  return eng().listarUnidadesEstoque();
 }
 
 async function loadFilaAndPaidMap(today) {
-  const metaSnap = await getDoc(doc(db, "sienge_defaulters_history", today));
-  if (!metaSnap.exists()) return { bills: [], paidMap: new Map() };
-  const meta = metaSnap.data() || {};
-  const bills = [];
-  const chunks = Number(meta.chunks) || 0;
-  for (let i = 0; i < chunks; i++) {
-    try {
-      const snap = await getDoc(doc(db, "sienge_defaulters_history", `${today}_chunk_${i}`));
-      if (!snap.exists()) continue;
-      const raw = snap.data().data;
-      const arr = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
-      if (Array.isArray(arr)) bills.push(...arr);
-    } catch (e) {}
-  }
+  const r = await cob().lerBlocosDia(today);
+  if (!r) return { bills: [], paidMap: new Map() };
   let paidMap = new Map();
-  if (meta.paidMap) {
-    try { paidMap = new Map(JSON.parse(meta.paidMap)); } catch (e) { paidMap = new Map(); }
+  const pm = r.ficha && r.ficha.paidMap;
+  if (pm) {
+    try { paidMap = new Map(typeof pm === "string" ? JSON.parse(pm) : pm); } catch (e) { paidMap = new Map(); }
   }
-  return { bills, paidMap };
+  return { bills: r.lista || [], paidMap };
 }
 
-function chunkBySize(list) {
-  const out = [];
-  let cur = [];
-  let bytes = 0;
-  list.forEach((u) => {
-    const size = JSON.stringify(u || null).length + 2;
-    if (cur.length && (cur.length >= FB_CHUNK || bytes + size > FB_DOC_BYTES)) {
-      out.push(cur);
-      cur = [];
-      bytes = 0;
-    }
-    cur.push(u);
-    bytes += size;
-  });
-  if (cur.length) out.push(cur);
-  return out;
-}
 
 const SOLD_CODES = new Set(["V", "O", "G", "P", "L"]);
 
@@ -467,41 +418,14 @@ function semVazio(value) {
 async function saveCc(ccId, allUnits) {
   const cc = String(ccId);
   const list = allUnits.filter((u) => String(u.enterpriseId) === cc);
-  const empName = (list[0] && list[0].enterpriseName) || "";
-  const chunks = chunkBySize(list);
-  await Promise.all(chunks.map((units, n) => setDoc(doc(db, FB_COL, `cc_${cc}_${n}`), semVazio({
-    enterpriseId: cc,
-    enterpriseName: empName,
-    chunk: n,
-    units,
-    updatedAt: new Date().toISOString(),
-    date: todayIsoSP()
-  }))));
-  const stale = [];
-  for (let n = chunks.length; n < chunks.length + 4; n++) {
-    stale.push(deleteDoc(doc(db, FB_COL, `cc_${cc}_${n}`)).catch(() => {}));
-  }
-  await Promise.all(stale);
+  // Troca as unidades do empreendimento numa chamada (as que sumiram da lista são apagadas no banco).
+  await eng().salvarEstoqueCc(cc, semVazio(list));
 }
 
 async function saveCaixaPosicao(units, today) {
   const pos = (units || []).filter(isFinanceLike).map((u) => slimCaixaRow(u, today));
-  const CHUNK = 120;
-  const nChunks = Math.max(1, Math.ceil(pos.length / CHUNK) || 1);
-  for (let c = 0; c < nChunks; c++) {
-    await setDoc(doc(db, "caixa_posicao", `${today}_${c}`), {
-      date: today,
-      chunk: c,
-      rows: pos.slice(c * CHUNK, (c + 1) * CHUNK),
-      updatedAt: new Date().toISOString()
-    });
-  }
-  await setDoc(doc(db, "caixa_posicao", "_meta"), {
-    lastDate: today,
-    chunks: nChunks,
-    count: pos.length,
-    updatedAt: new Date().toISOString()
-  }, { merge: true });
+  // Foto do dia numa chamada (RPC gravar_caixa_posicao); as datas gravadas saem de listar_datas_caixa_posicao.
+  await dados().DadosFinanceiro.gravarCaixaPosicao(today, pos, dados().sb);
   return pos.length;
 }
 
@@ -556,8 +480,7 @@ async function handler(req, res) {
   started = Date.now();
 
   try {
-    const stateSnap = await getDoc(doc(db, FB_COL, STATE_ID));
-    let state = stateSnap.exists() ? stateSnap.data() : null;
+    let state = await lerControle(STATE_ID);
     if (!state || state.date !== today) {
       state = { date: today, seen: [], processed: 0, failed: 0, passes: 0, skippedSettled: 0, done: false };
     }
@@ -595,11 +518,11 @@ async function handler(req, res) {
     state.passes = (Number(state.passes) || 0) + 1;
     if (!state.obraFalhas || typeof state.obraFalhas !== "object") state.obraFalhas = {};
     if (!state.censoFalhas || typeof state.censoFalhas !== "object") state.censoFalhas = {};
-    await setDoc(doc(db, FB_COL, STATE_ID), { ...state, done: false });
+    await gravarControle(STATE_ID, { ...state, done: false });
 
     let units = await loadUnits();
     if (!units.length) {
-      return terminar(res, 200, { done: false, date: today, message: "Sem estoque no Firebase. A posição não foi fechada para o dia poder tentar de novo." });
+      return terminar(res, 200, { done: false, date: today, message: "Sem estoque no banco. A posição não foi fechada para o dia poder tentar de novo." });
     }
 
     if (!Array.isArray(state.contractsSeen)) state.contractsSeen = [];
@@ -633,7 +556,7 @@ async function handler(req, res) {
       state.contractsSeen = [...seenCc];
       const contractsLeft = pendingCc.filter((id) => !seenCc.has(id)).length;
       state.contractsLeft = contractsLeft;
-      await setDoc(doc(db, FB_COL, STATE_ID), { ...state, done: false });
+      await gravarControle(STATE_ID, { ...state, done: false });
       if (contractsLeft > 0 && state.passes < 800) {
         if (segueSozinho(req)) await continuarBatimento(req);
         return terminar(res, 200, {
@@ -678,8 +601,8 @@ async function handler(req, res) {
 
     const persistSnapshot = async (nextUnits, done) => {
       await Promise.all([...dirtyCc].map((cc) => saveCc(cc, nextUnits)));
-      await setDoc(doc(db, FB_COL, STATE_ID), { ...state, done: !!done });
-      await setDoc(doc(db, FB_COL, "_meta"), {
+      await gravarControle(STATE_ID, { ...state, done: !!done });
+      await gravarControle("_meta", {
         batimentoAt: new Date().toISOString(),
         batimentoDate: today,
         batimentoDone: !!done,
@@ -688,7 +611,7 @@ async function handler(req, res) {
         obrasLeft: state.obrasLeft || 0,
         unitsSavedDate: done ? today : (state.unitsSavedDate || null),
         snapshotAt: new Date().toISOString()
-      }, { merge: true });
+      }, true);
       if (!done && state.passes % 20 !== 0) return null;
       return saveCaixaPosicao(nextUnits, today);
     };

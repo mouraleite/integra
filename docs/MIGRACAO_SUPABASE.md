@@ -72,6 +72,19 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
      Mudanças: a coleção antiga `creditors` deixou de ser usada como reserva (só `sienge_creditors`); `updatedAt`
      de algumas tabelas passa a ser a hora do servidor; a camada compara JSON com chaves ordenadas para não
      regravar valores iguais.
+   - **Servidor (feito no código, falta testar com as chaves na Vercel):** `lib/dados-servidor.js` carrega no Node as
+     mesmas camadas das telas (`js/<area>/dados-*.js` e `mapas-*.js`, via `includeFiles` do `vercel.json`) com o cliente
+     service role (`lib/supabase-admin.js`). Migrados: `lib/integra-auth.js` (usuário ativo lido de `public.usuarios`;
+     login compartilhado passa se um dos cadastros estiver ativo), `publicar` (administrador pelo perfil em `usuarios`;
+     solicitação em `solicitacoes_producao`), `central-email-enviar`, `sync-customers`, `sync-creditors`, `morning-warmup`
+     (fila da cobrança, snapshot, contas pagas, valor a receber, títulos incompletos, distratos), `painel-diario`,
+     `estoque-batimento`, `caucao-batimento`, `reembolso-batimento` e `antecipacoes-batimento`. Os documentos divididos em
+     partes viraram uma linha (base da caução, mês do comercial, vistoria do dia) ou uma RPC (contas pagas, antecipações,
+     valor a receber, posição do caixa, estoque por empreendimento). As travas que eram `runTransaction` usam
+     `travar_caucao_batimento` e `trocar_configuracao`. Do Firebase o servidor só usa o Storage (`sienge-upload`, fotos
+     da vistoria), na Fase 4.
+     Já era assim antes: o `sync-creditors` não apaga os credores que saíram do Sienge (o estado nasce com
+     `removidos: 0` e a limpeza só roda com `removidos` vazio).
    Ordem original: núcleo, cobrança, jurídico, engenharia/vistoria, financeiro, comercial/compras,
    orçamento, fiscal/contábil, marketing, servidor. Cada área ganha `js/<area>/dados-<area>.js` e é testada no preview.
 4. **Carga e virada:** `importar-supabase.js` e `copiar-storage.js` (reexecutáveis), ensaio com conferência de contagens,

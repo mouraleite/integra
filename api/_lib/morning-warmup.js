@@ -1,7 +1,4 @@
-const { initializeApp } = require("firebase/app");
-const {
-  getFirestore, doc, setDoc, getDoc, deleteDoc, collection, getDocs, updateDoc
-} = require("firebase/firestore");
+const { dados, tabela, checar } = require("../../lib/dados-servidor");
 const { todayIsoSP } = require("../../lib/br-calendar");
 const caucaoHandler = require("../../lib/caucao-batimento");
 const { marcarBaixados } = require("../../lib/distrato-followup-core");
@@ -17,17 +14,16 @@ const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toSt
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 const SIENGE_BULK_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api`;
 
-const firebaseConfig = {
-  apiKey: "AIzaSyBlBCaXn4y3sJDENW0GXw3ck_D2h3qknHc",
-  authDomain: "crm-gestao-mldu.firebaseapp.com",
-  projectId: "crm-gestao-mldu",
-  storageBucket: "crm-gestao-mldu.firebasestorage.app",
-  messagingSenderId: "1040392341069",
-  appId: "1:1040392341069:web:6acf1beb34af663cfffe04"
-};
+// Banco: Supabase com a service role (lib/dados-servidor.js), com as mesmas camadas das telas.
+const HIST = "sienge_defaulters_history";
+const cob = () => dados().DadosCobranca;
+const fin = () => dados().DadosFinanceiro;
+const sbAdmin = () => dados().sb;
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+async function apagarCacheDia(ids) {
+  if (!ids || !ids.length) return;
+  checar(await sbAdmin().from(HIST).delete().in("id", ids.map(String)));
+}
 
 const STATE_ID = "_warmup_state";
 const BATCH_CC = 2;
@@ -55,10 +51,15 @@ async function siengePorCaminho(path) {
 }
 
 async function runDistratoFollowup() {
+  const docs = tabela("relacionamento_docs_assinatura");
+  const anexos = tabela("anexos_mapa");
   return marcarBaixados({
-    db: db,
     siengeFetch: siengePorCaminho,
-    fx: { collection: collection, getDocs: getDocs, doc: doc, getDoc: getDoc, updateDoc: updateDoc }
+    banco: {
+      listarDocs: () => docs.listar({ filtros: [["tipo", "in", "(distrato,cessao,aditamento)"]] }),
+      anexosDoCentro: (centro) => anexos.listar({ filtros: [["enterprise_id", "eq", String(centro)]] }),
+      marcarLancado: (id, campos) => docs.gravar(id, campos, { merge: true })
+    }
   });
 }
 
@@ -659,11 +660,10 @@ async function salvarSnapshotCobranca(today, bills) {
     const c = sjClients[cid];
     if (sjCenters[c.cc]) sjCenters[c.cc].clients += 1;
   });
-  const ref = doc(db, "inadimplencia_snapshots", today);
+  const snaps = tabela("inadimplencia_snapshots");
   let prev = null;
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) prev = snap.data() || {};
+    prev = await snaps.obter(today);
   } catch (e) {}
   if (prev) {
     const prevVal = Number(prev.total_value) || 0;
@@ -711,7 +711,7 @@ async function salvarSnapshotCobranca(today, bills) {
     payload.sprint_avg_delay = prev.sprint_avg_delay;
     payload.sprint_saved_at = prev.sprint_saved_at;
   }
-  await setDoc(ref, payload, { merge: true });
+  await snaps.gravar(today, payload, { merge: true });
   return lista.length + " títulos";
 }
 
@@ -727,7 +727,7 @@ function buildDefaulterQuery(cId, today, extraParams, billTypeParams) {
 
 async function loadConfigCustom() {
   try {
-    const snap = await getDoc(doc(db, "config", "global"));
+    const snap = await dados().DadosNucleo.lerConfig("global");
     if (!snap.exists()) return "{}";
     return snap.data().crm_empresas_custom || "{}";
   } catch (e) {
@@ -736,19 +736,17 @@ async function loadConfigCustom() {
 }
 
 async function loadState(today) {
-  const snap = await getDoc(doc(db, "sienge_defaulters_history", STATE_ID));
-  if (!snap.exists()) return null;
-  const s = snap.data();
+  const s = await cob().lerCacheDia(STATE_ID);
+  if (!s) return null;
   if (s.date !== today) return null;
   return s;
 }
 
 async function saveState(state) {
-  await setDoc(doc(db, "sienge_defaulters_history", STATE_ID), state);
+  await cob().gravarCacheDia(STATE_ID, state);
 }
 
 const CFIN_STATE_ID = "_cfin_state";
-const CFIN_JSON_MAX = 700000;
 
 function isoDate(d) {
   return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
@@ -766,7 +764,6 @@ function shiftDays(iso, days) {
 
 const CFIN_INICIO = "2026-01-01";
 const CFIN_DIAS_API = 60;
-const CFIN_CORTE_ID = "_corte";
 
 function ymSeguinte(ym) {
   const parts = String(ym || "2025-12").split("-").map(Number);
@@ -852,62 +849,25 @@ async function continuarWarmup(req) {
 }
 
 async function loadCfinState(today) {
-  const snap = await getDoc(doc(db, "sienge_defaulters_history", CFIN_STATE_ID));
-  if (!snap.exists()) return null;
-  const s = snap.data() || {};
+  const s = await cob().lerCacheDia(CFIN_STATE_ID);
+  if (!s) return null;
   if (s.date !== today) return null;
   return s;
 }
 
 async function saveCfinState(state) {
-  await setDoc(doc(db, "sienge_defaulters_history", CFIN_STATE_ID), state);
-}
-
-function fatiarContas(lista) {
-  const fatias = [];
-  let atual = [];
-  let tamanho = 2;
-  (lista || []).forEach((row) => {
-    let limpo = row;
-    try { limpo = JSON.parse(JSON.stringify(row)); } catch (e) { limpo = null; }
-    if (!limpo) return;
-    const pedaco = JSON.stringify(limpo);
-    if (atual.length && tamanho + pedaco.length > CFIN_JSON_MAX) {
-      fatias.push(atual);
-      atual = [];
-      tamanho = 2;
-    }
-    atual.push(limpo);
-    tamanho += pedaco.length + 1;
-  });
-  if (atual.length || !fatias.length) fatias.push(atual);
-  return fatias;
+  await cob().gravarCacheDia(CFIN_STATE_ID, state);
 }
 
 async function gravarMesPago(companyId, ym, bills, extra) {
-  const fatias = fatiarContas(bills);
-  const n = fatias.reduce((s, fatia) => s + fatia.length, 0);
-  const id = String(companyId) + "_" + ym;
-  const base = {
-    companyId: String(companyId),
-    ym: ym,
+  const lista = [];
+  (bills || []).forEach((row) => {
+    try { lista.push(JSON.parse(JSON.stringify(row))); } catch (e) {}
+  });
+  await fin().gravarMesPago(String(companyId), ym, lista, {
     ate: extra && extra.ate ? extra.ate : "",
-    fechado: !!(extra && extra.fechado),
-    em: new Date().toISOString()
-  };
-  await setDoc(doc(db, "cfin_pagos", id), Object.assign({}, base, {
-    n: n,
-    partes: fatias.length,
-    bills: fatias[0] || []
-  }));
-  for (let i = 1; i < fatias.length; i++) {
-    await setDoc(doc(db, "cfin_pagos", id + "_p" + (i + 1)), {
-      companyId: String(companyId),
-      ym: ym,
-      parte: i + 1,
-      bills: fatias[i]
-    });
-  }
+    fechado: !!(extra && extra.fechado)
+  }, sbAdmin());
 }
 
 async function gravarMesEmpresas(companies, ym, bills, extra) {
@@ -927,11 +887,7 @@ async function gravarMesEmpresas(companies, ym, bills, extra) {
 }
 
 async function marcarCorte(ate, ymFechado) {
-  await setDoc(doc(db, "cfin_pagos", CFIN_CORTE_ID), {
-    ate: ate || "",
-    ymFechado: ymFechado || "2025-12",
-    em: new Date().toISOString()
-  });
+  await fin().marcarCortePagos(ate || "", ymFechado || "2025-12", sbAdmin());
 }
 
 async function fetchOutcomeBills(start, end, companyId) {
@@ -940,7 +896,7 @@ async function fetchOutcomeBills(start, end, companyId) {
 }
 
 /**
- * Grava no Firebase as contas de 01/01/2026 até o dia que saiu dos últimos 60 dias.
+ * Grava no Supabase as contas de 01/01/2026 até o dia que saiu dos últimos 60 dias.
  * Mês já fechado não volta para o Sienge. O mês do corte é regravado todo dia, e o corte anda um dia.
  * Roda depois da fila, na mesma rotina das 7h.
  */
@@ -972,8 +928,8 @@ async function advanceControleFinanceiro(req, res, today, started, log) {
     }
     let ymFechado = "2025-12";
     try {
-      const corteSnap = await getDoc(doc(db, "cfin_pagos", CFIN_CORTE_ID));
-      if (corteSnap.exists()) ymFechado = String((corteSnap.data() || {}).ymFechado || ymFechado);
+      const corteDoc = await fin().lerCortePagos(sbAdmin());
+      if (corteDoc) ymFechado = String(corteDoc.ymFechado || ymFechado);
     } catch (e) {}
     const pairs = mesesHistorico(corte, ymFechado);
     state = {
@@ -1093,7 +1049,6 @@ async function advanceControleFinanceiro(req, res, today, started, log) {
     today: today,
     started: started,
     log: log,
-    db: db,
     fetchAllPages: fetchAllPages,
     continuar: function () { return continuarWarmup(req); }
   });
@@ -1103,8 +1058,6 @@ async function advanceControleFinanceiro(req, res, today, started, log) {
    Títulos e previsões a receber em aberto que não são CT nem TC, de todas as empresas geridas.
    Lido no batimento das 7h e gravado em caixa_valor_receber/emp_<empresa>. A tela só lê o resultado.
    O filtro é o mesmo de FluxoCaixaDiarioApp.vrItensDoIncome (caixa-diario.js): mantenha os dois iguais. */
-const VR_COL = "caixa_valor_receber";
-const VR_ESTADO = "_estado";
 const VR_MESES_VENCIDAS = 12;
 const VR_BUDGET_MS = 40000;
 
@@ -1214,10 +1167,10 @@ async function valorReceberHandler(req, res) {
   const started = Date.now();
   const today = todayIsoSP();
   const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
-  const ref = doc(db, VR_COL, VR_ESTADO);
+  const lerEstado = () => fin().lerEstadoValorReceber(sbAdmin());
+  const gravarEstado = (obj, opcoes) => fin().gravarEstadoValorReceber(obj, opcoes, sbAdmin());
   try {
-    const snap = await getDoc(ref);
-    let st = snap.exists() ? snap.data() : null;
+    let st = await lerEstado();
     if (st && st.date === today && st.done && !force) return res.status(200).json({ done: true, date: today });
     if (st && st.date === today && !st.done && Number(st.lockAte || 0) > Date.now() && !force) {
       return res.status(200).json({ done: false, emAndamento: true });
@@ -1228,7 +1181,7 @@ async function valorReceberHandler(req, res) {
       st = { date: today, ini: jan.ini, fim: jan.fim, empresas, ei: 0, fi: 0, done: false, itens: "[]", falhas: 0 };
     }
     st.lockAte = Date.now() + 58000;
-    await setDoc(ref, st);
+    await gravarEstado(st);
     const fatias = vrFatias(st.ini, st.fim);
     let itens = [];
     try { itens = JSON.parse(st.itens || "[]"); } catch (e) { itens = []; }
@@ -1251,15 +1204,15 @@ async function valorReceberHandler(req, res) {
           vistos[k] = true;
           return true;
         }).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
-        await setDoc(doc(db, VR_COL, "emp_" + cid), {
+        // caixa_valor_receber "emp_<empresa>" + itens, numa chamada (RPC gravar_caixa_valor_receber).
+        await fin().gravarValorReceber({
           companyId: String(cid),
           ini: st.ini,
           fim: st.fim,
           atualizadoEm: new Date().toISOString(),
           origem: "batimento",
-          falhas: st.falhas || 0,
-          itens: JSON.stringify(unicos)
-        });
+          falhas: st.falhas || 0
+        }, unicos, sbAdmin());
         itens = [];
         st.falhas = 0;
         st.fi = 0;
@@ -1269,12 +1222,12 @@ async function valorReceberHandler(req, res) {
     st.itens = JSON.stringify(itens);
     st.done = st.ei >= st.empresas.length;
     st.lockAte = 0;
-    await setDoc(ref, st);
+    await gravarEstado(st);
     if (!st.done) await continuarValorReceber(req);
     res.setHeader("Access-Control-Allow-Origin", "*");
     return res.status(200).json({ done: st.done, empresa: st.ei, de: st.empresas.length });
   } catch (e) {
-    try { await setDoc(ref, { lockAte: 0 }, { merge: true }); } catch (e2) {}
+    try { await gravarEstado({ lockAte: 0 }, { merge: true }); } catch (e2) {}
     return res.status(500).json({ error: String((e && e.message) || e) });
   }
 }
@@ -1282,8 +1235,7 @@ async function valorReceberHandler(req, res) {
 /** Valor a Receber entra no mesmo batimento das 7h. A chamada é abandonada; a rotina segue sozinha. */
 async function dispararValorReceber(req) {
   try {
-    const snap = await getDoc(doc(db, VR_COL, VR_ESTADO));
-    const st = snap.exists() ? snap.data() : null;
+    const st = await fin().lerEstadoValorReceber(sbAdmin());
     if (st && st.date === todayIsoSP() && (st.done || Number(st.lockAte || 0) > Date.now())) return;
   } catch (e) {}
   await continuarValorReceber(req);
@@ -1330,12 +1282,11 @@ async function buscarOutcomeIncompleto(start, end, depth) {
 
 async function runTitulosIncompletos() {
   const today = todayIsoSP();
-  const ref = doc(db, TIN_COL, TIN_ID);
-  const snap = await getDoc(ref);
-  const prev = snap.exists() ? (snap.data() || {}) : {};
+  const tin = tabela(TIN_COL);
+  const prev = (await tin.obter(TIN_ID)) || {};
   if (prev.date === today && prev.done) return { ok: true, skipped: true, date: today, total: Number(prev.total) || 0 };
   if (prev.date === today && Number(prev.lockAte || 0) > Date.now()) return { ok: true, locked: true, date: today };
-  await setDoc(ref, { date: today, done: false, lockAte: Date.now() + 2 * 60 * 1000 }, { merge: true });
+  await tin.gravar(TIN_ID, { date: today, done: false, lockAte: Date.now() + 2 * 60 * 1000 }, { merge: true });
   try {
     const bills = await buscarOutcomeIncompleto(addDaysIso(today, -29), today, 0);
     const vistos = new Set();
@@ -1351,7 +1302,7 @@ async function runTitulosIncompletos() {
     let primeiros = {};
     try { primeiros = JSON.parse(prev.primeiros || "{}"); } catch (e) { primeiros = {}; }
     const fila = aplicarFila(rows, primeiros, today);
-    await setDoc(ref, {
+    await tin.gravar(TIN_ID, {
       date: today,
       done: true,
       lockAte: 0,
@@ -1362,7 +1313,7 @@ async function runTitulosIncompletos() {
     });
     return { ok: true, date: today, total: fila.rows.length };
   } catch (e) {
-    try { await setDoc(ref, { lockAte: 0 }, { merge: true }); } catch (e2) {}
+    try { await tin.gravar(TIN_ID, { lockAte: 0 }, { merge: true }); } catch (e2) {}
     throw e;
   }
 }
@@ -1488,8 +1439,8 @@ async function handler(req, res) {
   const log = [];
 
   try {
-    const metaToday = await getDoc(doc(db, "sienge_defaulters_history", today));
-    if (!force && metaToday.exists() && metaToday.data() && metaToday.data().warmupDone) {
+    const metaToday = await cob().lerCacheDia(today);
+    if (!force && metaToday && metaToday.warmupDone) {
       return advanceControleFinanceiro(req, res, today, started, log);
     }
 
@@ -1591,7 +1542,7 @@ async function handler(req, res) {
         const prontos = normalized.filter((b) => b.subjudice === "S" || (b.daysDelay > 0 && (b.value || 0) > 0.009));
         log.push(`emp ${cId} lote ${state.batchIndex + 1}: ${foraDaCobranca} parcela(s) sem cobrança`);
         const chunkId = `${today}_warmup_${cId}_${state.batchIndex}`;
-        await setDoc(doc(db, "sienge_defaulters_history", chunkId), {
+        await cob().gravarCacheDia(chunkId, {
           date: today,
           companyId: cId,
           batchIndex: state.batchIndex,
@@ -1644,7 +1595,7 @@ async function handler(req, res) {
         } catch (e) {
           log.push("income: " + e.message);
         }
-        await setDoc(doc(db, "sienge_defaulters_history", `${today}_income_${idx}`), {
+        await cob().gravarCacheDia(`${today}_income_${idx}`, {
           date: today, idx, data: JSON.stringify(paidEntries)
         });
         state.incomeChunks = state.incomeChunks || [];
@@ -1666,9 +1617,9 @@ async function handler(req, res) {
       const toDelete = [...(state.warmupChunks || []), ...(state.incomeChunks || [])];
       for (const id of toDelete) {
         try {
-          const snap = await getDoc(doc(db, "sienge_defaulters_history", id));
-          if (!snap.exists()) continue;
-          const d = snap.data() || {};
+          // comoTexto: data volta como texto JSON (formato antigo, que o código abaixo lê).
+          const d = await cob().lerCacheDia(id, { comoTexto: true });
+          if (!d) continue;
           if (id.indexOf("_warmup_") >= 0) {
             try { billsRaw.push(...JSON.parse(d.data || "[]")); } catch (e) {}
           } else {
@@ -1697,10 +1648,10 @@ async function handler(req, res) {
       const numChunks = Math.max(1, Math.ceil(bills.length / CHUNK));
       for (let i = 0; i < numChunks; i++) {
         const slice = bills.slice(i * CHUNK, (i + 1) * CHUNK);
-        await setDoc(doc(db, "sienge_defaulters_history", `${today}_chunk_${i}`), { data: JSON.stringify(slice) });
+        await cob().gravarCacheDia(`${today}_chunk_${i}`, { date: today, data: slice });
       }
       const timestampStr = new Date().toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo" });
-      await setDoc(doc(db, "sienge_defaulters_history", today), {
+      await cob().gravarCacheDia(today, {
         date: today,
         chunks: numChunks,
         timestampStr,
@@ -1710,9 +1661,7 @@ async function handler(req, res) {
         cacheRev: DEFAULTERS_CACHE_REV,
         createdAt: new Date().toISOString()
       });
-      for (const id of toDelete) {
-        try { await deleteDoc(doc(db, "sienge_defaulters_history", id)); } catch (e) {}
-      }
+      try { await apagarCacheDia(toDelete); } catch (e) {}
       state.step = "done";
       await saveState({ date: today, step: "done" });
       log.push(`finalize: ${bills.length} títulos, ${numChunks} chunks`);

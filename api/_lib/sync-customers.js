@@ -1,5 +1,4 @@
-const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, doc, setDoc, query, where, getDocs, limit } = require('firebase/firestore');
+const { tabela } = require('../../lib/dados-servidor');
 
 // Configuração Sienge
 const SIENGE_DOMAIN = "mouraleite";
@@ -9,18 +8,8 @@ const SIENGE_PASS = process.env.SIENGE_API_PASSWORD || "";
 const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toString('base64');
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 
-// Configuração Firebase (usando a mesma chave pública do frontend)
-const firebaseConfig = {
-  apiKey: "AIzaSyBlBCaXn4y3sJDENW0GXw3ck_D2h3qknHc",
-  authDomain: "crm-gestao-mldu.firebaseapp.com",
-  projectId: "crm-gestao-mldu",
-  storageBucket: "crm-gestao-mldu.firebasestorage.app",
-  messagingSenderId: "1040392341069",
-  appId: "1:1040392341069:web:6acf1beb34af663cfffe04"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// Banco: tabela sienge_customers no Supabase (service role), com o mesmo mapa das telas.
+const clientes = () => tabela('sienge_customers');
 
 // Helper para formatar data (YYYY-MM-DD)
 function formatDate(date) {
@@ -90,16 +79,15 @@ module.exports = async function handler(req, res) {
             if (results.length === 0) break;
 
             for (const customer of results) {
-                const docRef = doc(db, 'sienge_customers', String(customer.id));
-                const docSnap = await getDocs(query(collection(db, 'sienge_customers'), where('id', '==', customer.id), limit(1)));
-                
-                if (!docSnap.empty) {
+                const existente = await clientes().obter(String(customer.id));
+
+                if (existente) {
                     console.log(`[SYNC] Cliente ${customer.id} já existe na base. Parando paginação de novos cadastros.`);
                     achouClienteExistente = true;
                     break;
                 }
 
-                await setDoc(docRef, customer);
+                await clientes().gravar(String(customer.id), customer);
                 clientesNovosAdicionados++;
             }
 
@@ -122,8 +110,7 @@ module.exports = async function handler(req, res) {
             if (results.length === 0) break;
 
             for (const customer of results) {
-                const docRef = doc(db, 'sienge_customers', String(customer.id));
-                await setDoc(docRef, customer, { merge: true });
+                await clientes().gravar(String(customer.id), customer, { merge: true });
                 clientesAtualizados++;
             }
 

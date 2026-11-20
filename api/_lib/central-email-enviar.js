@@ -10,8 +10,8 @@
    - registra em central_email_envios: no máximo um e-mail por régua, por cliente e título, por dia. */
 const https = require("https");
 const { graphMailConfigured, sendMail } = require("../../lib/graph-mail");
+const { dados, tabela } = require("../../lib/dados-servidor");
 
-const FS = "https://firestore.googleapis.com/v1/projects/crm-gestao-mldu/databases/(default)/documents";
 const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
 const EMAIL_OK = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
@@ -59,44 +59,19 @@ function http(url, opts, corpo, saltos) {
   });
 }
 
-/* ---------- banco (Firestore REST) ---------- */
-function deFs(v) {
-  if (!v || typeof v !== "object") return null;
-  if ("stringValue" in v) return v.stringValue;
-  if ("integerValue" in v) return Number(v.integerValue);
-  if ("doubleValue" in v) return v.doubleValue;
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("nullValue" in v) return null;
-  if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(deFs);
-  if ("mapValue" in v) {
-    const o = {};
-    const f = (v.mapValue && v.mapValue.fields) || {};
-    Object.keys(f).forEach((k) => { o[k] = deFs(f[k]); });
-    return o;
-  }
-  return null;
+/* ---------- banco (Supabase, service role) ---------- */
+async function lerTemplates() {
+  const snap = await dados().DadosNucleo.lerConfig("central_email");
+  const cfg = snap.exists() ? snap.data() : null;
+  return (cfg && Array.isArray(cfg.templates)) ? cfg.templates : [];
 }
 
-function paraFs(v) {
-  if (v === null || v === undefined) return { nullValue: null };
-  if (typeof v === "boolean") return { booleanValue: v };
-  if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
-  return { stringValue: String(v) };
+function lerEnvio(id) {
+  return tabela("central_email_envios").obter(id);
 }
 
-async function lerDoc(caminho) {
-  const r = await http(FS + "/" + caminho, { headers: { Accept: "application/json" } });
-  if (r.status !== 200) return null;
-  const j = JSON.parse(r.buffer.toString("utf8"));
-  return deFs({ mapValue: { fields: j.fields || {} } });
-}
-
-async function gravarDoc(caminho, obj) {
-  const fields = {};
-  Object.keys(obj).forEach((k) => { fields[k] = paraFs(obj[k]); });
-  const corpo = JSON.stringify({ fields });
-  const r = await http(FS + "/" + caminho, { method: "PATCH", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  return r.status === 200;
+function gravarEnvio(id, obj) {
+  return tabela("central_email_envios").gravar(id, obj);
 }
 
 /* ---------- Sienge ---------- */
@@ -220,8 +195,8 @@ module.exports = async function handler(req, res) {
   const itens = Array.isArray(corpo.itens) ? corpo.itens.slice(0, MAX_ITENS) : [];
   if (!itens.length) return responder(res, 400, { error: "Nada para enviar." });
 
-  const cfg = await lerDoc("config/central_email");
-  const templates = (cfg && Array.isArray(cfg.templates)) ? cfg.templates : [];
+  let templates;
+  try { templates = await lerTemplates(); } catch (e) { return responder(res, 502, { error: "Não consegui ler os templates no banco." }); }
   const { dia, hora } = agoraBrasil();
   const resultados = [];
 
@@ -235,7 +210,7 @@ module.exports = async function handler(req, res) {
       const t = templates.find((x) => x && String(x.id) === templateId);
       if (!t || t.status !== "aprovado" || !t.ativo) throw new Error("Template não aprovado ou régua desligada.");
       const id = idEnvio(dia, templateId, customerId, titulo);
-      const ja = await lerDoc("central_email_envios/" + id);
+      const ja = await lerEnvio(id);
       if (ja && ja.status === "enviado") { r.status = "ja-enviado"; resultados.push(r); continue; }
 
       const para = t.destino === "fixo"
@@ -255,7 +230,7 @@ module.exports = async function handler(req, res) {
       await sendMail({ to: para.join(","), cc: cc.join(","), subject: assunto, html, attachments: anexos });
       r.status = "enviado";
       r.para = para.length;
-      await gravarDoc("central_email_envios/" + id, {
+      await gravarEnvio(id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
         para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
       });
@@ -264,7 +239,7 @@ module.exports = async function handler(req, res) {
       r.erro = String((e && e.message) || e).slice(0, 200);
       try {
         if (templateId && customerId && titulo) {
-          await gravarDoc("central_email_envios/" + idEnvio(dia, templateId, customerId, titulo), {
+          await gravarEnvio(idEnvio(dia, templateId, customerId, titulo), {
             dia, templateId, customerId, titulo, status: "erro", em: new Date().toISOString(), erro: r.erro
           });
         }
