@@ -211,13 +211,14 @@ const ResultadoCaixaApp = {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         try {
-          const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf.slice(0), { type: "array" });
           const f = this.lerForecast(wb);
           if (!Object.keys(f.contas || {}).length) {
             falhas.push(file.name);
             continue;
           }
-          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {} });
+          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {}, buf: buf });
         } catch (e) {
           falhas.push(file.name);
         }
@@ -260,6 +261,13 @@ const ResultadoCaixaApp = {
           });
         });
       });
+      const orfaos = {};
+      Object.keys(substituir).forEach((chave) => {
+        Object.keys(this.forecasts || {}).forEach((ym) => {
+          const item = ((this.forecasts[ym] || {}).porArquivo || {})[chave];
+          if (item && item.orig) orfaos[item.orig] = 1;
+        });
+      });
       seguintes.forEach((ym) => {
         const doc = this.garantirForecast(ym);
         Object.keys(substituir).forEach((nome) => { delete doc.porArquivo[nome]; });
@@ -278,9 +286,28 @@ const ResultadoCaixaApp = {
           this.apagarForecastNuvem(ym);
         }
       });
+      for (let i = 0; i < lidos.length; i++) {
+        const arq = lidos[i];
+        const orig = this.idOriginalForecast(base, arq.empresa, arq.nome);
+        try {
+          await this.salvarOriginal(orig, arq.nome, arq.buf);
+          seguintes.forEach((ym) => {
+            const item = ((this.forecasts[ym] || {}).porArquivo || {})[base + "|" + arq.nome];
+            if (!item) return;
+            item.orig = orig;
+            item.origNome = arq.nome;
+          });
+          delete orfaos[orig];
+        } catch (err) {
+          this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + arq.nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+        }
+      }
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       const gravados = Object.keys(mesesGravados).map((ym) => ({ ym: ym, doc: this.forecasts[ym] }));
       this.aplicarForecastVista();
-      if (falhas.length) this.aviso = "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".";
+      if (falhas.length) this.aviso = ((this.aviso ? this.aviso + " " : "") + "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".").trim();
       this.gravarForecastLocal();
       try {
         for (let i = 0; i < gravados.length; i++) await this.salvarForecastNuvem(gravados[i].ym, gravados[i].doc);
@@ -303,7 +330,14 @@ const ResultadoCaixaApp = {
       const por = (doc && doc.porArquivo) || {};
       const daqui = Object.keys(por).filter((chave) => this.forecastDaCompetencia(chave, por[chave]));
       if (!daqui.length) return;
-      daqui.forEach((chave) => { delete por[chave]; });
+      const orfaos = {};
+      daqui.forEach((chave) => {
+        if (por[chave] && por[chave].orig) orfaos[por[chave].orig] = 1;
+        delete por[chave];
+      });
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       if (!Object.keys(por).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -323,7 +357,9 @@ const ResultadoCaixaApp = {
       const doc = this.forecasts[ym];
       if (!doc || !doc.porArquivo || !doc.porArquivo[nome]) return;
       if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+      const orig = doc.porArquivo[nome].orig || "";
       delete doc.porArquivo[nome];
+      if (orig && !this.origAindaUsado(orig)) this.apagarOriginal(orig);
       if (!Object.keys(doc.porArquivo).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -1210,7 +1246,7 @@ const ResultadoCaixaApp = {
     return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
       <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
       <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
-      <button type="button" class="rcx-baixar" title="Baixar a leitura gravada deste arquivo" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
+      <button type="button" class="rcx-baixar${arq && arq.orig ? "" : " is-sem"}" title="${arq && arq.orig ? "Baixar o arquivo original" : "Este envio não guardou o Excel original. Suba o arquivo de novo para baixar."}" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
       <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
     </span>`;
   },
@@ -1535,21 +1571,33 @@ const ResultadoCaixaApp = {
   async baixarArquivo(tipo, chave) {
     let nome = chave;
     try { nome = decodeURIComponent(chave); } catch (e) {}
-    const p = this.pacoteConferencia(tipo, nome);
-    if (!p) {
-      alert("Não achei este arquivo gravado.");
+    const ref = this.refOriginal(tipo, nome);
+    if (!ref) {
+      alert("Este arquivo foi enviado antes de guardar o Excel original. Suba o arquivo de novo para poder baixá-lo.");
       return;
     }
-    const bruto = String((p.meta && p.meta.nome) || nome || "arquivo").replace(/^\d{4}-\d{2}\|/, "").replace(/\.(xlsx|xlsm)$/i, "");
-    const arquivo = "conferencia-" + bruto.replace(/[\\/:*?"<>|]/g, " ").trim() + ".xlsx";
-    await this.baixarPacotes([p], arquivo);
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const dado = await this.lerOriginal(ref.id);
+      if (!dado || !dado.buf) throw new Error("vazio");
+      this.dispararDownload(dado.buf, dado.nome || ref.nome || nome);
+    } catch (e) {
+      alert("Não consegui baixar o arquivo original. Suba o arquivo de novo.");
+    }
+    this._baixando = false;
   },
 
   async baixarColuna(qual) {
     const atual = this.anoAtual();
     const ant = atual > 1900 ? atual - 1 : 0;
-    let lista = [];
-    let arquivo = "conferencia.xlsx";
+    const refs = [];
+    const sem = [];
+    const guardar = (tipo, nome) => {
+      const ref = this.refOriginal(tipo, nome);
+      if (ref) refs.push(ref);
+      else sem.push(nome);
+    };
     if (qual === "forecast") {
       const usados = {};
       this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
@@ -1562,15 +1610,26 @@ const ResultadoCaixaApp = {
           mapa[nome] = 1;
         });
       });
-      lista = Object.keys(mapa).map((nome) => this.pacoteConferencia("fc", nome)).filter(Boolean);
-      arquivo = "conferencia-forecast.xlsx";
+      Object.keys(mapa).forEach((nome) => guardar("fc", nome));
     } else {
       const ano = qual === "anterior" ? ant : atual;
-      const arquivos = ((this.anoDados(ano) || {}).arquivos) || {};
-      lista = Object.keys(arquivos).map((nome) => this.pacoteConferencia(String(ano), nome)).filter(Boolean);
-      arquivo = qual === "anterior" ? "conferencia-ano-anterior.xlsx" : "conferencia-competencia.xlsx";
+      Object.keys(((this.anoDados(ano) || {}).arquivos) || {}).forEach((nome) => guardar(String(ano), nome));
     }
-    await this.baixarPacotes(lista, arquivo);
+    if (!refs.length) {
+      alert("Estes arquivos foram enviados antes de guardar o Excel original. Suba de novo para poder baixá-los.");
+      return;
+    }
+    for (let i = 0; i < refs.length; i++) {
+      try {
+        const dado = await this.lerOriginal(refs[i].id);
+        if (!dado || !dado.buf) sem.push(refs[i].nome);
+        else this.dispararDownload(dado.buf, dado.nome || refs[i].nome);
+      } catch (e) {
+        sem.push(refs[i].nome);
+      }
+      if (i < refs.length - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (sem.length) alert("Sem o Excel original: " + sem.map((n) => String(n).replace(/^\d{4}-\d{2}\|/, "")).join(", ") + ". Suba esses arquivos de novo.");
   },
 
   nomeEmpresaArquivo(nome) {
@@ -2107,10 +2166,11 @@ const ResultadoCaixaApp = {
       this._mapa = await this.mapaPronto();
       for (let i = 0; i < files.length; i++) {
         const buf = await files[i].arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array" });
+        const wb = XLSX.read(buf.slice(0), { type: "array" });
         const blocos = this.lerPlanilha(wb);
         if (!blocos.length) throw new Error("Não reconheci centros de custo em " + files[i].name + ". Use o comparativo orçado × realizado por centro de custo.");
         this.aplicarBlocos(files[i].name, blocos);
+        await this.ligarOriginalEnviado(files[i].name, buf);
       }
       const fora = this._fora || [];
       if (fora.length) {
@@ -2298,6 +2358,173 @@ const ResultadoCaixaApp = {
     return out;
   },
 
+  idOriginalForecast(base, empresa, nome) {
+    const emp = Number(empresa) || 0;
+    const chave = emp ? String(emp) : String(nome || "arq").replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 60);
+    return "fc_" + String(base || "").replace(/[^0-9-]/g, "") + "_" + chave;
+  },
+
+  bufParaBase64(buf) {
+    const blob = new Blob([buf]);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+      reader.onerror = () => reject(reader.error || new Error("Não consegui ler o arquivo."));
+      reader.readAsDataURL(blob);
+    });
+  },
+
+  base64ParaBuf(b64) {
+    const bin = atob(String(b64 || ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  },
+
+  async salvarOriginal(id, nome, buf) {
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fx || !db || !id || !buf) throw new Error("A nuvem não está disponível.");
+    const b64 = await this.bufParaBase64(buf);
+    if (!b64) throw new Error("Arquivo vazio.");
+    const LIM = 400000;
+    const partes = [];
+    if (b64.length > LIM) {
+      for (let i = 0, n = 0; i < b64.length; i += LIM, n++) {
+        const pid = id + "__o" + n;
+        partes.push(pid);
+        await fx.setDoc(fx.doc(db, "resultado_caixa_orig", pid), {
+          tipo: "original-parte",
+          pai: id,
+          texto: b64.slice(i, i + LIM)
+        });
+      }
+    }
+    await fx.setDoc(fx.doc(db, "resultado_caixa_orig", id), {
+      tipo: "original",
+      nome: nome || "arquivo.xlsx",
+      texto: partes.length ? "" : b64,
+      partes: partes,
+      em: new Date().toISOString()
+    });
+    for (let n = partes.length; n < 40; n++) {
+      fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id + "__o" + n)).catch(function() {});
+    }
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return true;
+  },
+
+  async lerOriginal(id) {
+    if (this._bytesOriginais && this._bytesOriginais[id]) {
+      return { nome: "", buf: this._bytesOriginais[id] };
+    }
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fx || !db || !id || typeof fx.getDoc !== "function") return null;
+    const snap = await fx.getDoc(fx.doc(db, "resultado_caixa_orig", id));
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    if (!existe) return null;
+    const x = snap.data() || {};
+    let b64 = x.texto || "";
+    if (Array.isArray(x.partes) && x.partes.length) {
+      b64 = "";
+      for (let i = 0; i < x.partes.length; i++) {
+        const p = await fx.getDoc(fx.doc(db, "resultado_caixa_orig", x.partes[i]));
+        const ok = p && (typeof p.exists === "function" ? p.exists() : p.exists);
+        if (!ok) return null;
+        b64 += String((p.data() || {}).texto || "");
+      }
+    }
+    if (!b64) return null;
+    const buf = this.base64ParaBuf(b64);
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return { nome: x.nome || "", buf: buf };
+  },
+
+  apagarOriginal(id) {
+    if (!id) return;
+    if (this._bytesOriginais) delete this._bytesOriginais[id];
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (!fx || !db) return;
+    fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id)).catch(function() {});
+    for (let n = 0; n < 40; n++) {
+      fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id + "__o" + n)).catch(function() {});
+    }
+  },
+
+  origAindaUsado(id) {
+    if (!id) return false;
+    let achou = false;
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      Object.keys(por).forEach((nome) => {
+        if (por[nome] && por[nome].orig === id) achou = true;
+      });
+    });
+    const visitar = (bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        if (bag.arquivos[nome] && bag.arquivos[nome].orig === id) achou = true;
+      });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => visitar(this.acervo.anterior[k]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => visitar(this.acervo.meses[k]));
+    return achou;
+  },
+
+  async ligarOriginalEnviado(nome, buf) {
+    const lista = [];
+    const visitar = (slot, bag) => {
+      const arq = bag && bag.arquivos && bag.arquivos[nome];
+      if (!arq || !arq._pendente) return;
+      const id = arq._doc || this.docCaixa(arq._slot || slot, arq.empresa, nome);
+      arq._doc = id;
+      lista.push({ arq: arq, id: id });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    for (let i = 0; i < lista.length; i++) {
+      try {
+        await this.salvarOriginal(lista[i].id, nome, buf);
+        lista[i].arq.orig = lista[i].id;
+        lista[i].arq.origNome = nome;
+      } catch (err) {
+        this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+      }
+    }
+  },
+
+  refOriginal(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const chaves = Object.keys(this.forecasts || {});
+      for (let i = 0; i < chaves.length; i++) {
+        const arq = ((this.forecasts[chaves[i]] || {}).porArquivo || {})[nome];
+        if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || arq.nome || nome };
+      }
+      return null;
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || nome };
+    return null;
+  },
+
+  dispararDownload(buf, nome) {
+    const bruto = String(nome || "arquivo.xlsx").replace(/^\d{4}-\d{2}\|/, "").replace(/[\\/:*?"<>|]/g, " ").trim() || "arquivo.xlsx";
+    const arquivo = /\.(xlsx|xlsm)$/i.test(bruto) ? bruto : (bruto + ".xlsx");
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = arquivo;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  },
+
   async salvarArquivoNuvem(slot, nome, arq) {
     const fx = window.firebaseCollections;
     const db = window.firebaseDb;
@@ -2330,7 +2557,9 @@ const ResultadoCaixaApp = {
       rotulo: arq.rotulo || "",
       em: new Date().toISOString(),
       payload: ids.length ? "" : detalhe,
-      partes: ids
+      partes: ids,
+      orig: arq.orig || "",
+      origNome: arq.origNome || ""
     };
     await fx.setDoc(fx.doc(db, "resultado_caixa", id), base);
     for (let n = ids.length; n < 40; n++) {
@@ -2386,6 +2615,7 @@ const ResultadoCaixaApp = {
     this._nuvemToken = (this._nuvemToken || 0) + 1;
     fx.deleteDoc(fx.doc(db, "resultado_caixa", docId)).catch(() => {});
     if (String(docId).indexOf("__p") >= 0 || String(docId).indexOf("fc-") === 0) return;
+    this.apagarOriginal(docId);
     for (let n = 0; n < 40; n++) {
       fx.deleteDoc(fx.doc(db, "resultado_caixa", docId + "__p" + n)).catch(function() {});
     }
@@ -2397,7 +2627,7 @@ const ResultadoCaixaApp = {
       acervo._partes[id] = x.texto || "";
       return;
     }
-    if (x && (x.tipo === "forecast" || String(x.slot || "").indexOf("fc-") === 0)) return;
+    if (x && (x.tipo === "forecast" || x.tipo === "original" || x.tipo === "original-parte" || String(x.slot || "").indexOf("fc-") === 0)) return;
     const nome = x.nome || id;
     let extra = null;
     if (typeof x.payload === "string" && x.payload && !(Array.isArray(x.partes) && x.partes.length)) {
@@ -2412,7 +2642,9 @@ const ResultadoCaixaApp = {
       planosPorCc: (extra && extra.planosJson) ? this.abrirPlanos(extra.planosJson) : ((x.planosPorCc && Object.keys(x.planosPorCc).length) ? x.planosPorCc : this.abrirPlanos(x.planosJson)),
       _doc: id,
       _slot: x.slot || "",
-      _partes: Array.isArray(x.partes) ? x.partes : []
+      _partes: Array.isArray(x.partes) ? x.partes : [],
+      orig: x.orig || "",
+      origNome: x.origNome || ""
     };
     const slot = String(x.slot || "");
     if (slot.indexOf("ant-") === 0) {
@@ -3044,21 +3276,21 @@ const ResultadoCaixaApp = {
         <div class="rcx-arqs-col">
           <div class="rcx-arqs-head">
             <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
-            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos desta competência para conferência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais desta competência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
           </div>
           <div class="rcx-arqs">${chipsAtual || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
           <div class="rcx-arqs-head">
             <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
-            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos do ano anterior para conferência" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do ano anterior" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
           </div>
           <div class="rcx-arqs">${chipsAnt || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
           <div class="rcx-arqs-head">
             <span class="rcx-arqs-label">Forecast</span>
-            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos de forecast para conferência" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do forecast" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
           </div>
           <div class="rcx-arqs">${chipForecast}</div>
         </div>
