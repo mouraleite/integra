@@ -8973,6 +8973,8 @@ window.FILA_QUEUE_GROUPS = {
   ANALISE_INTERNA_JURIDICO: 8,
   // Acordo judicial quebrado há 31 dias ou mais: o cliente já passou pelo jurídico e volta para lá.
   REENVIAR_JURIDICO: 8.5,
+  // E-mail ao jurídico já enviado e o Sienge ainda não está sub judice.
+  ALTERAR_SUBJUDICE_SIENGE: 8.75,
   ENVIAR_JURIDICO: 9,
   SEM_CATEGORIA_SEM_PAGTO: 10,
   SEM_CATEGORIA_COM_PAGTO: 11,
@@ -9082,9 +9084,13 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   if (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client)) {
     return G.NEX_CUMPRIDA;
   }
-  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico
+  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico.
+  // Depois do e-mail, se o Sienge não está sub judice, a tag passa a Alterar p/ Sub judice Sienge.
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(client)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
+      if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)) {
+        return G.ALTERAR_SUBJUDICE_SIENGE;
+      }
       return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
@@ -9130,6 +9136,7 @@ window.getFilaQueueGroupMeta = function(group) {
     [G.RECENTE_JURIDICO]: { label: 'Recente Jurídico', bg: '#e0e7ff', color: '#3730a3' },
     [G.ANALISE_INTERNA_JURIDICO]: { label: 'Análise Interna Jurídico', bg: '#ede9fe', color: '#5b21b6' },
     [G.REENVIAR_JURIDICO]: { label: 'Reenviar para Jurídico - Acordo Judicial Quebrado', bg: '#fee2e2', color: '#991b1b' },
+    [G.ALTERAR_SUBJUDICE_SIENGE]: { label: 'Acordo Judicial - Alterar p/ Sub judice Sienge', bg: '#fff7ed', color: '#c2410c' },
     [G.ENVIAR_JURIDICO]: { label: 'Enviar para Jurídico', bg: '#ffedd5', color: '#9a3412' },
     [G.SEM_CATEGORIA_SEM_PAGTO]: { label: 'Sem pagamento nos últimos 30 dias', bg: '#f8fafc', color: '#475569' },
     [G.SEM_CATEGORIA_COM_PAGTO]: { label: 'Com pagamento nos últimos 30 dias', bg: '#ecfdf5', color: '#047857' },
@@ -9158,7 +9165,35 @@ window.getAcordoJuridicoAgingHtml = function(client) {
   </span>`;
 };
 
+window.acordoEmailTagChave = function(customerId, titulo) {
+  const c = String(customerId || "").replace(/\D/g, "");
+  const t = String(titulo || "").replace(/\D/g, "");
+  if (!c || !t) return "";
+  return c + "_" + t;
+};
+
+window.acordoEmailTags = {};
+try {
+  const cacheTags = JSON.parse(localStorage.getItem("crm_acordo_email_tag") || "{}");
+  if (cacheTags && typeof cacheTags === "object") window.acordoEmailTags = cacheTags;
+} catch (e) { window.acordoEmailTags = {}; }
+
+window.clientMarcadoAlterarSubjudiceSienge = function(client) {
+  const k = window.acordoEmailTagChave(client && client.customerId, client && client.saleId);
+  return !!(k && window.acordoEmailTags[k]);
+};
+
+window.getAlterarSubjudiceSiengeAgingHtml = function() {
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fdba74; background-color: #fff7ed; color: #c2410c; font-weight: 600;" title="O e-mail ao jurídico já foi enviado. No Sienge este título não está sub judice: altere o status para sub judice.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Acordo Judicial - Alterar p/ Sub judice Sienge
+  </span>`;
+};
+
 window.getAcordoJudicialEnviarJuridicoAgingHtml = function(client) {
+  if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)
+    && typeof window.getAlterarSubjudiceSiengeAgingHtml === "function") {
+    return window.getAlterarSubjudiceSiengeAgingHtml();
+  }
   const days = typeof window.getAcordoJudicialQuebradoDays === "function"
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
@@ -13614,7 +13649,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
         }
         const g = typeof window.getFilaQueueGroup === "function" ? window.getFilaQueueGroup(c) : null;
         const G = window.FILA_QUEUE_GROUPS || {};
-        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO)) return true;
+        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO || g === G.ALTERAR_SUBJUDICE_SIENGE)) return true;
       }
       return false;
     });

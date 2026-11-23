@@ -1473,7 +1473,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2196 &nbsp;&middot;&nbsp; 19/11/2026
+            v1.0.2197 &nbsp;&middot;&nbsp; 23/11/2026
           </span>
         </div>
       </div>
@@ -5252,6 +5252,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                   <div style="position: absolute; top: 50%; left: 0; right: 0; height: 4px; background: #cbd5e1; z-index: 0; transform: translateY(-50%); border-radius: 2px;"></div>
                 </div>
               </div>
+              <div id="regua-email-templates" style="margin-top: 18px;"></div>
             </div>
 
               <!-- ABA 4: Negociação -->
@@ -5333,7 +5334,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                 </h3>
                 <p style="font-size: 0.85rem; color: #64748b; margin-top: 0; margin-bottom: 12px;">Atribua e gerencie os operadores responsáveis por cada cidade da sua carteira.</p>
                 <div style="margin-bottom: 15px; padding: 12px 14px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; font-size: 0.82rem; color: #3730a3; line-height: 1.45;">
-                  <strong>Apoio Jurídico (Interno):</strong> acordo judicial quebrado (parcela SA, A1, A2… e passagem pelo jurídico) fica com a <strong>Lucelia</strong>, grupo <em>Acordo Judicial Quebrado</em>. No <strong>31º dia</strong> o grupo passa a <em>Enviar para Jurídico</em>. Sem acordo (pagou tudo e voltou a atrasar): Lucelia nos primeiros <strong>90 dias</strong> com tag <em>Recente Jurídico</em>; de 90 a 180 dias volta para o operador da carteira, ainda com a mesma tag; depois de 180 dias a tag some da fila, mas a ficha mantém o alerta de passagem pelo jurídico.
+                  <strong>Apoio Jurídico (Interno):</strong> acordo judicial quebrado (parcela SA, A1, A2… e passagem pelo jurídico) fica com a <strong>Lucelia</strong>, grupo <em>Acordo Judicial Quebrado</em>. No <strong>31º dia</strong> o grupo passa a <em>Reenviar para Jurídico</em> e o e-mail sai. Em 23/11/2026 o e-mail também sai para quem está com 41 dias. Depois do e-mail, como o Sienge não está sub judice, a tag fica <em>Acordo Judicial - Alterar p/ Sub judice Sienge</em>. Sem acordo (pagou tudo e voltou a atrasar): Lucelia nos primeiros <strong>90 dias</strong> com tag <em>Recente Jurídico</em>; de 90 a 180 dias volta para o operador da carteira, ainda com a mesma tag; depois de 180 dias a tag some da fila, mas a ficha mantém o alerta de passagem pelo jurídico.
                 </div>
               <div class="table-container" style="max-height: 450px; overflow-y: auto;">
                 <table class="custom-table" style="font-size: 0.85rem; border: none; border-bottom: 0;">
@@ -8477,6 +8478,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
               <div class="adv-pill" data-value="RECENTE_JURIDICO">Recente Jurídico</div>
               <div class="adv-pill" data-value="ANALISE_INTERNA_JURIDICO">Análise Interna Jurídico</div>
               <div class="adv-pill" data-value="REENVIAR_JURIDICO">Reenviar para Jurídico - Acordo Judicial Quebrado</div>
+              <div class="adv-pill" data-value="ALTERAR_SUBJUDICE_SIENGE">Acordo Judicial - Alterar p/ Sub judice Sienge</div>
               <div class="adv-pill" data-value="ENVIAR_JURIDICO">Enviar para Jurídico</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_SEM_PAGTO">Sem pagamento nos últimos 30 dias</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_COM_PAGTO">Com pagamento nos últimos 30 dias</div>
@@ -8692,16 +8694,16 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2196"></script>
+  <script defer src="js/nucleo/data.js?v=2197"></script>
   <script defer src="js/nucleo/sienge-api.js?v=eecc180e03"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=c4c8f6825a"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=d3847dea98"></script>
+  <script defer src="js/nucleo/app.js?v=888172707a"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
-  <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>
+  <script defer src="js/nucleo/central-email.js?v=0e9c13e3dc"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=720f06e7ab"></script>
@@ -8745,7 +8747,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
   <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
   <script defer src="js/cobranca/relacionamento.js?v=0dcf74e50f"></script>
-  <script defer src="js/cobranca/aditamento.js?v=2196"></script>
+  <script defer src="js/cobranca/aditamento.js?v=2197"></script>
   <script defer src="js/cobranca/cessao-direitos.js?v=a362080a19"></script>
   <script defer src="js/cobranca/permuta-lote.js?v=c10be02302"></script>
   <script defer src="js/cobranca/doc-assinatura.js?v=6707b12419"></script>
