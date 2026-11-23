@@ -81,6 +81,11 @@
         status: "status", em: ["em", "ms"], para: "para", cc: "cc", extrato: ["extrato", "bool"], erro: "erro",
       },
     },
+    // Cliente/título que recebeu o e-mail da régua "Reenviar jurídico" (id "<customerId>_<titulo>").
+    acordo_email_tag: {
+      tabela: "acordo_email_tag",
+      campos: { customerId: ["customer_id", "texto"], titulo: ["titulo", "texto"], tag: "tag", em: ["em", "ms"] },
+    },
     obra_vgv: {
       tabela: "obra_vgv",
       campos: { nome: "nome", vgv: ["vgv", "num"], lancamento: ["lancamento", "data"], at: ["at", "ms"] },

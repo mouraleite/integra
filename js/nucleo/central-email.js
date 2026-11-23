@@ -250,15 +250,29 @@ const CentralEmailApp = {
     return email;
   },
 
+  tagReenviar() {
+    return Number((window.FILA_QUEUE_GROUPS || {}).REENVIAR_JURIDICO);
+  },
+
+  // Em 23/11/2026 a régua de reenvio também leva quem está com 41 dias.
+  // Nos outros dias vale só o dia gravado no template (31).
+  excecao41Hoje() {
+    return this.hojeIso() === "2026-11-23";
+  },
+
   clientesDoTemplate(t) {
     const lista = window.rawClientList || [];
     const tag = Number(t.tag);
     const alvo = Number(t.diasVencido);
     if (!Number.isFinite(tag) || !Number.isFinite(alvo)) return [];
+    const reenviar = this.tagReenviar();
+    const hoje41 = tag === reenviar && this.excecao41Hoje();
     return lista.filter((c) => {
       if (typeof window.getFilaQueueGroup !== "function") return false;
       if (Number(window.getFilaQueueGroup(c)) !== tag) return false;
-      return this.diasAtraso(c, tag) === alvo;
+      const dias = this.diasAtraso(c, tag);
+      if (dias === alvo) return true;
+      return hoje41 && dias === 41;
     });
   },
 
@@ -729,10 +743,16 @@ const CentralEmailApp = {
     if (this._disparando || !this.naProducao()) return;
     if (!(window.rawClientList || []).length) return;
     const chave = "crm_cem_disparo_" + this.hojeIso();
-    try { if (Number(localStorage.getItem(chave) || 0) > Date.now() - 30 * 60 * 1000) return; } catch (e) {}
+    const chave41 = "crm_cem_41_" + this.hojeIso();
+    const forcar41 = this.excecao41Hoje();
+    try {
+      if (!forcar41 && Number(localStorage.getItem(chave) || 0) > Date.now() - 30 * 60 * 1000) return;
+      if (forcar41 && localStorage.getItem(chave41) === "1") return;
+    } catch (e) {}
     this._disparando = true;
     try {
       if (!this.state.pronto) await this.carregar();
+      await this.sincronizarTags();
       const ligados = this.state.templates.filter((t) => t.status === "aprovado" && t.ativo);
       if (!ligados.length) return;
       const feitos = await this.lerEnviosDoDia();
@@ -748,16 +768,37 @@ const CentralEmailApp = {
         });
       });
       try { localStorage.setItem(chave, String(Date.now())); } catch (e) {}
+      let mudouTag = false;
+      let enviou41 = false;
+      const auth = window.MouraAuth;
+      const token = auth && typeof auth.getIntegraToken === "function" ? await auth.getIntegraToken() : "";
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["X-Integra-Token"] = token;
       for (let i = 0; i < itens.length; i += 8) {
         try {
-          const res = await fetch("/api/central-email-enviar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itens: itens.slice(i, i + 8) }) });
+          const res = await fetch("/api/central-email-enviar", { method: "POST", headers, body: JSON.stringify({ itens: itens.slice(i, i + 8) }) });
           if (res.status === 503) break;
+          const body = await res.json().catch(() => null);
+          const resultados = (body && body.resultados) || [];
+          for (const r of resultados) {
+            if (!r || (r.status !== "enviado" && r.status !== "ja-enviado") || !this.templateEhReenviar(r.templateId)) continue;
+            await this.marcarAlterarSubjudice(r.customerId, r.titulo);
+            mudouTag = true;
+            enviou41 = true;
+          }
         } catch (e) {
           console.warn("[Central e-mail] envio", e);
         }
       }
+      if (forcar41 && enviou41) {
+        try { localStorage.setItem(chave41, "1"); } catch (e) {}
+      }
       if (itens.length) await this.lerEnviosDoDia();
+      if (mudouTag && typeof loadDashboardData === "function" && window.AppState && AppState.defaultersLoaded && !window._isDefaultersLoading) {
+        try { loadDashboardData(false); } catch (e) {}
+      }
       if (document.getElementById("central-email-root") && this.state.aba === "fila") this.render();
+      if (document.getElementById("regua-email-templates")) this.pintarPainelRegua();
     } finally {
       this._disparando = false;
     }
@@ -891,13 +932,120 @@ const CentralEmailApp = {
     if (t) this.marcarVisto(t);
     this.fecharModal();
     this.editar(id);
+  },
+
+  templateEhReenviar(id) {
+    const t = this.achar(String(id || ""));
+    const g = this.tagReenviar();
+    return !!(t && Number.isFinite(g) && Number(t.tag) === g);
+  },
+
+  gravarCacheTags() {
+    try { localStorage.setItem("crm_acordo_email_tag", JSON.stringify(window.acordoEmailTags || {})); } catch (e) {}
+  },
+
+  async marcarAlterarSubjudice(customerId, titulo) {
+    if (typeof window.acordoEmailTagChave !== "function") return;
+    const k = window.acordoEmailTagChave(customerId, titulo);
+    if (!k) return;
+    window.acordoEmailTags = window.acordoEmailTags || {};
+    window.acordoEmailTags[k] = true;
+    this.gravarCacheTags();
+    if (!window.DadosNucleo) return;
+    try {
+      await window.DadosNucleo.tabela("acordo_email_tag").gravar(k, {
+        customerId: String(customerId || ""),
+        titulo: String(titulo || ""),
+        tag: "Acordo Judicial - Alterar p/ Sub judice Sienge",
+        em: new Date().toISOString()
+      });
+    } catch (e) {
+      console.warn("[Central e-mail] tag sub judice", e);
+    }
+  },
+
+  async sincronizarTags() {
+    if (!window.DadosNucleo) return;
+    window.acordoEmailTags = window.acordoEmailTags || {};
+    const antes = Object.keys(window.acordoEmailTags).length;
+    try {
+      const linhas = await window.DadosNucleo.tabela("acordo_email_tag").listar({ colunas: "id" });
+      linhas.forEach((d) => { if (d && d.id) window.acordoEmailTags[d.id] = true; });
+    } catch (e) {
+      console.warn("[Central e-mail] leitura da tag", e);
+      return;
+    }
+    this.gravarCacheTags();
+    if (this._disparando) return;
+    if (Object.keys(window.acordoEmailTags).length !== antes
+      && typeof loadDashboardData === "function"
+      && window.AppState && AppState.defaultersLoaded && !window._isDefaultersLoading) {
+      try { loadDashboardData(false); } catch (e2) {}
+    }
+  },
+
+  async painelRegua() {
+    if (!this.state.pronto) {
+      try { await this.carregar(); } catch (e) {}
+    }
+    this.pintarPainelRegua();
+  },
+
+  pintarPainelRegua() {
+    const root = document.getElementById("regua-email-templates");
+    if (!root) return;
+    const reenviar = this.tagReenviar();
+    const linhas = this.state.templates.map((t) => {
+      const gente = (window.rawClientList || []).length ? this.clientesDoTemplate(t) : null;
+        const leva = Number(t.tag) === reenviar && gente
+        ? `<div style="margin-top:4px;font-size:0.75rem;color:#9a3412;">${gente.length} título(s) entram neste disparo.${this.excecao41Hoje() ? " Hoje também entra quem está com 41 dias." : ""}</div>`
+        : "";
+      return `<tr>
+        <td>${this.esc(t.nome)}${leva}</td>
+        <td>${this.esc(this.rotuloTag(t.tag))}</td>
+        <td>${this.esc(t.diasVencido)}</td>
+        <td>${this.esc(this.situacao(t))}</td>
+        <td class="is-right"><button type="button" class="tvig-ico" title="Ver" onclick="CentralEmailApp.verTemplate('${this.esc(t.id)}')"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></td>
+      </tr>`;
+    }).join("");
+    const fila = (window.rawClientList || []).length
+      ? ""
+      : `<p style="margin:0 0 12px;font-size:0.8rem;color:#64748b;">Abra a Fila de Cobrança nesta sessão para ver quantos títulos entram no disparo.</p>`;
+    root.innerHTML = `
+      <div style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;overflow:hidden;">
+        <div style="padding:14px 16px 10px;">
+          <h3 style="font-size:1.05rem;color:#1e293b;margin:0 0 8px;display:flex;align-items:center;gap:8px;">
+            <i data-lucide="mail" style="color:var(--color-primary);width:18px;height:18px;"></i> Templates da régua
+          </h3>
+          <p style="margin:0 0 8px;font-size:0.85rem;color:#475569;line-height:1.45;">Para teste. O olho abre o e-mail com o cliente de exemplo, o mesmo texto que sai no envio.</p>
+          <p style="margin:0;font-size:0.85rem;color:#475569;line-height:1.45;">Acordo judicial quebrado: o e-mail sai aos 31 dias de atraso. Só em 23/11/2026 também sai para quem está com 41 dias. Depois do envio, como no Sienge o título não está sub judice, a tag da fila passa a <strong>Acordo Judicial - Alterar p/ Sub judice Sienge</strong>. O envio sai quando o template está aprovado e a régua ligada.</p>
+        </div>
+        <div style="padding:0 16px 16px;">
+          ${fila}
+          <div class="table-container">
+            <table class="custom-table" style="font-size:0.85rem;">
+              <thead><tr>
+                <th style="background:#004E33;color:#fff;">Template</th>
+                <th style="background:#004E33;color:#fff;">Tag</th>
+                <th style="background:#004E33;color:#fff;">Dias vencido</th>
+                <th style="background:#004E33;color:#fff;">Régua</th>
+                <th style="background:#004E33;color:#fff;text-align:right;">Ações</th>
+              </tr></thead>
+              <tbody>${linhas || `<tr><td colspan="5">Nenhum template gravado. O texto fica na Central de e-mail.</td></tr>`}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    if (window.lucide) window.lucide.createIcons({ root: root });
   }
 };
 
 window.CentralEmailApp = CentralEmailApp;
 
 document.addEventListener("tabChanged", function (e) {
-  if (e && e.detail === "central-email" && window.CentralEmailApp) CentralEmailApp.abrir();
+  if (!window.CentralEmailApp) return;
+  if (e && e.detail === "central-email") CentralEmailApp.abrir();
+  if (e && e.detail === "configuracoes") CentralEmailApp.painelRegua();
 });
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -913,6 +1061,7 @@ document.addEventListener("DOMContentLoaded", function () {
     app.avisar();
   };
   setTimeout(tentar, 2500);
+  if (window.CentralEmailApp) CentralEmailApp.sincronizarTags();
   // Envio automático das réguas: confere a cada 2 minutos se a fila do dia já está carregada.
   setInterval(function () {
     if (window.CentralEmailApp) CentralEmailApp.dispararDoDia().catch(() => {});

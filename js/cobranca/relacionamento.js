@@ -2831,15 +2831,13 @@ const RelacionamentoApp = {
     return total;
   },
 
-  /** A4 retrato, uma imagem por página; logo só na primeira e "N de M" no rodapé, como na impressão. */
+  /** A4 retrato. O miolo entra como texto; a logo continua imagem. "N de M" no rodapé. */
   async _baixarPaginasPdf(paginas, fileName, opts) {
     opts = opts || {};
-    if (typeof html2canvas !== "function" || !window.jspdf) throw new Error("Gerador de PDF indisponível.");
+    if (!window.jspdf || typeof window.pintarElementoComoTextoPdf !== "function") throw new Error("Gerador de PDF indisponível.");
     const W = 794, H = 1123, PAD_X = 57, PAD_TOP = 38, PAD_BOTTOM = 64;
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
     for (let i = 0; i < paginas.length; i++) {
       const page = document.createElement("div");
       page.style.cssText = `position:fixed;left:-13000px;top:0;width:${W}px;height:${H}px;background:#fff;box-sizing:border-box;padding:${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px;overflow:hidden;color:#111;`;
@@ -2866,9 +2864,8 @@ const RelacionamentoApp = {
           area.style.transform = `scale(${s})`;
           area.style.width = (100 / s) + "%";
         }
-        const canvas = await html2canvas(page, { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false, width: W, height: H });
         if (i > 0) pdf.addPage();
-        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, pageW, pageH);
+        window.pintarElementoComoTextoPdf(pdf, page, { pagina: true });
       } finally {
         page.remove();
       }

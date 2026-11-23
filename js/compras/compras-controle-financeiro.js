@@ -1660,7 +1660,9 @@ ComprasControleApp.abrirTituloRow = async function (row) {
         billId,
         credorId: row.credorId || (bill && bill.creditorId) || "",
         bruto: Number(row.valor) || Number(row.valorAjustado) || 0,
-        anexos: this._tituloDetalhe.attachments
+        anexos: this._tituloDetalhe.attachments,
+        companyId: row.companyId || (bill && bill.companyId) || "",
+        payment: this._tituloDetalhe.payment
       }).then((fiscal) => {
         if (this._tituloGen !== gen || !this._tituloDetalhe) return;
         this._tituloDetalhe.fiscal = fiscal;

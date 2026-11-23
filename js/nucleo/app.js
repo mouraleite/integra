@@ -8993,6 +8993,8 @@ window.FILA_QUEUE_GROUPS = {
   ANALISE_INTERNA_JURIDICO: 8,
   // Acordo judicial quebrado há 31 dias ou mais: o cliente já passou pelo jurídico e volta para lá.
   REENVIAR_JURIDICO: 8.5,
+  // E-mail ao jurídico já enviado e o Sienge ainda não está sub judice.
+  ALTERAR_SUBJUDICE_SIENGE: 8.75,
   ENVIAR_JURIDICO: 9,
   SEM_CATEGORIA_SEM_PAGTO: 10,
   SEM_CATEGORIA_COM_PAGTO: 11,
@@ -9102,9 +9104,13 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   if (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client)) {
     return G.NEX_CUMPRIDA;
   }
-  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico
+  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico.
+  // Depois do e-mail, se o Sienge não está sub judice, a tag passa a Alterar p/ Sub judice Sienge.
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(client)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
+      if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)) {
+        return G.ALTERAR_SUBJUDICE_SIENGE;
+      }
       return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
@@ -9150,6 +9156,7 @@ window.getFilaQueueGroupMeta = function(group) {
     [G.RECENTE_JURIDICO]: { label: 'Recente Jurídico', bg: '#e0e7ff', color: '#3730a3' },
     [G.ANALISE_INTERNA_JURIDICO]: { label: 'Análise Interna Jurídico', bg: '#ede9fe', color: '#5b21b6' },
     [G.REENVIAR_JURIDICO]: { label: 'Reenviar para Jurídico - Acordo Judicial Quebrado', bg: '#fee2e2', color: '#991b1b' },
+    [G.ALTERAR_SUBJUDICE_SIENGE]: { label: 'Acordo Judicial - Alterar p/ Sub judice Sienge', bg: '#fff7ed', color: '#c2410c' },
     [G.ENVIAR_JURIDICO]: { label: 'Enviar para Jurídico', bg: '#ffedd5', color: '#9a3412' },
     [G.SEM_CATEGORIA_SEM_PAGTO]: { label: 'Sem pagamento nos últimos 30 dias', bg: '#f8fafc', color: '#475569' },
     [G.SEM_CATEGORIA_COM_PAGTO]: { label: 'Com pagamento nos últimos 30 dias', bg: '#ecfdf5', color: '#047857' },
@@ -9178,7 +9185,35 @@ window.getAcordoJuridicoAgingHtml = function(client) {
   </span>`;
 };
 
+window.acordoEmailTagChave = function(customerId, titulo) {
+  const c = String(customerId || "").replace(/\D/g, "");
+  const t = String(titulo || "").replace(/\D/g, "");
+  if (!c || !t) return "";
+  return c + "_" + t;
+};
+
+window.acordoEmailTags = {};
+try {
+  const cacheTags = JSON.parse(localStorage.getItem("crm_acordo_email_tag") || "{}");
+  if (cacheTags && typeof cacheTags === "object") window.acordoEmailTags = cacheTags;
+} catch (e) { window.acordoEmailTags = {}; }
+
+window.clientMarcadoAlterarSubjudiceSienge = function(client) {
+  const k = window.acordoEmailTagChave(client && client.customerId, client && client.saleId);
+  return !!(k && window.acordoEmailTags[k]);
+};
+
+window.getAlterarSubjudiceSiengeAgingHtml = function() {
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fdba74; background-color: #fff7ed; color: #c2410c; font-weight: 600;" title="O e-mail ao jurídico já foi enviado. No Sienge este título não está sub judice: altere o status para sub judice.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Acordo Judicial - Alterar p/ Sub judice Sienge
+  </span>`;
+};
+
 window.getAcordoJudicialEnviarJuridicoAgingHtml = function(client) {
+  if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)
+    && typeof window.getAlterarSubjudiceSiengeAgingHtml === "function") {
+    return window.getAlterarSubjudiceSiengeAgingHtml();
+  }
   const days = typeof window.getAcordoJudicialQuebradoDays === "function"
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
@@ -13621,7 +13656,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
         }
         const g = typeof window.getFilaQueueGroup === "function" ? window.getFilaQueueGroup(c) : null;
         const G = window.FILA_QUEUE_GROUPS || {};
-        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO)) return true;
+        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO || g === G.ALTERAR_SUBJUDICE_SIENGE)) return true;
       }
       return false;
     });
@@ -23981,37 +24016,226 @@ async function renegConcluirProposta() {
   }
 }
 
-async function baixarHtmlComoPdf(html, nomeArquivo, opts) {
-  if (!window.jspdf || !window.jspdf.jsPDF || typeof html2canvas !== "function") {
-    throw new Error("gerador de PDF indisponível");
+function rgbCssPdf(css) {
+  const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : [17, 17, 17];
+}
+
+function fundoCssPdf(css) {
+  const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/);
+  if (!m) return null;
+  const a = m[4] == null ? 1 : parseFloat(m[4]);
+  if (!(a > 0.04)) return null;
+  if (+m[1] > 250 && +m[2] > 250 && +m[3] > 250) return null;
+  return [+m[1], +m[2], +m[3]];
+}
+
+function fonteCssPdf(st) {
+  const fam = String(st.fontFamily || "").toLowerCase();
+  const serif = /times|georgia|serif/.test(fam) && !/sans-serif/.test(fam);
+  const bold = (parseInt(st.fontWeight, 10) || 0) >= 600 || st.fontWeight === "bold";
+  const italic = /italic|oblique/.test(st.fontStyle || "");
+  let estilo = "normal";
+  if (bold && italic) estilo = "bolditalic";
+  else if (bold) estilo = "bold";
+  else if (italic) estilo = "italic";
+  return { nome: serif ? "times" : "helvetica", estilo: estilo };
+}
+
+function escalaCssPdf(el) {
+  let s = 1;
+  let n = el;
+  while (n && n.nodeType === 1) {
+    const t = getComputedStyle(n).transform;
+    const m = t && t !== "none" ? t.match(/matrix\(\s*([-\d.]+)/) : null;
+    const a = m ? parseFloat(m[1]) : 1;
+    if (a > 0.2 && a < 4) s *= a;
+    n = n.parentElement;
   }
+  return s;
+}
+
+/**
+ * Desenha o HTML já montado na tela como texto de verdade no PDF.
+ * A posição segue o que o navegador quebrou (justificado, título, quadro, tabela).
+ * Imagem (logo, QR) continua imagem. opts.pagina preenche a folha atual;
+ * sem isso, o bloco pode passar de uma folha e a margem é opts.margem (mm).
+ */
+function pintarElementoComoTextoPdf(pdf, el, opts) {
+  opts = opts || {};
+  if (!el || !pdf) throw new Error("Gerador de PDF indisponível.");
+  const raiz = el.getBoundingClientRect();
+  if (!(raiz.width > 1) || !(raiz.height > 1)) throw new Error("A página do documento não foi medida.");
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margem = opts.pagina ? 0 : (Number(opts.margem) || 0);
+  const utilW = pageW - margem * 2;
+  const utilH = pageH - margem * 2;
+  const escala = utilW / raiz.width;
+  const fatiaPx = utilH / escala;
+  const uma = !!opts.pagina || raiz.height <= fatiaPx + 2;
+  const nPag = uma ? 1 : Math.max(1, Math.ceil((raiz.height - 1) / fatiaPx));
+  const localY = (rect) => rect.top - raiz.top;
+  const localX = (rect) => rect.left - raiz.left;
+  const xy = (x, y, indice) => {
+    const base = uma ? 0 : indice * fatiaPx;
+    return [margem + x * escala, margem + (y - base) * escala];
+  };
+  const corte = (top, height, indice) => {
+    if (uma) return height > 0.3 ? { y: top, h: height } : null;
+    const a = Math.max(top, indice * fatiaPx);
+    const b = Math.min(top + height, (indice + 1) * fatiaPx);
+    return b - a > 0.4 ? { y: a, h: b - a } : null;
+  };
+  const paginaDe = (top, height) => {
+    if (uma) return 0;
+    const meio = top + height / 2;
+    return Math.min(nPag - 1, Math.max(0, Math.floor(meio / fatiaPx)));
+  };
+
+  const caixas = [];
+  el.querySelectorAll("*").forEach((node) => {
+    if (node.hasAttribute && node.hasAttribute("data-doc-palavra")) return;
+    if (node.closest && node.closest("svg")) return;
+    const st = getComputedStyle(node);
+    if (st.display === "none" || st.visibility === "hidden") return;
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    caixas.push({ node: node, st: st, top: localY(r), left: localX(r), width: r.width, height: r.height });
+  });
+
+  const imagens = [];
+  el.querySelectorAll("img").forEach((img) => {
+    const r = img.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return;
+    imagens.push({ img: img, top: localY(r), left: localX(r), width: r.width, height: r.height });
+  });
+
+  const palavras = [];
+  const guardar = (texto, rect, pai) => {
+    const t = String(texto || "");
+    if (!t || !pai || rect.width < 0.2 || rect.height < 0.2) return;
+    palavras.push({
+      t: t,
+      top: localY(rect),
+      left: localX(rect),
+      width: rect.width,
+      height: rect.height,
+      pai: pai
+    });
+  };
+  el.querySelectorAll("span[data-doc-palavra]").forEach((span) => {
+    guardar(span.textContent, span.getBoundingClientRect(), span);
+  });
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let no;
+  while ((no = walker.nextNode())) {
+    const pai = no.parentElement;
+    if (!pai || pai.closest("span[data-doc-palavra]") || pai.closest("svg") || pai.closest("script,style")) continue;
+    const st = getComputedStyle(pai);
+    if (st.display === "none" || st.visibility === "hidden") continue;
+    const bruto = no.nodeValue || "";
+    let i = 0;
+    while (i < bruto.length) {
+      while (i < bruto.length && /\s/.test(bruto.charAt(i))) i++;
+      if (i >= bruto.length) break;
+      const ini = i;
+      while (i < bruto.length && !/\s/.test(bruto.charAt(i))) i++;
+      const range = document.createRange();
+      range.setStart(no, ini);
+      range.setEnd(no, i);
+      const rects = range.getClientRects();
+      const rect = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+      guardar(bruto.slice(ini, i), rect, pai);
+    }
+  }
+
+  const formatoImg = (img) => {
+    const s = String((img && (img.currentSrc || img.src)) || "");
+    if (/image\/jpe?g|\.jpe?g(\?|$)/i.test(s)) return "JPEG";
+    return "PNG";
+  };
+
+  for (let p = 0; p < nPag; p++) {
+    if (p > 0) pdf.addPage();
+    caixas.forEach((c) => {
+      const fat = corte(c.top, c.height, p);
+      if (!fat) return;
+      const bg = fundoCssPdf(c.st.backgroundColor);
+      if (bg) {
+        pdf.setFillColor(bg[0], bg[1], bg[2]);
+        const o = xy(c.left, fat.y, p);
+        pdf.rect(o[0], o[1], c.width * escala, fat.h * escala, "F");
+      }
+      const lado = (nome, x1, y1, x2, y2) => {
+        const w = parseFloat(c.st["border" + nome + "Width"]) || 0;
+        if (w < 0.4) return;
+        const cor = rgbCssPdf(c.st["border" + nome + "Color"]);
+        pdf.setDrawColor(cor[0], cor[1], cor[2]);
+        pdf.setLineWidth(Math.max(0.08, w * escala));
+        const a = xy(x1, y1, p);
+        const b = xy(x2, y2, p);
+        pdf.line(a[0], a[1], b[0], b[1]);
+      };
+      const right = c.left + c.width;
+      const bot = c.top + c.height;
+      if (fat.y - c.top < 0.8) lado("Top", c.left, c.top, right, c.top);
+      if (c.top + c.height - (fat.y + fat.h) < 0.8) lado("Bottom", c.left, bot, right, bot);
+      lado("Left", c.left, fat.y, c.left, fat.y + fat.h);
+      lado("Right", right, fat.y, right, fat.y + fat.h);
+    });
+    imagens.forEach((im) => {
+      if (paginaDe(im.top, im.height) !== p) return;
+      const o = xy(im.left, im.top, p);
+      const fmt = formatoImg(im.img);
+      try { pdf.addImage(im.img, fmt, o[0], o[1], im.width * escala, im.height * escala); }
+      catch (e) {
+        try { pdf.addImage(im.img.src, fmt, o[0], o[1], im.width * escala, im.height * escala); } catch (e2) {}
+      }
+    });
+    palavras.forEach((w) => {
+      if (paginaDe(w.top, w.height) !== p) return;
+      const st = getComputedStyle(w.pai);
+      const fonte = fonteCssPdf(st);
+      const px = (parseFloat(st.fontSize) || 14) * escalaCssPdf(w.pai);
+      pdf.setFont(fonte.nome, fonte.estilo);
+      pdf.setFontSize(Math.max(4, px * escala * 72 / 25.4));
+      const cor = rgbCssPdf(st.color);
+      pdf.setTextColor(cor[0], cor[1], cor[2]);
+      const natural = pdf.getTextWidth(w.t);
+      const alvo = w.width * escala;
+      let espaco = 0;
+      const ls = parseFloat(st.letterSpacing);
+      if (isFinite(ls)) espaco += ls * escala;
+      if (w.t.length > 1 && natural > 0) espaco += (alvo - natural) / (w.t.length - 1);
+      if (espaco < -0.35) espaco = -0.35;
+      if (espaco > 0.8) espaco = 0.8;
+      if (Math.abs(espaco) < 0.01) espaco = 0;
+      pdf.setCharSpace(espaco);
+      const meia = Math.max(0, (w.height - px) / 2);
+      const o = xy(w.left, w.top + meia + px * 0.8, p);
+      pdf.text(w.t, o[0], o[1]);
+      pdf.setCharSpace(0);
+    });
+  }
+}
+
+window.pintarElementoComoTextoPdf = pintarElementoComoTextoPdf;
+
+async function baixarHtmlComoPdf(html, nomeArquivo, opts) {
+  if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("gerador de PDF indisponível");
   const host = document.createElement("div");
-  host.style.cssText = "position:fixed;left:0;top:0;width:740px;background:#fff;padding:24px 32px;color:#111;z-index:-1;pointer-events:none;";
+  host.style.cssText = "position:fixed;left:-13000px;top:0;width:740px;background:#fff;padding:24px 32px;color:#111;";
   host.innerHTML = html;
   document.body.appendChild(host);
   try {
     if (window.RelacionamentoApp && typeof RelacionamentoApp._justificarPagina === "function") {
       RelacionamentoApp._justificarPagina(host);
     }
-    const canvas = await html2canvas(host, { scale: 2, backgroundColor: "#ffffff" });
+    await Promise.all(Array.from(host.querySelectorAll("img")).map((img) => img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; })));
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const margin = 8;
-    const imgW = 210 - margin * 2;
-    const pageCanvasH = Math.floor((297 - margin * 2) * canvas.width / imgW);
-    let y = 0;
-    let page = 0;
-    while (y < canvas.height) {
-      const sliceH = Math.min(pageCanvasH, canvas.height - y);
-      const slice = document.createElement("canvas");
-      slice.width = canvas.width;
-      slice.height = sliceH;
-      slice.getContext("2d").drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-      if (page) pdf.addPage();
-      pdf.addImage(slice.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, sliceH * imgW / canvas.width);
-      y += sliceH;
-      page += 1;
-    }
+    pintarElementoComoTextoPdf(pdf, host, { margem: 8 });
     const bytes = new Uint8Array(pdf.output("arraybuffer"));
     if (!(opts && opts.devolver)) renegBaixarBytes(bytes, nomeArquivo);
     return bytes;
@@ -41270,7 +41494,7 @@ window.nexSiengeUnitContext = function(customerId, saleId, item) {
 };
 
 window.nexHtmlToPdfFile = async function(html, fileName) {
-  if (typeof html2canvas !== "function" || !window.jspdf) {
+  if (!window.jspdf || typeof window.pintarElementoComoTextoPdf !== "function") {
     throw new Error("Gerador de PDF indisponível.");
   }
   const wrap = document.createElement("div");
@@ -41281,30 +41505,10 @@ window.nexHtmlToPdfFile = async function(html, fileName) {
     if (window.RelacionamentoApp && typeof RelacionamentoApp._justificarPagina === "function") {
       RelacionamentoApp._justificarPagina(wrap);
     }
-    const canvas = await html2canvas(wrap, { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false });
+    await Promise.all(Array.from(wrap.querySelectorAll("img")).map((img) => img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; })));
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const pageHeightPx = Math.max(1, Math.floor(canvas.width * (pageH / pageW)));
-    let offset = 0;
-    let first = true;
-    while (offset < canvas.height) {
-      const sliceH = Math.min(pageHeightPx, canvas.height - offset);
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = canvas.width;
-      pageCanvas.height = sliceH;
-      const ctx = pageCanvas.getContext("2d");
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-      ctx.drawImage(canvas, 0, offset, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-      const data = pageCanvas.toDataURL("image/jpeg", 0.93);
-      if (!first) pdf.addPage();
-      first = false;
-      const sliceMm = sliceH * pageW / canvas.width;
-      pdf.addImage(data, "JPEG", 0, 0, pageW, sliceMm);
-      offset += pageHeightPx;
-    }
+    window.pintarElementoComoTextoPdf(pdf, wrap, { margem: 0 });
     const blob = pdf.output("blob");
     return new File([blob], fileName || "documento.pdf", { type: "application/pdf" });
   } finally {

@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=7bc7edd630">
+  <link rel="stylesheet" href="css/style.css?v=92443ca032">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -1473,7 +1473,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2196 &nbsp;&middot;&nbsp; 19/11/2026
+            v1.0.2207 &nbsp;&middot;&nbsp; 23/11/2026
           </span>
         </div>
       </div>
@@ -5252,6 +5252,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                   <div style="position: absolute; top: 50%; left: 0; right: 0; height: 4px; background: #cbd5e1; z-index: 0; transform: translateY(-50%); border-radius: 2px;"></div>
                 </div>
               </div>
+              <div id="regua-email-templates" style="margin-top: 18px;"></div>
             </div>
 
               <!-- ABA 4: Negociação -->
@@ -5333,7 +5334,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                 </h3>
                 <p style="font-size: 0.85rem; color: #64748b; margin-top: 0; margin-bottom: 12px;">Atribua e gerencie os operadores responsáveis por cada cidade da sua carteira.</p>
                 <div style="margin-bottom: 15px; padding: 12px 14px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; font-size: 0.82rem; color: #3730a3; line-height: 1.45;">
-                  <strong>Apoio Jurídico (Interno):</strong> acordo judicial quebrado (parcela SA, A1, A2… e passagem pelo jurídico) fica com a <strong>Lucelia</strong>, grupo <em>Acordo Judicial Quebrado</em>. No <strong>31º dia</strong> o grupo passa a <em>Enviar para Jurídico</em>. Sem acordo (pagou tudo e voltou a atrasar): Lucelia nos primeiros <strong>90 dias</strong> com tag <em>Recente Jurídico</em>; de 90 a 180 dias volta para o operador da carteira, ainda com a mesma tag; depois de 180 dias a tag some da fila, mas a ficha mantém o alerta de passagem pelo jurídico.
+                  <strong>Apoio Jurídico (Interno):</strong> acordo judicial quebrado (parcela SA, A1, A2… e passagem pelo jurídico) fica com a <strong>Lucelia</strong>, grupo <em>Acordo Judicial Quebrado</em>. No <strong>31º dia</strong> o grupo passa a <em>Reenviar para Jurídico</em> e o e-mail sai. Em 23/11/2026 o e-mail também sai para quem está com 41 dias. Depois do e-mail, como o Sienge não está sub judice, a tag fica <em>Acordo Judicial - Alterar p/ Sub judice Sienge</em>. Sem acordo (pagou tudo e voltou a atrasar): Lucelia nos primeiros <strong>90 dias</strong> com tag <em>Recente Jurídico</em>; de 90 a 180 dias volta para o operador da carteira, ainda com a mesma tag; depois de 180 dias a tag some da fila, mas a ficha mantém o alerta de passagem pelo jurídico.
                 </div>
               <div class="table-container" style="max-height: 450px; overflow-y: auto;">
                 <table class="custom-table" style="font-size: 0.85rem; border: none; border-bottom: 0;">
@@ -8477,6 +8478,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
               <div class="adv-pill" data-value="RECENTE_JURIDICO">Recente Jurídico</div>
               <div class="adv-pill" data-value="ANALISE_INTERNA_JURIDICO">Análise Interna Jurídico</div>
               <div class="adv-pill" data-value="REENVIAR_JURIDICO">Reenviar para Jurídico - Acordo Judicial Quebrado</div>
+              <div class="adv-pill" data-value="ALTERAR_SUBJUDICE_SIENGE">Acordo Judicial - Alterar p/ Sub judice Sienge</div>
               <div class="adv-pill" data-value="ENVIAR_JURIDICO">Enviar para Jurídico</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_SEM_PAGTO">Sem pagamento nos últimos 30 dias</div>
               <div class="adv-pill" data-value="SEM_CATEGORIA_COM_PAGTO">Com pagamento nos últimos 30 dias</div>
@@ -8689,7 +8691,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="module" src="js/nucleo/supabase-client.js?v=3"></script>
   <script defer src="js/nucleo/dados-base.js?v=2"></script>
   <script defer src="js/nucleo/storage-supabase.js?v=1"></script>
-  <script defer src="js/nucleo/mapas-nucleo.js?v=1"></script>
+  <script defer src="js/nucleo/mapas-nucleo.js?v=20261123sb"></script>
   <script defer src="js/nucleo/dados-nucleo.js?v=1"></script>
   <script defer src="js/cobranca/mapas-cobranca.js?v=1"></script>
   <script defer src="js/cobranca/dados-cobranca.js?v=1"></script>
@@ -8702,16 +8704,16 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2196"></script>
+  <script defer src="js/nucleo/data.js?v=2207"></script>
   <script defer src="js/nucleo/sienge-api.js?v=eecc180e03"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=c4c8f6825a"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=d3847dea98"></script>
+  <script defer src="js/nucleo/app.js?v=1ee9324cf7"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
-  <script defer src="js/nucleo/central-email.js?v=509e9c070e"></script>
+  <script defer src="js/nucleo/central-email.js?v=20261123sb"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=720f06e7ab"></script>
@@ -8722,12 +8724,12 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/alcada-desconto.js?v=e8826f2636"></script>
   <script defer src="js/cobranca/alcada-distrato.js?v=2811047cfb"></script>
   <script defer src="js/nucleo/home-dashboard.js?v=a36d15465d"></script>
-  <script defer src="js/cobranca/anexos.js?v=cfe0984055"></script>
+  <script defer src="js/cobranca/anexos.js?v=d00cdbe807"></script>
   <script defer src="js/cobranca/boletos-baixa.js?v=83666a3816"></script>
   <script type="text/x-sob-demanda" data-grupo="contas-pagar" data-src="js/financeiro/contas-pagar.js?v=3f6d4ddbf5"></script>
     <script defer src="js/financeiro/boleto-check.js?v=3d6798c849"></script>
-    <script defer src="js/financeiro/nota-fiscal-check.js?v=27ba062a96"></script>
-    <script defer src="js/financeiro/gerar-pagamento.js?v=3f8948906e"></script>
+    <script defer src="js/financeiro/nota-fiscal-check.js?v=2795e63f89"></script>
+    <script defer src="js/financeiro/gerar-pagamento.js?v=cafe592436"></script>
     <script defer src="js/financeiro/cartao-clara.js?v=ee76c9124b"></script>
     <script defer src="js/contabil/contabil.js?v=508491accb"></script>
     <script defer src="js/contabil/contabil-equiv.js?v=bf21ef1b34"></script>
@@ -8735,7 +8737,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/financeiro/rydoo.js?v=2cf1cec31a"></script>
   <script defer src="js/cobranca/titulos-incompletos.js?v=f4e16e2b3e"></script>
   <script defer src="js/compras/compras-previsoes.js?v=adef79f84f"></script>
-  <script defer src="js/compras/compras-controle-financeiro.js?v=0fbbb45cdb"></script>
+  <script defer src="js/compras/compras-controle-financeiro.js?v=6435f3e1c9"></script>
   <script defer src="js/compras/compras-dashboard.js?v=56f03f4429"></script>
   <script defer src="js/engenharia/caucao-core.js?v=43733f7412"></script>
   <script defer src="js/engenharia/engenharia-caucao.js?v=091e39ca27"></script>
@@ -8754,8 +8756,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/alerta-ponto.js?v=a88902b2f0"></script>
   <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
   <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
-  <script defer src="js/cobranca/relacionamento.js?v=0dcf74e50f"></script>
-  <script defer src="js/cobranca/aditamento.js?v=2196"></script>
+  <script defer src="js/cobranca/relacionamento.js?v=cd43b98234"></script>
+  <script defer src="js/cobranca/aditamento.js?v=2207"></script>
   <script defer src="js/cobranca/cessao-direitos.js?v=a362080a19"></script>
   <script defer src="js/cobranca/permuta-lote.js?v=c10be02302"></script>
   <script defer src="js/cobranca/doc-assinatura.js?v=6707b12419"></script>
@@ -8783,26 +8785,26 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script defer src="js/financeiro/fluxo-caixa.js?v=bfaac752df"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-2027.js?v=eceb14cc8f"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc.js?v=a04d69a2fe"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc.js?v=20261123sb"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-aportes.js?v=ba792d4803"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-slides.js?v=7d6dccf9d1"></script>
   <script defer src="js/financeiro/caixa-diario.js?v=abfdade485"></script>
   <script type="text/x-sob-demanda" data-grupo="mutuo" data-src="js/financeiro/mutuo.js?v=58de946e11"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=f80f51bbcf"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=20261123sb"></script>
   <script defer src="js/cobranca/relatorio-honorarios.js?v=aa553c2b1d"></script>
   <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
   <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
   <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
   <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=f3400cbefb"></script>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=981e037a7b"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=5b88891098"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>
   <script defer src="js/fiscal/fiscal-inserir-nota.js?v=a21f49f1c3"></script>
   <script defer src="js/fiscal/fiscal-enviar-nota.js?v=fbbe582aef"></script>
   <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
   <script defer src="js/nucleo/indexadores.js?v=0adcce7721"></script>
   <script defer src="js/engenharia/verificar-construcao.js?v=45a891d287"></script>
-  <script defer src="js/cobranca/financiamento.js?v=1347b8c00c"></script>
+  <script defer src="js/cobranca/financiamento.js?v=30c290930a"></script>
   <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
   <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>
   <script defer src="js/cobranca/registro.js?v=8ebdb13ff0"></script>

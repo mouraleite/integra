@@ -14,6 +14,8 @@ const { dados, tabela } = require("../../lib/dados-servidor");
 
 const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
+// Mesmo número de FILA_QUEUE_GROUPS.REENVIAR_JURIDICO. Depois deste envio a fila troca a tag.
+const TAG_REENVIAR_JURIDICO = 8.5;
 const EMAIL_OK = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 
 function responder(res, status, obj) {
@@ -72,6 +74,13 @@ function lerEnvio(id) {
 
 function gravarEnvio(id, obj) {
   return tabela("central_email_envios").gravar(id, obj);
+}
+
+// Depois do e-mail da régua "Reenviar jurídico", a fila troca a tag do cliente/título (acordo_email_tag).
+function gravarAcordoTag(customerId, titulo, em) {
+  return tabela("acordo_email_tag").gravar(customerId + "_" + titulo, {
+    customerId, titulo, tag: "Acordo Judicial - Alterar p/ Sub judice Sienge", em: em || new Date().toISOString()
+  });
 }
 
 /* ---------- Sienge ---------- */
@@ -211,7 +220,14 @@ module.exports = async function handler(req, res) {
       if (!t || t.status !== "aprovado" || !t.ativo) throw new Error("Template não aprovado ou régua desligada.");
       const id = idEnvio(dia, templateId, customerId, titulo);
       const ja = await lerEnvio(id);
-      if (ja && ja.status === "enviado") { r.status = "ja-enviado"; resultados.push(r); continue; }
+      if (ja && ja.status === "enviado") {
+        if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
+          await gravarAcordoTag(customerId, titulo, ja.em);
+        }
+        r.status = "ja-enviado";
+        resultados.push(r);
+        continue;
+      }
 
       const para = t.destino === "fixo"
         ? String(t.para || "").split(/[,;\s]+/).map((e) => e.trim().toLowerCase()).filter((e) => EMAIL_OK.test(e))
@@ -234,6 +250,9 @@ module.exports = async function handler(req, res) {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
         para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
       });
+      if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
+        await gravarAcordoTag(customerId, titulo);
+      }
     } catch (e) {
       r.status = "erro";
       r.erro = String((e && e.message) || e).slice(0, 200);
