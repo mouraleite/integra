@@ -406,11 +406,10 @@ const OrcamentoDfcApp = {
     return hoje.getMonth();
   },
 
-  /* Outubro e novembro (meses 10 e 11) entram pelo forecast vigente, e não pelo caixa nem pelo arquivo de fechamento. */
+  /* Primeiro mês que ainda é forecast. O mês fechado, com forecast já salvo, entra como realizado.
+     Em novembro de 2026 o caixa vai até outubro; novembro e dezembro vêm do forecast mais recente. */
   inicioForecast() {
-    const corte = this.corteForecast();
-    if (corte <= 0 || corte >= 12) return corte;
-    return Math.min(corte, 9);
+    return this.corteForecast();
   },
 
   /* Só o forecast da competência mais recente daquele mês. Arquivo de competência anterior não soma de novo. */
@@ -455,7 +454,7 @@ const OrcamentoDfcApp = {
     const ini = this.inicioForecast();
     if (corte <= 0) return "2026 entra como forecast.";
     if (corte >= 12) return "2026 entra pelo realizado do ano.";
-    return "Até " + nomes[ini - 1] + " entra o realizado do caixa. De " + nomes[ini] + " a dezembro entra o forecast mais recente de cada mês, o arquivo da competência vigente no fechamento de caixa.";
+    return "Até " + nomes[ini - 1] + " entra o realizado. De " + nomes[ini] + " a dezembro entra o forecast mais recente salvo no fechamento de caixa.";
   },
 
   chaveConta(code) {
@@ -2080,14 +2079,6 @@ const OrcamentoDfcApp = {
 
   async lerForecastsSalvos(app) {
     if (!app) return;
-    const mesesFc = ["2026-10", "2026-11", "2026-12"];
-    const jaTem = app.forecasts && mesesFc.some((ym) => {
-      const doc = app.forecasts[ym];
-      if (!doc) return false;
-      const por = doc.porArquivo;
-      return (por && typeof por === "object" && Object.keys(por).length) || (doc.contas && Object.keys(doc.contas).length);
-    });
-    if (jaTem) return;
     const fx = window.firebaseCollections;
     const db = window.firebaseDb;
     if (!fx || !db || typeof fx.query !== "function" || typeof fx.where !== "function") return;
@@ -2110,7 +2101,14 @@ const OrcamentoDfcApp = {
       };
     });
     if (!Object.keys(nuvem).length) return;
-    app.forecasts = nuvem;
+    app.forecasts = app.forecasts || {};
+    Object.keys(nuvem).forEach((ym) => {
+      const local = app.forecasts[ym];
+      const novo = nuvem[ym];
+      const localEm = local && local.em ? String(local.em) : "";
+      const novoEm = novo && novo.em ? String(novo.em) : "";
+      if (!local || (novoEm && novoEm >= localEm)) app.forecasts[ym] = novo;
+    });
     if (typeof app.normalizarForecastsMemoria === "function") app.normalizarForecastsMemoria();
     if (typeof app.gravarForecastLocal === "function") app.gravarForecastLocal();
   },
@@ -3300,10 +3298,21 @@ const OrcamentoDfcApp = {
     const corte = this.inicioForecast();
     const extras = (this.varRs ? `<th class="orc-dfc-vcol">Var R$</th>` : "") + (this.varPct ? `<th class="orc-dfc-vcol">Var %</th>` : "");
     const v1xv2 = this.modoV1xV2();
-    const h26 = this.MESES.map((m, i) => `<th${i === 0 ? " class=\"orc-dfc-sep\"" : ""} title="${v1xv2 ? "2027 · V1" : (i >= corte ? "Previsão de 2026" : "Realizado de 2026")}">${m}</th>`).join("") + `<th class="orc-dfc-sep">Total</th>`;
+    const h26 = this.MESES.map((m, i) => {
+      const fc = !v1xv2 && i >= corte;
+      const cls = [i === 0 ? "orc-dfc-sep" : "", fc ? "orc-dfc-fc" : (v1xv2 ? "" : "orc-dfc-real")].filter(Boolean).join(" ");
+      const sub = v1xv2 ? "" : `<small>${fc ? "Forecast" : "Realizado"}</small>`;
+      const title = v1xv2 ? "2027 · V1" : (fc ? "Forecast de 2026" : "Realizado de 2026");
+      return `<th class="${cls}" title="${title}">${m}${sub}</th>`;
+    }).join("") + `<th class="orc-dfc-sep">Total</th>`;
     const h27 = this.MESES.map((m, i) => `<th${i === 0 ? " class=\"orc-dfc-sep\"" : ""}>${m}</th>${extras}`).join("") + `<th class="orc-dfc-sep">Total</th>${extras}`;
     const rotulo27 = this.usaV2() ? "2027 · V2" : (this._v2 ? "2027 · V1" : "2027");
-    const h1 = `<th colspan="13" class="orc-dfc-mes">${v1xv2 ? "2027 · V1" : "2026"}</th><th colspan="${13 * (1 + this.colsVar())}" class="orc-dfc-mes is-alt">${rotulo27}</th>`;
+    const nReal = v1xv2 ? 0 : Math.max(0, Math.min(12, corte));
+    const nFc = v1xv2 ? 0 : 12 - nReal;
+    const hEsq = v1xv2
+      ? `<th colspan="13" class="orc-dfc-mes">2027 · V1</th>`
+      : `${nReal ? `<th colspan="${nReal}" class="orc-dfc-mes orc-dfc-mes-real">2026 · Realizado</th>` : ""}${nFc ? `<th colspan="${nFc}" class="orc-dfc-mes orc-dfc-mes-fc">2026 · Forecast</th>` : ""}<th class="orc-dfc-mes">Total</th>`;
+    const h1 = `${hEsq}<th colspan="${13 * (1 + this.colsVar())}" class="orc-dfc-mes is-alt">${rotulo27}</th>`;
     const h2 = h26 + h27;
     const trs = rows.map((r) => {
       const cls = [
@@ -3328,8 +3337,9 @@ const OrcamentoDfcApp = {
         const marca = chave ? ` data-orc-2026="${this.esc(chave)}"` : "";
         const neg = real < -0.005 ? " orc-dfc-neg" : "";
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        const titulo = (v1xv2 ? "V1 " : (i >= corte ? "Previsão " : "Realizado ")) + this.money(real);
-        return `<td class="${(sep + neg + abre).trim()}"${marca} title="${this.esc(titulo + (chave ? " · Ver lançamentos" : ""))}">${this.money(real)}</td>`;
+        const fc = !v1xv2 && i >= corte ? " orc-dfc-fc" : "";
+        const titulo = (v1xv2 ? "V1 " : (i >= corte ? "Forecast " : "Realizado ")) + this.money(real);
+        return `<td class="${(sep + neg + abre + fc).trim()}"${marca} title="${this.esc(titulo + (chave ? " · Ver lançamentos" : ""))}">${this.money(real)}</td>`;
       }).join("");
       const baseTotal = Number(v1xv2 ? r.cmpTotal : r.baseTotal) || 0;
       const ref = this.refLinha(r);
@@ -3815,7 +3825,7 @@ const OrcamentoDfcApp = {
     const corte = this.inicioForecast();
     const meses = this.MESES;
     const colunas = ["Conta"];
-    meses.forEach((m, i) => colunas.push(m + "/26" + (i >= corte ? " prev" : "")));
+    meses.forEach((m, i) => colunas.push(m + "/26" + (i >= corte ? " forecast" : " realizado")));
     colunas.push("Total 2026");
     meses.forEach((m) => {
       colunas.push(m + "/27");

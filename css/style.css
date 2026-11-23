@@ -11635,7 +11635,12 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .orc-dfc-table tbody tr:hover > td,
 .orc-dfc-table.orc-dfc-cmp tbody tr:hover > td:first-child { background: #d1fae5; box-shadow: none; }
 .orc-dfc-table.orc-dfc-cmp thead tr:first-child th { top: 0; height: 32px; font-size: 12px; }
-.orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th { top: 32px; height: 28px; font-size: 11px; font-weight: 700; background: #0c3d28; letter-spacing: 0.01em; }
+.orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th { top: 32px; height: 36px; font-size: 11px; font-weight: 700; background: #0c3d28; letter-spacing: 0.01em; }
+.orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th small { display: block; font-size: 8px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.1; color: #bbf7d0; }
+.orc-dfc-table.orc-dfc-cmp thead tr:first-child th.orc-dfc-mes-fc,
+.orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th.orc-dfc-fc { background: #b45309; color: #fff; }
+.orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th.orc-dfc-fc small { color: #ffedd5; }
+.orc-dfc-table.orc-dfc-cmp td.orc-dfc-fc { box-shadow: inset 0 0 0 999px rgba(245, 158, 11, 0.18); }
 .orc-dfc-table.orc-dfc-cmp thead tr:first-child th.orc-dfc-mes { border-left: 3px solid #d7ebe0; }
 .orc-dfc-table.orc-dfc-cmp thead tr:first-child th.is-alt { background: #0a3a28; }
 .orc-dfc-table.orc-dfc-cmp td.orc-dfc-abre { cursor: pointer; }
