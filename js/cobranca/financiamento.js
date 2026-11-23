@@ -1224,7 +1224,16 @@ const FinanciamentoApp = {
   guardarPendentes(stageId, files) {
     this._pendentes = this._pendentes || {};
     const atual = this._pendentes[stageId] || [];
-    this._pendentes[stageId] = atual.concat(files || []);
+    const chave = (f) => [f && f.name, f && f.size, f && f.lastModified].join("|");
+    const tem = new Set(atual.map(chave));
+    const novos = [];
+    (files || []).forEach((f) => {
+      const k = chave(f);
+      if (!f || tem.has(k)) return;
+      tem.add(k);
+      novos.push(f);
+    });
+    this._pendentes[stageId] = atual.concat(novos);
     this.pintarPendentes(stageId);
   },
 
@@ -1300,6 +1309,8 @@ const FinanciamentoApp = {
     if (st) st.textContent = "";
     const restam = [];
     let falha = "";
+    let enviados = 0;
+    let repetidos = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
@@ -1319,6 +1330,11 @@ const FinanciamentoApp = {
           },
           context: "financiamento"
         });
+        if (resp && resp.already) {
+          repetidos++;
+          continue;
+        }
+        enviados++;
         proc.anexos = proc.anexos || {};
         const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
         lista.push({
@@ -1343,6 +1359,8 @@ const FinanciamentoApp = {
     const st2 = document.getElementById("fin-st-" + stageId);
     const btn2 = document.getElementById("fin-env-" + stageId);
     if (falha && st2) st2.textContent = falha;
+    else if (st2 && repetidos && enviados) st2.textContent = "Enviei " + enviados + ". " + repetidos + " cópia(s) não foram de novo: o arquivo já estava na unidade.";
+    else if (st2 && repetidos) st2.textContent = "O arquivo já está na unidade. Não enviei outra cópia.";
     if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
     return !restam.length;
   },

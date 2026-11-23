@@ -5187,6 +5187,7 @@ const AnexosApp = {
         apiUrl = anexosApiUrl(`/sienge-proxy/units/${AnexosState.selectedUnidade}/attachments?description=${encodeURIComponent(descricaoSienge)}`);
       }
 
+      let reservouUnidade = false;
       try {
         // Se o arquivo foi importado do contrato, buscar o binário real antes de enviar
         let fileBlob = fileObj.file;
@@ -5217,6 +5218,21 @@ const AnexosApp = {
            }
         }
 
+        let jaNaUnidade = false;
+        if (destinoAPI !== "Cliente") {
+          const reserva = await anexosReservarEnvioUnidade(AnexosState.selectedUnidade, nomeFinalArquivo, {
+            costCenterId: cc,
+            contractId: AnexosState.activeContract && AnexosState.activeContract.id,
+            tag: tagLabel
+          });
+          if (reserva !== "enviar") jaNaUnidade = true;
+          else reservouUnidade = true;
+        }
+        if (jaNaUnidade) {
+          sentFiles++;
+          const summaryEl = document.getElementById("upload-summary");
+          if (summaryEl) summaryEl.innerHTML += `<div style="color: var(--color-text-muted); margin-bottom: 4px;">Já estava na unidade. Não enviei outra cópia de <strong>${nomeFinalArquivo}</strong>.</div>`;
+        } else {
         document.getElementById('upload-status-text').innerText = destinoAPI === 'Cliente'
           ? `Enviando para cliente ${targetCustId}...`
           : "Enviando arquivo...";
@@ -5340,8 +5356,10 @@ const AnexosApp = {
             AnexosState.mapaMeta[uid].sentTags = [...new Set([...prev, String(tagU || tagLabel).toUpperCase()])];
           }
         }
+        }
 
       } catch (err) {
+        if (reservouUnidade) anexosSoltarEnvioUnidade(AnexosState.selectedUnidade, nomeFinalArquivo);
         failedFileIds.add(fileObj.id);
         fileObj.status = 'Erro: ' + err.message;
         const summaryEl = document.getElementById('upload-summary');
@@ -5656,6 +5674,66 @@ async function anexosFindSiengeUnitId(sale, costCenterId, unitName) {
   throw new Error("Unidade não encontrada no Sienge.");
 }
 
+/* Um clique com o mesmo arquivo várias vezes na lista, ou um segundo envio no mesmo dia,
+   postava de novo no Sienge. A auditoria às vezes só ficava com um dos envios. */
+const anexosEnvioUnidade = new Set();
+
+function anexosChaveEnvioUnidade(unitId, fileName) {
+  return String(unitId || "") + "|" + anexosFoldTag(fileName);
+}
+
+async function anexosUnidadeTemArquivo(unitId, fileName) {
+  const alvo = anexosFoldTag(fileName);
+  if (!unitId || !alvo) return null;
+  try {
+    const auth = (typeof getBasicAuthHeader === "function") ? getBasicAuthHeader() : "";
+    const res = await fetch(anexosApiUrl("/sienge-proxy/units/" + encodeURIComponent(unitId) + "/attachments?limit=200&offset=0"), {
+      headers: { Authorization: auth, Accept: "application/json" },
+      cache: "no-store"
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const rows = Array.isArray(data) ? data : (data.results || data.data || data.attachments || []);
+    if (!Array.isArray(rows)) return null;
+    if (!rows.length) return "vazio";
+    return rows.some((a) => anexosFoldTag(a && (a.name || a.fileName || a.filename)) === alvo) ? "sim" : "nao";
+  } catch (e) {
+    return null;
+  }
+}
+
+async function anexosMapaTemArquivo(cc, contractId, tag, fileName) {
+  const id = String(contractId || "").trim();
+  const nome = anexosFoldTag(fileName);
+  if (!cc || !id || !nome) return false;
+  let byKey = AnexosState.mapaEnvios;
+  if (!byKey || typeof byKey !== "object" || !Object.keys(byKey).length) {
+    try { byKey = await anexosLoadMapaEnvios(cc); } catch (e) { byKey = null; }
+  }
+  if (!byKey) return false;
+  const tagChave = String(tag || "").toUpperCase().split("-")[0].trim() || String(tag || "");
+  const rec = byKey[anexosEnvioKey(id, tagChave)];
+  return !!(rec && rec.fileName && anexosFoldTag(rec.fileName) === nome);
+}
+
+/* "enviar" reserva o nome. "ja" não pode postar, e quem chamou não solta a reserva. */
+async function anexosReservarEnvioUnidade(unitId, fileName, ctx) {
+  const chave = anexosChaveEnvioUnidade(unitId, fileName);
+  if (anexosEnvioUnidade.has(chave)) return "ja";
+  anexosEnvioUnidade.add(chave);
+  const o = ctx || {};
+  const tem = await anexosUnidadeTemArquivo(unitId, fileName);
+  if (tem === "sim") return "ja";
+  if (tem === "nao") return "enviar";
+  const noMapa = await anexosMapaTemArquivo(o.costCenterId, o.contractId, o.tag, fileName);
+  if (noMapa) return "ja";
+  return "enviar";
+}
+
+function anexosSoltarEnvioUnidade(unitId, fileName) {
+  anexosEnvioUnidade.delete(anexosChaveEnvioUnidade(unitId, fileName));
+}
+
 window.anexosUploadUnitAttachment = async function(opts) {
   const o = opts || {};
   const file = o.file;
@@ -5697,21 +5775,36 @@ window.anexosUploadUnitAttachment = async function(opts) {
   const nomeFinalArquivo = anexosSafeFileName(`${cc} ${unitNameStr} - ${tag}${dataSuffix}.${extFinal}`);
   const descricaoSienge = `${dataIsoDot} - ${tag}`.replace(/\s+/g, " ").trim();
   const apiUrl = anexosApiUrl(`/sienge-proxy/units/${encodeURIComponent(siengeUnitId)}/attachments?description=${encodeURIComponent(descricaoSienge)}`);
-  const multipart = await anexosMultipartBody(file, nomeFinalArquivo);
+  const reserva = await anexosReservarEnvioUnidade(siengeUnitId, nomeFinalArquivo, {
+    costCenterId: cc,
+    contractId: sale.id || sale.contractId || sale.receivableBillId,
+    tag: tag
+  });
+  if (reserva !== "enviar") {
+    return { ok: true, already: true, fileName: nomeFinalArquivo, description: descricaoSienge, unitId: siengeUnitId, tag: tag, dateIso: `${y}-${m}-${d}` };
+  }
   const auth = (typeof getBasicAuthHeader === "function") ? getBasicAuthHeader() : "";
-  const res = multipart.body.length > ANEXOS_LIMITE_PROXY
-    ? await anexosEnviarPeloStorage(apiUrl, file, multipart.fileName)
-    : await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        Authorization: auth,
-        Accept: "application/json",
-        "Content-Type": multipart.contentType
-      },
-      body: multipart.body
-    });
+  let res;
+  try {
+    const multipart = await anexosMultipartBody(file, nomeFinalArquivo);
+    res = multipart.body.length > ANEXOS_LIMITE_PROXY
+      ? await anexosEnviarPeloStorage(apiUrl, file, multipart.fileName)
+      : await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          Authorization: auth,
+          Accept: "application/json",
+          "Content-Type": multipart.contentType
+        },
+        body: multipart.body
+      });
+  } catch (eRede) {
+    anexosSoltarEnvioUnidade(siengeUnitId, nomeFinalArquivo);
+    throw eRede;
+  }
   const context = o.context || "unidade";
   if (!res.ok) {
+    anexosSoltarEnvioUnidade(siengeUnitId, nomeFinalArquivo);
     if (typeof window.logCrmAudit === "function") {
       window.logCrmAudit({
         action: "ANEXO_ERRO",
@@ -5728,11 +5821,14 @@ window.anexosUploadUnitAttachment = async function(opts) {
     throw new Error("HTTP " + res.status);
   }
   if (typeof window.logCrmAudit === "function") {
+    const rotuloCliente = (window.AuditService && typeof AuditService.customerLabel === "function" && sale.customerId)
+      ? AuditService.customerLabel(sale.customerId) : "";
     window.logCrmAudit({
       action: "ANEXO_ENVIADO",
       module: "GED / Anexos",
       status: "ok",
       customerId: sale.customerId || "",
+      customerLabel: [rotuloCliente, unitName].filter(Boolean).join(" · "),
       enterpriseId: cc,
       unitId: siengeUnitId,
       unitName: unitName,

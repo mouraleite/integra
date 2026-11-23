@@ -1720,30 +1720,30 @@ const GerarPagamentoApp = {
     return "";
   },
 
-  /** Boleto cujo beneficiário não é o prestador da nota: o operador ajusta no Sienge e libera aqui. */
-  async alertarBeneficiarioBoleto(check, payment, nota, billId) {
+  /** Boleto cujo beneficiário não é o prestador da nota nem o credor do título. */
+  async alertarBeneficiarioBoleto(check, payment, nota, billId, credorDoc) {
     if (!check || !window.BoletoCheck || !BoletoCheck.ehBoleto(payment)) return;
     if (payment.kind === "boleto-concessionaria" || payment.kind === "boleto-tax") return;
     const prestador = nota && (nota.cnpjPrestador || "");
-    const docsNota = new Set(((nota && nota.cnpjs) || []).map((d) => BoletoCheck.digits(d)).filter((d) => d.length >= 11));
-    if (prestador) docsNota.add(BoletoCheck.digits(prestador));
-    if (!docsNota.size && !(nota && nota.cnpjPrestador)) return;
+    const credor = BoletoCheck.digits(credorDoc || "");
+    if (!prestador && (credor.length !== 11 && credor.length !== 14)) return;
     const prest = BoletoCheck.digits(prestador);
-    const bate = (doc) => {
-      const n = BoletoCheck.digits(doc);
-      if (n.length !== 11 && n.length !== 14) return false;
-      return prest ? n === prest : docsNota.has(n);
-    };
     let benef = this.docBeneficiarioPagamento(payment);
-    if (!bate(benef) && window.NotaFiscalCheck && typeof NotaFiscalCheck.cnpjBeneficiarioBoleto === "function") {
+    if (window.NotaFiscalCheck && typeof NotaFiscalCheck.cnpjBeneficiarioBoleto === "function") {
       let doPdf = "";
       try { doPdf = await NotaFiscalCheck.cnpjBeneficiarioBoleto(billId); } catch (e) { doPdf = ""; }
-      if (bate(doPdf) || !benef) benef = doPdf;
+      if (!benef) benef = doPdf;
     }
     if (!benef || (benef.length !== 11 && benef.length !== 14)) return;
-    const igual = bate(benef);
-    if (igual) return;
-    const msg = `Beneficiário do boleto (${BoletoCheck.docFmt(benef)}) é diferente do prestador da nota. Informe no Sienge que o beneficiário foi alterado e clique em Liberar.`;
+    const rel = (a, b) => (window.NotaFiscalCheck && typeof NotaFiscalCheck.relacaoCnpj === "function")
+      ? NotaFiscalCheck.relacaoCnpj(a, b)
+      : (a && b && a === b ? "igual" : "diferente");
+    const partes = [];
+    if ((prest.length === 11 || prest.length === 14) && rel(benef, prest) === "diferente") partes.push("prestador da nota (" + BoletoCheck.docFmt(prest) + ")");
+    if ((credor.length === 11 || credor.length === 14) && rel(benef, credor) === "diferente" && credor !== prest) partes.push("credor do título (" + BoletoCheck.docFmt(credor) + ")");
+    if ((credor.length === 11 || credor.length === 14) && rel(benef, credor) === "diferente" && credor === prest) partes.push("credor do título, que é o prestador da nota (" + BoletoCheck.docFmt(credor) + ")");
+    if (!partes.length) return;
+    const msg = "Beneficiário do boleto (" + BoletoCheck.docFmt(benef) + ") é diferente do " + partes.join(" e do ") + ". Informe no Sienge que o beneficiário foi alterado e clique em Liberar.";
     check.avisos = check.avisos || [];
     if (!check.avisos.includes(msg)) check.avisos.push(msg);
     check.beneficiarioDivergente = true;
@@ -1942,7 +1942,7 @@ const GerarPagamentoApp = {
           marcarLimite(msg);
           return { nivel: "erro", falhaConsulta: true, resumo: msg, erros: [msg], avisos: [], infos: [] };
         };
-        const fiscalP = servico ? NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor }).catch(falhaFiscal) : null;
+        const fiscalP = servico ? NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor, companyId: r.companyId }).catch(falhaFiscal) : null;
         const credorP = parecePix ? this.carregarCredor(r.credorId) : null;
         const notaP = pareceBoleto && !servico && NF ? NF.lerNota(r.titulo).catch(() => null) : null;
         let payment;
@@ -1971,7 +1971,7 @@ const GerarPagamentoApp = {
         if (gen !== s.gen) return;
         const boletoMenor = check.valorBoleto != null && check.valorBoleto > 0 && check.valorBoleto < t.aPagar - 0.01;
         if (!fiscal && NF && !NF.semRetencao(r.docId, r.docNome) && (NF.ehServico(r.docId, r.docNome) || boletoMenor)) {
-          fiscal = await NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor }).catch(falhaFiscal);
+          fiscal = await NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor, companyId: r.companyId }).catch(falhaFiscal);
           if (gen !== s.gen) return;
         }
         if (fiscal && fiscal.retidoPagamento > 0.009) check = BoletoCheck.validar(payment, Object.assign({}, ctx, { retido: fiscal.retidoPagamento }));
@@ -1981,7 +1981,7 @@ const GerarPagamentoApp = {
           notaBenef = notaP ? await notaP : await NF.lerNota(r.titulo).catch(() => null);
           if (gen !== s.gen) return;
         }
-        await this.alertarBeneficiarioBoleto(check, payment, notaBenef, r.titulo);
+        await this.alertarBeneficiarioBoleto(check, payment, notaBenef, r.titulo, fiscal && fiscal.credorDoc);
         if (gen !== s.gen) return;
         s.pagInfo[chave] = { payment, check, fiscal, tipoSienge: forma.tipo || "", falha: !!(check && check.falhaConsulta) };
         const soAntecipado = (check.antecipado || check.vencimentoPosterior) && check.nivel === "aviso" && !(check.erros || []).length
