@@ -2613,6 +2613,105 @@ const OrcamentoDfcApp = {
     return { y26: y26, y27: y27 };
   },
 
+  /* Janeiro parte do saldo final informado e cada mês seguinte soma a variação de caixa. */
+  serieDe(variacoes, abertura) {
+    const out = [];
+    const vars = variacoes || [];
+    for (let i = 0; i < 12; i++) {
+      const ini = i === 0 ? (Number(abertura) || 0) : out[i - 1].fim;
+      const variacao = Number(vars[i]) || 0;
+      out.push({ ini: ini, fim: ini + variacao, variacao: variacao, previsto: true });
+    }
+    return out;
+  },
+
+  /* No V1 x V2 as duas colunas de 2027 começam no mesmo saldo final de 2026. */
+  parSaldos() {
+    const serie = this.serieSaldos();
+    const fechamento = serie.y26[11].fim;
+    if (!this.modoV1xV2()) return { esq: serie.y26, dir: serie.y27, v1xv2: false, anoEsq: 2026, anoDir: 2027 };
+    const g12 = (this._linhasDfc || []).find((r) => r.id === "g_12") || {};
+    return {
+      esq: this.serieDe(g12.cmp, fechamento),
+      dir: this.serieDe(g12.months, fechamento),
+      v1xv2: true,
+      anoEsq: 2027,
+      anoDir: 2027
+    };
+  },
+
+  garantirCdi() {
+    if (this._cdiPronto || this._cdiPedido) return;
+    this._cdiPedido = this.buscarCdi();
+  },
+
+  async buscarCdi() {
+    const hoje = new Date();
+    const dataFinal = String(hoje.getDate()).padStart(2, "0") + "/" + String(hoje.getMonth() + 1).padStart(2, "0") + "/" + hoje.getFullYear();
+    const q = "code=4391&dataInicial=" + encodeURIComponent("01/01/2025") + "&dataFinal=" + encodeURIComponent(dataFinal);
+    const urls = [
+      "/api/bcb-sgs?" + q,
+      "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4391/dados?formato=json&dataInicial=" + encodeURIComponent("01/01/2025") + "&dataFinal=" + encodeURIComponent(dataFinal)
+    ];
+    const mapa = {};
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const res = await fetch(urls[i]);
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (!Array.isArray(json) || !json.length) continue;
+        json.forEach((r) => {
+          const s = String((r && r.data) || "").trim();
+          const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          const iso = s.match(/^(\d{4})-(\d{1,2})/);
+          const key = br
+            ? (br[3] + "-" + String(br[2]).padStart(2, "0"))
+            : (iso ? (iso[1] + "-" + String(iso[2]).padStart(2, "0")) : "");
+          if (!key) return;
+          const n = Number(String(r.valor == null ? "" : r.valor).replace(",", ".").replace("%", ""));
+          if (Number.isFinite(n) && n > 0) mapa[key] = n;
+        });
+        break;
+      } catch (e) {}
+    }
+    const chaves = Object.keys(mapa).sort();
+    this._cdiMes = mapa;
+    this._cdiUltimoMes = chaves.length ? chaves[chaves.length - 1] : "";
+    this._cdiUltimo = this._cdiUltimoMes ? mapa[this._cdiUltimoMes] : 0;
+    this._cdiPronto = true;
+    this._cdiPedido = null;
+    this.atualizarSaldosDom();
+  },
+
+  cdiDoMes(ano, i) {
+    const key = String(ano) + "-" + String(i + 1).padStart(2, "0");
+    const mapa = this._cdiMes || {};
+    const n = Number(mapa[key]);
+    if (n > 0) return { taxa: n, projetado: false, ref: key };
+    if (Number(this._cdiUltimo) > 0) return { taxa: Number(this._cdiUltimo), projetado: true, ref: this._cdiUltimoMes || "" };
+    return null;
+  },
+
+  /* Rendimento previsto: 80% do CDI do mês sobre o saldo inicial. Saldo negativo não rende. */
+  rendimentoAplicacao(saldo, ano, i) {
+    const base = Number(saldo) || 0;
+    if (base <= 0.005) return { valor: 0, taxa: 0, projetado: false, ref: "", base: base };
+    const cdi = this.cdiDoMes(ano, i);
+    if (!cdi) return { valor: null, taxa: 0, projetado: false, ref: "", base: base };
+    return { valor: base * 0.8 * (cdi.taxa / 100), taxa: cdi.taxa, projetado: cdi.projetado, ref: cdi.ref, base: base };
+  },
+
+  textoCdi(info) {
+    if (!info || info.valor == null) return "CDI do mês ainda não chegou do Banco Central.";
+    const taxa = (Number(info.taxa) || 0).toFixed(2).replace(".", ",");
+    const ref = String(info.ref || "");
+    const pedaco = ref.length >= 7 ? (ref.slice(5, 7) + "/" + ref.slice(0, 4)) : "";
+    const origem = info.projetado
+      ? ("CDI de " + (pedaco || "o último mês divulgado") + " projetado, " + taxa + "% a.m.")
+      : ("CDI de " + (pedaco || "o mês") + ", " + taxa + "% a.m.");
+    return "80% de " + origem + " sobre o saldo inicial " + this.money(info.base) + ".";
+  },
+
   colsVar() {
     return (this.varRs ? 1 : 0) + (this.varPct ? 1 : 0);
   },
@@ -2642,7 +2741,6 @@ const OrcamentoDfcApp = {
   },
 
   htmlSaldos() {
-    if (this.modoV1xV2()) return "";
     const span = 1 + this.MESES.length + 1 + (this.MESES.length + 1) * (1 + this.colsVar());
     if (this._saldoEstado === "lendo") {
       const n = Number(this._saldoFeitos) || 0;
@@ -2657,36 +2755,51 @@ const OrcamentoDfcApp = {
       return `<tr class="orc-dfc-saldo"><td colspan="${span}">O balancete não devolveu o saldo de caixa no fim do mês.</td></tr>`;
     }
     if (this._saldoEstado !== "ok") return "";
-    const serie = this.serieSaldos();
+    const par = this.parSaldos();
     const neg = (v) => (Number(v) < -0.005 ? " orc-dfc-neg" : "");
     const linha = (nome, campo, abre) => {
-      const c26 = serie.y26.map((item, i) => {
+      const c26 = par.esq.map((item, i) => {
         const valor = item[campo];
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        if (abre && !item.previsto) {
+        if (abre && !par.v1xv2 && !item.previsto) {
           const on = this.mesSaldo() === i ? " is-on" : "";
           return `<td class="${sep.trim()}${neg(valor)}"><button type="button" class="orc-dfc-saldo-btn${on}" data-saldo-mes="${i}">${this.money(valor)}</button></td>`;
         }
         return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>`;
       }).join("");
-      const a = serie.y26[0].ini;
-      const b = serie.y26[11].fim;
+      const a = par.esq[0].ini;
+      const b = par.esq[11].fim;
       const tot = campo === "ini" ? a : (campo === "fim" ? b : b - a);
-      const a27 = serie.y27[0].ini;
-      const b27 = serie.y27[11].fim;
+      const a27 = par.dir[0].ini;
+      const b27 = par.dir[11].fim;
       const tot27 = campo === "ini" ? a27 : (campo === "fim" ? b27 : b27 - a27);
-      const c27 = serie.y27.map((item, i) => {
+      const c27 = par.dir.map((item, i) => {
         const valor = item[campo];
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>${this.htmlVars(valor, serie.y26[i][campo])}`;
-      }).join("") + `<td class="orc-dfc-sep${neg(tot27)}">${this.money(tot27)}</td>${this.htmlVars(tot27, tot)}`;
-      const label = abre
+        return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>${this.htmlVars(valor, par.esq[i][campo], par.v1xv2 ? "v1" : "")}`;
+      }).join("") + `<td class="orc-dfc-sep${neg(tot27)}">${this.money(tot27)}</td>${this.htmlVars(tot27, tot, par.v1xv2 ? "v1" : "")}`;
+      const label = abre && !par.v1xv2
         ? `<button type="button" class="orc-dfc-saldo-abre" data-saldo-abrir="1">Saldo inicial</button>`
-        : nome;
+        : (abre ? "Saldo inicial" : nome);
       return `<tr class="orc-dfc-saldo"><td>${label}</td>${c26}<td class="orc-dfc-sep${neg(tot)}">${this.money(tot)}</td>${c27}</tr>`;
     };
+    const celulaAplic = (info, sep) => {
+      const valor = info && info.valor;
+      const vazio = valor == null;
+      const n = Number(valor) || 0;
+      return `<td class="${sep}${n < -0.005 ? " orc-dfc-neg" : ""}" title="${this.esc(this.textoCdi(info))}">${vazio ? "—" : this.money(n)}</td>`;
+    };
+    const ladoAplic = (serie, ano) => serie.map((item, i) => this.rendimentoAplicacao(item.ini, ano, i));
+    const esqA = ladoAplic(par.esq, par.anoEsq);
+    const dirA = ladoAplic(par.dir, par.anoDir);
+    const somaA = (lista) => lista.reduce((s, info) => s + (Number(info && info.valor) || 0), 0);
+    const totE = somaA(esqA);
+    const totD = somaA(dirA);
+    const cEsq = esqA.map((info, i) => celulaAplic(info, i === 0 ? "orc-dfc-sep" : "")).join("");
+    const cDir = dirA.map((info, i) => celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + this.htmlVars(info && info.valor, esqA[i] && esqA[i].valor, par.v1xv2 ? "v1" : "")).join("");
+    const aplic = `<tr class="orc-dfc-aplic"><td title="80% do CDI sobre o saldo inicial de cada mês. O mês sem CDI publicado usa o último divulgado.">Previsão de aplicação</td>${cEsq}<td class="orc-dfc-sep" title="Soma da previsão">${this.money(totE)}</td>${cDir}<td class="orc-dfc-sep" title="Soma da previsão">${this.money(totD)}</td>${this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "")}</tr>`;
     const folga = `<tr class="orc-dfc-saldo-gap"><td colspan="${span}"></td></tr>`;
-    return folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
+    return aplic + folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
   },
 
   quadroSaldos() {
@@ -2771,7 +2884,7 @@ const OrcamentoDfcApp = {
 
   textoLead() {
     const comum = "O saldo final de 2026 é o saldo inicial de janeiro de 2027, e cada mês seguinte parte do saldo final do anterior. " + this.textoCorte() + " O realizado vem do caixa e banco.";
-    if (this.modoV1xV2()) return "V1 x V2: à esquerda a V1 de 2027 (base anterior), à direita a V2 (arquivo novo). Ligue Variação R$ ou % para ver, mês a mês, quanto a V2 muda em relação à V1. O saldo de caixa fica na V1 e na V2 separadas.";
+    if (this.modoV1xV2()) return "V1 x V2: à esquerda a V1 de 2027, à direita a V2. As duas começam janeiro com o saldo final de 2026. A previsão de aplicação, depois da variação de caixa, é 80% do CDI sobre o saldo inicial de cada mês. Ligue Variação R$ ou % para ver quanto a V2 muda em relação à V1.";
     if (this.comparando()) return "A V1 é a base de 2027 que já estava carregada. A V2 é o arquivo novo. A variação de cada mês de 2027 compara a V2 com a V1. " + comum;
     if (this._v2 && this.versao === "1") return "Você está na V1, a base anterior de 2027. A variação de cada mês de 2027 compara com o mesmo mês de 2026. " + comum;
     return "Janeiro a dezembro de 2026, o total, e depois janeiro a dezembro de 2027. A variação ao lado de cada mês de 2027 compara com o mesmo mês de 2026. " + comum;
@@ -3260,6 +3373,7 @@ const OrcamentoDfcApp = {
     });
     this.ligarSaldos(body);
     this.pedirSaldos();
+    this.garantirCdi();
     if (foraEl) {
       if (!fora.length) {
         foraEl.innerHTML = "";

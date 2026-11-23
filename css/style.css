@@ -11629,6 +11629,9 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .orc-dfc-table.orc-dfc-cmp thead th.orc-dfc-vcol { background: #164e3a; color: #fff; }
 .orc-dfc-table.orc-dfc-cmp thead tr:nth-child(2) th:first-child { min-width: 64px; width: 72px; max-width: 88px; left: auto; text-align: right; }
 .orc-dfc-table.orc-dfc-cmp td:first-child { min-width: 220px; width: auto; max-width: none; white-space: nowrap; overflow: visible; text-overflow: clip; background: #fff; }
+.orc-rep-versao-box { display: flex; align-items: flex-end; gap: 10px; min-width: 0; }
+.orc-rep-versao-box .ml-tabs { margin: 0; }
+.orc-rep-versao-arq { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 0.75rem; font-weight: 600; padding-bottom: 8px; }
 .orc-dfc-table tbody tr:hover > td,
 .orc-dfc-table.orc-dfc-cmp tbody tr:hover > td:first-child { background: #d1fae5; box-shadow: none; }
 .orc-dfc-table.orc-dfc-cmp thead tr:first-child th { top: 0; height: 32px; font-size: 12px; }
@@ -11688,6 +11691,8 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .orc-dfc-neg { color: #991b1b; }
 .orc-dfc-formula .orc-dfc-neg { color: #991b1b; }
 .orc-dfc-saldo-gap td { height: 18px; padding: 0; border: none; background: #fff; }
+.orc-dfc-table.orc-dfc-cmp tfoot tr.orc-dfc-aplic td,
+.orc-dfc-table.orc-dfc-cmp tfoot tr.orc-dfc-aplic td:first-child { background: #fef9c3; color: #713f12; font-weight: 700; font-size: 11px; }
 .orc-dfc-table.orc-dfc-cmp tfoot tr.orc-dfc-saldo td,
 .orc-dfc-table.orc-dfc-cmp tfoot tr.orc-dfc-saldo td:first-child { background: #eef2ff; color: #1e293b; font-weight: 600; font-size: 11px; }
 .orc-dfc-table.orc-dfc-cmp tfoot tr.orc-dfc-saldo td.orc-dfc-neg { color: #991b1b; }

@@ -1318,6 +1318,7 @@ const OrcamentoRepassesApp = {
   selectedCompanyIds: [],
   companyDropOpen: false,
   companyQuery: "",
+  versao: "",
   abaId: "",
   obraCode: "",
   visaoAracari: "terrenista",
@@ -1664,9 +1665,76 @@ const OrcamentoRepassesApp = {
       .sort((a, b) => String(a.partnerName || "").localeCompare(String(b.partnerName || ""), "pt-BR") || Number(a.companyId) - Number(b.companyId));
   },
 
+  versaoAtual() {
+    const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
+    if (dfc && typeof dfc.garantir === "function") {
+      try { dfc.garantir(); } catch (e) {}
+    }
+    const temV1 = !!(dfc && dfc._v1 && Array.isArray(dfc._v1.lines) && dfc._v1.lines.length);
+    const temV2 = !!(dfc && dfc._v2 && Array.isArray(dfc._v2.lines) && dfc._v2.lines.length);
+    if (!this.versao) {
+      try { this.versao = localStorage.getItem("crm_repasse_versao") || ""; } catch (e) { this.versao = ""; }
+    }
+    if (this.versao === "1" && temV1) return "1";
+    if (this.versao === "2" && temV2) return "2";
+    return temV2 ? "2" : "1";
+  },
+
+  packVersao() {
+    const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
+    if (dfc && typeof dfc.garantir === "function") {
+      try { dfc.garantir(); } catch (e) {}
+    }
+    const v = this.versaoAtual();
+    const pack = v === "2" ? (dfc && dfc._v2) : (dfc && dfc._v1);
+    return pack && Array.isArray(pack.lines) && pack.lines.length ? pack : null;
+  },
+
+  linhasVersao() {
+    const pack = this.packVersao();
+    if (pack) return pack.lines;
+    return OrcEst.linhas();
+  },
+
+  setVersao(v) {
+    const pedido = v === "1" ? "1" : "2";
+    const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
+    const pack = pedido === "2" ? (dfc && dfc._v2) : (dfc && dfc._v1);
+    if (!pack || !Array.isArray(pack.lines) || !pack.lines.length) return;
+    this.versao = pedido;
+    try { localStorage.setItem("crm_repasse_versao", this.versao); } catch (e) {}
+    this.paintVersao();
+    this.paintFiltro();
+    this.paintCorpo();
+  },
+
+  paintVersao() {
+    const box = document.getElementById("orc-rep-versao");
+    const nome = document.getElementById("orc-rep-versao-arq");
+    if (!box) return;
+    const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
+    if (dfc && typeof dfc.garantir === "function") {
+      try { dfc.garantir(); } catch (e) {}
+    }
+    const atual = this.versaoAtual();
+    const item = (id, rotulo, icon, pack) => {
+      const tem = !!(pack && Array.isArray(pack.lines) && pack.lines.length);
+      const on = atual === id;
+      const title = tem ? (pack.fileName || rotulo) : ("Não há " + rotulo + " carregada no DFC 2027.");
+      return `<button type="button" role="tab" class="ml-tab${on ? " is-active" : ""}${tem ? "" : " is-locked"}" data-rep-versao="${id}" aria-selected="${on ? "true" : "false"}"${tem ? "" : " disabled"} title="${OrcEst.esc(title)}"><i data-lucide="${icon}"></i> ${rotulo}</button>`;
+    };
+    box.innerHTML = item("1", "V1", "archive", dfc && dfc._v1) + item("2", "V2", "file-spreadsheet", dfc && dfc._v2);
+    box.querySelectorAll("[data-rep-versao]").forEach((btn) => {
+      btn.addEventListener("click", () => this.setVersao(btn.getAttribute("data-rep-versao")));
+    });
+    const pack = this.packVersao();
+    if (nome) nome.textContent = pack && pack.fileName ? pack.fileName : "";
+    if (window.lucide && lucide.createIcons) lucide.createIcons();
+  },
+
   linhasDaEmpresa(companyId) {
     const ids = new Set(this.selectedCompanyIds.map(String));
-    return OrcEst.linhas().filter((l) => {
+    return this.linhasVersao().filter((l) => {
       const emp = String(l.e || "");
       if (companyId) return emp === String(companyId);
       return !ids.size || ids.has(emp);
@@ -2117,7 +2185,12 @@ const OrcamentoRepassesApp = {
 
   empresasFiltro() {
     const map = new Map();
-    OrcEst.empresas().forEach((e) => map.set(String(e.id), e));
+    this.linhasVersao().forEach((l) => {
+      const id = String(l.e || "");
+      if (!id || map.has(id)) return;
+      const name = String(l.enome || "");
+      map.set(id, { id: id, name: name, label: id + " - " + OrcEst.norm(name) });
+    });
     OrcEst.parcerias().forEach((p) => {
       const id = String(p.companyId || "");
       if (!id || map.has(id)) return;
@@ -2133,6 +2206,10 @@ const OrcamentoRepassesApp = {
         <p class="orc-dfc-lead">Cada aba é uma prestação de contas. Na parceria, escolha a obra e marque os centros de custo. Na sociedade, o resultado geral de todos os centros gera a distribuição.</p>
         <div class="orc-dfc-tools">
           <div id="orc-rep-emp-box"></div>
+          <div class="orc-rep-versao-box">
+            <div class="ml-tabs" id="orc-rep-versao" role="tablist"></div>
+            <span class="orc-rep-versao-arq" id="orc-rep-versao-arq"></span>
+          </div>
           <button type="button" class="btn btn-excel" id="orc-rep-excel" title="Exportar a prestação de contas com o repasse por centro de custo">
             <i data-lucide="download" style="width:14px;height:14px;"></i> Exportar em Excel
           </button>
@@ -2140,6 +2217,7 @@ const OrcamentoRepassesApp = {
         <div id="orc-rep-body"></div>
       </div>`;
     this.paintFiltro();
+    this.paintVersao();
     this.paintCorpo();
     const excel = document.getElementById("orc-rep-excel");
     if (excel) excel.addEventListener("click", () => this.exportDistribuicao());
@@ -2267,7 +2345,7 @@ const OrcamentoRepassesApp = {
 
   htmlYpes() {
     if (!this.ypesQuerido() || !window.OrcamentoImpostosApp) return "";
-    const linhas = OrcEst.linhas().filter((l) => String(l.e) === "21");
+    const linhas = this.linhasVersao().filter((l) => String(l.e) === "21");
     if (!linhas.length) return "";
     const mapa = OrcamentoImpostosApp.calcular(linhas);
     const row = mapa["21"];
