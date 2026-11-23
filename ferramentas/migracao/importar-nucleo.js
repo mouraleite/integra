@@ -92,14 +92,18 @@ function montar(pasta, usuariosBanco) {
     return { nome: String(p.name).trim().toUpperCase(), id_legado: p.id, permissoes: perms };
   }), "nome");
   const usuarios = json(crmUsers.list, null) || json(g.crm_users, []) || [];
-  // Perfil usado por usuário mas ausente da lista de perfis: cria sem permissões (a FK exige).
+  // Perfil usado por usuário mas ausente da lista de perfis (a FK exige a linha): usa as permissões gravadas em
+  // crm_perms_<nome em minúsculas com _>, como o app faz ao resolver o perfil; sem elas, cria sem permissões.
   const nomesPerfis = new Set(saida.perfis.linhas.map((p) => p.nome));
   usuarios.forEach((u) => {
     const nome = String((u && u.profile_name) || "SEM PERFIL").trim().toUpperCase();
     if (!nomesPerfis.has(nome)) {
       nomesPerfis.add(nome);
-      saida.perfis.linhas.push({ nome, id_legado: null, permissoes: {} });
-      avisos.push("perfis: '" + nome + "' usado por usuário e ausente da lista de perfis (criado sem permissões)");
+      const idProvavel = nome.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, "_");
+      const perms = json(g["crm_perms_" + idProvavel], null);
+      saida.perfis.linhas.push({ nome, id_legado: perms ? idProvavel : null, permissoes: perms || {} });
+      avisos.push("perfis: '" + nome + "' usado por usuário e ausente da lista de perfis (" +
+        (perms ? "permissões de crm_perms_" + idProvavel : "criado sem permissões") + ")");
     }
   });
   const removidos = new Set((conf.find((c) => c.chave === "removedEmails").valor || []).map((e) => String(e).toLowerCase()));
