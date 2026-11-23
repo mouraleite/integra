@@ -455,7 +455,8 @@ async function principal() {
     if (!item || (so && !so.has(t))) continue;
     if (seco) {
       // Tamanho aproximado: lote grande demais para a API vira erro na gravação real.
-      const kb = Math.round(Buffer.byteLength(JSON.stringify(item.linhas)) / 1024);
+      // Linha a linha: caixa_movimentos_itens passa do limite de tamanho de uma string única no Node.
+      const kb = Math.round(item.linhas.reduce((s, l) => s + Buffer.byteLength(JSON.stringify(l)), 0) / 1024);
       console.log("[seco] " + t + ": " + item.linhas.length + " linhas (~" + kb + " KB)");
       continue;
     }

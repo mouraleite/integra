@@ -24,7 +24,7 @@ const carimbo = agora.toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/
 const SAIDA = path.resolve(arg("--saida") || path.join(RAIZ, "..", "integra-export", carimbo));
 const SO = arg("--so") ? arg("--so").split(",").map((s) => s.trim()).filter(Boolean) : null;
 const AMOSTRA = arg("--amostra") ? Number(arg("--amostra")) : null;
-const PAGINA = 500;
+const PAGINA = arg("--pagina") ? Number(arg("--pagina")) : 500;
 
 // ---------- config do Firebase antigo (o front não usa mais o firebase-config.js) ----------
 function lerConfigFirebase() {
@@ -144,7 +144,7 @@ async function exportarColecao(db, nome, perfil) {
       perfil.bytes += linha.length;
       perfil.maiorDoc = Math.max(perfil.maiorDoc, linha.length);
       registrar(perfil, data);
-      arq.write(linha + "\n");
+      if (!arq.write(linha + "\n")) await new Promise((r) => arq.once("drain", r));
     }
     if (snap.size < tamanho) break;
     ultimo = snap.docs[snap.docs.length - 1];

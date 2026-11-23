@@ -271,7 +271,7 @@ async function principal() {
     const tab = saida.usuarios;
     if (!so || so.has("perfis") || so.has("usuarios")) {
       for (const t of ["perfis", "usuarios"]) {
-        const r = await sb.from(t).upsert(saida[t].linhas, { onConflict: saida[t].conflito || "id" });
+        const r = await sb.from(t).upsert(saida[t].linhas, { onConflict: saida[t].conflito || "id", defaultToNull: false });
         if (r.error) throw new Error(t + ": " + r.error.message);
       }
     }
@@ -292,7 +292,7 @@ async function principal() {
     }
     for (let i = 0; i < linhas.length; i += 500) {
       const lote = linhas.slice(i, i + 500);
-      const r = await sb.from(t).upsert(lote, { onConflict: item.conflito || "id" });
+      const r = await sb.from(t).upsert(lote, { onConflict: item.conflito || "id", defaultToNull: false });
       if (r.error) throw new Error(t + " (lote " + i + "): " + r.error.message);
     }
     console.log(t + ": " + linhas.length + " linhas");
