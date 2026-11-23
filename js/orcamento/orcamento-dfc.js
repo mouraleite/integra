@@ -3119,6 +3119,9 @@ const OrcamentoDfcApp = {
       if (foraEl) foraEl.innerHTML = "";
       return;
     }
+    const rolagem = body.querySelector(".orc-dfc-scroll");
+    const keepTop = rolagem ? rolagem.scrollTop : 0;
+    const keepLeft = rolagem ? rolagem.scrollLeft : 0;
     const { rows, fora } = this.visao === "2" ? this.montarVisao2() : this.montar();
     this._linhasDfc = rows;
     const corte = this._corte == null ? this.corteForecast() : this._corte;
@@ -3195,6 +3198,16 @@ const OrcamentoDfcApp = {
         </table>
       </div>
       <div id="orc-dfc-saldos">${this.quadroSaldos()}</div>`;
+    const nova = body.querySelector(".orc-dfc-scroll");
+    if (nova) {
+      const devolver = () => {
+        if (!nova.isConnected) return;
+        nova.scrollTop = keepTop;
+        nova.scrollLeft = keepLeft;
+      };
+      devolver();
+      requestAnimationFrame(devolver);
+    }
     body.querySelectorAll("[data-dfc-id]").forEach((tr) => {
       tr.addEventListener("click", () => this.toggle(tr.getAttribute("data-dfc-id")));
     });
