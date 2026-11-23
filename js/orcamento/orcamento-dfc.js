@@ -2002,6 +2002,9 @@ const OrcamentoDfcApp = {
 
   render(root) {
     this.garantir();
+    this.selectedCompanyIds = ["1"];
+    this.varRs = false;
+    this.varPct = false;
     const src = this.origem();
     root.innerHTML = `
       <div class="orc-dfc-page">
@@ -2690,6 +2693,46 @@ const OrcamentoDfcApp = {
     return null;
   },
 
+  ehLinhaAplicacao(nome) {
+    const n = String(nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    if (/IR SOBRE APLIC|DESPESA FINANC|AMORTIZ/.test(n)) return false;
+    return /RENDIMENTO.*APLIC|APLICACAO FINANCEIRA|PREVISAO DE APLIC|SUGESTAO DE APLIC/.test(n);
+  },
+
+  /* Linha de aplicação que veio no arquivo do orçamento, já na visão filtrada. */
+  orcadoAplicacao() {
+    const meses = Array(12).fill(0);
+    const cmp = Array(12).fill(0);
+    let achou = false;
+    (this._linhasDfc || []).forEach((r) => {
+      if (!r || !r.isAccount || !this.ehLinhaAplicacao(r.name)) return;
+      achou = true;
+      (r.months || []).forEach((v, i) => { if (i < 12) meses[i] += Number(v) || 0; });
+      (r.cmp || []).forEach((v, i) => { if (i < 12) cmp[i] += Number(v) || 0; });
+    });
+    return achou ? { meses: meses, cmp: cmp } : null;
+  },
+
+  textoConferenciaAplicacao(sugestao, orcado, rotulo) {
+    if (!orcado) return { alerta: false, texto: "Ainda não há linha de aplicação no arquivo. Quando ela entrar, a tela compara com esta sugestão." };
+    const diffs = [];
+    let somaO = 0;
+    let somaS = 0;
+    for (let i = 0; i < 12; i++) {
+      const s = Number(sugestao[i] && sugestao[i].valor) || 0;
+      const o = Number(orcado[i]) || 0;
+      somaS += s;
+      somaO += o;
+      if (Math.abs(s - o) >= 0.5) diffs.push(this.MESES[i]);
+    }
+    const prefixo = rotulo ? (rotulo + ": ") : "";
+    if (!diffs.length) return { alerta: false, texto: prefixo + "Orçado igual à sugestão, " + this.money(somaO) + " no ano." };
+    return {
+      alerta: true,
+      texto: prefixo + "Orçado " + this.money(somaO) + " e a sugestão é " + this.money(somaS) + ". Difere em " + diffs.join(", ") + ". Altere a linha no arquivo se for necessário."
+    };
+  },
+
   /* Rendimento previsto: 80% do CDI do mês sobre o saldo inicial. Saldo negativo não rende. */
   rendimentoAplicacao(saldo, ano, i) {
     const base = Number(saldo) || 0;
@@ -2814,7 +2857,19 @@ const OrcamentoDfcApp = {
         : varAplic();
       return celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + variacao;
     }).join("");
-    const aplic = `<tr class="orc-dfc-aplic"><td title="Só no ano orçado. 80% do CDI sobre o saldo inicial de cada mês. O ano corrente e o forecast já trazem essa linha no arquivo.">Previsão de aplicação</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${mostraE ? this.money(totE) : ""}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${mostraD ? this.money(totD) : ""}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
+    const orcado = this.orcadoAplicacao();
+    let textoConf = "";
+    let alertaAplic = false;
+    if ((mostraE || mostraD) && !orcado) {
+      textoConf = "Ainda não há linha de aplicação no arquivo. Quando ela entrar, a tela compara com esta sugestão.";
+    } else {
+      const confEsq = mostraE ? this.textoConferenciaAplicacao(esqA, orcado && orcado.cmp, par.v1xv2 ? "V1" : "") : null;
+      const confDir = mostraD ? this.textoConferenciaAplicacao(dirA, orcado && orcado.meses, par.v1xv2 ? "V2" : "") : null;
+      const partesConf = [confEsq, confDir].filter((c) => c && c.texto);
+      alertaAplic = partesConf.some((c) => c.alerta);
+      textoConf = partesConf.map((c) => c.texto).join(" ");
+    }
+    const aplic = `<tr class="orc-dfc-aplic${alertaAplic ? " is-alerta" : ""}"><td title="Sugestão de 80% do CDI sobre o saldo inicial. Compara com a linha de aplicação do arquivo.">Previsão de aplicação${textoConf ? `<small class="orc-dfc-aplic-aviso${alertaAplic ? " is-alerta" : ""}">${this.esc(textoConf)}</small>` : ""}</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${mostraE ? this.money(totE) : ""}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${mostraD ? this.money(totD) : ""}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
     const folga = `<tr class="orc-dfc-saldo-gap"><td colspan="${span}"></td></tr>`;
     return aplic + folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
   },
@@ -3539,10 +3594,7 @@ const OrcamentoDfcApp = {
     if (v2doc) {
       this._v2 = this.copiarPack(v2doc, { versao: "2" });
       this.gravarChave(this.LS_V2, this._v2);
-      if (!this._versaoEscolhida) {
-        this.versao = "2";
-        this.varRs = true;
-      }
+      if (!this._versaoEscolhida) this.versao = "2";
     }
     this._nuvemOk = true;
     this._nuvemMsg = "";
@@ -3555,8 +3607,6 @@ const OrcamentoDfcApp = {
     if (!document.getElementById("orc-dfc-body")) return;
     const lead = document.getElementById("orc-dfc-lead");
     if (lead) lead.textContent = this.textoLead();
-    const varRs = document.getElementById("orc-dfc-var-rs");
-    if (varRs && this.varRs) varRs.checked = true;
     this.paintVersao();
     this.paintMeta();
     this.paintEmp();
@@ -3582,14 +3632,11 @@ const OrcamentoDfcApp = {
       this._ignorarNuvem = false;
       this._nuvemOk = false;
       this._nuvemMsg = "Salvando a V2 no Firebase…";
-      this.varRs = true;
       this.gravarChave(this.LS_V2, pack);
     } catch (err) {
       this.erro = (err && err.message) ? err.message : "Não consegui ler esse Excel.";
     }
     this.busy = false;
-    const varRs = document.getElementById("orc-dfc-var-rs");
-    if (varRs && this.varRs) varRs.checked = true;
     const base = document.getElementById("orc-dfc-base");
     if (base) base.hidden = !this._custom;
     this.paintMeta();
