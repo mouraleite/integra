@@ -1531,13 +1531,21 @@ const OrcamentoRepassesApp = {
     if (typeof app.normalizarForecastsMemoria === "function") {
       try { app.normalizarForecastsMemoria(); } catch (e) {}
     }
-    const lista = [];
-    const por = doc.porArquivo;
-    if (por && typeof por === "object" && !Array.isArray(por) && Object.keys(por).length) {
-      Object.keys(por).forEach((nome) => lista.push(por[nome]));
-    } else if (doc.contas) lista.push(doc);
-    const emp = String(companyId || "").replace(/\D/g, "");
     const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
+    /* Dezembro pode ter o forecast de outubro e o de novembro. Entra só a competência mais recente, um arquivo por empresa. */
+    const brutos = (dfc && typeof dfc.arquivosDoForecast === "function")
+      ? dfc.arquivosDoForecast(doc)
+      : (doc.contas ? [doc] : []);
+    const porEmpresa = new Map();
+    brutos.forEach((arq) => {
+      let id = String((arq && arq.empresa) || "").replace(/\D/g, "");
+      if (!id && dfc && typeof dfc.empresaDoArquivo === "function") id = String(dfc.empresaDoArquivo(arq && (arq.rotulo || arq.nome)) || "").replace(/\D/g, "");
+      const chave = id || String((arq && (arq.nome || arq.rotulo)) || "");
+      const anterior = porEmpresa.get(chave);
+      if (!anterior || String((arq && arq.em) || "") >= String(anterior.em || "")) porEmpresa.set(chave, arq);
+    });
+    const lista = [...porEmpresa.values()];
+    const emp = String(companyId || "").replace(/\D/g, "");
     const out = [];
     lista.forEach((arq) => {
       let id = String((arq && arq.empresa) || "").replace(/\D/g, "");
