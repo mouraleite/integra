@@ -2784,20 +2784,39 @@ const OrcamentoDfcApp = {
       return `<tr class="orc-dfc-saldo"><td>${label}</td>${c26}<td class="orc-dfc-sep${neg(tot)}">${this.money(tot)}</td>${c27}</tr>`;
     };
     const celulaAplic = (info, sep) => {
-      const valor = info && info.valor;
+      if (!info) return `<td class="${sep}"></td>`;
+      const valor = info.valor;
       const vazio = valor == null;
       const n = Number(valor) || 0;
       return `<td class="${sep}${n < -0.005 ? " orc-dfc-neg" : ""}" title="${this.esc(this.textoCdi(info))}">${vazio ? "—" : this.money(n)}</td>`;
     };
-    const ladoAplic = (serie, ano) => serie.map((item, i) => this.rendimentoAplicacao(item.ini, ano, i));
+    const varAplic = () => {
+      let html = "";
+      if (this.varRs) html += `<td class="orc-dfc-vcol"></td>`;
+      if (this.varPct) html += `<td class="orc-dfc-vcol"></td>`;
+      return html;
+    };
+    /* O ano corrente e o forecast já trazem o rendimento. A linha só entra no ano orçado. */
+    const ladoAplic = (serie, ano) => {
+      if (Number(ano) < 2027) return serie.map(() => null);
+      return serie.map((item, i) => this.rendimentoAplicacao(item.ini, ano, i));
+    };
     const esqA = ladoAplic(par.esq, par.anoEsq);
     const dirA = ladoAplic(par.dir, par.anoDir);
     const somaA = (lista) => lista.reduce((s, info) => s + (Number(info && info.valor) || 0), 0);
     const totE = somaA(esqA);
     const totD = somaA(dirA);
+    const mostraE = Number(par.anoEsq) >= 2027;
+    const mostraD = Number(par.anoDir) >= 2027;
     const cEsq = esqA.map((info, i) => celulaAplic(info, i === 0 ? "orc-dfc-sep" : "")).join("");
-    const cDir = dirA.map((info, i) => celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + this.htmlVars(info && info.valor, esqA[i] && esqA[i].valor, par.v1xv2 ? "v1" : "")).join("");
-    const aplic = `<tr class="orc-dfc-aplic"><td title="80% do CDI sobre o saldo inicial de cada mês. O mês sem CDI publicado usa o último divulgado.">Previsão de aplicação</td>${cEsq}<td class="orc-dfc-sep" title="Soma da previsão">${this.money(totE)}</td>${cDir}<td class="orc-dfc-sep" title="Soma da previsão">${this.money(totD)}</td>${this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "")}</tr>`;
+    const cDir = dirA.map((info, i) => {
+      const base = esqA[i];
+      const variacao = mostraE && mostraD
+        ? this.htmlVars(info && info.valor, base && base.valor, par.v1xv2 ? "v1" : "")
+        : varAplic();
+      return celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + variacao;
+    }).join("");
+    const aplic = `<tr class="orc-dfc-aplic"><td title="Só no ano orçado. 80% do CDI sobre o saldo inicial de cada mês. O ano corrente e o forecast já trazem essa linha no arquivo.">Previsão de aplicação</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${mostraE ? this.money(totE) : ""}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${mostraD ? this.money(totD) : ""}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
     const folga = `<tr class="orc-dfc-saldo-gap"><td colspan="${span}"></td></tr>`;
     return aplic + folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
   },
