@@ -1210,8 +1210,367 @@ const ResultadoCaixaApp = {
     return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
       <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
       <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
+      <button type="button" class="rcx-baixar" title="Baixar a leitura gravada deste arquivo" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
       <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
     </span>`;
+  },
+
+  pacoteConferencia(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const contas = {};
+      const nomes = {};
+      const meses = {};
+      let meta = { nome: nome, empresa: 0, rotulo: "", base: "" };
+      let achou = false;
+      Object.keys(this.forecasts || {}).sort().forEach((ym) => {
+        const arq = ((this.forecasts[ym] || {}).porArquivo || {})[nome];
+        if (!arq) return;
+        achou = true;
+        meta = {
+          nome: arq.nome || meta.nome,
+          empresa: Number(arq.empresa) || meta.empresa || 0,
+          rotulo: arq.rotulo || meta.rotulo,
+          base: arq.base || meta.base
+        };
+        Object.keys(arq.contas || {}).forEach((cc) => {
+          if (arq.nomes && arq.nomes[cc]) nomes[cc] = arq.nomes[cc];
+          const bag = contas[cc] || (contas[cc] = {});
+          Object.keys(arq.contas[cc] || {}).forEach((code) => {
+            const info = arq.contas[cc][code] || {};
+            const linha = bag[code] || (bag[code] = { nome: info.nome || "", meses: {} });
+            if (info.nome) linha.nome = info.nome;
+            const v = Number((info.meses || {})[ym]) || 0;
+            if (!v) return;
+            linha.meses[ym] = (Number(linha.meses[ym]) || 0) + v;
+            meses[ym] = 1;
+          });
+        });
+      });
+      if (!achou) return null;
+      return { tipo: "fc", nome: nome, meta: meta, contas: contas, nomes: nomes, meses: Object.keys(meses).sort() };
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (!arq) return null;
+    return { tipo: "mes", nome: nome, meta: arq, ano: Number(tipo) || 0 };
+  },
+
+  linhasConferencia(p) {
+    const linhas = [];
+    const ordem = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    if (p.tipo === "fc") {
+      Object.keys(p.contas || {}).sort(ordem).forEach((cc) => {
+        const nomeCc = (p.nomes && p.nomes[cc]) || String(cc);
+        Object.keys(p.contas[cc] || {}).sort(ordem).forEach((code) => {
+          const info = p.contas[cc][code] || {};
+          linhas.push({ cc: nomeCc, code: code, nome: info.nome || "", meses: info.meses || {} });
+        });
+      });
+      return linhas;
+    }
+    const porCc = (p.meta && p.meta.contasPorCc) || {};
+    if (Object.keys(porCc).length) {
+      Object.keys(porCc).sort(ordem).forEach((cc) => {
+        const dono = porCc[cc] || {};
+        const rotulo = dono.nome ? (cc + " - " + dono.nome) : String(cc);
+        Object.keys(dono.contas || {}).sort(ordem).forEach((code) => {
+          const info = dono.contas[code] || {};
+          linhas.push({ cc: rotulo, code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+        });
+      });
+      return linhas;
+    }
+    Object.keys((p.meta && p.meta.contas) || {}).sort(ordem).forEach((code) => {
+      const info = p.meta.contas[code] || {};
+      linhas.push({ cc: "", code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+    });
+    return linhas;
+  },
+
+  colunasConferencia(p) {
+    const nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    if (p.tipo === "fc") {
+      const meses = (p.meses && p.meses.length) ? p.meses : [];
+      return {
+        heads: ["Centro de custo", "Código", "Conta"].concat(meses.map((ym) => {
+          const i = Number(ym.slice(5, 7)) - 1;
+          return (nomes[i] || ym) + "/" + ym.slice(0, 4);
+        })),
+        valores: (linha) => meses.map((ym) => Number(linha.meses[ym]) || 0)
+      };
+    }
+    const heads = ["Centro de custo", "Código", "Conta"];
+    for (let m = 0; m < 12; m++) {
+      heads.push(nomes[m] + " orçado");
+      heads.push(nomes[m] + " realizado");
+    }
+    return {
+      heads: heads,
+      valores: (linha) => {
+        const out = [];
+        for (let m = 1; m <= 12; m++) {
+          const cel = (linha.meses || {})[String(m)] || {};
+          out.push(Number(cel.o) || 0);
+          out.push(Number(cel.r) || 0);
+        }
+        return out;
+      }
+    };
+  },
+
+  nomeAbaConferencia(p, used, inv) {
+    const emp = Number(p.meta && p.meta.empresa) || this.empresaId(p.nome) || 0;
+    if (inv && emp && typeof inv.excelSheetName === "function") return inv.excelSheetName(emp, used);
+    let base = String((p.meta && (p.meta.rotulo || p.meta.nome)) || p.nome || "Arquivo")
+      .replace(/^\d{4}-\d{2}\|/, "")
+      .replace(/[:\\/?*\[\]]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Arquivo";
+    if (base.length > 31) base = base.slice(0, 31);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suf = "-" + (n++);
+      name = (base.slice(0, Math.max(1, 31 - suf.length)) + suf).slice(0, 31);
+    }
+    used.add(name.toLowerCase());
+    return name;
+  },
+
+  preencherConferencia(ws, inv, p, imgId, generatedAt) {
+    const moneyFmt = "#,##0.00";
+    const spec = this.colunasConferencia(p);
+    const linhas = this.linhasConferencia(p);
+    const heads = spec.heads;
+    const lastCol = Math.max(heads.length, 8);
+    const lastL = inv.excelColLetter(lastCol);
+    const nomeArquivo = String((p.meta && p.meta.nome) || p.nome || "").replace(/^\d{4}-\d{2}\|/, "");
+    const empresa = Number(p.meta && p.meta.empresa) || this.empresaId(nomeArquivo) || 0;
+    const comp = p.tipo === "fc"
+      ? (p.meta && p.meta.base ? p.meta.base : "")
+      : (p.ano ? String(p.ano) : "");
+    ws.properties.showGridLines = false;
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 4, topLeftCell: "B5", activeCell: "B5", showGridLines: false }];
+    ws.columns = [
+      { width: 42 },
+      { width: 18 },
+      { width: 42 },
+      ...Array.from({ length: lastCol - 3 }, () => ({ width: 16 }))
+    ];
+    ws.mergeCells("A1:A2");
+    ws.getRow(1).height = 28;
+    ws.getRow(2).height = 22;
+    const titulo = p.tipo === "fc" ? "Forecast gravado" : "Fechamento gravado";
+    const titleCell = ws.getCell("A1");
+    titleCell.value = {
+      richText: [
+        { font: { name: "Calibri", size: 14, bold: true, color: { argb: "FF475569" } }, text: titulo + "\n" },
+        { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nomeArquivo || "Arquivo" }
+      ]
+    };
+    inv.excelPaint(titleCell, {
+      fill: "FFFFFFFF",
+      align: { vertical: "middle", horizontal: "left", wrapText: true, indent: 8 }
+    });
+    if (imgId != null) {
+      try {
+        const logoPx = Math.round(1.54 * 96 / 2.54);
+        ws.addImage(imgId, { tl: { col: 0.04, row: 0.08 }, ext: { width: logoPx, height: logoPx } });
+      } catch (e) {}
+    }
+    const kpis = [
+      { label: "Arquivo", value: nomeArquivo || "—", texto: true },
+      { label: "Empresa", value: empresa ? String(empresa) : "—", texto: true },
+      { label: "Competência", value: comp || "—", texto: true },
+      { label: "Linhas", value: linhas.length, texto: false }
+    ];
+    kpis.forEach((k, i) => {
+      const col = 4 + i;
+      const cellL = ws.getRow(1).getCell(col);
+      const cellV = ws.getRow(2).getCell(col);
+      cellL.value = k.label;
+      cellV.value = k.value;
+      inv.excelPaint(cellL, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 8, color: { argb: "FF94A3B8" } },
+        align: { horizontal: "right", vertical: "bottom" }
+      });
+      inv.excelPaint(cellV, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 12, color: { argb: "FF0F172A" } },
+        align: { horizontal: "right", vertical: "middle" },
+        numFmt: k.texto ? undefined : "#,##0"
+      });
+    });
+    ws.getRow(3).height = 8;
+    const headRow = ws.getRow(4);
+    headRow.height = 20;
+    for (let c = 1; c <= lastCol; c++) {
+      const cell = headRow.getCell(c);
+      cell.value = heads[c - 1] || "";
+      inv.excelPaint(cell, {
+        fill: "FF334155",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: c <= 3 ? "left" : "right", vertical: "middle" },
+        border: true
+      });
+    }
+    const totais = Array(heads.length - 3).fill(0);
+    let rowIdx = 5;
+    linhas.forEach((linha) => {
+      const vals = spec.valores(linha);
+      const row = ws.getRow(rowIdx);
+      row.height = 18;
+      const textos = [linha.cc || "", linha.code || "", linha.nome || ""];
+      textos.forEach((texto, i) => {
+        const cell = row.getCell(i + 1);
+        cell.value = texto;
+        inv.excelPaint(cell, {
+          fill: i === 0 ? "FFE7F6EE" : "FFFFFFFF",
+          font: { bold: i === 0, size: 9, color: { argb: i === 0 ? "FF105436" : "FF0F172A" } },
+          align: { horizontal: "left", vertical: "middle" },
+          border: true
+        });
+      });
+      vals.forEach((n, i) => {
+        const cell = row.getCell(4 + i);
+        const num = Number(n) || 0;
+        totais[i] += num;
+        cell.value = num;
+        inv.excelPaint(cell, {
+          fill: "FFFFFFFF",
+          font: { size: 9, color: { argb: num < 0 ? "FFB91C1C" : (num ? "FF0F172A" : "FF94A3B8") } },
+          align: { horizontal: "right", vertical: "middle" },
+          border: true,
+          numFmt: moneyFmt
+        });
+      });
+      rowIdx += 1;
+    });
+    const total = ws.getRow(rowIdx);
+    total.height = 20;
+    ["", "", "Total"].forEach((texto, i) => {
+      const cell = total.getCell(i + 1);
+      cell.value = texto;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "left", vertical: "middle" },
+        border: true
+      });
+    });
+    totais.forEach((n, i) => {
+      const cell = total.getCell(4 + i);
+      cell.value = n;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "right", vertical: "middle" },
+        border: true,
+        numFmt: moneyFmt
+      });
+    });
+    for (let c = heads.length + 1; c <= lastCol; c++) {
+      inv.excelPaint(total.getCell(c), {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        border: true
+      });
+    }
+    const foot = ws.getRow(rowIdx + 2);
+    foot.getCell(1).value = generatedAt + " · Leitura gravada de " + (nomeArquivo || "arquivo") + ". O Excel original não fica armazenado; estes são os números que entraram na tela.";
+    inv.excelPaint(foot.getCell(1), {
+      font: { italic: true, size: 8, color: { argb: "FF64748B" } },
+      align: { horizontal: "left", vertical: "middle" }
+    });
+    ws.mergeCells(rowIdx + 2, 1, rowIdx + 2, lastCol);
+    if (lastL) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: Math.max(rowIdx - 1, 4), column: heads.length } };
+  },
+
+  async baixarPacotes(pacotes, arquivo) {
+    const lista = (pacotes || []).filter(Boolean);
+    if (!lista.length) {
+      alert("Nenhum arquivo gravado para baixar.");
+      return;
+    }
+    const inv = window.InvestimentoApp;
+    if (!inv || typeof inv.ensureExcelJS !== "function") {
+      alert("O Excel não está disponível nesta tela.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const ExcelJS = await inv.ensureExcelJS();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "CRM Moura Leite";
+      wb.created = new Date();
+      let imgId = null;
+      try {
+        const logo = await inv.logoDataUrl();
+        imgId = wb.addImage({ base64: logo.dataUrl, extension: logo.extension || "png" });
+      } catch (e) {}
+      const used = new Set();
+      const gerado = inv.generatedAtLabel(new Date());
+      lista.forEach((p) => {
+        const ws = wb.addWorksheet(this.nomeAbaConferencia(p, used, inv), { properties: { showGridLines: false } });
+        this.preencherConferencia(ws, inv, p, imgId, gerado);
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = arquivo || "conferencia.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+    } catch (e) {
+      alert((e && e.message) || "Não consegui gerar o Excel.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarArquivo(tipo, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    const p = this.pacoteConferencia(tipo, nome);
+    if (!p) {
+      alert("Não achei este arquivo gravado.");
+      return;
+    }
+    const bruto = String((p.meta && p.meta.nome) || nome || "arquivo").replace(/^\d{4}-\d{2}\|/, "").replace(/\.(xlsx|xlsm)$/i, "");
+    const arquivo = "conferencia-" + bruto.replace(/[\\/:*?"<>|]/g, " ").trim() + ".xlsx";
+    await this.baixarPacotes([p], arquivo);
+  },
+
+  async baixarColuna(qual) {
+    const atual = this.anoAtual();
+    const ant = atual > 1900 ? atual - 1 : 0;
+    let lista = [];
+    let arquivo = "conferencia.xlsx";
+    if (qual === "forecast") {
+      const usados = {};
+      this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
+      const mapa = {};
+      Object.keys(this.forecasts || {}).forEach((ym) => {
+        if (!usados[ym]) return;
+        const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+        Object.keys(por).forEach((nome) => {
+          if (!this.forecastDaCompetencia(nome, por[nome])) return;
+          mapa[nome] = 1;
+        });
+      });
+      lista = Object.keys(mapa).map((nome) => this.pacoteConferencia("fc", nome)).filter(Boolean);
+      arquivo = "conferencia-forecast.xlsx";
+    } else {
+      const ano = qual === "anterior" ? ant : atual;
+      const arquivos = ((this.anoDados(ano) || {}).arquivos) || {};
+      lista = Object.keys(arquivos).map((nome) => this.pacoteConferencia(String(ano), nome)).filter(Boolean);
+      arquivo = qual === "anterior" ? "conferencia-ano-anterior.xlsx" : "conferencia-competencia.xlsx";
+    }
+    await this.baixarPacotes(lista, arquivo);
   },
 
   nomeEmpresaArquivo(nome) {
@@ -2683,15 +3042,24 @@ const ResultadoCaixaApp = {
       </div>
       ${this.arqsAberto ? `<div class="rcx-arqs-box">
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos desta competência para conferência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAtual || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos do ano anterior para conferência" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAnt || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Forecast</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Forecast</span>
+            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos de forecast para conferência" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipForecast}</div>
         </div>
       </div>` : ""}

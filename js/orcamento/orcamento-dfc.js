@@ -398,7 +398,7 @@ const OrcamentoDfcApp = {
     return Array(12).fill(0);
   },
 
-  /* Primeiro mês (0 = jan) que entra como forecast. Em outubro de 2026, janeiro a setembro é realizado. */
+  /* Primeiro mês (0 = jan) que o caixa ainda trata como realizado. Em novembro de 2026, o caixa vai até outubro. */
   corteForecast() {
     const hoje = new Date();
     if (hoje.getFullYear() > 2026) return 12;
@@ -406,12 +406,56 @@ const OrcamentoDfcApp = {
     return hoje.getMonth();
   },
 
+  /* Outubro e novembro (meses 10 e 11) entram pelo forecast vigente, e não pelo caixa nem pelo arquivo de fechamento. */
+  inicioForecast() {
+    const corte = this.corteForecast();
+    if (corte <= 0 || corte >= 12) return corte;
+    return Math.min(corte, 9);
+  },
+
+  /* Só o forecast da competência mais recente daquele mês. Arquivo de competência anterior não soma de novo. */
+  arquivosDoForecast(doc) {
+    if (!doc) return [];
+    const porArq = doc.porArquivo;
+    const itens = [];
+    if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
+      Object.keys(porArq).forEach((nome) => {
+        if (porArq[nome]) itens.push({ nome: nome, arq: porArq[nome] });
+      });
+    } else if (doc.contas && Object.keys(doc.contas).length) {
+      itens.push({ nome: "", arq: doc });
+    }
+    if (!itens.length) return [];
+    const rc = window.ResultadoCaixaApp;
+    const baseDe = (item) => {
+      if (rc && typeof rc.baseForecast === "function") {
+        const b = rc.baseForecast(item.nome, item.arq);
+        if (b) return String(b);
+      }
+      const marca = item.arq && item.arq.base;
+      if (/^\d{4}-\d{2}$/.test(String(marca || ""))) return String(marca);
+      const m = String(item.nome || "").match(/^(\d{4}-\d{2})\|/);
+      return m ? m[1] : "";
+    };
+    let melhor = "";
+    itens.forEach((item) => {
+      const b = baseDe(item);
+      if (b > melhor) melhor = b;
+    });
+    return itens.filter((item) => {
+      if (melhor && baseDe(item) !== melhor) return false;
+      if (item.nome && rc && typeof rc.estaFora === "function" && rc.estaFora("fc", item.nome)) return false;
+      return true;
+    }).map((item) => item.arq);
+  },
+
   textoCorte() {
     const nomes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const corte = this.corteForecast();
+    const ini = this.inicioForecast();
     if (corte <= 0) return "2026 entra como forecast.";
     if (corte >= 12) return "2026 entra pelo realizado do ano.";
-    return "Até " + nomes[corte - 1] + " entra o realizado. De " + nomes[corte] + " a dezembro entra o forecast.";
+    return "Até " + nomes[ini - 1] + " entra o realizado do caixa. De " + nomes[ini] + " a dezembro entra o forecast mais recente de cada mês, o arquivo da competência vigente no fechamento de caixa.";
   },
 
   chaveConta(code) {
@@ -503,7 +547,9 @@ const OrcamentoDfcApp = {
       if (chave) this.somarBase(bag(ccs, gid + "|" + chave + "|" + ccId), i, v);
     };
     let arquivos = 0;
+    const ini = this.inicioForecast();
     (this._lancamentos2026 || []).forEach((c) => {
+      if (Number(c.i) >= ini) return;
       if (this.selectedCompanyIds.length && this.selectedCompanyIds.map(String).indexOf(String(c.companyId)) < 0) return;
       if (!this.ccCabe(c.cc)) return;
       if (!this.planOn(c.code)) return;
@@ -512,15 +558,11 @@ const OrcamentoDfcApp = {
     const app = window.ResultadoCaixaApp;
     const forecasts = (app && app.forecasts) || {};
     const fluxo = typeof FluxoCaixaApp !== "undefined" ? FluxoCaixaApp : null;
-    for (let i = corte; i < 12; i++) {
+    for (let i = ini; i < 12; i++) {
       const ym = "2026-" + String(i + 1).padStart(2, "0");
       const doc = forecasts[ym];
       if (!doc) continue;
-      const lista = [];
-      const porArq = doc.porArquivo;
-      if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
-        Object.keys(porArq).forEach((nome) => lista.push(porArq[nome]));
-      } else if (doc.contas) lista.push(doc);
+      const lista = this.arquivosDoForecast(doc);
       lista.forEach((arq) => {
         if (!this.empresaCabe(arq)) return;
         if (arq && (arq.empresa || arq.contas)) arquivos += 1;
@@ -834,7 +876,7 @@ const OrcamentoDfcApp = {
   },
 
   itensDaCelula(row, mesIdx) {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const gids = row.drillConta ? new Set([row.drillGid]) : this.gidsDoNo(row.drillGid);
     const emp = new Set(this.selectedCompanyIds.map(String));
     const conta = this.chaveConta(row.drillConta || "");
@@ -888,7 +930,7 @@ const OrcamentoDfcApp = {
     const id = pedacos.join("||");
     const row = (this._linhasDfc || []).find((r) => r.id === id);
     if (!row) return;
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const mesIdx = mes === "t" ? null : Number(mes);
     if (mesIdx != null && (!(mesIdx >= 0) || mesIdx >= corte)) return;
     const fim = this.fimRealizado2026();
@@ -1295,7 +1337,8 @@ const OrcamentoDfcApp = {
         alvo.cn = acc.nome;
       }
       if (!alvo.base || alvo.base.length < 12) alvo.base = Array(12).fill(0);
-      for (let i = 0; i < corte; i++) alvo.base[i] = acc.meses[i] || 0;
+      const limite = Math.min(Number(corte) || 0, this.inicioForecast());
+      for (let i = 0; i < limite; i++) alvo.base[i] = acc.meses[i] || 0;
       (acc.ccs || []).forEach((cc) => {
         let row = null;
         alvo.ccs.forEach((c) => { if (this.ccNorm(c.id) === cc.id) row = c; });
@@ -1306,7 +1349,8 @@ const OrcamentoDfcApp = {
           row.name = cc.nome;
         }
         if (!row.base || row.base.length < 12) row.base = Array(12).fill(0);
-        for (let i = 0; i < corte; i++) row.base[i] = cc.meses[i] || 0;
+        const limiteCc = Math.min(Number(corte) || 0, this.inicioForecast());
+        for (let i = 0; i < limiteCc; i++) row.base[i] = cc.meses[i] || 0;
       });
     });
   },
@@ -1673,6 +1717,7 @@ const OrcamentoDfcApp = {
       });
     }
     const empFiltro = new Set(this.selectedCompanyIds.map(String));
+    const ini = this.inicioForecast();
     (this._lancamentos2026 || []).forEach((c) => {
       const emp = String(c.companyId || "");
       if (empFiltro.size && !empFiltro.has(emp)) return;
@@ -1685,22 +1730,18 @@ const OrcamentoDfcApp = {
       const conta = String(c.code || "");
       const f = folha(c.gid, emp, cc, conta);
       const i = Number(c.i);
-      if (i >= 0 && i < 12) {
+      if (i >= 0 && i < ini) {
         f.base[i] += Number(c.v) || 0;
         g.base[i] += Number(c.v) || 0;
       }
     });
     const app = window.ResultadoCaixaApp;
     const forecasts = (app && app.forecasts) || {};
-    for (let i = corte; i < 12; i++) {
+    for (let i = ini; i < 12; i++) {
       const ym = "2026-" + String(i + 1).padStart(2, "0");
       const doc = forecasts[ym];
       if (!doc) continue;
-      const lista = [];
-      const porArq = doc.porArquivo;
-      if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
-        Object.keys(porArq).forEach((nome) => lista.push(porArq[nome]));
-      } else if (doc.contas) lista.push(doc);
+      const lista = this.arquivosDoForecast(doc);
       lista.forEach((arq) => {
         if (!this.empresaCabe(arq)) return;
         const emp = this.empresaDoArquivo(arq);
@@ -2519,7 +2560,7 @@ const OrcamentoDfcApp = {
   },
 
   mesSaldo() {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     let mes = Number(this._saldoMes);
     if (!(mes >= 0) || mes >= corte) mes = 0;
     return mes;
@@ -2547,7 +2588,7 @@ const OrcamentoDfcApp = {
 
   /* Realizado: saldo das contas marcadas. Forecast e 2027: saldo final do mês anterior mais a variação de caixa do mês. */
   serieSaldos() {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const g12 = (this._linhasDfc || []).find((r) => r.id === "g_12");
     const base = (g12 && g12.base) || [];
     const orc = (g12 && g12.months) || [];
@@ -3124,7 +3165,7 @@ const OrcamentoDfcApp = {
     const keepLeft = rolagem ? rolagem.scrollLeft : 0;
     const { rows, fora } = this.visao === "2" ? this.montarVisao2() : this.montar();
     this._linhasDfc = rows;
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const extras = (this.varRs ? `<th class="orc-dfc-vcol">Var R$</th>` : "") + (this.varPct ? `<th class="orc-dfc-vcol">Var %</th>` : "");
     const v1xv2 = this.modoV1xV2();
     const h26 = this.MESES.map((m, i) => `<th${i === 0 ? " class=\"orc-dfc-sep\"" : ""} title="${v1xv2 ? "2027 · V1" : (i >= corte ? "Previsão de 2026" : "Realizado de 2026")}">${m}</th>`).join("") + `<th class="orc-dfc-sep">Total</th>`;
@@ -3638,7 +3679,7 @@ const OrcamentoDfcApp = {
 
   preencherDfc(ws, inv, opts) {
     const rows = opts.rows || [];
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const meses = this.MESES;
     const colunas = ["Conta"];
     meses.forEach((m, i) => colunas.push(m + "/26" + (i >= corte ? " prev" : "")));
