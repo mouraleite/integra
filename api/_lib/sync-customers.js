@@ -1,5 +1,5 @@
 const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, doc, setDoc, query, where, getDocs, limit } = require('firebase/firestore');
+const { getFirestore, doc, setDoc } = require('firebase/firestore');
 
 // Configuração Sienge
 const SIENGE_DOMAIN = "mouraleite";
@@ -30,29 +30,29 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
-// Verifica se a data é o Carnaval da Moura Leite ou segunda feira
-function getStartAndEndDates() {
+function shiftDate(days) {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    return formatDate(date);
+}
+
+/* Cadastros novos: 60 dias. O buraco de 09/10 a 25/10 (códigos 15977 a 15990,
+   inclusive a cliente 15990) ficou de fora porque a janela era só o dia anterior
+   e não era refeita. */
+function janelaCadastros() {
+    return { startDate: shiftDate(-60), endDate: shiftDate(1) };
+}
+
+/* Alterações de cadastro já existente: janela curta, para o job caber no tempo. */
+function janelaAlteracoes() {
     const today = new Date();
-    const endDate = formatDate(today);
-    let startDateObj = new Date(today);
-
-    const dayOfWeek = startDateObj.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-
-    if (dayOfWeek === 1) {
-        // Segunda-feira: busca desde sábado (2 dias antes)
-        startDateObj.setDate(startDateObj.getDate() - 2);
-    } else if (dayOfWeek === 3) {
-        // Quarta-feira: Para garantir que o carnaval (Segunda/Terça) seja coberto
-        startDateObj.setDate(startDateObj.getDate() - 4); 
-    } else if (dayOfWeek === 0) {
-        startDateObj.setDate(startDateObj.getDate() - 1);
-    } else {
-        // Outros dias da semana, pega também o dia anterior por segurança com feriados de 1 dia
-        startDateObj.setDate(startDateObj.getDate() - 1); 
-    }
-
-    const startDate = formatDate(startDateObj);
-    return { startDate, endDate };
+    const endDate = shiftDate(1);
+    const startDateObj = new Date(today);
+    const dayOfWeek = startDateObj.getDay();
+    if (dayOfWeek === 1) startDateObj.setDate(startDateObj.getDate() - 2);
+    else if (dayOfWeek === 3) startDateObj.setDate(startDateObj.getDate() - 4);
+    else startDateObj.setDate(startDateObj.getDate() - 1);
+    return { startDate: formatDate(startDateObj), endDate };
 }
 
 async function fetchFromSienge(endpoint) {
@@ -68,81 +68,59 @@ async function fetchFromSienge(endpoint) {
     return response.json();
 }
 
+async function buscarTodos(filtro) {
+    const todos = [];
+    const limit = 200;
+    let offset = 0;
+    for (let page = 0; page < 30; page++) {
+        const data = await fetchFromSienge(`${filtro}&limit=${limit}&offset=${offset}`);
+        const results = data.results || [];
+        todos.push.apply(todos, results);
+        offset += limit;
+        const total = data.resultSetMetadata && Number(data.resultSetMetadata.count);
+        if (!results.length || results.length < limit || (Number.isFinite(total) && offset >= total)) break;
+    }
+    return todos;
+}
+
+async function gravarClientes(customers) {
+    let gravados = 0;
+    for (let i = 0; i < customers.length; i++) {
+        const customer = customers[i];
+        if (!customer || customer.id == null || customer.id === "") continue;
+        try {
+            await setDoc(doc(db, "sienge_customers", String(customer.id)), customer, { merge: true });
+            gravados++;
+        } catch (e) {
+            console.warn("[SYNC] cliente " + customer.id + " não gravou:", e.message);
+        }
+    }
+    return gravados;
+}
+
 module.exports = async function handler(req, res) {
     try {
-        const { startDate, endDate } = getStartAndEndDates();
-        const PAGE_LIMIT = 200;
+        const cadastros = janelaCadastros();
+        const alteracoes = janelaAlteracoes();
 
-        let clientesNovosAdicionados = 0;
-        let clientesAtualizados = 0;
+        console.log(`[SYNC] Cadastros de ${cadastros.startDate} a ${cadastros.endDate}.`);
+        const novos = await buscarTodos(`/customers?createdAfter=${cadastros.startDate}&createdBefore=${cadastros.endDate}`);
+        const clientesNovos = await gravarClientes(novos);
 
-        // 1. PROCESSAR NOVOS CLIENTES (createdAfter / createdBefore)
-        let offset = 0;
-        let achouClienteExistente = false;
+        console.log(`[SYNC] Alterações de ${alteracoes.startDate} a ${alteracoes.endDate}.`);
+        const mudancas = await buscarTodos(`/customers?modifiedAfter=${alteracoes.startDate}&modifiedBefore=${alteracoes.endDate}`);
+        const clientesAtualizados = await gravarClientes(mudancas);
 
-        console.log(`[SYNC] Iniciando busca de NOVOS clientes criados entre ${startDate} e ${endDate}...`);
-
-        while (!achouClienteExistente) {
-            const endpoint = `/customers?createdAfter=${startDate}&createdBefore=${endDate}&limit=${PAGE_LIMIT}&offset=${offset}`;
-            const data = await fetchFromSienge(endpoint);
-            const results = data.results || [];
-
-            if (results.length === 0) break;
-
-            for (const customer of results) {
-                const docRef = doc(db, 'sienge_customers', String(customer.id));
-                const docSnap = await getDocs(query(collection(db, 'sienge_customers'), where('id', '==', customer.id), limit(1)));
-                
-                if (!docSnap.empty) {
-                    console.log(`[SYNC] Cliente ${customer.id} já existe na base. Parando paginação de novos cadastros.`);
-                    achouClienteExistente = true;
-                    break;
-                }
-
-                await setDoc(docRef, customer);
-                clientesNovosAdicionados++;
-            }
-
-            offset += PAGE_LIMIT;
-            
-            if (!data.resultSetMetadata || offset >= data.resultSetMetadata.count) {
-                break;
-            }
-        }
-
-        // 2. PROCESSAR ATUALIZAÇÕES (modifiedAfter / modifiedBefore)
-        offset = 0;
-        console.log(`[SYNC] Iniciando busca de ATUALIZAÇÕES de clientes entre ${startDate} e ${endDate}...`);
-
-        while (true) {
-            const endpoint = `/customers?modifiedAfter=${startDate}&modifiedBefore=${endDate}&limit=${PAGE_LIMIT}&offset=${offset}`;
-            const data = await fetchFromSienge(endpoint);
-            const results = data.results || [];
-
-            if (results.length === 0) break;
-
-            for (const customer of results) {
-                const docRef = doc(db, 'sienge_customers', String(customer.id));
-                await setDoc(docRef, customer, { merge: true });
-                clientesAtualizados++;
-            }
-
-            offset += PAGE_LIMIT;
-            
-            if (!data.resultSetMetadata || offset >= data.resultSetMetadata.count) {
-                break;
-            }
-        }
-
-        const msg = `Sincronização concluída. Novos: ${clientesNovosAdicionados}. Atualizados: ${clientesAtualizados}. Datas: ${startDate} a ${endDate}.`;
+        const msg = `Sincronização concluída. Cadastros no período: ${novos.length}, gravados: ${clientesNovos}. Alterações: ${mudancas.length}, gravadas: ${clientesAtualizados}.`;
         console.log(`[SYNC] ${msg}`);
-        
+
         return res.status(200).json({
             success: true,
             message: msg,
-            novos: clientesNovosAdicionados,
+            novos: clientesNovos,
             atualizados: clientesAtualizados,
-            periodo: { startDate, endDate }
+            periodoCadastros: cadastros,
+            periodoAlteracoes: alteracoes
         });
 
     } catch (error) {
