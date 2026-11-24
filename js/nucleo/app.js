@@ -669,9 +669,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof window.updateOperatorTabsUI === "function") window.updateOperatorTabsUI();
     if (typeof window.syncWebroHideToggleUI === "function") window.syncWebroHideToggleUI();
     setTimeout(() => {
-      if (typeof window.ensureAllNexCleared === "function") window.ensureAllNexCleared();
-      if (typeof window.ensureNexTodayPurged === "function") window.ensureNexTodayPurged();
-      if (typeof window.ensureNexTitulo12753Removed === "function") window.ensureNexTitulo12753Removed();
+      // As limpezas de NEX de agosto (todas as NEX, as de 27/08 e as do título 12753) já rodaram e
+      // não são mais chamadas: com a trava do Firebase fora do ar, a limpeza geral apagava tudo de novo (19/11).
       if (typeof window.ensureBoletoNotesTitulo4868Removed === "function") window.ensureBoletoNotesTitulo4868Removed();
     }, 1500);
 });
@@ -38745,7 +38744,13 @@ window.purgeAllNexOccurrenceNotes = async function() {
   }
 };
 
+// Limpeza geral de 28/08/2026: já foi feita. Desligada de vez, porque, quando a leitura da trava
+// no Firebase falhava, ela rodava de novo e apagava todas as NEX e as notas de NEX (aconteceu em 19/11).
 window.ensureAllNexCleared = async function() {
+  return 0;
+};
+
+window.ensureAllNexClearedAntiga = async function() {
   const flag = "crm_nex_cleared_all_v20260828";
   try {
     if (localStorage.getItem(flag) === "1") return 0;
