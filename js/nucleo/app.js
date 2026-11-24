@@ -52078,6 +52078,7 @@ window.searchRelacionamento = async function() {
       return nome;
     }
 
+    window._billsDoPrincipal = {};
     results = await Promise.all(contratos.map(async c => {
        const tituloId = c.receivableBillId || c.contractNumber || c.id;
 
@@ -52182,6 +52183,28 @@ window.searchRelacionamento = async function() {
                        realContractStr = contractData.contractNumber;
                }
            } catch(e) {}
+       }
+
+       // Comprador secundário: o título fica no cliente principal e a lista do pesquisado vem vazia.
+       // Sem isso o contrato aparecia "Adimplente" mesmo quitado. Lê o título na lista do principal (traz payOffDate).
+       if (!contractBills.length && c.receivableBillId && typeof window.salesContractPeople === "function"
+         && typeof SiengeApiService.getReceivableBills === "function") {
+           try {
+               const pessoas = window.salesContractPeople(c) || [];
+               const principal = pessoas.find((p) => p.main) || null;
+               if (principal && principal.id != null && String(principal.id) !== String(customerId)) {
+                   window._billsDoPrincipal = window._billsDoPrincipal || {};
+                   const chave = String(principal.id);
+                   if (!window._billsDoPrincipal[chave]) {
+                       window._billsDoPrincipal[chave] = SiengeApiService.getReceivableBills(principal.id).catch(() => null);
+                   }
+                   const resP = await window._billsDoPrincipal[chave];
+                   const listaP = (resP && (resP.results || resP)) || [];
+                   const doContrato = (Array.isArray(listaP) ? listaP : []).find((b) =>
+                       String(b.receivableBillId || b.id) === String(c.receivableBillId));
+                   if (doContrato) contractBills.push(doContrato);
+               }
+           } catch (e) {}
        }
 
        const cStatus = String(c.status || '').toUpperCase();
