@@ -1601,8 +1601,9 @@ const OrcamentoRepassesApp = {
     catch (e) { return true; }
   },
 
-  /* Empresa 6: duas visões. O terrenista vê o 14202; o repasse é a variação do 14201 no mês seguinte.
-     O empreendedor vê 14201 e 70600; esse saldo é a distribuição entre os sócios. */
+  /* Empresa 6: duas visões. O terrenista vê o 14202 (PARCERIA) com o rateio das contas
+     configuradas; essa variação é o repasse. O empreendedor vê 14201 e 70600 e reparte
+     a variação entre os sócios. */
   aracariDe(part) {
     if (!part || String(part.companyId) !== "6") return false;
     const fold = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
@@ -1760,7 +1761,7 @@ const OrcamentoRepassesApp = {
     return this.prestacoes().map((p, i) => this.montarDfc(p, this.linhasDaEmpresa(p.companyId), i));
   },
 
-  encher(tpl, byId, linhas, centros, part, usarRateio, semFiltro) {
+  encher(tpl, byId, linhas, centros, part, usarRateio, semFiltro, rateioNoParceiro) {
     const app = this.appPar();
     const fluxo = typeof FluxoCaixaApp !== "undefined" ? FluxoCaixaApp : (window.FluxoCaixaApp || null);
     const dfc = typeof OrcamentoDfcApp !== "undefined" ? OrcamentoDfcApp : null;
@@ -1772,7 +1773,7 @@ const OrcamentoRepassesApp = {
       const obra = achado.obra;
       if (!semFiltro && !this.entraConta(part, obra, l.conta)) return;
       const doParceiro = this.ccEhDoParceiro(achado.nome);
-      const aplica = !!usarRateio && !doParceiro;
+      const aplica = !!usarRateio && (!doParceiro || rateioNoParceiro);
       const fator = aplica ? this.fator(part, obra, l.conta) : 1;
       if (!(Math.abs(fator) > 0)) return;
       const gid = dfc && typeof dfc.grupoDaConta === "function" ? dfc.grupoDaConta(l.conta, l.cn) : OrcEst.grupo(l.conta, l.cn);
@@ -1938,24 +1939,28 @@ const OrcamentoRepassesApp = {
     const especial = !sociedade && obra && !aracari ? this.parExtra(obra) : null;
     const centroParceiro = !sociedade && !!obra && this.soCentroParceiro(obra);
     let usarRateio = !especial && !sociedade && !!obra && !this.principalMarcado(obra) && algumMarcado && !centroParceiro;
-    if (visaoAr) usarRateio = false;
+    let rateioNoParceiro = false;
     let centros = this.centrosDa(part, obraCode, usarRateio);
     let semFiltro = false;
     if (visaoAr === "terrenista") {
+      /* 14202 tem PARCERIA no nome e, mesmo assim, recebe o rateio das contas da prestação. */
       centros = this.centrosFixos(part, obra, ["14202"]);
-      semFiltro = true;
+      usarRateio = true;
+      rateioNoParceiro = true;
+      semFiltro = false;
     } else if (visaoAr === "empreendedor") {
       centros = this.centrosFixos(part, obra, ["14201", "70600"]);
+      usarRateio = false;
       semFiltro = true;
     }
-    this.encher(tpl, byId, linhas, centros, part, usarRateio, semFiltro);
+    this.encher(tpl, byId, linhas, centros, part, usarRateio, semFiltro, rateioNoParceiro);
     const resultadoProprio = (byId.g_12 && byId.g_12.months) ? byId.g_12.months.slice() : OrcEst.z();
     const lucros = !this._semLucros && String(part.companyId) === "12" ? this.lucrosRecebidosEmpresa13() : null;
     if (lucros) this.incluirLucros(byId, lucros.meses);
     const resultado = (byId.g_12 && byId.g_12.months) ? byId.g_12.months.slice() : OrcEst.z();
     const linhasDez = this.linhasDez2026(part.companyId);
     const dezMolde = this.molde();
-    this.encher(dezMolde.tpl, dezMolde.byId, linhasDez, centros, part, usarRateio, semFiltro);
+    this.encher(dezMolde.tpl, dezMolde.byId, linhasDez, centros, part, usarRateio, semFiltro, rateioNoParceiro);
     const dezMap = {};
     dezMolde.tpl.forEach((g) => {
       dezMap[g.id] = (g.months && g.months[0]) || 0;
@@ -2108,19 +2113,16 @@ const OrcamentoRepassesApp = {
       });
     }
     if (visaoAr === "terrenista") {
-      const um = this.centrosFixos(part, obra, ["14201"]);
-      const serie = this.resultadoCc(linhas, linhasDez, um, part, false, true);
-      const pag = this.serieDeslocada(serie.dez, serie.ano);
       distribuicao.length = 0;
       distribuicao.push({
-        id: "14201",
-        nome: this.nomeCentro(part, "14201"),
-        pagoEm: "14201",
-        m: pag.m,
-        jan28: pag.jan28
+        id: "14202",
+        nome: this.nomeCentro(part, "14202"),
+        pagoEm: "14202",
+        m: pagamento.slice(),
+        jan28: jan28
       });
-      variacaoCard = pag.m.slice();
-      janCard = Number(pag.jan28) || 0;
+      variacaoCard = pagamento.slice();
+      janCard = Number(jan28) || 0;
       pessoas.length = 0;
     } else if (visaoAr === "empreendedor") {
       distribuicao.length = 0;
@@ -2472,7 +2474,7 @@ const OrcamentoRepassesApp = {
       }).join("")
       : `<p class="orc-est-nota">${sociedade ? "Esta sociedade não tem centro de custo." : "Esta obra não tem centro de custo."} Inclua na parametrização do parceiro.</p>`);
     const rateio = aracari
-      ? `<span class="orc-rep-sub">${visao === "empreendedor" ? "14201 · 70600" : "14202"}</span>`
+      ? `<span class="orc-rep-sub">${visao === "empreendedor" ? "14201 · 70600" : "14202 · rateio"}</span>`
       : (obra && !card.sociedade
       ? `<span class="orc-rep-sub">${card.extra ? "DFC integral · repasse no percentual" : (card.centroParceiro ? "Centro do parceiro · integral" : (card.rateio ? ("Rateio " + OrcEst.esc(this.pctTxt(card.obraShare))) : "Total da obra"))}</span>`
       : "");
@@ -2490,9 +2492,9 @@ const OrcamentoRepassesApp = {
         : (sociedade
         ? "Na sociedade o DFC junta todos os centros marcados. A linha 12 fica no mês em que o resultado acontece. A variação desse mês vira distribuição no mês seguinte, por centro de custo: janeiro de 2027 distribui dezembro de 2026, e dezembro de 2027 é distribuído em JAN/28. Cada sócio recebe o seu percentual. Repasse e dividendos já lançados no orçamento ficam de fora, para o valor não se abater duas vezes."
         : (visao === "terrenista"
-        ? "O DFC é o centro 14202. O repasse do terrenista é a variação de caixa do centro 14201, paga no mês seguinte."
+        ? "O DFC é o centro 14202, com o rateio das contas configuradas na prestação. A variação desse centro é o repasse do terrenista, pago no mês seguinte."
         : (visao === "empreendedor"
-        ? "O DFC junta os centros 14201 e 70600. O saldo dos dois é a distribuição do mês seguinte, separada entre Moura Leite, Soma e PRF."
+        ? "O DFC junta os centros 14201 e 70600, sem o percentual da obra. A variação dos dois é repartida entre os sócios no mês seguinte."
         : (card.extra
         ? "Esta obra tem o centro do empreendedor, o da parceria e outros centros (marketing, comercial, gestão). O DFC soma os centros marcados por inteiro, só nas contas ligadas na prestação de contas. O repasse do final é o percentual do parceiro sobre esse DFC, pago no mês seguinte no centro do empreendedor."
         : "Com os centros da obra marcados, o DFC é o total recebido e pago na obra. O centro com PARCERIA no nome já é a parte do parceiro: o repasse previsto é a variação desse centro, sem aplicar de novo o percentual da obra. O percentual da obra incide só sobre os demais centros. A linha 12 fica no mês em que o resultado acontece. O repasse é a variação desse mês paga no mês seguinte: janeiro de 2027 paga dezembro de 2026. A variação do 13301 é paga no 13300, na conta cadastrada no 13301. A do 13401 é paga no 13400, na conta do 13401. O centro de custo não entra no cadastro do credor."))))}</p>`;
@@ -2694,7 +2696,7 @@ const OrcamentoRepassesApp = {
           { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nome + (String(emp) === "12"
             ? ". Cada mês distribui a variação de caixa desse mês. O lucro da empresa 13 entra no mês em que chega."
             : (String(emp) === "6"
-            ? ". Terrenista: variação do 14201 no mês seguinte. Empreendedor: saldo de 14201 e 70600, separado entre Moura Leite, Soma e PRF."
+            ? ". Terrenista: centro 14202 com o rateio das contas; a variação é o repasse. Empreendedor: centros 14201 e 70600, variação repartida entre os sócios."
             : ". Janeiro é o repasse da variação de dezembro de 2026. Cada mês paga a variação do mês anterior.")) }
         ]
       };
@@ -2946,7 +2948,7 @@ const OrcamentoRepassesApp = {
           : "");
       let quem = "Cada participante recebe este percentual do repasse do mês seguinte.";
       if (card.extra) quem = "Cada participante recebe este percentual do repasse do mês seguinte.";
-      else if (card.aracari) quem = "O saldo dos centros 14201 e 70600 é a distribuição do mês seguinte. Cada sócio recebe a fatia cadastrada.";
+      else if (card.aracari) quem = "O saldo dos centros 14201 e 70600 é repartido entre os sócios no mês seguinte. Cada um recebe a fatia cadastrada.";
       else if (card.kind === "mista") quem = "Cada empreendedor recebe, sobre o valor do terrenista, a proporção da fatia dele. 50% de uma fatia de 56% são 28% do negócio.";
       else if (card.companyId === "12") quem = "Cada sócio recebe este percentual da variação de caixa do mês. O lucro recebido da empresa 13 já está nessa variação.";
       else if (card.sociedade) quem = "Cada sócio recebe este percentual da distribuição do mês seguinte, no centro de custo cadastrado.";
@@ -2977,7 +2979,7 @@ const OrcamentoRepassesApp = {
       : (card.sociedade
         ? "A variação de caixa de um mês vira distribuição no mês seguinte."
         : (card.aracariVisao === "terrenista"
-          ? "O repasse do terrenista é a variação de caixa do centro 14201, paga no mês seguinte."
+          ? "O repasse do terrenista é a variação de caixa do centro 14202, já com o rateio das contas configuradas, paga no mês seguinte."
           : (card.extra
           ? "A variação de caixa do DFC integral, no percentual do parceiro e só nas contas da prestação, é o repasse do mês seguinte. Ele é pago no centro do empreendedor."
           : (card.centroParceiro
