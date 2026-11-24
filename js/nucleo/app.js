@@ -13667,7 +13667,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   }
 
   if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
-  if (!window._filaProntaAtiva && typeof window.nexScheduleCumpridaCheck === "function") window.nexScheduleCumpridaCheck();
+  if (typeof window.nexScheduleCumpridaCheck === "function") window.nexScheduleCumpridaCheck();
   const originalAdvFilters = window.advFilters;
   window.advFilters = window.advFiltersFila || {};
   clientList = window.applyAdvFiltersTo(clientList);
@@ -38251,8 +38251,9 @@ window.nexIsLegallyValid = function(item) {
 };
 
 window.nexScheduleCumpridaCheck = function() {
-  if (window._nexCumpridaChecking || typeof window.nexCollectAll !== "function") return;
-  if (!window.SiengeApiService || typeof SiengeApiService.getCustomerFinancialStatements !== "function") return;
+  if (window._nexCumpridaPromise) return window._nexCumpridaPromise;
+  if (typeof window.nexCollectAll !== "function") return Promise.resolve();
+  if (!window.SiengeApiService || typeof SiengeApiService.getCustomerFinancialStatements !== "function") return Promise.resolve();
   if (!window._nexPayAttempted) window._nexPayAttempted = new Set();
   const pending = window.nexCollectAll().filter(function(it) {
     if (!it || !window.nexIsEntregue(it.status) || !it.arDigital) return false;
@@ -38262,7 +38263,7 @@ window.nexScheduleCumpridaCheck = function() {
     const key = window.nexPayKey(it.customerId, it.titulo || it.saleId);
     return key && !window._nexPayAttempted.has(key);
   });
-  if (!pending.length) return;
+  if (!pending.length) return Promise.resolve();
   const byCustomer = new Map();
   pending.forEach(function(it) {
     const cid = String(it.customerId || "");
@@ -38273,9 +38274,9 @@ window.nexScheduleCumpridaCheck = function() {
     if (!byCustomer.has(cid)) byCustomer.set(cid, []);
     byCustomer.get(cid).push(titulo);
   });
-  if (!byCustomer.size) return;
+  if (!byCustomer.size) return Promise.resolve();
   window._nexCumpridaChecking = true;
-  Promise.all(Array.from(byCustomer.entries()).map(async function(pair) {
+  window._nexCumpridaPromise = Promise.all(Array.from(byCustomer.entries()).map(async function(pair) {
     const cid = pair[0];
     const titulos = pair[1];
     try {
@@ -38301,6 +38302,7 @@ window.nexScheduleCumpridaCheck = function() {
   })).then(function() {
     window._nexCumpridaChecking = false;
     window._nexCumpridaSet = null;
+    if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
     if (window._isDefaultersLoading) {
       window._filaSearchPending = true;
       return;
@@ -38309,7 +38311,10 @@ window.nexScheduleCumpridaCheck = function() {
     if (tab && tab.style.display !== "none" && window.AppState && AppState.defaultersLoaded && typeof loadDashboardData === "function") {
       loadDashboardData(false);
     }
+  }).finally(function() {
+    window._nexCumpridaPromise = null;
   });
+  return window._nexCumpridaPromise;
 };
 
 window.nexScheduleFollowupPayCheck = function() {

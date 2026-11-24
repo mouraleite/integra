@@ -1958,6 +1958,16 @@ const DashboardInadimplencia = (function() {
       fila = window.filaAplicarPagamentosRecentes(fila);
       if (Array.isArray(window.rawClientList) && window.rawClientList.length) window.rawClientList = fila;
     }
+    if (!Array.isArray(window.rawClientList) || !window.rawClientList.length) window.rawClientList = fila;
+    if (typeof window.nexScheduleCumpridaCheck === "function") {
+      try {
+        await Promise.race([
+          Promise.resolve(window.nexScheduleCumpridaCheck()),
+          new Promise((resolve) => setTimeout(resolve, 25000))
+        ]);
+      } catch (e) {}
+    }
+    if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
     if (typeof window.refreshVistoriaSprintCounts === "function") {
       try { await window.refreshVistoriaSprintCounts(); } catch (e) {}
     }

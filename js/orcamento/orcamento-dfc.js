@@ -2611,8 +2611,50 @@ const OrcamentoDfcApp = {
   },
 
   garantirCdi() {
-    if (this._cdiPronto || this._cdiPedido) return;
+    if (!this._cdiHidratado) {
+      this._cdiHidratado = true;
+      this.lerCdiSalvo();
+    }
+    if (this._cdiPedido || this._cdiBuscou) return;
+    this._cdiBuscou = true;
     this._cdiPedido = this.buscarCdi();
+  },
+
+  lerCdiSalvo() {
+    try {
+      const bruto = JSON.parse(localStorage.getItem("crm_dfc_cdi_4391") || "null");
+      if (!bruto || typeof bruto !== "object") return;
+      this.aplicarMapaCdi(bruto, false);
+    } catch (e) {}
+  },
+
+  taxaCdi(valor) {
+    const s = String(valor == null ? "" : valor).trim().replace("%", "").replace(/\s/g, "");
+    if (!s) return 0;
+    const n = s.indexOf(",") >= 0
+      ? Number(s.replace(/\./g, "").replace(",", "."))
+      : Number(s);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  },
+
+  /* O mês corrente da série 4391 ainda está aberto. A projeção usa o último mês fechado. */
+  aplicarMapaCdi(mapa, gravar) {
+    const fonte = mapa && typeof mapa === "object" ? mapa : {};
+    const chaves = Object.keys(fonte).filter((k) => Number(fonte[k]) > 0).sort();
+    if (!chaves.length) return false;
+    const hoje = new Date();
+    const mesAtual = hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0");
+    const fechadas = chaves.filter((k) => k < mesAtual);
+    const ref = fechadas.length ? fechadas[fechadas.length - 1] : chaves[chaves.length - 1];
+    this._cdiMes = {};
+    chaves.forEach((k) => { this._cdiMes[k] = Number(fonte[k]); });
+    this._cdiUltimoMes = ref;
+    this._cdiUltimo = Number(fonte[ref]) || 0;
+    this._cdiPronto = this._cdiUltimo > 0;
+    if (gravar && this._cdiPronto) {
+      try { localStorage.setItem("crm_dfc_cdi_4391", JSON.stringify(this._cdiMes)); } catch (e) {}
+    }
+    return this._cdiPronto;
   },
 
   async buscarCdi() {
@@ -2629,8 +2671,9 @@ const OrcamentoDfcApp = {
         const res = await fetch(urls[i]);
         if (!res.ok) continue;
         const json = await res.json();
-        if (!Array.isArray(json) || !json.length) continue;
-        json.forEach((r) => {
+        const linhas = Array.isArray(json) ? json : (json && (json.dados || json.value || json.data));
+        if (!Array.isArray(linhas) || !linhas.length) continue;
+        linhas.forEach((r) => {
           const s = String((r && r.data) || "").trim();
           const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
           const iso = s.match(/^(\d{4})-(\d{1,2})/);
@@ -2638,18 +2681,15 @@ const OrcamentoDfcApp = {
             ? (br[3] + "-" + String(br[2]).padStart(2, "0"))
             : (iso ? (iso[1] + "-" + String(iso[2]).padStart(2, "0")) : "");
           if (!key) return;
-          const n = Number(String(r.valor == null ? "" : r.valor).replace(",", ".").replace("%", ""));
-          if (Number.isFinite(n) && n > 0) mapa[key] = n;
+          const n = this.taxaCdi(r.valor);
+          if (n > 0) mapa[key] = n;
         });
-        break;
+        if (Object.keys(mapa).length) break;
       } catch (e) {}
     }
-    const chaves = Object.keys(mapa).sort();
-    this._cdiMes = mapa;
-    this._cdiUltimoMes = chaves.length ? chaves[chaves.length - 1] : "";
-    this._cdiUltimo = this._cdiUltimoMes ? mapa[this._cdiUltimoMes] : 0;
-    this._cdiPronto = true;
+    const ok = this.aplicarMapaCdi(mapa, true);
     this._cdiPedido = null;
+    if (!ok && !(Number(this._cdiUltimo) > 0)) this._cdiFalhou = true;
     this.atualizarSaldosDom();
   },
 
@@ -2798,7 +2838,8 @@ const OrcamentoDfcApp = {
       const valor = info.valor;
       const vazio = valor == null;
       const n = Number(valor) || 0;
-      return `<td class="${sep}${n < -0.005 ? " orc-dfc-neg" : ""}" title="${this.esc(this.textoCdi(info))}">${vazio ? "—" : this.money(n)}</td>`;
+      const texto = vazio ? "…" : (Math.abs(n) < 0.005 ? "0,00" : this.money(n));
+      return `<td class="${sep}${n < -0.005 ? " orc-dfc-neg" : ""}" title="${this.esc(this.textoCdi(info))}">${texto}</td>`;
     };
     const varAplic = () => {
       let html = "";
@@ -2807,6 +2848,7 @@ const OrcamentoDfcApp = {
       return html;
     };
     /* O ano corrente e o forecast já trazem o rendimento. A linha só entra no ano orçado. */
+    if ((Number(par.anoEsq) >= 2027 || Number(par.anoDir) >= 2027) && !this._cdiPronto && !this._cdiBuscou) this.garantirCdi();
     const ladoAplic = (serie, ano) => {
       if (Number(ano) < 2027) return serie.map(() => null);
       return serie.map((item, i) => this.rendimentoAplicacao(item.ini, ano, i));
@@ -2827,10 +2869,22 @@ const OrcamentoDfcApp = {
       return celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + variacao;
     }).join("");
     const orcado = this.orcadoAplicacao();
+    const temSugestao = (lista) => lista.some((info) => info && info.valor != null);
+    const textoTot = (lista, tot, mostra) => {
+      if (!mostra) return "";
+      if (!temSugestao(lista)) return "…";
+      return Math.abs(tot) < 0.005 ? "0,00" : this.money(tot);
+    };
     let textoConf = "";
     let alertaAplic = false;
     if ((mostraE || mostraD) && !orcado) {
-      textoConf = "Ainda não há linha de aplicação no arquivo. Quando ela entrar, a tela compara com esta sugestão.";
+      if (temSugestao(esqA) || temSugestao(dirA)) {
+        textoConf = "Sugestão para lançar na linha de aplicação do Excel. Quando a linha entrar no arquivo, a tela compara com estes valores.";
+      } else if (this._cdiFalhou) {
+        textoConf = "Não consegui o CDI do Banco Central para calcular a sugestão.";
+      } else {
+        textoConf = "Calculando a sugestão de 80% do CDI para lançar no Excel.";
+      }
     } else {
       const confEsq = mostraE ? this.textoConferenciaAplicacao(esqA, orcado && orcado.cmp, par.v1xv2 ? "V1" : "") : null;
       const confDir = mostraD ? this.textoConferenciaAplicacao(dirA, orcado && orcado.meses, par.v1xv2 ? "V2" : "") : null;
@@ -2838,7 +2892,7 @@ const OrcamentoDfcApp = {
       alertaAplic = partesConf.some((c) => c.alerta);
       textoConf = partesConf.map((c) => c.texto).join(" ");
     }
-    const aplic = `<tr class="orc-dfc-aplic${alertaAplic ? " is-alerta" : ""}"><td title="Sugestão de 80% do CDI sobre o saldo inicial. Compara com a linha de aplicação do arquivo.">Previsão de aplicação${textoConf ? `<small class="orc-dfc-aplic-aviso${alertaAplic ? " is-alerta" : ""}">${this.esc(textoConf)}</small>` : ""}</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${mostraE ? this.money(totE) : ""}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${mostraD ? this.money(totD) : ""}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
+    const aplic = `<tr class="orc-dfc-aplic${alertaAplic ? " is-alerta" : ""}"><td title="Sugestão de 80% do CDI sobre o saldo inicial. Estes são os valores para lançar no Excel.">Previsão de aplicação${textoConf ? `<small class="orc-dfc-aplic-aviso${alertaAplic ? " is-alerta" : ""}">${this.esc(textoConf)}</small>` : ""}</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${textoTot(esqA, totE, mostraE)}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${textoTot(dirA, totD, mostraD)}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
     const folga = `<tr class="orc-dfc-saldo-gap"><td colspan="${span}"></td></tr>`;
     return aplic + folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
   },
