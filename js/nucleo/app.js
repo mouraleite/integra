@@ -31831,7 +31831,7 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
     : "";
   if (isento) {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;font-size:0.82rem;line-height:1.45;";
-    box.innerHTML = `<strong>Sem multa e sem juros neste boleto.</strong> A API do Sienge receberá multa <b>0%</b> e juros <b>0%</b>. Principal: ${money(principal)}.${graceHint}`;
+    box.innerHTML = `<strong>Sem multa e sem juros neste boleto.</strong> A API do Sienge receberá multa <b>0,01%</b> e juros <b>0,01%</b> (com 0% o Sienge aplica os encargos do contrato). Principal: ${money(principal)}.${graceHint}`;
   } else {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.82rem;line-height:1.45;";
     box.innerHTML = `<strong>Este boleto será gerado COM acréscimos.</strong> A API do Sienge receberá multa <b>${Number(finePct).toFixed(2)}%</b> e juros <b>${Number(interestPct).toFixed(2)}% a.m.</b>${(multa + juros) > 0.009 ? ` · Estimativa: multa ${money(multa)} + juros ${money(juros)} · Total ${money(principal + multa + juros)}` : ""}.${honHint}${graceHint}`;
@@ -32178,13 +32178,17 @@ window.submitReprocessBoleto = async function() {
       interest = 0;
     }
 
+    // O Sienge trata 0% como "não informado" e aplica a multa e os juros do contrato
+    // (teste no título 14394 em 24/11/2026: 0% gerou R$ 1.195,32 sobre R$ 1.171,12).
+    // Isenção total vai como o mínimo de 0,01%.
+    const SIENGE_PCT_MINIMO = 0.01;
     const payload = {
       receivableBillId: Number(currentReprocessBillId),
       companyId: Number(companyId),
       checkingAccountId: account,
       newDueDate: dueDate,
-      interestPercentage: Number(interest) || 0,
-      finePercentage: Number(fine) || 0,
+      interestPercentage: Math.max(SIENGE_PCT_MINIMO, Number(interest) || 0),
+      finePercentage: Math.max(SIENGE_PCT_MINIMO, Number(fine) || 0),
       insurancepercentage: 0,
       correctAnnualInstallment: false,
       groupedInstalments: installmentsArray.length > 1,
