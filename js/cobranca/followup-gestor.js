@@ -224,12 +224,13 @@
     resumoHtml(p, idBase) {
       const r = p.resumo || {};
       const v = r.valores;
-      const cartao = (rotulo, qtd, valor, cor, fundo) => `<div style="flex:1;min-width:150px;border:1px solid #e2e8f0;border-left:4px solid ${cor};border-radius:8px;padding:10px 12px;background:${fundo || "#fff"};">
-          <div style="font-size:0.68rem;font-weight:800;color:${cor};text-transform:uppercase;">${rotulo}</div>
-          <div style="display:flex;align-items:baseline;gap:6px;margin-top:2px;white-space:nowrap;"><strong style="font-size:0.95rem;color:#0f172a;">${qtd} parc.</strong><span style="font-size:0.92rem;font-weight:800;color:${cor};">${this.moeda(valor)}</span></div>
+      const cartao = (rotulo, qtd, valor, cor, fundo) => `<div style="min-width:0;border:1px solid #e2e8f0;border-left:4px solid ${cor};border-radius:8px;padding:10px 12px;background:${fundo || "#fff"};">
+          <div style="font-size:0.66rem;font-weight:800;color:${cor};text-transform:uppercase;letter-spacing:.02em;">${rotulo}</div>
+          <div style="font-size:0.78rem;font-weight:700;color:#475569;margin-top:4px;">${qtd} ${Number(qtd) === 1 ? "parcela" : "parcelas"}</div>
+          <div style="font-size:1.02rem;font-weight:800;color:${cor};white-space:nowrap;font-variant-numeric:tabular-nums;">${this.moeda(valor)}</div>
         </div>`;
       const valoresHtml = v
-        ? `<div style="display:flex;gap:8px;flex-wrap:wrap;flex:1;min-width:0;">
+        ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;flex:1;min-width:0;">
             ${cartao("Valores pagos", v.pagosQtd, v.pagos, "#15803d")}
             ${cartao("Valores vencidos", v.vencidosQtd, v.vencidos, "#c2410c", "#fff7ed")}
             ${cartao("Valores a vencer", v.aVencerQtd, v.aVencer, "#1d4ed8")}
@@ -237,34 +238,36 @@
           </div>`
         : `<div style="flex:1;padding:12px;border:1px dashed #cbd5e1;border-radius:8px;color:#64748b;font-size:0.84rem;">Os valores do contrato não estavam carregados na ficha quando o pedido foi feito. Use Visualizar Extrato.</div>`;
       const gauge = r.pctPago != null
-        ? `<div style="width:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;">
+        ? `<div style="width:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;border:1px solid #e2e8f0;border-radius:8px;padding:6px 4px;background:#fff;">
             <canvas id="${idBase}-gauge" width="150" height="85" data-pct="${r.pctPago}" data-resta="${v ? (Number(v.vencidos) || 0) + (Number(v.aVencer) || 0) : 0}"></canvas>
             <span style="font-size:0.68rem;font-weight:700;color:#64748b;">Pago do contrato</span>
           </div>`
         : "";
-      const linha = (icone, rotulo, conteudo) => `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9;">
-          <i data-lucide="${icone}" style="width:16px;height:16px;color:#105436;flex-shrink:0;margin-top:2px;"></i>
-          <div style="min-width:0;flex:1;"><div style="font-size:0.68rem;font-weight:800;color:#64748b;text-transform:uppercase;">${rotulo}</div><div style="font-size:0.86rem;color:#0f172a;">${conteudo}</div></div>
+      const linha = (icone, rotulo, conteudo, largo) => `<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;min-width:0;${largo ? "grid-column:1 / -1;" : ""}">
+          <i data-lucide="${icone}" style="width:16px;height:16px;color:#105436;flex-shrink:0;margin-top:1px;"></i>
+          <div style="min-width:0;flex:1;"><div style="font-size:0.66rem;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.02em;margin-bottom:3px;">${rotulo}</div><div style="font-size:0.84rem;color:#0f172a;line-height:1.45;">${conteudo}</div></div>
         </div>`;
       const c = r.construcao;
       const construcaoTxt = c ? this.esc(c.texto || (c.tem ? "Lote com construção." : "Sem registro de construção.")) : "Não consultado.";
       const loteBtn = r.lote && r.lote.coords
-        ? ` <button type="button" class="btn btn-outline btn-sm" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;" onclick="FollowupGestor.abrirLote('${this.esc(p.id)}')"><i data-lucide="globe" style="width:12px;height:12px;"></i> Ver lote no KMZ</button>`
+        ? `<div style="margin-top:6px;"><button type="button" class="btn btn-outline btn-sm" style="padding:2px 8px;font-size:0.75rem;" onclick="FollowupGestor.abrirLote('${this.esc(p.id)}')"><i data-lucide="globe" style="width:12px;height:12px;"></i> Ver lote no KMZ</button></div>`
         : "";
       const pmp = r.pmp != null ? this.esc(r.pmp) + " dias" + (r.pctEmDia != null ? " · pagou em dia " + this.esc(r.pctEmDia) + "% das vezes" : "") : "—";
       const reneg = r.renegociacoes != null ? this.esc(r.renegociacoes) + (Number(r.renegociacoes) === 1 ? " renegociação" : " renegociações") : "—";
       const atraso = r.diasAtraso != null ? this.esc(r.diasAtraso) + " dias de atraso" + (r.acordoQuebrado ? " · acordo quebrado" : "") : "";
       const u = r.ultimoContato;
       const contato = u
-        ? `<strong>${this.esc(this.dataHora(u.data))}</strong> · ${this.esc(u.canal)}${u.autor ? " · " + this.esc(u.autor) : ""}<div style="margin-top:4px;padding:6px 8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;white-space:pre-wrap;font-size:0.8rem;color:#334155;">${this.esc(u.texto || "(sem texto)")}</div>`
+        ? `<strong>${this.esc(this.dataHora(u.data))}</strong> · ${this.esc(u.canal)}${u.autor ? " · " + this.esc(u.autor) : ""}<div style="margin-top:6px;padding:8px 10px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;white-space:pre-wrap;font-size:0.8rem;color:#334155;">${this.esc(u.texto || "(sem texto)")}</div>`
         : "Nenhum contato registrado.";
-      return `<div style="display:flex;gap:12px;align-items:stretch;flex-wrap:wrap;">${valoresHtml}${gauge}</div>
-        <div style="margin-top:10px;">
+      const acordos = reneg + (atraso ? `<div style="color:#64748b;font-size:0.78rem;margin-top:2px;">${atraso}</div>` : "");
+      const pmpTxt = pmp + (r.perfil ? `<div style="color:#64748b;font-size:0.78rem;margin-top:2px;">${this.esc(r.perfil)}</div>` : "");
+      return `<div style="display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;">${valoresHtml}${gauge}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;margin-top:10px;">
           ${linha("house", "Construção", construcaoTxt + loteBtn)}
           ${linha("mail", "Nex", this.esc((r.nex && r.nex.texto) || "—"))}
-          ${linha("handshake", "Acordos", reneg + (atraso ? " · " + atraso : ""))}
-          ${linha("timer", "PMP", pmp + (r.perfil ? " · " + this.esc(r.perfil) : ""))}
-          ${linha("message-square", "Último contato", contato)}
+          ${linha("handshake", "Acordos", acordos)}
+          ${linha("timer", "PMP", pmpTxt)}
+          ${linha("message-square", "Último contato", contato, true)}
         </div>
         <div style="font-size:0.72rem;color:#94a3b8;margin-top:6px;">Resumo da ficha em ${this.esc(this.dataHora(r.geradoEm))}, quando o pedido foi feito.</div>`;
     },
@@ -380,7 +383,7 @@
         : `<label style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Operador responsável</label>
            <select id="fg-operador-sel" style="height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 10px;">${itensOp.map((o) => `<option value="${this.esc(o.id)}" ${this.norm(o.id) === this.norm(opFila) ? "selected" : ""}>${this.esc(o.label)}</option>`).join("")}</select>`;
       this._operadorEscolhido = opFila;
-      this.modal("fg-pedido", 900, `
+      this.modal("fg-pedido", 1000, `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
           <div>
             <h2 style="margin:0;color:#105436;font-size:1.15rem;">Pedir atualização ao operador</h2>
@@ -561,7 +564,7 @@
       const pos = meus.findIndex((x) => x.id === p.id);
       const podeResponder = p.status === "aguardando" && !this.souAdmin() && this.operadorEh(p.operador, user);
       this.popupAtual = p.id;
-      this.modal("fg-popup", 920, `
+      this.modal("fg-popup", 1000, `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
           <div>
             <div style="display:inline-flex;align-items:center;gap:6px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:999px;padding:3px 10px;font-size:0.75rem;font-weight:800;"><i data-lucide="bell-ring" style="width:13px;height:13px;"></i> Follow-up do gestor${meus.length > 1 && pos >= 0 ? " · " + (pos + 1) + " de " + meus.length : ""}</div>
@@ -775,7 +778,7 @@
       const p = this.acharPedido(id);
       if (!p) return;
       const resp = p.status === "respondido";
-      this.modal("fg-olho", 920, `
+      this.modal("fg-olho", 1000, `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
           <div>
             <h2 style="margin:0;color:#105436;font-size:1.1rem;">Follow-up do gestor</h2>
