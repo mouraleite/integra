@@ -10,7 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const { initializeApp } = require("firebase/app");
 const {
-  getFirestore, collection, query, orderBy, limit, startAfter, getDocs, documentId,
+  getFirestore, collection, query, orderBy, limit, startAfter, getDocsFromServer, documentId,
   Timestamp, GeoPoint, DocumentReference, Bytes,
 } = require("firebase/firestore");
 
@@ -129,6 +129,26 @@ function registrar(perfil, data) {
 }
 
 // ---------- exportação ----------
+// Lê só do servidor: depois de um timeout o SDK passava a responder do cache local (vazio) sem erro,
+// e a coleção saía como "vazia" ou pela metade (24/11/2026: caixa_movimentos, cfin_pagos,
+// sienge_defaulters_history e parte de caixa_posicao). Agora tenta de novo e, se não der, acusa erro.
+async function lerPagina(q, nome) {
+  let falha = null;
+  for (let tentativa = 1; tentativa <= 5; tentativa++) {
+    try {
+      const snap = await getDocsFromServer(q);
+      if (snap.metadata && snap.metadata.fromCache) throw new Error("resposta veio do cache, não do servidor");
+      return snap;
+    } catch (e) {
+      falha = e;
+      const espera = 2000 * tentativa;
+      console.log(`  ${nome}: falha na leitura (tentativa ${tentativa}/5): ${String(e && e.message || e).slice(0, 120)}; nova tentativa em ${espera / 1000}s`);
+      await new Promise((r) => setTimeout(r, espera));
+    }
+  }
+  throw falha;
+}
+
 async function exportarColecao(db, nome, perfil) {
   const arq = fs.createWriteStream(path.join(SAIDA, `${nome}.ndjson`), { encoding: "utf8" });
   let ultimo = null;
@@ -137,7 +157,7 @@ async function exportarColecao(db, nome, perfil) {
     if (tamanho <= 0) break;
     const partes = [collection(db, nome), orderBy(documentId()), limit(tamanho)];
     if (ultimo) partes.splice(2, 0, startAfter(ultimo));
-    const snap = await getDocs(query(...partes));
+    const snap = await lerPagina(query(...partes), nome);
     for (const d of snap.docs) {
       const data = d.data();
       const linha = JSON.stringify({ id: d.id, data: serializar(data) });
