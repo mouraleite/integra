@@ -2023,6 +2023,15 @@ window.buildSprintOperatorSummaries = function() {
   });
   const boUsers = users.filter(u => hd.isBackOfficeUser(u));
   const seenBo = new Set();
+  const nexId = window.FILA_QUEUE_GROUPS && window.FILA_QUEUE_GROUPS.NEX_CUMPRIDA;
+  let nexCumprida = 0;
+  if (nexId != null) {
+    all.forEach((c) => {
+      if (!c || c.distratado) return;
+      const g = typeof window.getFilaQueueGroup === 'function' ? window.getFilaQueueGroup(c) : c._filaQueueGroup;
+      if (g === nexId) nexCumprida += 1;
+    });
+  }
   boUsers.forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
     if (seenBo.has(id)) return;
@@ -2032,8 +2041,11 @@ window.buildSprintOperatorSummaries = function() {
     const validar = Number(counts.validar) || 0;
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
-    if (!enviar && !validar && !enviarSj && !validarSj) return;
+    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida) return;
     lines.push('*' + hd.sprintOperatorLabel(u) + '*');
+    if (nexCumprida > 0) {
+      lines.push('• Há ' + nexCumprida + (nexCumprida === 1 ? ' título com NEX cumprida' : ' títulos com NEX cumprida'));
+    }
     if (enviar > 0) {
       lines.push('• Há ' + enviar + ' vistoria' + (enviar === 1 ? '' : 's') + ' para enviar');
     }
