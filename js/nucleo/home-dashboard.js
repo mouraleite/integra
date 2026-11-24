@@ -2041,6 +2041,17 @@ window.buildSprintOperatorSummaries = function() {
   });
   const boUsers = users.filter(u => hd.isBackOfficeUser(u));
   const seenBo = new Set();
+  // Títulos da fila com a tag "Acordo Judicial - Alterar p/ Sub judice Sienge" (mesmo grupo da Fila de Cobrança).
+  const G = window.FILA_QUEUE_GROUPS || {};
+  const titulosSubjudice = new Set();
+  if (G.ALTERAR_SUBJUDICE_SIENGE && typeof window.getFilaQueueGroup === 'function') {
+    all.forEach(c => {
+      try {
+        if (window.getFilaQueueGroup(c) === G.ALTERAR_SUBJUDICE_SIENGE) titulosSubjudice.add(String(c.customerId) + '-' + String(c.saleId));
+      } catch (e) {}
+    });
+  }
+  const alterarSj = titulosSubjudice.size;
   boUsers.forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
     if (seenBo.has(id)) return;
@@ -2050,8 +2061,11 @@ window.buildSprintOperatorSummaries = function() {
     const validar = Number(counts.validar) || 0;
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
-    if (!enviar && !validar && !enviarSj && !validarSj) return;
+    if (!enviar && !validar && !enviarSj && !validarSj && !alterarSj) return;
     lines.push('*' + hd.sprintOperatorLabel(u) + '*');
+    if (alterarSj > 0) {
+      lines.push('• Há ' + alterarSj + (alterarSj === 1 ? ' título' : ' títulos') + ' para alterar para sub judice no Sienge');
+    }
     if (enviar > 0) {
       lines.push('• Há ' + enviar + ' vistoria' + (enviar === 1 ? '' : 's') + ' para enviar');
     }
