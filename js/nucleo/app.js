@@ -18812,6 +18812,23 @@ function formatCpfCnpj(val) {
             const totalComHonorarios = totalAtualizado + totalHonorarios;
             if (simTotalEl) simTotalEl.textContent = kpiFmt(margemHon > 0 ? totalComHonorarios : totalAtualizado);
 
+            // Desconto em multa e juros: por enquanto o Sienge não aplica pela API (aviso abaixo da negociação).
+            try {
+              const taxaSim = typeof window.getSimuladorTaxaMultiplier === "function" ? window.getSimuladorTaxaMultiplier() : 1;
+              const selTaxa = document.getElementById("simulador-taxa");
+              let avisoSim = document.getElementById("simulador-aviso-sienge");
+              if (!avisoSim && selTaxa && selTaxa.parentNode) {
+                avisoSim = document.createElement("div");
+                avisoSim.id = "simulador-aviso-sienge";
+                selTaxa.parentNode.appendChild(avisoSim);
+              }
+              if (avisoSim) {
+                avisoSim.innerHTML = (taxaSim < 1 && typeof window.avisoDescontoSiengeHtml === "function")
+                  ? window.avisoDescontoSiengeHtml({ finePct: 2 * taxaSim, interestPct: 1 * taxaSim, alvo: margemHon > 0 ? totalComHonorarios : totalAtualizado })
+                  : "";
+              }
+            } catch (e) {}
+
             // Atualiza VF do Funil
             window.funnelCurrentVF = kpiAVencer + totalAtualizado;
             
@@ -31779,6 +31796,17 @@ window.renderAlertaDescontoEncargos = function(customerId) {
   box.style.display = "block";
 };
 
+/** Aviso enquanto o Sienge não aplica pela API a multa e os juros com desconto (teste de 24/11/2026). */
+window.avisoDescontoSiengeHtml = function(o) {
+  const pct = (v) => (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return `<div style="margin-top:8px;padding:9px 11px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.8rem;line-height:1.45;">
+    <strong>Atenção: boleto com desconto de multa e juros deve ser gerado direto no Sienge.</strong>
+    Pelo Integra, o Sienge ainda aplica a multa e os juros do contrato (2% e 1% a.m.), mesmo com o desconto escolhido. Estamos aguardando resposta do suporte do Sienge.
+    No Sienge, informe multa <b>${pct(o && o.finePct)}%</b> e juros <b>${pct(o && o.interestPct)}% a.m.</b> para chegar em <b>${money(o && o.alvo)}</b>.
+  </div>`;
+};
+
 window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultiplier) {
   const box = document.getElementById("reprocess-charges-summary");
   if (!box) return { multa: 0, juros: 0, principal: 0 };
@@ -31835,6 +31863,12 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
   } else {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.82rem;line-height:1.45;";
     box.innerHTML = `<strong>Este boleto será gerado COM acréscimos.</strong> A API do Sienge receberá multa <b>${Number(finePct).toFixed(2)}%</b> e juros <b>${Number(interestPct).toFixed(2)}% a.m.</b>${(multa + juros) > 0.009 ? ` · Estimativa: multa ${money(multa)} + juros ${money(juros)} · Total ${money(principal + multa + juros)}` : ""}.${honHint}${graceHint}`;
+  }
+  // Enquanto o Sienge não responde: a API ignora multa e juros enviados e aplica os do contrato
+  // (teste no título 14394 em 24/11/2026). Desconto ou isenção precisa ser gerado direto no Sienge.
+  if (waiver.waive || taxa < 1) {
+    const alvo = isento ? principal : principal + multa + juros;
+    box.innerHTML += window.avisoDescontoSiengeHtml({ finePct: finePct, interestPct: interestPct, alvo: alvo });
   }
   return { multa, juros, principal, honorarios, finePct, interestPct, waive: waiver.waive };
 };
