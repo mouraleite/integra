@@ -585,25 +585,72 @@
     return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
 
-  // Sugestão automática: telas citadas no código alterado, nome do arquivo e palavras do texto.
+  // Nome da tela como frase comparável: sem acento, sem o que está entre parênteses, só letras e números.
+  function fraseTela(s) {
+    return " " + semAcento(String(s || "").replace(/\([^)]*\)/g, " ")).replace(/[^a-z0-9%]+/g, " ").trim() + " ";
+  }
+
+  // Telas cujo nome inteiro aparece no texto. Se um nome está dentro de outro que também apareceu
+  // ("Fluxo de caixa" dentro de "Fluxo de caixa diário"), fica só o mais longo.
+  function telasNoTexto(menu, texto, exigirCaminho) {
+    const t = fraseTela(texto);
+    if (t.trim().length < 3) return [];
+    const genericos = ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro", "geral", "configuracao"];
+    const achadas = menu.filter((m) => {
+      const nome = fraseTela(m.nome);
+      const palavras = nome.trim().split(" ").filter(Boolean);
+      if (!palavras.length) return false;
+      // Nome de uma palavra só e genérico ("Configurações") não identifica tela nenhuma.
+      if (palavras.length < 2 && genericos.indexOf(palavras[0]) >= 0) return false;
+      if (t.indexOf(nome) < 0) return false;
+      if (!exigirCaminho) return true;
+      // Na linha "Onde:", nome genérico só vale com o menu pai junto ("Caixa e Banco > Configurações").
+      const partes = String(m.caminho || "").split("›").map(fraseTela);
+      return palavras.length >= 2 || partes.length < 2 || t.indexOf(partes[partes.length - 2]) >= 0;
+    });
+    return achadas.filter((m) => !achadas.some((o) => o !== m
+      && fraseTela(o.nome).length > fraseTela(m.nome).length
+      && fraseTela(o.nome).indexOf(fraseTela(m.nome)) >= 0)).map((m) => m.tab);
+  }
+
+  // Linhas "Onde:" / "Onde fica:" dos commits (aceita "- Onde fica: ..." também).
+  function textoOnde(r) {
+    const linhas = [];
+    ((r && r.commits) || []).forEach((c) => {
+      String(c.corpo || "").split("\n").forEach((l) => {
+        const m = /^[\s\-•*]*onde( fica)?\s*:\s*(.+)$/i.exec(l);
+        if (m) linhas.push(m[2]);
+      });
+    });
+    return linhas.join(" \n ");
+  }
+
+  // Arquivo alterado -> aba. Igual ao id da aba vence; senão o id termina com o nome do arquivo
+  // (caixa-diario.js -> fluxo-caixa-diario) ou o arquivo começa com o id ("orcamento-dfc" -> "orcamento").
+  function telasDoArquivo(menu, nomeArquivo) {
+    const base = semAcento(String(nomeArquivo || "").split("/").pop().replace(/\.(js|css|html)$/i, "")).replace(/_/g, "-");
+    if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop", "config", "utils"].indexOf(base) >= 0) return [];
+    const ids = menu.map((t) => ({ tab: t.tab, tb: semAcento(t.tab).replace(/_/g, "-") }));
+    const iguais = ids.filter((x) => x.tb === base);
+    if (iguais.length) return iguais.map((x) => x.tab);
+    const fim = ids.filter((x) => x.tb.endsWith("-" + base));
+    if (fim.length) return fim.map((x) => x.tab);
+    return ids.filter((x) => base.indexOf(x.tb + "-") === 0).map((x) => x.tab);
+  }
+
+  // Sugestão automática de "Onde mudou", da mais confiável para a menos:
+  // 1) linha "Onde:" do commit; 2) telas citadas nas linhas alteradas; 3) nome do arquivo alterado.
+  // Só sem nada disso entra o texto (título e descrição), exigindo o nome inteiro da tela.
   function sugerirTelas(r, descricao) {
     const menu = menuTelas();
     const achadas = new Set();
+    telasNoTexto(menu, textoOnde(r), true).forEach((t) => achadas.add(t));
     ((r && r.abas) || []).forEach((t) => { if (telaPorTab(t)) achadas.add(t); });
-    ((r && r.arquivos) || []).forEach((f) => {
-      const base = semAcento(String(f.nome || "").split("/").pop().replace(/\.(js|css|html)$/i, ""));
-      if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop"].indexOf(base) >= 0) return;
-      menu.forEach((t) => {
-        const tb = semAcento(t.tab).replace(/_/g, "-");
-        if (tb === base || base.indexOf(tb + "-") === 0 || tb.indexOf(base) === 0) achadas.add(t.tab);
-      });
-    });
-    const texto = semAcento([descricao || ""].concat(((r && r.commits) || []).map((c) => (c.titulo || "") + " " + (c.corpo || ""))).join(" "));
-    menu.forEach((t) => {
-      const palavras = semAcento(t.nome).split(/[^a-z0-9%]+/).filter((p) => p.length > 3);
-      if (palavras.length < 2 && ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro"].indexOf(palavras[0]) >= 0) return;
-      if (palavras.length && palavras.every((p) => texto.indexOf(p) >= 0)) achadas.add(t.tab);
-    });
+    ((r && r.arquivos) || []).forEach((f) => telasDoArquivo(menu, f.nome).forEach((t) => achadas.add(t)));
+    if (!achadas.size) {
+      const texto = [descricao || ""].concat(((r && r.commits) || []).map((c) => c.titulo || "")).join(" \n ");
+      telasNoTexto(menu, texto, false).forEach((t) => achadas.add(t));
+    }
     return Array.from(achadas).slice(0, 8);
   }
 
@@ -1075,8 +1122,10 @@
     const d = dados[s.ambiente];
     const mudouDepois = d && d.sha && s.sha && d.sha !== s.sha;
     const quem = (s.solicitante && (s.solicitante.nome || s.solicitante.email)) || "desenvolvedor";
-    const informadas = Array.isArray(s.telas) && s.telas.length;
-    const telas = informadas ? s.telas : sugerirTelas(s, s.descricao);
+    // As telas são sempre automáticas: recalcula com a regra atual (pedido antigo pode ter falso positivo gravado).
+    const recalculadas = s.semAlteracoesCodigo ? [] : sugerirTelas(s, s.descricao);
+    const informadas = !recalculadas.length && Array.isArray(s.telas) && s.telas.length;
+    const telas = recalculadas.length ? recalculadas : (informadas ? s.telas : []);
     const github = s.semAlteracoesCodigo ? "" : `<p style="margin:8px 0 0;"><a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a></p>`;
     return `<div class="avsol-pedido" style="color:${esc(amb.cor)};" data-id="${esc(s.id)}">
       <div class="avsol-cab">

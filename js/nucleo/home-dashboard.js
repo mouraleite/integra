@@ -201,6 +201,7 @@ const HomeDashboard = {
     return notes.some(n => {
       const canal = String(n.canal || '').toLowerCase();
       if (canal === 'nota interna' || n.fase === 'Nota Interna') return false;
+      if (typeof window.isFollowUpGestorCanal === 'function' && window.isFollowUpGestorCanal(n.canal)) return false;
       return !!(n.text || n.date);
     });
   },
@@ -297,6 +298,18 @@ const HomeDashboard = {
     const thresholdJuridico = juridicoNode ? juridicoNode.dias : 151;
     const groups = [];
     const back = this.isBackOfficeUser(user);
+
+    // Follow-up do gestor: títulos em que o gestor pediu atualização e o operador ainda não respondeu.
+    const fg = window.FollowupGestor && typeof window.FollowupGestor.itensInsight === 'function'
+      ? window.FollowupGestor.itensInsight(user)
+      : [];
+    groups.push({
+      id: 'followup-gestor',
+      label: fg.length + (fg.length === 1 ? ' título com' : ' títulos com') + ' pedido de atualização do gestor',
+      items: fg,
+      hideIfEmpty: true,
+      count: fg.length
+    });
 
     if (back) {
       const vencidos = scopeClients.filter(c => {
@@ -683,6 +696,11 @@ const HomeDashboard = {
         ev.stopPropagation();
         const customerId = btn.getAttribute('data-customer-id');
         const saleId = btn.getAttribute('data-sale-id');
+        if (btn.getAttribute('data-insight-id') === 'followup-gestor' && window.FollowupGestor
+          && typeof window.FollowupGestor.abrirPorCliente === 'function'
+          && window.FollowupGestor.abrirPorCliente(customerId, saleId, this.getViewUser())) {
+          return;
+        }
         if (btn.getAttribute('data-insight-id') === 'nex-validade' && typeof window.abrirAvaliacaoCancelamento === 'function') {
           window.abrirAvaliacaoCancelamento(customerId, saleId);
           return;
@@ -2032,6 +2050,17 @@ window.buildSprintOperatorSummaries = function() {
       if (g === nexId) nexCumprida += 1;
     });
   }
+  // Títulos da fila com a tag "Acordo Judicial - Alterar p/ Sub judice Sienge" (mesmo grupo da Fila de Cobrança).
+  const G = window.FILA_QUEUE_GROUPS || {};
+  const titulosSubjudice = new Set();
+  if (G.ALTERAR_SUBJUDICE_SIENGE && typeof window.getFilaQueueGroup === 'function') {
+    all.forEach(c => {
+      try {
+        if (window.getFilaQueueGroup(c) === G.ALTERAR_SUBJUDICE_SIENGE) titulosSubjudice.add(String(c.customerId) + '-' + String(c.saleId));
+      } catch (e) {}
+    });
+  }
+  const alterarSj = titulosSubjudice.size;
   boUsers.forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
     if (seenBo.has(id)) return;
@@ -2041,10 +2070,13 @@ window.buildSprintOperatorSummaries = function() {
     const validar = Number(counts.validar) || 0;
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
-    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida) return;
+    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida && !alterarSj) return;
     lines.push('*' + hd.sprintOperatorLabel(u) + '*');
     if (nexCumprida > 0) {
       lines.push('• Há ' + nexCumprida + (nexCumprida === 1 ? ' título com NEX cumprida' : ' títulos com NEX cumprida'));
+    }
+    if (alterarSj > 0) {
+      lines.push('• Há ' + alterarSj + (alterarSj === 1 ? ' título' : ' títulos') + ' para alterar para sub judice no Sienge');
     }
     if (enviar > 0) {
       lines.push('• Há ' + enviar + ' vistoria' + (enviar === 1 ? '' : 's') + ' para enviar');
