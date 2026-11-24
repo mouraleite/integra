@@ -1078,6 +1078,9 @@
                 <li data-tab="recebimentos-webro" data-module="sub_fin_cr_recebimentos_webro_acessar">
                   <a onclick="switchTab('recebimentos-webro', 'Recebimentos Webro')">Recebimentos Webro</a>
                 </li>
+                <li data-tab="remessa-avulsa" data-module="sub_fin_cr_remessa_avulsa_acessar">
+                  <a onclick="switchTab('remessa-avulsa', 'Remessa avulsa')">Remessa avulsa</a>
+                </li>
                 <li data-tab="scod" data-module="sub_fin_cr_scod_acessar">
                   <a onclick="switchTab('scod', 'Scod')">Scod</a>
                 </li>
@@ -1476,7 +1479,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2224 &nbsp;&middot;&nbsp; 24/11/2026
+            v1.0.2225 &nbsp;&middot;&nbsp; 24/11/2026
           </span>
         </div>
       </div>
@@ -3463,6 +3466,10 @@ Promitente comprador(a)</textarea>
 
       <section id="tab-recebimentos-webro" class="tab-pane" style="display: none;">
         <div id="recebimentos-webro-root"></div>
+      </section>
+
+      <section id="tab-remessa-avulsa" class="tab-pane" style="display: none;">
+        <div id="remessa-avulsa-root"></div>
       </section>
 
       <!-- TAB: POSIÇÃO DE ESTOQUE COMERCIAL -->
@@ -6582,6 +6589,7 @@ Promitente comprador(a)</textarea>
                   <div id="simulador-right-panel">
                     <h4 style="margin: 0 0 12px 0; color: var(--color-primary); font-size: 1.1rem; font-weight: 700;">
                       Parcelas vencidas e boletos do contrato</h4>
+                    <div id="simulador-alerta-parcial" role="alert" style="display: none; margin: 0 0 12px; padding: 10px 14px; border-radius: 6px; background: #fff7ed; border: 1px solid #fdba74; border-left: 4px solid #ea580c; color: #7c2d12; font-size: 0.9rem; line-height: 1.45;"></div>
                     <p id="simulador-empty-msg" style="display:none; margin: 0 0 12px; font-size: 0.9rem; color: #64748b;">Não há parcelas vencidas nem boletos em aberto para este contrato no momento.</p>
 
                     <div id="simulador-table-container" style="display: none;">
@@ -8853,7 +8861,6 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       </div>
 
       <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0; position: sticky; bottom: 0; background: white; padding-bottom: 15px;">
-        <button type="button" class="btn btn-fechar" onclick="closeAdvFiltersModal()">Fechar</button>
         <button type="button" class="btn btn-outline" onclick="clearAdvFilters()" style="padding: 10px 18px; font-weight: 600; background-color: #f97316; color: white; border-color: #ea580c;">Limpar Filtros</button>
         <button type="button" class="btn btn-primary" onclick="applyAdvFilters()" style="padding: 10px 18px; font-weight: 600;">Aplicar Filtros</button>
       </div>
@@ -8870,14 +8877,14 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2224"></script>
+  <script defer src="js/nucleo/data.js?v=2225"></script>
   <script defer src="js/nucleo/sienge-api.js?v=e62d86cca1"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=2930d859b8"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=fe231ed2e5"></script>
+  <script defer src="js/nucleo/app.js?v=76986c49b6"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
   <script defer src="js/cobranca/followup-gestor.js?v=901abd86b4"></script>
   <script defer src="js/nucleo/central-email.js?v=0e9c13e3dc"></script>
@@ -8915,8 +8922,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="consultar-titulo" data-src="js/financeiro/consultar-titulo.js?v=4f7f885504"></script>
   <script type="text/x-sob-demanda" data-grupo="antecipacoes" data-src="js/financeiro/antecipacoes.js?v=1b1ee0b5f4"></script>
   <script defer src="js/nucleo/config-tags.js?v=3843c41147"></script>
-  <script defer src="js/nucleo/config-users.js?v=3b0f0d80dc"></script>
-  <script defer src="js/nucleo/suporte.js?v=07bc755f0e"></script>
+  <script defer src="js/nucleo/config-users.js?v=4a2adc43ab"></script>
+  <script defer src="js/nucleo/suporte.js?v=e11ee879be"></script>
   <script defer src="js/nucleo/aviso-develop.js?v=2f25992866"></script>
   <script defer src="js/nucleo/ml-select-unico.js?v=4f7efa8871"></script>
   <script defer src="js/nucleo/escala-home-office.js?v=d269d4eced"></script>
@@ -8924,7 +8931,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
   <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
   <script defer src="js/cobranca/relacionamento.js?v=cd43b98234"></script>
-  <script defer src="js/cobranca/aditamento.js?v=2224"></script>
+  <script defer src="js/cobranca/aditamento.js?v=2225"></script>
   <script defer src="js/cobranca/cessao-direitos.js?v=80db47f351"></script>
   <script defer src="js/cobranca/permuta-lote.js?v=c10be02302"></script>
   <script defer src="js/cobranca/doc-assinatura.js?v=005b95b1af"></script>
@@ -8936,6 +8943,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
   <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
   <script defer src="js/comercial/recebimentos-webro.js?v=7963d39f8a"></script>
+  <script defer src="js/financeiro/remessa-avulsa.js?v=927a59ea9d"></script>
   <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
   <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
   <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
