@@ -201,6 +201,7 @@ const HomeDashboard = {
     return notes.some(n => {
       const canal = String(n.canal || '').toLowerCase();
       if (canal === 'nota interna' || n.fase === 'Nota Interna') return false;
+      if (typeof window.isFollowUpGestorCanal === 'function' && window.isFollowUpGestorCanal(n.canal)) return false;
       return !!(n.text || n.date);
     });
   },
@@ -297,6 +298,18 @@ const HomeDashboard = {
     const thresholdJuridico = juridicoNode ? juridicoNode.dias : 151;
     const groups = [];
     const back = this.isBackOfficeUser(user);
+
+    // Follow-up do gestor: títulos em que o gestor pediu atualização e o operador ainda não respondeu.
+    const fg = window.FollowupGestor && typeof window.FollowupGestor.itensInsight === 'function'
+      ? window.FollowupGestor.itensInsight(user)
+      : [];
+    groups.push({
+      id: 'followup-gestor',
+      label: fg.length + (fg.length === 1 ? ' título com' : ' títulos com') + ' pedido de atualização do gestor',
+      items: fg,
+      hideIfEmpty: true,
+      count: fg.length
+    });
 
     if (back) {
       const vencidos = scopeClients.filter(c => {
@@ -683,6 +696,11 @@ const HomeDashboard = {
         ev.stopPropagation();
         const customerId = btn.getAttribute('data-customer-id');
         const saleId = btn.getAttribute('data-sale-id');
+        if (btn.getAttribute('data-insight-id') === 'followup-gestor' && window.FollowupGestor
+          && typeof window.FollowupGestor.abrirPorCliente === 'function'
+          && window.FollowupGestor.abrirPorCliente(customerId, saleId, this.getViewUser())) {
+          return;
+        }
         if (btn.getAttribute('data-insight-id') === 'nex-validade' && typeof window.abrirAvaliacaoCancelamento === 'function') {
           window.abrirAvaliacaoCancelamento(customerId, saleId);
           return;

@@ -23,6 +23,17 @@ const AlertasPopupApp = {
         <div class="apa-item"><strong>Cliente exemplo · QD 04 LT 18</strong><span>Água: sim · Energia: sim · Estágio: alvenaria</span></div>`
     },
     {
+      id: "followup-gestor",
+      nome: "Pedido de atualização do gestor",
+      quando: "No login e assim que o administrador envia o pedido. Responder depois esconde até a próxima entrada no Integra. Some quando o operador responde.",
+      logica: "O administrador clica em Pedir atualização na ficha do cliente e escreve as considerações. O pedido leva o resumo do contrato daquele momento: valores pagos, vencidos e a vencer, percentual pago, construção (com o lote do KMZ, se houver), Nex, renegociações, PMP e último contato. Nas Ocorrências e Promessas entra a nota Follow up do Gestor, e a resposta do operador fica como resposta dessa nota. Essas notas não contam como contato com o cliente. Os títulos pendentes aparecem nos Insights da home, e Contas a Receber > Follow-up Cobrança lista todos os pedidos.",
+      quem: "O operador responsável pelo título, escolhido pelo administrador no pedido (vem preenchido com o operador da fila). Administrador não recebe.",
+      titulo: "O gestor gostaria de uma atualização detalhada deste caso",
+      corpo: `<p>Pedido de Administrador exemplo · 24/11/2026 08:40</p>
+        <div class="apa-item"><strong>Cliente exemplo · Título 13444</strong><span>Pagos 26 parc. R$ 24.914,58 · Vencidos 3 parc. R$ 5.289,12 · 27% pago</span><span>Nex enviada em 10/10/2026 · 2 renegociações · PMP 33 dias</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real há Visualizar Extrato, Abrir ficha, o campo da resposta e Enviar resposta.</p>`
+    },
+    {
       id: "vistoria",
       nome: "Vistoria aguardando validação",
       quando: "No login e de novo quando uma vistoria entra em aguardando validação. Some ao confirmar a lista ou ao adiar.",

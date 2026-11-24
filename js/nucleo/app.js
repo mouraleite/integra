@@ -4043,7 +4043,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "parametrizacoes": "Gestão de Empresas",
     "centros-custo": "Gestão de Centros de Custo",
     "followup-cnd": "Follow-up CND",
-    "kmz": "Upload de Mapeamento (KMZ)",
+    "followup-cobranca": "Follow-up Cobrança",
+    "kmz":"Upload de Mapeamento (KMZ)",
     "upload-kmz": "Upload de KMZ",
     "imagem-satelite": "Imagem de Satélite",
     "upload-mapa": "Upload de Projeto Urbanístico",
@@ -4282,6 +4283,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     loadCentrosCustoTab();
   } else if (tabId === "followup-cnd") {
     if (window.FollowupCndApp && typeof FollowupCndApp.abrir === "function") FollowupCndApp.abrir();
+  } else if (tabId === "followup-cobranca") {
+    if (window.FollowupGestor && typeof window.FollowupGestor.abrir === "function") window.FollowupGestor.abrir();
   } else if (tabId === "central-email") {
     if (window.CentralEmailApp && typeof CentralEmailApp.abrir === "function") CentralEmailApp.abrir();
   } else if (tabId === "doc-padrao") {
@@ -5403,6 +5406,9 @@ async function processSuccessfulLogin(loggedUser) {
       }
       if (window.FollowupCndApp && typeof FollowupCndApp.avisar === "function") {
         FollowupCndApp.avisar();
+      }
+      if (window.FollowupGestor && typeof window.FollowupGestor.iniciar === "function") {
+        window.FollowupGestor.iniciar();
       }
       if (window.GerarPagamentoApp && typeof window.GerarPagamentoApp.avisoFechamento === "function") {
         window.GerarPagamentoApp.avisoFechamento();
@@ -15608,7 +15614,8 @@ async function viewCustomerCard(customerId, saleId, specificTitulo = null) {
   });
   if (typeof window.applyFichaPerfilVista === "function") window.applyFichaPerfilVista(false);
   if (typeof window.syncQuitacaoAdvogadoVista === "function") window.syncQuitacaoAdvogadoVista();
-  
+  if (window.FollowupGestor && typeof window.FollowupGestor.atualizarBotaoFicha === "function") window.FollowupGestor.atualizarBotaoFicha();
+
   // Abas judiciais: menu Sub Judice, advogado, ou contrato/cliente já sub judice (ex.: fila de cobrança)
   syncCobrancaJudicialTabs(isSubjudice, isAdvogado);
 
@@ -18115,7 +18122,8 @@ function formatCpfCnpj(val) {
        kpiPago, kpiAcrescimo, kpiDesconto, kpiLiquido, kpiQtdPagas,
        kpiVencidas, kpiVencidasOriginal, kpiQtdVencidas,
        kpiAVencer, kpiQtdAVencer,
-       kpiTotalContrato, kpiTotalQtd
+       kpiTotalContrato, kpiTotalQtd,
+       _customerId: String(customerId)
     };
 
     const elTotalSum = document.getElementById("ext-kpi-total-sum");
@@ -18232,7 +18240,9 @@ function formatCpfCnpj(val) {
     }
     
     const kpiPctPaid = kpiSomaOriginal > 0 ? (kpiPago / kpiSomaOriginal) : (sale.status === 'Quitado' ? 1 : 0);
-    
+    // Follow-up do gestor: o resumo leva o mesmo percentual do medidor "Pago do Contrato".
+    if (AppState.currentContractKpis) AppState.currentContractKpis.kpiPctPago = kpiPctPaid;
+
     AppState.isCurrentContractPaid = (kpiPctPaid >= 1 || sale.status === 'Quitado');
     if (AppState.isCurrentContractPaid) {
         let payoffDateMsg = sale.payOffDate ? new Date(sale.payOffDate + 'T12:00:00').toLocaleDateString('pt-BR') : "";
@@ -18976,7 +18986,15 @@ function formatCpfCnpj(val) {
       }
       
       const badgeClass = riskLevel === "high" ? "risk-high" : riskLevel === "medium" ? "risk-medium" : "risk-low";
-      
+      // Follow-up do gestor: PMP e renegociações do mesmo Perfil Analítico da ficha.
+      AppState.currentFichaPerfil = {
+        _customerId: String(customerId),
+        pmp: mediaPMP,
+        renegociacoes: reparcelamentosCount,
+        pctEmDia: totalPagamentos > 0 ? pctEmDia : null,
+        perfil: profileName
+      };
+
       chronicBanner.innerHTML = `
         <div style="padding: 15px; border-radius: 6px; display: flex; align-items: flex-start; gap: 12px; border: 1.5px solid; margin-bottom: 20px;" class="${badgeClass}">
           <i data-lucide="${iconName}" style="width: 24px; height: 24px; flex-shrink: 0; margin-top: 2px;"></i>
@@ -19399,6 +19417,7 @@ function renderCustomerOccurrences() {
     }
     const isWebroBaixa = !!(occ.webroBaixa || (typeof window.isWebroBaixaCanal === "function" && window.isWebroBaixaCanal(occ.canal)));
     const isReuniaoSemanal = !!(typeof window.isReuniaoSemanalTerceirizadaCanal === "function" && window.isReuniaoSemanalTerceirizadaCanal(occ.canal));
+    const isFollowupGestor = !!(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(occ.canal));
     if (isNexLocked) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#fef2f2', 'important');
@@ -19411,6 +19430,12 @@ function renderCustomerOccurrences() {
       card.style.setProperty('border', '1px solid #c7d2fe', 'important');
       card.style.setProperty('border-left', '4px solid #4f46e5', 'important');
       card.style.setProperty('box-shadow', '0 0 0 1px rgba(79,70,229,0.10)', 'important');
+    } else if (isFollowupGestor) {
+      card.style.setProperty('position', 'relative', 'important');
+      card.style.setProperty('background-color', '#fdf4ff', 'important');
+      card.style.setProperty('border', '1px solid #f0abfc', 'important');
+      card.style.setProperty('border-left', '4px solid #a21caf', 'important');
+      card.style.setProperty('box-shadow', '0 0 0 1px rgba(162,28,175,0.10)', 'important');
     } else if (isWebroBaixa) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#ecfdf5', 'important');
@@ -19439,11 +19464,12 @@ function renderCustomerOccurrences() {
       else if (occ.canal.toLowerCase() === 'presencial') canalIcon = 'user';
       else if (isNotaInterna) canalIcon = 'sticky-note';
       else if (isReuniaoSemanal) canalIcon = 'users';
+      else if (isFollowupGestor) canalIcon = 'clipboard-list';
       else if (isWebroBaixa) canalIcon = 'banknote';
       else if (isNexLocked) canalIcon = 'mail';
-      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : 'rgba(0,0,0,0.05)';
-      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)');
-      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa) ? '700' : '400';
+      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : (isFollowupGestor ? '#fae8ff' : 'rgba(0,0,0,0.05)');
+      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isFollowupGestor ? '#86198f' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)'));
+      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa || isFollowupGestor) ? '700' : '400';
       tagsHtml += `<span style="background: ${canalTagBg}; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; color: ${canalTagColor}; font-weight: ${canalTagWeight};"><i data-lucide="${canalIcon}" style="width: 10px; height: 10px; display: inline-block; margin-right: 2px;"></i>${occ.canal}</span>`;
     }
     if (occ.iniciativa) {
@@ -19551,6 +19577,15 @@ function renderCustomerOccurrences() {
           `);
       }
       
+      // Follow up do Gestor sem resposta: o operador responde pelo pop-up do pedido.
+      if (isFollowupGestor && occ.followupGestorId && !(occ.replies && occ.replies.length) && window.FollowupGestor) {
+          const fgId = String(occ.followupGestorId).replace(/[^A-Za-z0-9_-]/g, "");
+          btns.push(`
+            <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; border-color: #f0abfc; color: #86198f;" onclick="window.FollowupGestor.responderPelaNota('${fgId}')">
+              <i data-lucide="message-square" style="width:10px; height:10px;"></i> ${window.FollowupGestor.souAdmin() ? "Ver pedido" : "Responder"}
+            </button>
+          `);
+      }
       if (isNotaInterna) {
           btns.push(`
             <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px;" onclick="window.toggleReplyInput('${occ.date}')">
@@ -19577,14 +19612,14 @@ function renderCustomerOccurrences() {
     }
 
     let repliesHtml = "";
-    if (isNotaInterna && occ.replies && occ.replies.length > 0) {
-      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid rgba(245,158,11,0.4); padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
+    if ((isNotaInterna || isFollowupGestor) && occ.replies && occ.replies.length > 0) {
+      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid ${isFollowupGestor ? 'rgba(162,28,175,0.4)' : 'rgba(245,158,11,0.4)'}; padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
       occ.replies.forEach(reply => {
         const rDate = new Date(reply.date).toLocaleString('pt-BR');
         repliesHtml += `
           <div style="background: rgba(255,255,255,0.6); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.05); font-size: 0.75rem;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 0.7rem; color: var(--color-text-muted);">
-              <strong>${reply.author}</strong> <span>${rDate}</span>
+              <strong>${reply.tipo === "resposta" ? "Resposta · " : ""}${reply.author}</strong> <span>${rDate}</span>
             </div>
             <div style="color: #1e293b; white-space: pre-wrap;">${reply.text}</div>
           </div>
@@ -34561,8 +34596,10 @@ window.getLatestCustomerContact = function(customerId) {
     ? notesFn(AppState.judNotes, customerId)
     : ((AppState.judNotes && AppState.judNotes[customerId]) || []);
   let latest = null;
+  // Pedido do gestor e resposta do operador (Follow up do Gestor) não são contato com o cliente.
+  const followupGestor = (n) => typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n && n.canal);
   (Array.isArray(notesNormal) ? notesNormal : []).forEach(n => {
-    if (!n || !n.date) return;
+    if (!n || !n.date || followupGestor(n)) return;
     if (!latest || new Date(n.date) > new Date(latest.date)) latest = n;
   });
   (Array.isArray(notesJud) ? notesJud : []).forEach(n => {
@@ -35963,7 +36000,7 @@ async function _loadZeroPaidTab_Impl() {
       // Obter último contato
       const notesNormal = (AppState.notes && AppState.notes[bill.customerId]) ? AppState.notes[bill.customerId] : [];
       const notesJud = (AppState.judNotes && AppState.judNotes[bill.customerId]) ? AppState.judNotes[bill.customerId] : [];
-      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna'; });
+      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna' && !(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n.canal)); });
       
       if (notes.length > 0) {
         notes.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -49138,6 +49175,10 @@ window.fichaAtualizarBotaoLote = function(estado, coords, lotName, empId) {
     span.appendChild(btn);
   }
   const base = "border:none;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;justify-content:center;margin-left:8px;border-radius:4px;font-size:0.75rem;font-weight:bold;white-space:nowrap;";
+  // Follow-up do gestor: guarda o lote do KMZ da ficha aberta para o botão do resumo.
+  window._fichaLoteAtual = (estado === "abrir" && coords)
+    ? { customerId: String((window.AppState && AppState.selectedCustomerId) || ""), lotName: lotName, coords: coords, empId: empId }
+    : null;
   if (estado === "abrir" && coords) {
     btn.disabled = false;
     btn.style.cssText = base + "background:#105436;color:#fff;cursor:pointer;";
