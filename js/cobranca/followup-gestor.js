@@ -187,8 +187,14 @@
       if (typeof window.cancelamentoLerConstrucao === "function") {
         try {
           const ref = cliente || { customerId: cid, saleId: ficha.saleId || ficha.titulo, billIds: [ficha.titulo] };
-          const obra = await window.cancelamentoLerConstrucao(ref);
-          construcao = { tem: !!obra.temConstrucao, incerta: !!obra.incerta, texto: obra.texto || "" };
+          // A consulta espera o índice da fila, que pode demorar (Sienge com 429): no máximo 8 s.
+          const obra = await Promise.race([
+            window.cancelamentoLerConstrucao(ref),
+            new Promise((resolve) => setTimeout(() => resolve(null), 8000))
+          ]);
+          construcao = obra
+            ? { tem: !!obra.temConstrucao, incerta: !!obra.incerta, texto: obra.texto || "" }
+            : { tem: false, incerta: true, texto: "A consulta de construção não respondeu a tempo. Confira na aba Construção da ficha." };
         } catch (e) {}
       }
       const lote = window._fichaLoteAtual && String(window._fichaLoteAtual.customerId || "") === cid ? window._fichaLoteAtual : null;
@@ -351,8 +357,17 @@
       if (!fb) { this.aviso("O banco do Integra não está disponível agora. Tente de novo em instantes.", "erro"); return; }
       const ficha = this.fichaAtual();
       if (!ficha.customerId || !ficha.titulo) { this.aviso("Abra a ficha do cliente antes de pedir a atualização.", "erro"); return; }
-      const m = this.modal("fg-pedido", 900, `<div style="padding:30px;text-align:center;color:#64748b;">Montando o resumo do contrato…</div>`);
-      const resumo = await this.montarResumo(ficha);
+      const m = this.modal("fg-pedido", 900, `<div style="padding:30px;text-align:center;color:#64748b;">Montando o resumo do contrato…
+          <div style="margin-top:14px;"><button type="button" class="btn btn-fechar" onclick="FollowupGestor.fecharModal('fg-pedido')">Fechar</button></div></div>`);
+      let resumo;
+      try {
+        resumo = await this.montarResumo(ficha);
+      } catch (e) {
+        console.error("[followup-gestor] resumo", e);
+        this.fecharModal("fg-pedido");
+        this.aviso("Não foi possível montar o resumo do contrato. Tente de novo.", "erro");
+        return;
+      }
       if (m.style.display === "none") return;
       const cliente = this.acharCliente(ficha.customerId, ficha.titulo);
       const opFila = cliente && cliente.assignedOperator && this.norm(cliente.assignedOperator) !== this.norm("NÃO ATRIBUÍDO") ? String(cliente.assignedOperator) : "";
