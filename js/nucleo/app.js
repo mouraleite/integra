@@ -30474,6 +30474,20 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
     alert("Abra o simulador de distrato a partir de um contrato.");
     return;
   }
+  // Um distrato em aberto por título: outro só depois da baixa aprovada pelo administrador.
+  if (window.DocAssinaturaApp && typeof DocAssinaturaApp.distratoAbertoDoTitulo === "function") {
+    const tituloDist = g_distSale.receivableBillId || g_distSale.id || "";
+    const aberto = await DocAssinaturaApp.distratoAbertoDoTitulo(tituloDist);
+    if (aberto) {
+      const quando = typeof DocAssinaturaApp.quando === "function" ? DocAssinaturaApp.quando(aberto.createdAt) : String(aberto.createdAt || "");
+      const pedida = aberto.baixa && aberto.baixa.status === "pendente";
+      alert("Já existe um distrato em aberto para o título " + tituloDist + ", gerado em " + quando + " por " + (aberto.userName || "—") + ".\n\n"
+        + (pedida
+          ? "A baixa dele já foi pedida e aguarda a aprovação do administrador. Depois da aprovação, gere o novo distrato."
+          : "Para gerar outro, peça a baixa do anterior em Relacionamento > Documentos para assinar (botão Pedir baixa), com a justificativa. O administrador precisa aprovar."));
+      return;
+    }
+  }
   if (typeof window.enrichCustomerForLegalDocs === "function") {
     g_distCustomer = await window.enrichCustomerForLegalDocs(g_distCustomer);
   }

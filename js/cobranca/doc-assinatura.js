@@ -45,6 +45,230 @@ const DocAssinaturaApp = {
     return false;
   },
 
+  /* ---------- Documento em aberto e baixa com aprovação do administrador ----------
+     Distrato gerado fica "em aberto" até ser lançado no Sienge ou baixado. Enquanto houver um em aberto
+     para o título, não se gera outro. A baixa pede justificativa e só vale depois que o administrador aprova. */
+  souAdmin() {
+    return typeof window.isCrmSuperAdmin === "function" && window.isCrmSuperAdmin();
+  },
+
+  emAberto(row) {
+    return !!row && row.status !== "lancado" && row.status !== "baixado";
+  },
+
+  tituloNum(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  /** Distrato em aberto do título (o mais recente), lido da lista compartilhada. null quando não há. */
+  async distratoAbertoDoTitulo(titulo) {
+    const t = this.tituloNum(titulo);
+    if (!t) return null;
+    let lista = null;
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    if (fx && db && fx.getDocs && fx.query && fx.where && fx.collection) {
+      try {
+        lista = [];
+        const snap = await fx.getDocs(fx.query(fx.collection(db, this.COL), fx.where("titulo", "==", t)));
+        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data() || {})));
+      } catch (e) {
+        console.warn("[Assinatura] consulta de distrato em aberto", e);
+        lista = null;
+      }
+    }
+    const locais = (this.lerLocal() || []).concat(this.itens || []);
+    const todos = (lista || []).concat(locais.filter((r) => r && (!lista || String(r.id || "").indexOf("local-") === 0)));
+    const abertos = todos.filter((r) => r && r.tipo === "distrato" && this.tituloNum(r.titulo) === t && this.emAberto(r));
+    abertos.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    return abertos[0] || null;
+  },
+
+  /* ---------- Documentos parados (sprint diário e home) ----------
+     Distrato e TCD (termo de cessão de direitos) ainda em aberto, gerados há mais de N dias corridos. */
+  DIAS_PARADO: 7,
+
+  /** Carrega a lista em segundo plano (uma vez) e repinta a home quando chegar. */
+  prepararParados() {
+    if ((this.itens && this.itens.length) || this._carregandoParados) return;
+    this._carregandoParados = this.garantirItens().then(() => {
+      const hd = window.HomeDashboard;
+      const box = document.getElementById("home-op-insights-container");
+      if (hd && box && box.style.display !== "none" && typeof hd.renderInsights === "function") {
+        try { hd.renderInsights(); } catch (e) {}
+      }
+    }).catch(() => {}).finally(() => { this._carregandoParados = null; });
+  },
+
+  parados(user) {
+    this.prepararParados();
+    const limite = Date.now() - this.DIAS_PARADO * 86400000;
+    const email = String((user && user.email) || "").toLowerCase();
+    const nome = this.normNome(user && (user.name || user.nome));
+    const doUsuario = (r) => {
+      if (!user) return true;
+      if (email && r.userEmail && email === String(r.userEmail).toLowerCase()) return true;
+      return !!(nome && nome.length > 3 && nome === this.normNome(r.userName));
+    };
+    const lista = (this.itens || []).filter((r) => {
+      if (!r || !this.emAberto(r) || (r.tipo !== "distrato" && r.tipo !== "cessao")) return false;
+      const t = new Date(r.createdAt || "").getTime();
+      return Number.isFinite(t) && t < limite && doUsuario(r);
+    });
+    return { distrato: lista.filter((r) => r.tipo === "distrato"), cessao: lista.filter((r) => r.tipo === "cessao") };
+  },
+
+  diasDesde(iso) {
+    const t = new Date(iso || "").getTime();
+    return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : 0;
+  },
+
+  /** Linhas do sprint: por quem gerou, "x distratos e y TCD com mais de 7 dias". */
+  linhasSprintParados() {
+    const tudo = this.parados(null);
+    const porPessoa = new Map();
+    tudo.distrato.concat(tudo.cessao).forEach((r) => {
+      const k = String(r.userEmail || r.userName || "—").toLowerCase();
+      if (!porPessoa.has(k)) porPessoa.set(k, { nome: r.userName || "—", distrato: 0, cessao: 0 });
+      porPessoa.get(k)[r.tipo === "distrato" ? "distrato" : "cessao"] += 1;
+    });
+    if (!porPessoa.size) return [];
+    const plural = (n, s, p) => n + " " + (n === 1 ? s : p);
+    const linhas = ["*Documentos para assinar parados há mais de " + this.DIAS_PARADO + " dias*"];
+    [...porPessoa.values()].sort((a, b) => (b.distrato + b.cessao) - (a.distrato + a.cessao)).forEach((p) => {
+      const partes = [];
+      if (p.distrato) partes.push(plural(p.distrato, "distrato", "distratos"));
+      if (p.cessao) partes.push(plural(p.cessao, "TCD", "TCD"));
+      linhas.push("• " + String(p.nome).toUpperCase() + ": " + partes.join(" e "));
+    });
+    return linhas;
+  },
+
+  modalBaixa(html) {
+    let m = document.getElementById("docs-baixa-modal");
+    if (!m) {
+      m = document.createElement("div");
+      m.id = "docs-baixa-modal";
+      m.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:100001;display:flex;align-items:center;justify-content:center;padding:16px;";
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `<div style="background:#fff;width:min(560px,96vw);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,0.28);padding:18px;">${html}</div>`;
+    m.style.display = "flex";
+    return m;
+  },
+
+  fecharModalBaixa() {
+    const m = document.getElementById("docs-baixa-modal");
+    if (m) m.style.display = "none";
+  },
+
+  pedirBaixa(id) {
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !this.emAberto(row)) return;
+    if (chave.indexOf("local-") === 0) { alert("Este documento ainda não foi salvo na lista compartilhada. Atualize a tela e tente de novo."); return; }
+    this.modalBaixa(`
+      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">Pedir baixa do ${this.esc(this.tipoLabel(row.tipo).toLowerCase())}</h3>
+      <div style="font-size:0.85rem;color:#475569;margin-bottom:10px;">${this.esc(this.nomeExibido(row))} · Título ${this.esc(row.titulo)} · gerado em ${this.esc(this.quando(row.createdAt))} por ${this.esc(row.userName || "—")}</div>
+      <div style="font-size:0.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;margin-bottom:10px;">A baixa só vale depois que o administrador aprovar. Enquanto isso, não é possível gerar outro distrato para este título.</div>
+      <label for="docs-baixa-just" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Justificativa</label>
+      <textarea id="docs-baixa-just" rows="4" maxlength="1000" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Por que este documento deve ser baixado? (ex.: valor errado, cliente desistiu, novo cálculo)"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button type="button" class="btn btn-cancel" onclick="DocAssinaturaApp.fecharModalBaixa()">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="docs-baixa-enviar" onclick="DocAssinaturaApp.enviarPedidoBaixa('${encodeURIComponent(chave)}')">Pedir baixa</button>
+      </div>`);
+    const t = document.getElementById("docs-baixa-just");
+    if (t) t.focus();
+  },
+
+  async enviarPedidoBaixa(id) {
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    const el = document.getElementById("docs-baixa-just");
+    const just = String((el && el.value) || "").trim();
+    if (!row) return;
+    if (just.length < 10) { alert("Escreva a justificativa da baixa (pelo menos 10 caracteres)."); if (el) el.focus(); return; }
+    const eu = this.eu();
+    const baixa = { status: "pendente", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: new Date().toISOString() };
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    try {
+      await fx.updateDoc(fx.doc(db, this.COL, chave), { baixa: baixa });
+    } catch (e) {
+      console.error("[Assinatura] pedido de baixa", e);
+      alert("Não foi possível gravar o pedido de baixa. Tente de novo.");
+      return;
+    }
+    row.baixa = baixa;
+    this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === chave ? row : x)));
+    this.fecharModalBaixa();
+    this.pintar();
+  },
+
+  async decidirBaixa(id, aprovar) {
+    if (!this.souAdmin()) { alert("Só o administrador aprova a baixa."); return; }
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !row.baixa || row.baixa.status !== "pendente") return;
+    let motivo = "";
+    if (!aprovar) {
+      motivo = String(prompt("Motivo da recusa da baixa:") || "").trim();
+      if (!motivo) return;
+    } else {
+      const msg = "Aprovar a baixa do " + this.tipoLabel(row.tipo).toLowerCase() + " de " + this.nomeExibido(row) + " (título " + row.titulo + ")?\n\nJustificativa: " + row.baixa.justificativa;
+      const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
+      if (!ok) return;
+    }
+    const eu = this.eu();
+    const baixa = Object.assign({}, row.baixa, {
+      status: aprovar ? "aprovada" : "recusada",
+      decididoPor: eu.userName,
+      decididoPorEmail: eu.userEmail,
+      decididoEm: new Date().toISOString(),
+      motivoRecusa: motivo
+    });
+    const patch = aprovar ? { baixa: baixa, status: "baixado", baixadoEm: baixa.decididoEm } : { baixa: baixa };
+    const fx = window.firebaseCollections;
+    const db = window.firebaseDb;
+    try {
+      await fx.updateDoc(fx.doc(db, this.COL, chave), patch);
+    } catch (e) {
+      console.error("[Assinatura] decisão da baixa", e);
+      alert("Não foi possível gravar a decisão. Tente de novo.");
+      return;
+    }
+    Object.assign(row, patch);
+    this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === chave ? row : x)));
+    this.pintar();
+  },
+
+  situacaoHtml(r) {
+    if (r.status === "lancado") return `<span class="docs-sit is-feito">Lançado no Sienge</span>`;
+    if (r.status === "baixado") {
+      const b = r.baixa || {};
+      return `<span class="docs-sit is-feito" title="${this.esc("Baixa aprovada por " + (b.decididoPor || "administrador") + ". Justificativa: " + (b.justificativa || ""))}">Baixado</span>`;
+    }
+    const b = r.baixa;
+    if (b && b.status === "pendente") {
+      return `<span class="docs-sit" style="background:#fef3c7;color:#92400e;" title="${this.esc("Pedida por " + (b.pedidoPor || "") + " em " + this.quando(b.pedidoEm) + ". Justificativa: " + (b.justificativa || ""))}">Baixa pedida</span>`;
+    }
+    if (b && b.status === "recusada") {
+      return `<span class="docs-sit" title="${this.esc("Baixa recusada por " + (b.decididoPor || "") + ": " + (b.motivoRecusa || ""))}">Aguardando · baixa recusada</span>`;
+    }
+    return `<span class="docs-sit">Aguardando</span>`;
+  },
+
+  botoesBaixaHtml(r) {
+    if (!r || r.tipo !== "distrato" || !this.emAberto(r)) return "";
+    const chave = encodeURIComponent(String(r.id));
+    if (r.baixa && r.baixa.status === "pendente") {
+      if (!this.souAdmin()) return "";
+      return `<button type="button" class="btn btn-primary btn-sm" style="padding:3px 8px;font-size:0.72rem;" onclick="DocAssinaturaApp.decidirBaixa('${chave}', true)">Aprovar baixa</button>`
+        + `<button type="button" class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" onclick="DocAssinaturaApp.decidirBaixa('${chave}', false)">Recusar</button>`;
+    }
+    return `<button type="button" class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.72rem;" title="Pedir ao administrador a baixa deste distrato, para poder gerar outro" onclick="DocAssinaturaApp.pedirBaixa('${chave}')">Pedir baixa</button>`;
+  },
+
   lerLocal() {
     try {
       const raw = JSON.parse(localStorage.getItem(this.LS) || "[]");
@@ -224,7 +448,7 @@ const DocAssinaturaApp = {
   },
 
   botaoDistratoHtml(r) {
-    if (!r || r.tipo !== "distrato" || r.status === "lancado") return "";
+    if (!r || r.tipo !== "distrato" || !this.emAberto(r)) return "";
     const titulo = String(r.titulo || "").replace(/\D/g, "");
     const chave = encodeURIComponent(String(r.id));
     const aval = this.avalDistrato(r);
@@ -408,6 +632,11 @@ const DocAssinaturaApp = {
     const chave = decodeURIComponent(String(id || ""));
     const row = (this.itens || []).find((r) => String(r.id) === chave);
     if (!row) return;
+    // Distrato em aberto não some pela lixeira: só com baixa aprovada pelo administrador.
+    if (row.tipo === "distrato" && this.emAberto(row) && !this.souAdmin()) {
+      alert("Distrato em aberto não pode ser removido. Use Pedir baixa: o administrador aprova a baixa com a justificativa.");
+      return;
+    }
     const msg = "Remover " + this.tipoLabel(row.tipo) + " de " + (row.cliente || "este cliente") + " da lista?";
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
     if (!ok) return;
@@ -490,7 +719,7 @@ const DocAssinaturaApp = {
 
   visiveis() {
     return this.itens.filter((row) => {
-      if (row && row.status === "lancado" && !this.mostrarFinalizados) return false;
+      if (row && !this.emAberto(row) && !this.mostrarFinalizados) return false;
       if (this.tipo && row.tipo !== this.tipo) return false;
       if (this.vista === "meus" && !this.mesmoUsuario(row)) return false;
       return true;
@@ -947,7 +1176,7 @@ const DocAssinaturaApp = {
 
   pendentesParaAlertar() {
     return (this.itens || []).filter((row) => {
-      if (!row || row.status === "lancado") return false;
+      if (!row || !this.emAberto(row)) return false;
       const dias = this.diasUteisDesde(row.createdAt);
       const marco = this.marcoAlerta(dias);
       if (!marco || this.alertaVisto(row, dias)) return false;
@@ -1058,7 +1287,9 @@ const DocAssinaturaApp = {
     }).join("")}</div>`;
     const opts = `<option value="">Todos os documentos</option>` + this.TIPOS.map((t) => `<option value="${t.id}"${this.tipo === t.id ? " selected" : ""}>${this.esc(t.label)}</option>`).join("");
     const rows = this.ordenar(this.visiveis());
-    const aviso = this.aviso ? `<p class="docs-aviso">${this.esc(this.aviso)}</p>` : "";
+    const pedidosBaixa = this.souAdmin() ? (this.itens || []).filter((r) => r && this.emAberto(r) && r.baixa && r.baixa.status === "pendente").length : 0;
+    const aviso = (this.aviso ? `<p class="docs-aviso">${this.esc(this.aviso)}</p>` : "")
+      + (pedidosBaixa ? `<p class="docs-aviso" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;"><strong>${pedidosBaixa} ${pedidosBaixa === 1 ? "pedido" : "pedidos"} de baixa</strong> aguardando sua aprovação (situação "Baixa pedida").</p>` : "");
     const grupos = new Map();
     rows.forEach((r) => {
       const id = this.centroDe(r) || "";
@@ -1077,8 +1308,8 @@ const DocAssinaturaApp = {
             <td>${this.esc(r.titulo || "—")}</td>
             <td>${this.esc(this.rotuloUnidade(r))}</td>
             <td>${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
-            <td><span class="docs-sit${r.status === "lancado" ? " is-feito" : ""}">${r.status === "lancado" ? "Lançado no Sienge" : "Aguardando"}</span></td>
-            <td class="docs-acoes">${distrato}<button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
+            <td>${this.situacaoHtml(r)}</td>
+            <td class="docs-acoes">${this.botoesBaixaHtml(r)}${distrato}<button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
           </tr>`;
     };
     const corpo = ordem.map((id) => {
