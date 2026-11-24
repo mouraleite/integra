@@ -1601,9 +1601,10 @@ const OrcamentoRepassesApp = {
     catch (e) { return true; }
   },
 
-  /* Empresa 6: duas visões. O terrenista vê o 14202 (PARCERIA) com o rateio das contas
-     configuradas; essa variação é o repasse. O empreendedor vê 14201 e 70600 e reparte
-     a variação entre os sócios. */
+  /* Empresa 6: duas visões, no mesmo critério da parceria e da mista.
+     O 14202 tem PARCERIA no nome, então já é a parte do terrenista e entra por inteiro.
+     O 14201 é do empreendedor e também entra por inteiro, junto com o 70600.
+     Os 44% do terrenista e os 56% do empreendedor valem só na leitura da obra inteira. */
   aracariDe(part) {
     if (!part || String(part.companyId) !== "6") return false;
     const fold = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
@@ -1774,7 +1775,12 @@ const OrcamentoRepassesApp = {
       if (!semFiltro && !this.entraConta(part, obra, l.conta)) return;
       const doParceiro = this.ccEhDoParceiro(achado.nome);
       const aplica = !!usarRateio && (!doParceiro || rateioNoParceiro);
-      const fator = aplica ? this.fator(part, obra, l.conta) : 1;
+      /* Parceria e mista: o centro com PARCERIA no nome já é a parte do parceiro.
+         O percentual da obra não incide de novo. Na mista, despesa bancária continua fora. */
+      let fator = 1;
+      if (aplica) fator = this.fator(part, obra, l.conta);
+      else if (doParceiro && app && typeof app.isMista === "function" && app.isMista(part)
+        && typeof app.ehDespesaBancaria === "function" && app.ehDespesaBancaria(l.conta, l.cn)) fator = 0;
       if (!(Math.abs(fator) > 0)) return;
       const gid = dfc && typeof dfc.grupoDaConta === "function" ? dfc.grupoDaConta(l.conta, l.cn) : OrcEst.grupo(l.conta, l.cn);
       const g = gid ? byId[gid] : null;
@@ -1943,10 +1949,10 @@ const OrcamentoRepassesApp = {
     let centros = this.centrosDa(part, obraCode, usarRateio);
     let semFiltro = false;
     if (visaoAr === "terrenista") {
-      /* 14202 tem PARCERIA no nome e, mesmo assim, recebe o rateio das contas da prestação. */
+      /* Centro do parceiro: 100%. O percentual da obra não incide de novo. */
       centros = this.centrosFixos(part, obra, ["14202"]);
-      usarRateio = true;
-      rateioNoParceiro = true;
+      usarRateio = false;
+      rateioNoParceiro = false;
       semFiltro = false;
     } else if (visaoAr === "empreendedor") {
       centros = this.centrosFixos(part, obra, ["14201", "70600"]);
@@ -2474,7 +2480,7 @@ const OrcamentoRepassesApp = {
       }).join("")
       : `<p class="orc-est-nota">${sociedade ? "Esta sociedade não tem centro de custo." : "Esta obra não tem centro de custo."} Inclua na parametrização do parceiro.</p>`);
     const rateio = aracari
-      ? `<span class="orc-rep-sub">${visao === "empreendedor" ? "14201 · 70600" : "14202 · rateio"}</span>`
+      ? `<span class="orc-rep-sub">${visao === "empreendedor" ? "14201 · 70600 · integral" : "14202 · integral"}</span>`
       : (obra && !card.sociedade
       ? `<span class="orc-rep-sub">${card.extra ? "DFC integral · repasse no percentual" : (card.centroParceiro ? "Centro do parceiro · integral" : (card.rateio ? ("Rateio " + OrcEst.esc(this.pctTxt(card.obraShare))) : "Total da obra"))}</span>`
       : "");
@@ -2484,7 +2490,7 @@ const OrcamentoRepassesApp = {
       <div class="orc-rep-ccs">${marcas}</div>
       <div class="orc-rep-resumo">
         <span><strong>${OrcEst.esc(card.nome)}</strong> <span class="orc-rep-sub">${OrcEst.esc((card.companyId ? card.companyId + " — " : "") + card.empresa)}</span> ${rateio}</span>
-        <span class="orc-rep-valor"><span>${sociedade || visao === "empreendedor" ? "Variação — distribuição" : (card.centroParceiro || card.rateio || card.extra ? "Variação — repasse" : "Variação — total da obra")}</span><b>${OrcEst.money(this.soma(card.variacao))}</b></span>
+        <span class="orc-rep-valor"><span>${sociedade || visao === "empreendedor" ? "Variação — distribuição" : (visao === "terrenista" || card.centroParceiro || card.rateio || card.extra ? "Variação — repasse" : "Variação — total da obra")}</span><b>${OrcEst.money(this.soma(card.variacao))}</b></span>
       </div>
       ${this.dfcHtml(card)}
       <p class="orc-est-nota">${card.companyId === "12"
@@ -2492,9 +2498,9 @@ const OrcamentoRepassesApp = {
         : (sociedade
         ? "Na sociedade o DFC junta todos os centros marcados. A linha 12 fica no mês em que o resultado acontece. A variação desse mês vira distribuição no mês seguinte, por centro de custo: janeiro de 2027 distribui dezembro de 2026, e dezembro de 2027 é distribuído em JAN/28. Cada sócio recebe o seu percentual. Repasse e dividendos já lançados no orçamento ficam de fora, para o valor não se abater duas vezes."
         : (visao === "terrenista"
-        ? "O DFC é o centro 14202, com o rateio das contas configuradas na prestação. A variação desse centro é o repasse do terrenista, pago no mês seguinte."
+        ? "O DFC é o centro 14202. O nome tem PARCERIA, então este centro já é a parte do terrenista e entra por inteiro. O percentual da obra não incide de novo. A variação dele é o repasse, pago no mês seguinte. Os 44% do terrenista e os 56% do empreendedor valem quando a obra é lida por inteiro."
         : (visao === "empreendedor"
-        ? "O DFC junta os centros 14201 e 70600, sem o percentual da obra. A variação dos dois é repartida entre os sócios no mês seguinte."
+        ? "O centro 14201 é do empreendedor e entra por inteiro, junto com o 70600. A variação dos dois é repartida entre os sócios no mês seguinte. O percentual da obra não entra nesta leitura."
         : (card.extra
         ? "Esta obra tem o centro do empreendedor, o da parceria e outros centros (marketing, comercial, gestão). O DFC soma os centros marcados por inteiro, só nas contas ligadas na prestação de contas. O repasse do final é o percentual do parceiro sobre esse DFC, pago no mês seguinte no centro do empreendedor."
         : "Com os centros da obra marcados, o DFC é o total recebido e pago na obra. O centro com PARCERIA no nome já é a parte do parceiro: o repasse previsto é a variação desse centro, sem aplicar de novo o percentual da obra. O percentual da obra incide só sobre os demais centros. A linha 12 fica no mês em que o resultado acontece. O repasse é a variação desse mês paga no mês seguinte: janeiro de 2027 paga dezembro de 2026. A variação do 13301 é paga no 13300, na conta cadastrada no 13301. A do 13401 é paga no 13400, na conta do 13401. O centro de custo não entra no cadastro do credor."))))}</p>`;
@@ -2696,7 +2702,7 @@ const OrcamentoRepassesApp = {
           { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nome + (String(emp) === "12"
             ? ". Cada mês distribui a variação de caixa desse mês. O lucro da empresa 13 entra no mês em que chega."
             : (String(emp) === "6"
-            ? ". Terrenista: centro 14202 com o rateio das contas; a variação é o repasse. Empreendedor: centros 14201 e 70600, variação repartida entre os sócios."
+            ? ". Terrenista: centro 14202 por inteiro, porque tem parceria no nome; a variação é o repasse. Empreendedor: centros 14201 e 70600 por inteiro, variação repartida entre os sócios."
             : ". Janeiro é o repasse da variação de dezembro de 2026. Cada mês paga a variação do mês anterior.")) }
         ]
       };
@@ -2979,7 +2985,7 @@ const OrcamentoRepassesApp = {
       : (card.sociedade
         ? "A variação de caixa de um mês vira distribuição no mês seguinte."
         : (card.aracariVisao === "terrenista"
-          ? "O repasse do terrenista é a variação de caixa do centro 14202, já com o rateio das contas configuradas, paga no mês seguinte."
+          ? "O repasse do terrenista é a variação de caixa do centro 14202, por inteiro, paga no mês seguinte. O percentual da obra não incide de novo neste centro."
           : (card.extra
           ? "A variação de caixa do DFC integral, no percentual do parceiro e só nas contas da prestação, é o repasse do mês seguinte. Ele é pago no centro do empreendedor."
           : (card.centroParceiro
