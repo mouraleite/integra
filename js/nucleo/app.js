@@ -31831,7 +31831,7 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
     : "";
   if (isento) {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#ecfdf5;border:1px solid #6ee7b7;color:#065f46;font-size:0.82rem;line-height:1.45;";
-    box.innerHTML = `<strong>Sem multa e sem juros neste boleto.</strong> A API do Sienge receberá multa <b>0%</b> e juros <b>0%</b>. Principal: ${money(principal)}.${graceHint}`;
+    box.innerHTML = `<strong>Sem multa e sem juros neste boleto.</strong> A API do Sienge receberá multa <b>0,01%</b> e juros <b>0,01%</b> (com 0% o Sienge aplica os encargos do contrato). Principal: ${money(principal)}.${graceHint}`;
   } else {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.82rem;line-height:1.45;";
     box.innerHTML = `<strong>Este boleto será gerado COM acréscimos.</strong> A API do Sienge receberá multa <b>${Number(finePct).toFixed(2)}%</b> e juros <b>${Number(interestPct).toFixed(2)}% a.m.</b>${(multa + juros) > 0.009 ? ` · Estimativa: multa ${money(multa)} + juros ${money(juros)} · Total ${money(principal + multa + juros)}` : ""}.${honHint}${graceHint}`;
@@ -32178,13 +32178,17 @@ window.submitReprocessBoleto = async function() {
       interest = 0;
     }
 
+    // O Sienge trata 0% como "não informado" e aplica a multa e os juros do contrato
+    // (teste no título 14394 em 24/11/2026: 0% gerou R$ 1.195,32 sobre R$ 1.171,12).
+    // Isenção total vai como o mínimo de 0,01%.
+    const SIENGE_PCT_MINIMO = 0.01;
     const payload = {
       receivableBillId: Number(currentReprocessBillId),
       companyId: Number(companyId),
       checkingAccountId: account,
       newDueDate: dueDate,
-      interestPercentage: Number(interest) || 0,
-      finePercentage: Number(fine) || 0,
+      interestPercentage: Math.max(SIENGE_PCT_MINIMO, Number(interest) || 0),
+      finePercentage: Math.max(SIENGE_PCT_MINIMO, Number(fine) || 0),
       insurancepercentage: 0,
       correctAnnualInstallment: false,
       groupedInstalments: installmentsArray.length > 1,
@@ -46501,6 +46505,9 @@ async function saveDocPadrao(tipo) {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   const ids = keyMap[tipo] || [];
   const data = {};
@@ -46561,6 +46568,9 @@ async function previewDocPadrao(tipo) {
     vencimento: 'Alteração de Vencimento',
     aditamento: 'Aditamento Contratual',
     permuta: 'Permuta de lote',
+    simiq: 'Termo de simulação do saldo devedor (IQ)',
+    deciq: 'Declaração de saldo devedor (IQ)',
+    quifin: 'Termo de quitação por financiamento',
   };
   const label = labelMap[tipo] || tipo;
   const fillLegalPreview = async (rawText) => {
@@ -46683,6 +46693,35 @@ async function previewDocPadrao(tipo) {
       .replace(/\{\{\s*CERTIFICADO_GRAPROHAB\s*\}\}/g, '071/2021');
     const filled = window.centerDistratoSignatures ? window.centerDistratoSignatures(await fillLegalPreview(exemplo)) : await fillLegalPreview(exemplo);
     content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">Na prévia, o lote de destino e os valores usam um exemplo de troca dentro do mesmo empreendimento. Na geração entram o lote ativo escolhido e o saldo do título.</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
+  } else if (tipo === 'simiq' || tipo === 'deciq' || tipo === 'quifin') {
+    const title = document.getElementById('doc-' + tipo + '-title')?.value || '';
+    let corpo = document.getElementById('doc-' + tipo + '-corpo')?.value || '';
+    if (typeof applyDistratoConditionals === 'function') corpo = applyDistratoConditionals(corpo, { hasConjuge: true });
+    let filled = await fillLegalPreview(corpo);
+    const exemplosFin = {
+      SALDO_DEVEDOR: 'R$ 48.320,15',
+      SALDO_DEVEDOR_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      SALDO_CORRIGIDO: 'R$ 51.040,00',
+      SALDO_CORRIGIDO_EXTENSO: 'cinquenta e um mil e quarenta reais',
+      VALOR_QUITACAO: 'R$ 48.320,15',
+      VALOR_QUITACAO_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      VALOR_PAGO: 'R$ 36.500,00',
+      VALOR_PAGO_EXTENSO: 'trinta e seis mil e quinhentos reais',
+      QTD_PARCELAS_ABERTAS: '42',
+      DATA_BASE_SALDO: new Date().toLocaleDateString('pt-BR'),
+      TABELA_PARCELAS: '<table style="width:100%;border-collapse:collapse;font-size:12px;margin:8px 0;"><tr><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Parcela</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Vencimento</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">Valor presente</th></tr><tr><td style="border:1px solid #cbd5e1;padding:4px 6px;">48</td><td style="border:1px solid #cbd5e1;padding:4px 6px;">10/12/2026</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">R$ 1.150,48</td></tr></table>',
+      MATRICULA: '27.403',
+      AREA_LOTE: '250,00 m²',
+      NUM_CONTRATO: '1042'
+    };
+    filled = filled.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (full, key) => Object.prototype.hasOwnProperty.call(exemplosFin, key) ? exemplosFin[key] : full);
+    if (window.centerSimpleDocSignature) filled = window.centerSimpleDocSignature(filled);
+    const nota = tipo === 'simiq'
+      ? 'Na prévia, saldo e parcelas usam um exemplo. Na etapa 1 do financiamento entram o saldo e as parcelas em aberto do título no Sienge.'
+      : (tipo === 'deciq'
+        ? 'Na prévia, o saldo usa um exemplo. Na etapa 4 do financiamento entra o saldo devedor do título no Sienge.'
+        : 'Na prévia, o valor quitado usa um exemplo. Na etapa 10 entra o saldo declarado neste financiamento ou, se ele já estiver zerado, o total recebido no título.');
+    content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">${nota}</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
   }
   
   const win = window.open('', '_blank', 'width=700,height=600,scrollbars=yes');
@@ -46725,7 +46764,7 @@ function applySavedDocPadraoFields(tipo, data, fieldMap) {
 
 // Carregar templates salvos ao inicializar
 async function loadDocPadraoTemplates() {
-  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta'];
+  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta', 'simiq', 'deciq', 'quifin'];
   const fieldMap = {
     reneg: ['doc-reneg-title', 'doc-reneg-subtitle', 'doc-reneg-clauses'],
     boleto: ['doc-boleto-inst1', 'doc-boleto-inst2', 'doc-boleto-obs'],
@@ -46739,6 +46778,9 @@ async function loadDocPadraoTemplates() {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   
   if (window.firebaseCollections && window.firebaseDb) {
