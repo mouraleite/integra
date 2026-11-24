@@ -1773,6 +1773,8 @@ const FinanciamentoApp = {
             #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
             #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
+            #financiamento-root .fin-doc { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
+            #financiamento-root .fin-doc p { margin: 0; color: #166534; font-size: 0.75rem; flex: 1 1 220px; }
           </style>
           <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
           ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
@@ -1785,6 +1787,8 @@ const FinanciamentoApp = {
             const atual = !encerrado && idx === ativoIdx;
             const passada = encerrado || idx < ativoIdx || !!concluidaEm;
             const sid = String(s.id).replace(/'/g, "");
+            const docKind = typeof this.docDaEtapa === "function" ? this.docDaEtapa(s, idx) : "";
+            const docBtn = (docKind && typeof this.botaoDocumentoEtapa === "function") ? this.botaoDocumentoEtapa(sid, docKind) : "";
             const notasEtapa = this.listaNotas(proc, s.id);
             const rascunho = notasEtapa.filter((n) => n.rascunho).pop() || {};
             const historico = this.historicoHtml(proc, s.id);
@@ -1802,11 +1806,13 @@ const FinanciamentoApp = {
                   </div>
                 </div>
                 ${passada ? historico : ""}
+                ${passada ? docBtn : ""}
               </div>`;
             }
             const iniciada = String(proc.currentStageId || "") === String(s.id);
             const desde = iniciada && proc.done && proc.done[s.id] ? " · desde " + this.fmtDate(proc.done[s.id]) : "";
             const corpo = iniciada ? `<div class="fin-etapa-corpo">
+              ${docBtn}
               ${historico}
               <div class="fin-nota">
                 <label for="fin-nota-${sid}">Nota interna</label>
