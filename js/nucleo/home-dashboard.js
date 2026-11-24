@@ -311,6 +311,22 @@ const HomeDashboard = {
       count: fg.length
     });
 
+    // Distrato e TCD gerados por esta pessoa, em aberto há mais de 7 dias (Documentos para assinar).
+    // Na home só; o sprint traz o time inteiro numa seção própria.
+    const DA = window.DocAssinaturaApp;
+    if (DA && typeof DA.parados === 'function' && user) {
+      const par = DA.parados(user);
+      const dias = DA.DIAS_PARADO || 7;
+      const itensDoc = (rows) => rows.map(r => ({
+        customerId: 'doc-' + r.id,
+        saleId: r.titulo,
+        customerName: r.cliente || ('Título ' + r.titulo),
+        hint: 'Gerado em ' + (typeof DA.quando === 'function' ? DA.quando(r.createdAt) : '') + ' · ' + DA.diasDesde(r.createdAt) + ' dias'
+      }));
+      groups.push({ id: 'docs-distrato-7', soHome: true, label: par.distrato.length + (par.distrato.length === 1 ? ' distrato' : ' distratos') + ' com mais de ' + dias + ' dias', items: itensDoc(par.distrato), hideIfEmpty: true, count: par.distrato.length });
+      groups.push({ id: 'docs-tcd-7', soHome: true, label: par.cessao.length + ' TCD com mais de ' + dias + ' dias', items: itensDoc(par.cessao), hideIfEmpty: true, count: par.cessao.length });
+    }
+
     if (back) {
       const vencidos = scopeClients.filter(c => {
         const info = typeof window.getClientJudicialPhaseInfo === 'function' ? window.getClientJudicialPhaseInfo(c) : null;
@@ -696,6 +712,11 @@ const HomeDashboard = {
         ev.stopPropagation();
         const customerId = btn.getAttribute('data-customer-id');
         const saleId = btn.getAttribute('data-sale-id');
+        const insightId = btn.getAttribute('data-insight-id');
+        if ((insightId === 'docs-distrato-7' || insightId === 'docs-tcd-7') && typeof window.switchTab === 'function') {
+          window.switchTab('relacionamento_assinaturas', 'Documentos para assinar');
+          return;
+        }
         if (btn.getAttribute('data-insight-id') === 'followup-gestor' && window.FollowupGestor
           && typeof window.FollowupGestor.abrirPorCliente === 'function'
           && window.FollowupGestor.abrirPorCliente(customerId, saleId, this.getViewUser())) {
@@ -2032,6 +2053,7 @@ window.buildSprintOperatorSummaries = function() {
     const mine = hd.clientsOfOperator(u, all);
     if (!mine.length) return;
     const groups = hd.collectInsightGroups(mine, u).filter(g => {
+      if (g.soHome) return false;
       const n = g.count != null ? g.count : (g.items || []).length;
       return n > 0;
     });
@@ -2091,6 +2113,10 @@ window.buildSprintOperatorSummaries = function() {
       lines.push('• Há ' + validarSj + ' vistoria' + (validarSj === 1 ? '' : 's') + ' sub judice para validar');
     }
   });
+  // Distrato e TCD em aberto há mais de 7 dias, por quem gerou (Documentos para assinar).
+  if (window.DocAssinaturaApp && typeof window.DocAssinaturaApp.linhasSprintParados === 'function') {
+    try { window.DocAssinaturaApp.linhasSprintParados().forEach(l => lines.push(l)); } catch (e) {}
+  }
   return lines.join('\n');
 };
 

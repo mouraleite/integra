@@ -1785,6 +1785,9 @@ const OrcamentoRepassesApp = {
       const gid = dfc && typeof dfc.grupoDaConta === "function" ? dfc.grupoDaConta(l.conta, l.cn) : OrcEst.grupo(l.conta, l.cn);
       const g = gid ? byId[gid] : null;
       if (!g || g.type !== "resultado" || this.grupoOculto(part, g)) return;
+      // semFiltro só vem da visão Empreendedor (Araçari, 14201 + 70600). O repasse ao terrenista lançado
+      // no orçamento não pode abater a distribuição dos empreendedores: o 04.01 fica de fora, como na sociedade.
+      if (semFiltro && gid === "g_04_01") return;
       const pct = aplica
         ? (app && typeof app.partnerPctForObra === "function" ? app.partnerPctForObra(part, obra, l.conta) : (Number(obra.defaultPartnerShare) || 0))
         : 0;
@@ -2500,7 +2503,7 @@ const OrcamentoRepassesApp = {
         : (visao === "terrenista"
         ? "O DFC é o centro 14202. O nome tem PARCERIA, então este centro já é a parte do terrenista e entra por inteiro. O percentual da obra não incide de novo. A variação dele é o repasse, pago no mês seguinte. Os 44% do terrenista e os 56% do empreendedor valem quando a obra é lida por inteiro."
         : (visao === "empreendedor"
-        ? "O centro 14201 é do empreendedor e entra por inteiro, junto com o 70600. A variação dos dois é repartida entre os sócios no mês seguinte. O percentual da obra não entra nesta leitura."
+        ? "O centro 14201 é do empreendedor e entra por inteiro, junto com o 70600. A variação dos dois é repartida entre os sócios no mês seguinte. O percentual da obra não entra nesta leitura. O 04.01 Repasses terrenistas fica de fora, para o repasse ao terrenista não abater a distribuição dos empreendedores."
         : (card.extra
         ? "Esta obra tem o centro do empreendedor, o da parceria e outros centros (marketing, comercial, gestão). O DFC soma os centros marcados por inteiro, só nas contas ligadas na prestação de contas. O repasse do final é o percentual do parceiro sobre esse DFC, pago no mês seguinte no centro do empreendedor."
         : "Com os centros da obra marcados, o DFC é o total recebido e pago na obra. O centro com PARCERIA no nome já é a parte do parceiro: o repasse previsto é a variação desse centro, sem aplicar de novo o percentual da obra. O percentual da obra incide só sobre os demais centros. A linha 12 fica no mês em que o resultado acontece. O repasse é a variação desse mês paga no mês seguinte: janeiro de 2027 paga dezembro de 2026. A variação do 13301 é paga no 13300, na conta cadastrada no 13301. A do 13401 é paga no 13400, na conta do 13401. O centro de custo não entra no cadastro do credor."))))}</p>`;

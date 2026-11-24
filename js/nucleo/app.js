@@ -30474,6 +30474,20 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
     alert("Abra o simulador de distrato a partir de um contrato.");
     return;
   }
+  // Um distrato em aberto por título: outro só depois da baixa aprovada pelo administrador.
+  if (window.DocAssinaturaApp && typeof DocAssinaturaApp.distratoAbertoDoTitulo === "function") {
+    const tituloDist = g_distSale.receivableBillId || g_distSale.id || "";
+    const aberto = await DocAssinaturaApp.distratoAbertoDoTitulo(tituloDist);
+    if (aberto) {
+      const quando = typeof DocAssinaturaApp.quando === "function" ? DocAssinaturaApp.quando(aberto.createdAt) : String(aberto.createdAt || "");
+      const pedida = aberto.baixa && aberto.baixa.status === "pendente";
+      alert("Já existe um distrato em aberto para o título " + tituloDist + ", gerado em " + quando + " por " + (aberto.userName || "—") + ".\n\n"
+        + (pedida
+          ? "A baixa dele já foi pedida e aguarda a aprovação do administrador. Depois da aprovação, gere o novo distrato."
+          : "Para gerar outro, peça a baixa do anterior em Relacionamento > Documentos para assinar (botão Pedir baixa), com a justificativa. O administrador precisa aprovar."));
+      return;
+    }
+  }
   if (typeof window.enrichCustomerForLegalDocs === "function") {
     g_distCustomer = await window.enrichCustomerForLegalDocs(g_distCustomer);
   }
@@ -60772,23 +60786,37 @@ window.resolveBrokerCreditorNames = async function(ids) {
 };
 
 window.gerarMapaZeropaidPDF = async function() {
-    const zeroList = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
-    const zeroKeys = new Set(zeroList.map(c => `${c.customerId}-${c.saleId}`));
     const opFilter = window.activeZeroOperatorFilter
         || (typeof activeZeroOperatorFilter !== "undefined" ? activeZeroOperatorFilter : "TODOS");
     const normOp = (v) => (typeof window.normalizeOperatorName === "function")
         ? window.normalizeOperatorName(v)
         : String(v || "").toUpperCase();
-    const webroList = (window.rawClientList || []).filter(c => {
-        if (!c || zeroKeys.has(`${c.customerId}-${c.saleId}`) || c.isZeroPaid) return false;
+    // Entrada = as três tags da fila: Pagamento de entrada Webro, Aguardando Webro e Pendente Repasse Webro.
+    const tagEntrada = (c) => {
+        const baixa = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+        if (baixa) return baixa === "PENDENTE" ? "pendente" : "aguardando";
+        if (typeof window.clientHasPagamentoEntradaWebro === "function" && window.clientHasPagamentoEntradaWebro(c)) return "pagamento";
+        return "";
+    };
+    const chave = (c) => `${c.customerId}-${c.saleId}`;
+    const zeroBase = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
+    const zeroList = zeroBase.filter(c => c && !tagEntrada(c));
+    const vistosEntrada = new Set();
+    const webroList = zeroBase.concat(window.rawClientList || []).filter(c => {
+        if (!c || vistosEntrada.has(chave(c))) return false;
         const subj = typeof window.clientIsSubjudice === "function"
             ? window.clientIsSubjudice(c)
             : (c.subjudice === "S" || c.subjudice === true);
         if (subj) return false;
-        if (typeof window.clientHasPagamentoEntradaWebro !== "function" || !window.clientHasPagamentoEntradaWebro(c)) return false;
+        const tag = tagEntrada(c);
+        if (!tag) return false;
         if (opFilter && opFilter !== "TODOS" && normOp(c.assignedOperator) !== normOp(opFilter)) return false;
+        vistosEntrada.add(chave(c));
+        c._tagEntrada = tag;
         return true;
     });
+    const porTag = { pagamento: 0, aguardando: 0, pendente: 0 };
+    webroList.forEach(c => { porTag[c._tagEntrada] = (porTag[c._tagEntrada] || 0) + 1; });
     if (!zeroList.length && !webroList.length) {
         alert("Não há clientes 0% pago nem pagando entrada Webro para gerar o mapa.");
         return;
@@ -60896,19 +60924,21 @@ window.gerarMapaZeropaidPDF = async function() {
         const stats = (list) => {
             const s = { value: 0, titles: 0, clients: new Set(), delaySum: 0, delayN: 0, ageSum: 0, ageN: 0,
                 months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, recency: recencyDefs.map(() => 0) };
+            // Tudo em número de títulos.
             list.forEach(c => {
+                const t = titleCount(c);
                 s.value += clientValue(c);
-                s.titles += titleCount(c);
+                s.titles += t;
                 s.clients.add(String(c.customerId));
                 if (c.maxDaysDelay > 0) { s.delaySum += c.maxDaysDelay; s.delayN++; }
                 const d = parseSale(c);
-                if (!d) { s.noDate++; s.recency[5]++; return; }
+                if (!d) { s.noDate += t; s.recency[5] += t; return; }
                 const days = Math.max(0, Math.round((now - d) / 86400000));
                 s.ageSum += days; s.ageN++;
                 const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-                if (s.months[key] != null) s.months[key]++; else s.older++;
+                if (s.months[key] != null) s.months[key] += t; else s.older += t;
                 const idx = recencyDefs.findIndex(r => r.max != null && days <= r.max);
-                s.recency[idx >= 0 ? idx : 4]++;
+                s.recency[idx >= 0 ? idx : 4] += t;
             });
             const avgAge = s.ageN ? Math.round(s.ageSum / s.ageN) : 0;
             s.clientsN = s.clients.size;
@@ -60919,10 +60949,13 @@ window.gerarMapaZeropaidPDF = async function() {
         const sz = stats(zeroList);
         const sw = stats(webroList);
 
-        const C_ZERO = "#334155";
-        const C_WEB = "#94a3b8";
-        const C_HEAD = "#1e293b";
-        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f8fafc";
+        // Cores do mapa: verde da marca nos cabeçalhos, vermelho para 0% pago e laranja para entrada Webro.
+        const C_ZERO = "#dc2626";
+        const C_WEB = "#ea580c";
+        const C_HEAD = "#105436";
+        const BG_ZERO = "#fef2f2";
+        const BG_WEB = "#fff7ed";
+        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f3f8f5";
         const ellipsisTd = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
         const dot = (color) => `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
 
@@ -60943,30 +60976,32 @@ window.gerarMapaZeropaidPDF = async function() {
                     const h = (v / maxVal) * (H - padTop - padBot);
                     const y = H - padBot - h;
                     out += `<rect x="${x - barW / 2}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${v ? color : "#e2e8f0"}" rx="2"/>`;
-                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">${v}</text>`;
+                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="9" font-weight="800" fill="${color}">${v}</text>`;
                 });
-                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="7" fill="#64748b">${s.label}</text>`;
+                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="8.5" font-weight="600" fill="#475569">${s.label}</text>`;
             });
             return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;">
                 <line x1="0" y1="${H - padBot}" x2="${W}" y2="${H - padBot}" stroke="#e2e8f0" stroke-width="1.5"/>${out}
             </svg>`;
         };
 
-        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:4px 6px;font-size:8px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
-        const totalTd = (v, align) => `<td style="padding:5px 6px;border-top:2px solid #cbd5e1;text-align:${align || "center"};font-weight:800;color:${C_HEAD};">${v}</td>`;
+        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:5px 7px;font-size:9px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
+        const totalTd = (v, align, extra) => `<td style="padding:6px 7px;border-top:2px solid ${C_HEAD};text-align:${align || "center"};font-weight:800;color:${C_HEAD};${extra || ""}">${v}</td>`;
+        const celZero = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_ZERO};background:${v ? BG_ZERO : "transparent"};">${v || "-"}</td>`;
+        const celWeb = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_WEB};background:${v ? BG_WEB : "transparent"};">${v || "-"}</td>`;
 
         const recencyTable = `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup><col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%"></colgroup>
-                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th("0% pago", "center")}${th("Entrada", "center")}${th("Total", "center")}</tr></thead>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup><col style="width:43%"><col style="width:19%"><col style="width:19%"><col style="width:19%"></colgroup>
+                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th(`${dot("#fca5a5")}0% pago`, "center")}${th(`${dot("#fdba74")}Entrada`, "center")}${th("Total", "center")}</tr></thead>
                 <tbody>
                     ${recencyDefs.map((r, i) => `<tr style="background:${zebra(i)};">
-                        <td style="padding:4px 6px;font-weight:700;color:#334155;">${esc(r.label)}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};">${sz.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;">${sw.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;">${sz.recency[i] + sw.recency[i]}</td>
+                        <td style="padding:5px 7px;font-weight:700;color:#1e293b;">${esc(r.label)}</td>
+                        ${celZero(sz.recency[i])}
+                        ${celWeb(sw.recency[i])}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.recency[i] + sw.recency[i] || "-"}</td>
                     </tr>`).join("")}
-                    <tr style="background:#f1f5f9;">${totalTd("Total", "left")}${totalTd(zeroList.length)}${totalTd(webroList.length)}${totalTd(zeroList.length + webroList.length)}</tr>
+                    <tr style="background:#e7f6ee;">${totalTd("Total de títulos", "left")}${totalTd(sz.titles, "center", `color:${C_ZERO};`)}${totalTd(sw.titles, "center", `color:${C_WEB};`)}${totalTd(sz.titles + sw.titles)}</tr>
                 </tbody>
             </table>`;
 
@@ -60981,7 +61016,7 @@ window.gerarMapaZeropaidPDF = async function() {
             add(zeroList, "z");
             add(webroList, "w");
             return Object.values(map).map(r => ({ ...r, zc: r.z.cl.size, zt: r.z.t, wc: r.w.cl.size, wt: r.w.t }))
-                .sort((a, b) => (b.zc + b.wc) - (a.zc + a.wc) || (b.zt + b.wt) - (a.zt + a.wt));
+                .sort((a, b) => (b.zt + b.wt) - (a.zt + a.wt) || b.zt - a.zt);
         };
         const capRows = (rows, max, otherLabel) => {
             if (rows.length <= max) return rows;
@@ -60990,7 +61025,7 @@ window.gerarMapaZeropaidPDF = async function() {
             return rows.slice(0, max - 1).concat([{ id: "", name: `${otherLabel} (${rest.length})`, isOther: true, zc: sum("zc"), zt: sum("zt"), wc: sum("wc"), wt: sum("wt") }]);
         };
         const ccIdOf = (c) => (typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(c.costCenterId) : c.costCenterId) || "N/D";
-        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 16, "OUTROS EMPREENDIMENTOS");
+        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 13, "OUTROS EMPREENDIMENTOS");
         const brokerRows = capRows(combine(
             c => c.brokerId ? `id:${c.brokerId}` : (c.brokerName ? `n:${String(c.brokerName).trim().toUpperCase()}` : "sem"),
             c => ({
@@ -60998,31 +61033,29 @@ window.gerarMapaZeropaidPDF = async function() {
                 name: c.brokerName ? String(c.brokerName).trim().toUpperCase() : (c.brokerId ? `CREDOR ${c.brokerId}` : "SEM CORRETOR NO CONTRATO"),
                 isOther: !c.brokerId && !c.brokerName
             })
-        ), 16, "OUTROS CORRETORES");
+        ), 13, "OUTROS CORRETORES");
 
         const zt = sz.titles, wt = sw.titles;
+        // Só títulos: 0% pago, entrada e total.
         const splitTable = (rows, firstCols, firstHeads, emptyMsg) => `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup>${firstCols}<col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"></colgroup>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup>${firstCols}<col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup>
                 <thead>
-                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1], "vertical-align:bottom;")).join("")}
-                        ${th(`${dot(C_ZERO)}0% pago`, "center", "border-left:1px solid #475569;")}${th("", "center")}
-                        ${th(`${dot(C_WEB)}Entrada`, "center", "border-left:1px solid #475569;")}${th("", "center")}</tr>
-                    <tr style="background:#334155;">${firstHeads.map(() => th("")).join("")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}</tr>
+                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1])).join("")}
+                        ${th(`${dot("#fca5a5")}0% pago`, "center")}
+                        ${th(`${dot("#fdba74")}Entrada`, "center")}
+                        ${th("Total", "center")}</tr>
                 </thead>
                 <tbody>
                     ${rows.map((r, i) => `<tr style="background:${zebra(i)};">
                         ${r.cells}
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};border-left:1px solid #e2e8f0;">${r.zc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:${C_ZERO};">${r.zt || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;border-left:1px solid #e2e8f0;">${r.wc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:#64748b;">${r.wt || "-"}</td>
-                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 4}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
-                    <tr style="background:#f1f5f9;">
-                        <td colspan="${firstHeads.length}" style="padding:5px 6px;border-top:2px solid #cbd5e1;font-weight:800;color:${C_HEAD};">Total</td>
-                        ${totalTd(sz.clientsN)}${totalTd(zt)}${totalTd(sw.clientsN)}${totalTd(wt)}
+                        ${celZero(r.zt)}
+                        ${celWeb(r.wt)}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${(r.zt + r.wt) || "-"}</td>
+                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 3}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
+                    <tr style="background:#e7f6ee;">
+                        <td colspan="${firstHeads.length}" style="padding:6px 7px;border-top:2px solid ${C_HEAD};font-weight:800;color:${C_HEAD};">Total de títulos</td>
+                        ${totalTd(zt, "center", `color:${C_ZERO};`)}${totalTd(wt, "center", `color:${C_WEB};`)}${totalTd(zt + wt)}
                     </tr>
                 </tbody>
             </table>`;
@@ -61044,34 +61077,36 @@ window.gerarMapaZeropaidPDF = async function() {
             "Sem corretores no contrato"
         );
 
-        const kpi = (label, value) => `
-            <div style="flex:1;min-width:0;padding:6px 10px;border-left:1px solid #e2e8f0;">
-                <div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
-                <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;white-space:nowrap;">${value}</div>
+        const kpi = (label, value, color) => `
+            <div style="flex:1;min-width:0;padding:8px 12px;border-left:1px solid rgba(15,23,42,0.08);">
+                <div style="font-size:9px;font-weight:800;color:#475569;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
+                <div style="font-size:20px;font-weight:800;color:${color || "#0f172a"};margin-top:2px;white-space:nowrap;">${value}</div>
             </div>`;
-        const kpiGroup = (color, title, sub, s) => `
-            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:#fff;border:1px solid #e2e8f0;border-top:3px solid ${color};border-radius:8px;">
-                <div style="width:150px;flex-shrink:0;padding:6px 10px;display:flex;flex-direction:column;justify-content:center;">
-                    <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;letter-spacing:0.3px;">${dot(color)}${title}</div>
-                    <div style="font-size:8px;color:#64748b;margin-top:2px;">${sub}</div>
+        const kpiGroup = (color, bg, title, sub, s, extra) => `
+            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:${bg};border:1px solid ${color}33;border-left:6px solid ${color};border-radius:10px;">
+                <div style="width:190px;flex-shrink:0;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:12px;font-weight:800;color:${color};text-transform:uppercase;letter-spacing:0.3px;">${title}</div>
+                    <div style="font-size:9px;color:#475569;margin-top:2px;line-height:1.35;">${sub}</div>
+                    ${extra || ""}
                 </div>
-                ${kpi("Valor em atraso", fmtInt(s.value))}
-                ${kpi("Clientes", s.clientsN)}
-                ${kpi("Títulos", s.titles)}
+                ${kpi("Títulos", s.titles, color)}
+                ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
                 ${kpi("Desde a venda", s.avgSaleLabel)}
             </div>`;
+        const chip = (txt, n, color) => `<span style="display:inline-block;margin:3px 4px 0 0;padding:1px 6px;border-radius:10px;background:#fff;border:1px solid ${color}55;color:${color};font-size:8.5px;font-weight:800;white-space:nowrap;">${txt}: ${n}</span>`;
+        const chipsEntrada = `<div>${chip("Entrada Webro", porTag.pagamento || 0, C_WEB)}${chip("Aguardando", porTag.aguardando || 0, C_WEB)}${chip("Pendente repasse", porTag.pendente || 0, C_WEB)}</div>`;
         const quadro = (title, body, extra) => `
-            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
-                <div style="background:${C_HEAD};color:#fff;padding:6px 10px;font-weight:800;font-size:10px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
-                <div style="flex:1;min-height:0;padding:6px 8px;overflow:hidden;">${body}</div>
+            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
+                <div style="background:${C_HEAD};color:#fff;padding:7px 12px;font-weight:800;font-size:11px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
+                <div style="flex:1;min-height:0;padding:8px 10px;overflow:hidden;">${body}</div>
             </div>`;
 
-        const legend = `<div style="display:flex;gap:14px;justify-content:center;font-size:8px;font-weight:700;color:#475569;margin-bottom:2px;">
-            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Pagando entrada (boleto Webro)</span></div>`;
+        const legend = `<div style="display:flex;gap:16px;justify-content:center;font-size:9.5px;font-weight:800;color:#334155;margin-bottom:2px;">
+            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Entrada Webro (pagamento, aguardando e pendente repasse)</span></div>`;
         const saleBand = `
             <div style="display:flex;gap:12px;height:100%;align-items:stretch;">
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;">
-                    <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;text-align:center;">Vendas nos últimos 12 meses</div>
+                    <div style="font-size:9.5px;font-weight:800;color:${C_HEAD};text-transform:uppercase;text-align:center;">Títulos por mês da venda (últimos 12 meses)</div>
                     ${legend}
                     ${groupedBarChart(chartSlots)}
                 </div>
@@ -61085,18 +61120,22 @@ window.gerarMapaZeropaidPDF = async function() {
         container.style.cssText = "position:absolute;top:-9999px;left:-9999px;width:1122px;height:793px;background:#fff;padding:14px 18px;font-family:'Inter','Segoe UI',sans-serif;box-sizing:border-box;display:flex;flex-direction:column;";
         container.id = "mapa-zeropaid-pdf-container";
         container.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:8px;margin-bottom:8px;flex-shrink:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg, #105436 0%, #1b8253 100%);border-radius:10px;padding:8px 14px;margin-bottom:8px;flex-shrink:0;">
                 <div style="display:flex;align-items:center;gap:12px;">
-                    <img src="${logoUrl}" alt="Logo" style="height:32px;object-fit:contain;">
+                    <img src="${logoUrl}" alt="Logo" style="height:34px;object-fit:contain;background:#fff;border-radius:6px;padding:2px;">
                     <div>
-                        <h1 style="margin:0;color:#0f172a;font-size:16px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
-                        <p style="margin:2px 0 0 0;color:#64748b;font-size:10px;">Posição em: ${nowLabel} · Atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
+                        <h1 style="margin:0;color:#fff;font-size:17px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
+                        <p style="margin:2px 0 0 0;color:#d1fae5;font-size:10px;">Posição em ${nowLabel} · em número de títulos · atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
                     </div>
+                </div>
+                <div style="text-align:right;color:#fff;">
+                    <div style="font-size:9px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:#d1fae5;">Total de títulos</div>
+                    <div style="font-size:24px;font-weight:800;line-height:1;">${sz.titles + sw.titles}</div>
                 </div>
             </div>
             <div style="display:flex;gap:8px;margin-bottom:8px;flex-shrink:0;">
-                ${kpiGroup(C_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz)}
-                ${kpiGroup(C_WEB, "Pagando entrada", "Entrada em boleto Webro em aberto", sw)}
+                ${kpiGroup(C_ZERO, BG_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz, "")}
+                ${kpiGroup(C_WEB, BG_WEB, "Entrada Webro", "Entrada paga ou em boleto Webro", sw, chipsEntrada)}
             </div>
             ${quadro("Quando o cliente comprou o lote", saleBand, "flex-shrink:0;height:196px;margin-bottom:8px;")}
             <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
