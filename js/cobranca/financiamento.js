@@ -2,6 +2,7 @@ const FinanciamentoState = {
   view: "busca",
   painel: "dashboard",
   dashboardPeriodo: "",
+  dashboardDetalhe: null,
   customer: null,
   contracts: [],
   selected: null,
@@ -165,10 +166,13 @@ const FinanciamentoApp = {
 
   agruparDashboard(lista, rotuloDe) {
     const mapa = new Map();
-    (lista || []).forEach((proc) => {
+    (lista || []).forEach((row) => {
+      const proc = row && row.proc ? row.proc : row;
+      const key = row && row.key != null ? String(row.key) : this.procKey(proc.customerId, proc.contractId);
       const nome = String(rotuloDe(proc) || "—").trim() || "—";
-      const atual = mapa.get(nome) || { nome: nome, quantidade: 0 };
+      const atual = mapa.get(nome) || { nome: nome, quantidade: 0, itens: [] };
       atual.quantidade += 1;
+      atual.itens.push({ key: key, proc: proc });
       mapa.set(nome, atual);
     });
     return Array.from(mapa.values()).sort((a, b) => b.quantidade - a.quantidade
@@ -176,25 +180,36 @@ const FinanciamentoApp = {
   },
 
   dadosDashboard(periodo) {
-    const unicos = new Map();
-    this.listOpenProcesses().concat(this.listCompletedProcesses()).forEach(({ key, proc }) => unicos.set(String(key), proc));
-    const processos = Array.from(unicos.values()).filter((proc) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
-    const abertos = processos.filter((proc) => this.isProcessoAberto(proc));
-    const concluidos = processos.filter((proc) => this.isProcessoConcluido(proc));
+    const abertosRows = this.listOpenProcesses().filter(({ proc }) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
+    const concluidosRows = this.listCompletedProcesses().filter(({ proc }) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
+    const abertos = abertosRows.map((row) => row.proc);
+    const concluidos = concluidosRows.map((row) => row.proc);
+    const processos = abertos.concat(concluidos);
     const etapas = this.folhasEtapa(this.catalogoEtapas());
-    const etapasComContagem = etapas.map((etapa) => ({
-      id: String(etapa.id),
-      nome: etapa.label || etapa.nome || String(etapa.id),
-      quantidade: abertos.filter((proc) => String(proc.currentStageId || "") === String(etapa.id)).length
-    }));
-    const semEtapa = abertos.filter((proc) => !proc.currentStageId
-      || !etapas.some((etapa) => String(etapa.id) === String(proc.currentStageId))).length;
-    if (semEtapa) etapasComContagem.unshift({ id: "", nome: "Aguardando definição da etapa", quantidade: semEtapa });
+    const etapasComContagem = etapas.map((etapa) => {
+      const itens = abertosRows.filter(({ proc }) => String(proc.currentStageId || "") === String(etapa.id));
+      return {
+        id: String(etapa.id),
+        nome: etapa.label || etapa.nome || String(etapa.id),
+        quantidade: itens.length,
+        itens: itens
+      };
+    });
+    const semEtapaItens = abertosRows.filter(({ proc }) => !proc.currentStageId
+      || !etapas.some((etapa) => String(etapa.id) === String(proc.currentStageId)));
+    if (semEtapaItens.length) {
+      etapasComContagem.unshift({
+        id: "",
+        nome: "Aguardando definição da etapa",
+        quantidade: semEtapaItens.length,
+        itens: semEtapaItens
+      });
+    }
     const saldos = processos.map((proc) => ({ proc: proc, saldo: this.saldoDeclaradoDashboard(proc) }))
       .filter((item) => item.saldo != null);
     const valorTotal = saldos.reduce((total, item) => total + item.saldo, 0);
-    const porCidade = this.agruparDashboard(abertos, (proc) => this.cidadeDoProc(proc));
-    const porEmpreendimento = this.agruparDashboard(abertos, (proc) => this.obraDoProc(proc).empreendimento);
+    const porCidade = this.agruparDashboard(abertosRows, (proc) => this.cidadeDoProc(proc));
+    const porEmpreendimento = this.agruparDashboard(abertosRows, (proc) => this.obraDoProc(proc).empreendimento);
     const ano = Number(String(periodo || "").slice(0, 4));
     const mes = Number(String(periodo || "").slice(5, 7));
     const periodoLabel = Number.isInteger(ano) && Number.isInteger(mes) && mes >= 1 && mes <= 12
@@ -214,6 +229,59 @@ const FinanciamentoApp = {
     };
   },
 
+  barraDashboardHtml(itens, tipo, totalAbertos) {
+    const detalhe = FinanciamentoState.dashboardDetalhe;
+    return (itens || []).map((item) => {
+      const id = item.id != null ? String(item.id) : String(item.nome || "");
+      const ativo = detalhe && detalhe.tipo === tipo && String(detalhe.id) === id;
+      const percentual = totalAbertos ? Math.round((item.quantidade || 0) / totalAbertos * 100) : 0;
+      const enc = encodeURIComponent(id);
+      return `<button type="button" class="fin-dash-etapa${ativo ? " is-aberto" : ""}" onclick="FinanciamentoApp.abrirDetalheDashboard('${tipo}','${enc}')" aria-pressed="${ativo ? "true" : "false"}" title="Ver clientes">
+        <div><strong>${this.esc(item.nome)}</strong><span>${item.quantidade || 0}</span></div>
+        <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
+      </button>`;
+    }).join("");
+  },
+
+  detalheDashboardHtml(dados) {
+    const detalhe = FinanciamentoState.dashboardDetalhe;
+    if (!detalhe) return "";
+    let grupo = null;
+    let rotuloTipo = "grupo";
+    if (detalhe.tipo === "etapa") {
+      grupo = (dados.etapas || []).find((item) => String(item.id) === String(detalhe.id));
+      rotuloTipo = "etapa";
+    } else if (detalhe.tipo === "cidade") {
+      grupo = (dados.porCidade || []).find((item) => String(item.nome) === String(detalhe.id));
+      rotuloTipo = "cidade";
+    } else if (detalhe.tipo === "empreendimento") {
+      grupo = (dados.porEmpreendimento || []).find((item) => String(item.nome) === String(detalhe.id));
+      rotuloTipo = "empreendimento";
+    }
+    const titulo = grupo ? grupo.nome : detalhe.id;
+    const itens = (grupo && grupo.itens) || [];
+    const linhas = itens.length ? itens.map(({ key, proc }) => {
+      const obra = this.obraDoProc(proc);
+      const unidade = this.formatUnidade(proc.unit || proc.unitName || "—");
+      const safeKey = String(key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return `<button type="button" class="fin-dash-cliente" onclick="FinanciamentoApp.abrirAberto('${safeKey}')">
+        <strong title="${this.esc(proc.customerName || "")}">${this.esc(proc.customerName || proc.customerId || "—")}</strong>
+        <span>${this.esc(obra.empreendimento)} · ${this.esc(unidade)}</span>
+        <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · Título ${this.esc(proc.titulo || "—")} · ${this.esc(this.etapaLabel(proc))}</span>
+      </button>`;
+    }).join("") : `<p class="fin-dash-vazio">Nenhum cliente neste ${rotuloTipo}.</p>`;
+    return `<section class="fin-dash-detalhe" aria-label="Clientes do ${rotuloTipo} selecionado">
+      <div class="fin-dash-detalhe-topo">
+        <div>
+          <h3>${this.esc(titulo)}</h3>
+          <p>${itens.length} cliente${itens.length === 1 ? "" : "s"} · clique para abrir o financiamento</p>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.fecharDetalheDashboard()">Fechar</button>
+      </div>
+      <div class="fin-dash-clientes">${linhas}</div>
+    </section>`;
+  },
+
   dashboardHtml() {
     const periodo = /^\d{4}-\d{2}$/.test(FinanciamentoState.dashboardPeriodo)
       ? FinanciamentoState.dashboardPeriodo
@@ -221,16 +289,9 @@ const FinanciamentoApp = {
     FinanciamentoState.dashboardPeriodo = periodo;
     const dados = this.dadosDashboard(periodo);
     const totalAbertos = dados.abertos.length;
-    const barraGrupo = (itens) => (itens || []).map((item) => {
-      const percentual = totalAbertos ? Math.round(item.quantidade / totalAbertos * 100) : 0;
-      return `<article class="fin-dash-etapa">
-        <div><strong>${this.esc(item.nome)}</strong><span>${item.quantidade}</span></div>
-        <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
-      </article>`;
-    }).join("");
-    const estagios = barraGrupo(dados.etapas);
-    const cidades = barraGrupo(dados.porCidade);
-    const empreendimentos = barraGrupo(dados.porEmpreendimento);
+    const estagios = this.barraDashboardHtml(dados.etapas, "etapa", totalAbertos);
+    const cidades = this.barraDashboardHtml(dados.porCidade, "cidade", totalAbertos);
+    const empreendimentos = this.barraDashboardHtml(dados.porEmpreendimento, "empreendimento", totalAbertos);
     return `<section class="fin-dashboard">
       <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
         <header class="fin-dash-cabecalho">
@@ -253,17 +314,18 @@ const FinanciamentoApp = {
           <article class="fin-dash-kpi"><span>Valor de financiamento</span><strong>${this.esc(this.fmtMoney(dados.valorTotal))}</strong><small>${dados.saldosDeclarados} com saldo declarado · ${dados.saldosPendentes} pendentes</small></article>
         </div>
         <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento</span></div>
+          <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento · clique para ver os clientes</span></div>
           <div class="fin-dash-etapas">${estagios || '<p class="fin-dash-vazio">Etapas de financiamento não cadastradas.</p>'}</div>
         </section>
         <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Em andamento por cidade</h3><span>${dados.porCidade.length} cidade${dados.porCidade.length === 1 ? "" : "s"}</span></div>
+          <div class="fin-dash-titulo"><h3>Em andamento por cidade</h3><span>${dados.porCidade.length} cidade${dados.porCidade.length === 1 ? "" : "s"} · clique para ver os clientes</span></div>
           <div class="fin-dash-etapas">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
         </section>
         <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Em andamento por empreendimento</h3><span>${dados.porEmpreendimento.length} empreendimento${dados.porEmpreendimento.length === 1 ? "" : "s"}</span></div>
+          <div class="fin-dash-titulo"><h3>Em andamento por empreendimento</h3><span>${dados.porEmpreendimento.length} empreendimento${dados.porEmpreendimento.length === 1 ? "" : "s"} · clique para ver os clientes</span></div>
           <div class="fin-dash-etapas">${empreendimentos || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
         </section>
+        ${this.detalheDashboardHtml(dados)}
       </div>
       <style>
         #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-laranja:#f37021; }
@@ -289,16 +351,27 @@ const FinanciamentoApp = {
         #financiamento-root .fin-dash-titulo h3 { margin:0; color:#105436; font-size:0.95rem; }
         #financiamento-root .fin-dash-titulo span { color:#64748b; font-size:0.72rem; }
         #financiamento-root .fin-dash-etapas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; }
-        #financiamento-root .fin-dash-etapa { min-width:0; padding:8px 10px; border:1px solid #eef2f7; border-radius:8px; background:#f8fafc; }
+        #financiamento-root .fin-dash-etapa { min-width:0; padding:8px 10px; border:1px solid #eef2f7; border-radius:8px; background:#f8fafc; text-align:left; font:inherit; cursor:pointer; transition:border-color .15s, box-shadow .15s, background .15s; }
+        #financiamento-root .fin-dash-etapa:hover { border-color:#86efac; background:#f0fdf4; }
+        #financiamento-root .fin-dash-etapa.is-aberto { border-color:#16a34a; background:#ecfdf5; box-shadow:inset 3px 0 0 #16a34a; }
         #financiamento-root .fin-dash-etapa > div:first-child { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; color:#334155; font-size:0.76rem; }
         #financiamento-root .fin-dash-etapa strong { font-weight:700; line-height:1.35; }
         #financiamento-root .fin-dash-etapa span { flex:0 0 auto; color:#105436; font-weight:800; font-variant-numeric:tabular-nums; }
         #financiamento-root .fin-dash-barra { height:6px; margin-top:7px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
         #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
         #financiamento-root .fin-dash-vazio { grid-column:1/-1; margin:6px 0; color:#64748b; font-size:0.8rem; }
-        @media (max-width:900px) { #financiamento-root .fin-dash-indicadores { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+        #financiamento-root .fin-dash-detalhe { padding:14px; border:1px solid #bbf7d0; border-radius:10px; background:#f0fdf4; }
+        #financiamento-root .fin-dash-detalhe-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
+        #financiamento-root .fin-dash-detalhe-topo h3 { margin:0; color:#14532d; font-size:0.95rem; }
+        #financiamento-root .fin-dash-detalhe-topo p { margin:4px 0 0; color:#166534; font-size:0.75rem; }
+        #financiamento-root .fin-dash-clientes { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+        #financiamento-root .fin-dash-cliente { display:flex; flex-direction:column; gap:3px; min-width:0; padding:10px 12px; border:1px solid #dcfce7; border-radius:8px; background:#fff; text-align:left; font:inherit; cursor:pointer; }
+        #financiamento-root .fin-dash-cliente:hover { border-color:#86efac; background:#f8fafc; }
+        #financiamento-root .fin-dash-cliente strong { color:#0f172a; font-size:0.82rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #financiamento-root .fin-dash-cliente span { color:#64748b; font-size:0.72rem; line-height:1.35; overflow-wrap:anywhere; }
+        @media (max-width:900px) { #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-clientes { grid-template-columns:repeat(2,minmax(0,1fr)); } }
         @media (max-width:600px) {
-          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas { grid-template-columns:1fr; }
+          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas, #financiamento-root .fin-dash-clientes { grid-template-columns:1fr; }
           #financiamento-root .fin-dash-cabecalho { align-items:stretch; flex-direction:column; }
           #financiamento-root .fin-dash-acoes { justify-content:flex-start; }
           #financiamento-root .fin-dash-titulo { align-items:flex-start; flex-direction:column; }
@@ -310,6 +383,27 @@ const FinanciamentoApp = {
   atualizarDashboard(periodo) {
     if (periodo && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(periodo))) return;
     FinanciamentoState.dashboardPeriodo = String(periodo || "");
+    FinanciamentoState.dashboardDetalhe = null;
+    this.render();
+  },
+
+  abrirDetalheDashboard(tipo, idEnc) {
+    const id = decodeURIComponent(String(idEnc == null ? "" : idEnc));
+    const atual = FinanciamentoState.dashboardDetalhe;
+    if (atual && atual.tipo === tipo && String(atual.id) === String(id)) {
+      FinanciamentoState.dashboardDetalhe = null;
+    } else {
+      FinanciamentoState.dashboardDetalhe = { tipo: tipo, id: id };
+    }
+    this.render();
+    const painel = document.querySelector("#financiamento-root .fin-dash-detalhe");
+    if (painel && typeof painel.scrollIntoView === "function") {
+      setTimeout(() => painel.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
+    }
+  },
+
+  fecharDetalheDashboard() {
+    FinanciamentoState.dashboardDetalhe = null;
     this.render();
   },
 
@@ -864,6 +958,112 @@ const FinanciamentoApp = {
     return this.lerMapaProc(merged);
   },
 
+  digitosProc(valor) {
+    return String(valor == null ? "" : valor).replace(/\D/g, "");
+  },
+
+  assinaturaTituloProc(proc) {
+    const cliente = String(proc && proc.customerId || "").trim();
+    const titulo = this.digitosProc(proc && proc.titulo);
+    if (cliente && titulo) return cliente + ":t:" + titulo;
+    return "";
+  },
+
+  indiceEtapaProc(proc) {
+    const folhas = this.folhasEtapa(this.catalogoEtapas());
+    if (!proc || !proc.currentStageId) return -1;
+    return folhas.findIndex((s) => String(s.id) === String(proc.currentStageId));
+  },
+
+  pontuacaoProcessoAberto(proc) {
+    let pts = this.indiceEtapaProc(proc);
+    if (pts < 0) pts = proc && proc.currentStageId ? 0 : -1;
+    if (proc && (proc.enterpriseName || proc.empId || proc.costCenterId)) pts += 0.2;
+    if (proc && (proc.companyName || proc.companyId)) pts += 0.1;
+    if (proc && proc.concluidas) pts += Object.keys(proc.concluidas).length * 0.01;
+    if (proc && proc.anexos) pts += Object.keys(proc.anexos).length * 0.02;
+    if (proc && proc.notas) pts += Object.keys(proc.notas).length * 0.01;
+    return pts;
+  },
+
+  ehCascaAberta(proc) {
+    if (!this.isProcessoAberto(proc) || (proc && proc.currentStageId)) return false;
+    const tem = (obj) => !!(obj && typeof obj === "object" && Object.keys(obj).length);
+    return !tem(proc.done) && !tem(proc.concluidas) && !tem(proc.anexos) && !tem(proc.notas);
+  },
+
+  processosMesmoTitulo(a, b) {
+    if (!a || !b) return false;
+    if (String(a.customerId || "") !== String(b.customerId || "")) return false;
+    const ta = this.digitosProc(a.titulo);
+    const tb = this.digitosProc(b.titulo);
+    return !!(ta && tb && ta === tb);
+  },
+
+  preferirProcessoAberto(a, b) {
+    const pa = this.pontuacaoProcessoAberto(a.proc);
+    const pb = this.pontuacaoProcessoAberto(b.proc);
+    if (pb !== pa) return pb > pa ? b : a;
+    const ta = Date.parse((a.proc && a.proc.updatedAt) || 0) || 0;
+    const tb = Date.parse((b.proc && b.proc.updatedAt) || 0) || 0;
+    return tb >= ta ? b : a;
+  },
+
+  persistirMapaProcessos(all) {
+    window._finProcMem = all || {};
+    const raw = JSON.stringify(window._finProcMem);
+    try { sessionStorage.setItem(FIN_PROC_KEY, raw); } catch (e) {}
+    try { localStorage.setItem(FIN_PROC_KEY, raw); } catch (e) {}
+    if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(() => {});
+  },
+
+  /* Remove duplicatas: mesmo cliente + mesmo título fica só o mais avançado; casca aberta some se já houver concluído. */
+  sanearDuplicadosProcessos() {
+    const all = this.loadAllProcesses();
+    const abertos = [];
+    const concluidos = [];
+    Object.keys(all).forEach((key) => {
+      const proc = all[key];
+      if (!proc || typeof proc !== "object") return;
+      if (this.isProcessoConcluido(proc)) concluidos.push({ key: key, proc: proc });
+      else if (this.isProcessoAberto(proc)) abertos.push({ key: key, proc: proc });
+    });
+    const remover = new Set();
+    abertos.forEach((row) => {
+      if (concluidos.some((c) => this.processosMesmoTitulo(row.proc, c.proc))) {
+        remover.add(row.key);
+        return;
+      }
+      if (this.ehCascaAberta(row.proc)
+        && concluidos.some((c) => String(c.proc.customerId || "") === String(row.proc.customerId || ""))) {
+        remover.add(row.key);
+      }
+    });
+    const porTitulo = new Map();
+    abertos.forEach((row) => {
+      if (remover.has(row.key)) return;
+      const sig = this.assinaturaTituloProc(row.proc);
+      if (!sig) return;
+      const atual = porTitulo.get(sig);
+      if (!atual) {
+        porTitulo.set(sig, row);
+        return;
+      }
+      const melhor = this.preferirProcessoAberto(atual, row);
+      const pior = melhor.key === atual.key ? row : atual;
+      porTitulo.set(sig, melhor);
+      remover.add(pior.key);
+    });
+    if (!remover.size) return false;
+    remover.forEach((key) => { delete all[key]; });
+    this.persistirMapaProcessos(all);
+    if (FinanciamentoState.process) {
+      const atualKey = this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId);
+      if (remover.has(atualKey)) FinanciamentoState.process = null;
+    }
+    return true;
+  },
+
   isProcessoAberto(proc) {
     if (!proc) return false;
     const st = String(proc.status || "").toLowerCase();
@@ -874,6 +1074,7 @@ const FinanciamentoApp = {
   },
 
   listOpenProcesses() {
+    this.sanearDuplicadosProcessos();
     const all = this.loadAllProcesses();
     const mem = FinanciamentoState.process;
     if (mem && mem.customerId && mem.contractId) {
@@ -3803,7 +4004,31 @@ window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {
       }
       if (junto.done && junto.done[id] && rev >= horaFin(junto.done[id])) delete junto.done[id];
     });
-    if (String(recente.status || "") !== "concluido") delete junto.finishedAt;
+    const statusConcluido = (p) => {
+      const s = String((p && p.status) || "").toLowerCase();
+      return s === "concluido" || s === "concluída" || s === "completed" || s === "complete";
+    };
+    const antigoConcluido = statusConcluido(antigo) || !!(antigo.finishedAt && !antigo.closedAt);
+    const recenteConcluido = statusConcluido(recente) || !!(recente.finishedAt && !recente.closedAt);
+    if (recenteConcluido) {
+      junto.status = recente.status || "concluido";
+      junto.finishedAt = recente.finishedAt || antigo.finishedAt || "";
+    } else if (antigoConcluido) {
+      const fin = Date.parse(antigo.finishedAt || antigo.updatedAt || 0) || 0;
+      const undo = Object.keys(recente.desfeitos || {}).some((id) => {
+        const em = recente.desfeitos[id] && recente.desfeitos[id].em;
+        return (Date.parse(em || 0) || 0) >= fin;
+      });
+      if (undo && !recente.finishedAt && !statusConcluido(recente)) {
+        delete junto.finishedAt;
+        if (statusConcluido(junto)) junto.status = "";
+      } else {
+        junto.status = antigo.status || "concluido";
+        junto.finishedAt = antigo.finishedAt || "";
+      }
+    } else {
+      delete junto.finishedAt;
+    }
     if (!junto.currentStageId) junto.currentStageId = antigo.currentStageId || recente.currentStageId || null;
     if (!junto.customerName) junto.customerName = antigo.customerName || recente.customerName || "";
     if (!junto.titulo) junto.titulo = antigo.titulo || recente.titulo || "";
