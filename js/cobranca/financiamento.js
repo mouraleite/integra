@@ -109,6 +109,7 @@ const FinanciamentoApp = {
       : (painel === "esteira" ? this.esteiraHtml()
         : (painel === "concluidos" ? this.concluidosHtml() : this.buscaHtml()));
     if (noFluxo) {
+      this.limparEstilosDocxPreviewGlobais();
       this.carregarSaldoQuitacao(FinanciamentoState.process);
       this.carregarMetragemLote(FinanciamentoState.process);
     }
@@ -3418,14 +3419,16 @@ const FinanciamentoApp = {
         parcelasCongeladas: dados.parcelasCongeladas,
         periodoCongelamento: dados.periodoCongelamento
       });
-      this.atualizarTermosEtapa(state.stageId);
-      const stageStatus = document.getElementById("fin-termo-st-" + state.stageId);
-      if (stageStatus) stageStatus.textContent = "Declaração salva nesta etapa. Você pode abrir o PDF abaixo.";
       state.gerando = false;
       this.fecharModalDeclaracaoSaldo();
+      this.limparEstilosDocxPreviewGlobais();
+      this.render();
+      const stageStatus = document.getElementById("fin-termo-st-" + state.stageId);
+      if (stageStatus) stageStatus.textContent = "Declaração salva nesta etapa. Você pode abrir o PDF abaixo.";
       return true;
     } catch (e) {
       console.error("[Financiamento] geração da declaração", e);
+      this.limparEstilosDocxPreviewGlobais();
       if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar a declaração.";
       state.gerando = false;
       if (botao) { botao.disabled = false; botao.textContent = "Gerar declaração"; }
@@ -3873,6 +3876,17 @@ const FinanciamentoApp = {
     });
   },
 
+  limparEstilosDocxPreviewGlobais() {
+    Array.from(document.head.querySelectorAll("style")).forEach((st) => {
+      if (!st || st.getAttribute("data-fin-keep") === "1") return;
+      const txt = String(st.textContent || "");
+      if (!txt) return;
+      if (/\.docx-wrapper|section\.docx|\.docx\s*\{|docx-wrapper\s*>/.test(txt)) {
+        st.remove();
+      }
+    });
+  },
+
   async converterDocxTermoParaPdf(buffer) {
     await this.carregarScriptTermo(
       "https://cdn.jsdelivr.net/npm/docx-preview@0.3.6/dist/docx-preview.min.js",
@@ -3882,11 +3896,19 @@ const FinanciamentoApp = {
     if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
       throw new Error("O gerador de PDF não está disponível. Atualize a página e tente novamente.");
     }
+    this.limparEstilosDocxPreviewGlobais();
     const container = document.createElement("div");
-    container.style.cssText = "position:fixed;left:-12000px;top:0;z-index:-1;background:#fff;";
+    container.setAttribute("data-fin-docx-temp", "1");
+    container.style.cssText = "position:fixed;left:-12000px;top:0;width:816px;z-index:-1;background:#fff;visibility:hidden;pointer-events:none;";
+    const styleHost = document.createElement("div");
+    styleHost.setAttribute("data-fin-docx-styles", "1");
+    container.appendChild(styleHost);
+    const bodyHost = document.createElement("div");
+    bodyHost.setAttribute("data-fin-docx-body", "1");
+    container.appendChild(bodyHost);
     document.body.appendChild(container);
     try {
-      await window.docx.renderAsync(buffer, container, document.head, {
+      await window.docx.renderAsync(buffer, bodyHost, styleHost, {
         className: "docx",
         inWrapper: true,
         ignoreWidth: false,
@@ -3896,9 +3918,9 @@ const FinanciamentoApp = {
         renderHeaders: true,
         renderFooters: true
       });
-      this.limparDestaqueAmareloHtml(container);
+      this.limparDestaqueAmareloHtml(bodyHost);
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
-      const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
+      const paginas = Array.from(bodyHost.querySelectorAll(".docx-wrapper > section.docx"));
       if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
       const { jsPDF } = window.jspdf;
       let pdf = null;
@@ -3932,7 +3954,8 @@ const FinanciamentoApp = {
       if (!blob || !blob.size) throw new Error("O PDF gerado está vazio.");
       return { pdf: pdf, blob: blob };
     } finally {
-      container.remove();
+      try { container.remove(); } catch (e) {}
+      this.limparEstilosDocxPreviewGlobais();
     }
   },
 
@@ -4401,10 +4424,13 @@ const FinanciamentoApp = {
       const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
       if (status) status.textContent = "Salvando o PDF nesta etapa…";
       await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
-      this.atualizarTermosEtapa(stageId);
-      if (status) status.textContent = "Termo salvo nesta etapa. Você pode continuar o processo ou abrir o PDF abaixo.";
+      this.limparEstilosDocxPreviewGlobais();
+      this.render();
+      const statusAtual = document.getElementById("fin-termo-st-" + stageId);
+      if (statusAtual) statusAtual.textContent = "Termo salvo nesta etapa. Você pode continuar o processo ou abrir o PDF abaixo.";
       return true;
     } catch (e) {
+      this.limparEstilosDocxPreviewGlobais();
       if (status) status.textContent = (e && e.message) || "Não foi possível gerar e salvar o termo.";
       console.error("[Financiamento] geração do termo", e);
       return false;
