@@ -3542,6 +3542,41 @@ const FinanciamentoApp = {
     });
   },
 
+  removerDestaquesAmarelosDocx(xmlDoc) {
+    if (!xmlDoc) return;
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    Array.from(xmlDoc.getElementsByTagNameNS(ns, "highlight")).forEach((no) => {
+      if (no.parentNode) no.parentNode.removeChild(no);
+    });
+    const amarelo = /^(FFFF00|YELLOW|FF0|FFF2CC|FFFF99|FFEB9C|FFFFA5|FFF59D|FFECB3|FCE883)$/i;
+    Array.from(xmlDoc.getElementsByTagNameNS(ns, "shd")).forEach((no) => {
+      const fill = String(
+        no.getAttributeNS(ns, "fill")
+        || no.getAttribute("w:fill")
+        || no.getAttribute("fill")
+        || ""
+      ).replace(/^#/, "").trim();
+      if (amarelo.test(fill) && no.parentNode) no.parentNode.removeChild(no);
+    });
+  },
+
+  limparDestaqueAmareloHtml(raiz) {
+    if (!raiz || !raiz.querySelectorAll) return;
+    const ehAmarelo = (valor) => /rgb\(\s*255\s*,\s*255\s*,\s*0\s*\)|rgb\(\s*255\s*,\s*242\s*,\s*204\s*\)|rgb\(\s*255\s*,\s*235\s*,\s*156\s*\)|rgb\(\s*255\s*,\s*245\s*,\s*157\s*\)|#ffff00|#fff2cc|#ffeb9c|#fff59d|yellow/.test(String(valor || "").toLowerCase());
+    Array.from(raiz.querySelectorAll("*")).forEach((el) => {
+      if (!el || !el.style) return;
+      const inline = String(el.style.backgroundColor || el.style.background || "");
+      let calculado = "";
+      try {
+        calculado = window.getComputedStyle(el).backgroundColor || "";
+      } catch (e) {}
+      if (ehAmarelo(inline) || ehAmarelo(calculado)) {
+        el.style.setProperty("background", "transparent", "important");
+        el.style.setProperty("background-color", "transparent", "important");
+      }
+    });
+  },
+
   termosEtapaHtml(proc, stageId) {
     if (!this.ehEtapaGeradoraDocumento(stageId)) return "";
     const lista = proc && proc.termos && proc.termos[stageId];
@@ -3550,12 +3585,12 @@ const FinanciamentoApp = {
       if (!termo || !/^[a-zA-Z0-9_-]+$/.test(String(termo.id || ""))) return "";
       const url = this.urlStorageTermo(termo.url);
       const baixar = url
-        ? `<a class="btn btn-outline btn-sm" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer">Abrir PDF</a>`
+        ? `<a class="btn btn-outline btn-sm fin-termo-btn" href="${this.esc(url)}" target="_blank" rel="noopener noreferrer">Abrir PDF</a>`
         : `<span class="fin-termo-st">PDF salvo no armazenamento.</span>`;
       const envio = termo.siengeSentAt
         ? `<span class="fin-termo-enviado">Enviado ao Sienge em ${this.esc(this.fmtDate(termo.siengeSentAt))}</span>`
-        : `<button type="button" class="btn btn-primary btn-sm" id="fin-termo-env-${this.esc(termo.id)}" onclick="FinanciamentoApp.enviarTermoSienge('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')">Enviar para o Sienge</button>`;
-      const excluir = `<button type="button" class="btn btn-outline btn-sm fin-termo-excluir" id="fin-termo-del-${this.esc(termo.id)}" title="Excluir termo" aria-label="Excluir termo ${this.esc(termo.fileName || "")}" onclick="FinanciamentoApp.removerTermoSaldo('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
+        : `<button type="button" class="btn btn-primary btn-sm fin-termo-btn" id="fin-termo-env-${this.esc(termo.id)}" onclick="FinanciamentoApp.enviarTermoSienge('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')">Enviar para o Sienge</button>`;
+      const excluir = `<button type="button" class="btn btn-outline btn-sm fin-termo-excluir fin-termo-btn" id="fin-termo-del-${this.esc(termo.id)}" title="Excluir termo" aria-label="Excluir termo ${this.esc(termo.fileName || "")}" onclick="FinanciamentoApp.removerTermoSaldo('${String(stageId).replace(/[^a-zA-Z0-9_-]/g, "")}','${this.esc(termo.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
       return `<div class="fin-termo-item">
         <div><strong>${this.esc(termo.fileName || "Documento de financiamento.pdf")}</strong><span>Gerado em ${this.esc(this.fmtDate(termo.documentDate || termo.generatedAt))} · validade até ${this.esc(this.fmtDate(termo.validUntil))}</span></div>
         <div class="fin-termo-acoes">${baixar}${envio}${excluir}<span id="fin-termo-send-st-${this.esc(termo.id)}" class="fin-termo-st" role="status"></span></div>
@@ -3746,8 +3781,7 @@ const FinanciamentoApp = {
     }
     if (holders.length >= 3) campos.push(["[INCLUIR TODOS OS TITULARES DO CONTRATO]", extras]);
     campos.forEach(([campo, valor]) => this.substituirTextoTermo(xmlDoc, campo, valor));
-    const destaques = Array.from(xmlDoc.getElementsByTagNameNS(ns, "highlight"));
-    destaques.forEach((no) => { if (no.parentNode) no.parentNode.removeChild(no); });
+    this.removerDestaquesAmarelosDocx(xmlDoc);
     const textoFinal = Array.from(xmlDoc.getElementsByTagNameNS(ns, "t")).map((no) => no.textContent || "").join("");
     const pendentes = [
       "[Preambulo]", "[NOME DO EMPREENDIMENTO]", "QUADRA/LOTE", "1º TITULAR", "Nº CPF TITULAR",
@@ -3829,6 +3863,7 @@ const FinanciamentoApp = {
       "[data inicial]", "[data final]", "[quantidade]", "XXXXXXXX"
     ].filter((campo) => textoFinal.indexOf(campo) >= 0);
     if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo da declaração: " + pendentes.join(", "));
+    this.removerDestaquesAmarelosDocx(xmlDoc);
     this.justificarParagrafosTermo(xmlDoc);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
@@ -3861,6 +3896,7 @@ const FinanciamentoApp = {
         renderHeaders: true,
         renderFooters: true
       });
+      this.limparDestaqueAmareloHtml(container);
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
       const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
       if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
@@ -4750,10 +4786,8 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
             #financiamento-root .fin-nota textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font: inherit; background: #fff; min-height: 52px; resize: vertical; }
             #financiamento-root .fin-nota-linha { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
-            #financiamento-root .fin-etapa,
             #financiamento-root .fin-etapa-corpo,
-            #financiamento-root .fin-anexo,
-            #financiamento-root .crm-card-content { overflow: visible; }
+            #financiamento-root .fin-anexo { overflow: visible; }
             #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; position: relative; z-index: 1; }
             #financiamento-root .fin-anexo-arquivo { display:flex; flex:0 1 260px; flex-direction:column; min-width:220px; max-width:260px; }
             #financiamento-root .fin-anexo-label { display:block; margin-bottom:6px; color:#64748b; font-size:0.7rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }
@@ -4836,6 +4870,13 @@ const FinanciamentoApp = {
             #financiamento-root .fin-termo-item strong { color:#0f172a; font-size:0.8rem; }
             #financiamento-root .fin-termo-item span { color:#64748b; font-size:0.73rem; }
             #financiamento-root .fin-termo-acoes { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+            #financiamento-root .fin-termo-acoes .fin-termo-btn,
+            #financiamento-root .fin-termo-acoes a.btn,
+            #financiamento-root .fin-termo-acoes button.btn {
+              display:inline-flex; align-items:center; justify-content:center; gap:6px;
+              height:40px; box-sizing:border-box; padding:0 12px; margin:0; line-height:1; white-space:nowrap;
+              text-decoration:none; background-image:none;
+            }
             #financiamento-root .fin-termo-enviado { color:#166534 !important; font-weight:700; }
             #financiamento-root .fin-termo-excluir { color:#b91c1c; border-color:#fecaca; }
             #financiamento-root .fin-termo-excluir:hover { color:#991b1b; border-color:#fca5a5; background:#fef2f2; }
