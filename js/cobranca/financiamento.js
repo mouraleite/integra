@@ -1197,12 +1197,12 @@ const FinanciamentoApp = {
     const hoje = this.hojeIso();
     if (Date.now() < new Date(hoje + "T08:00:00").getTime()) return;
     const chave = this.chaveAlertaEsteira(hoje);
-    try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+    if (this.jaCienteHoje(chave)) return;
     if (document.getElementById("fin-alerta") || this._alertaAbrindo) return;
     this._alertaAbrindo = true;
     try {
       await this.puxarNuvem();
-      try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+      if (this.jaCienteHoje(chave)) return;
       const lista = this.atrasadosEsteira();
       let parcelas = [];
       let parcelasErro = false;
@@ -1216,7 +1216,7 @@ const FinanciamentoApp = {
         parcelas = [];
       }
       if (document.getElementById("fin-alerta")) return;
-      try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+      if (this.jaCienteHoje(chave)) return;
       if (!lista.length && !parcelas.length && !parcelasErro) return;
       if (!lista.length && parcelasErro) return;
       const linhas = lista.map((item) => {
@@ -1226,13 +1226,16 @@ const FinanciamentoApp = {
         return `<button type="button" class="fin-alerta-item" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
           <strong>${this.esc(proc.customerName || "—")}</strong>
           <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
-          <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))} · ${n} dia${n === 1 ? "" : "s"}</span>
+          <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))}</span>
+          <div class="fin-al-chips"><em class="fin-al-chip is-alerta">Em alerta há ${n} dia${n === 1 ? "" : "s"}</em></div>
         </button>`;
       }).join("");
       // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
       const cards = parcelas.map((p) => {
         const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const chips = [];
+        const emAlerta = this.diasAlertaParcela(p, hoje);
+        if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">Em alerta há ${emAlerta} dia${emAlerta === 1 ? "" : "s"}</em>`);
         if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
         if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
         if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
@@ -1267,9 +1270,13 @@ const FinanciamentoApp = {
           <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Financiamentos: etapas e parcelas</h2>
           <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
         </div>
-        <div style="padding:12px 18px 18px;overflow:auto;">
+        <div style="padding:12px 18px 12px;overflow:auto;">
           ${blocoEtapas}
           ${blocoParcelas}
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px 16px;border-top:1px solid #e2e8f0;">
+          <span style="color:#64748b;font-size:0.8rem;">Ao dar ciente, este aviso só volta amanhã.</span>
+          <button type="button" class="btn btn-primary" id="fin-alerta-ciente">Ciente</button>
         </div>
       </div>`;
       document.body.appendChild(overlay);
@@ -1292,16 +1299,57 @@ const FinanciamentoApp = {
         + "#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}"
         + "#fin-alerta .fin-al-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}"
         + "#fin-alerta .fin-al-chip{font-style:normal;font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:999px;}"
+        + "#fin-alerta .fin-al-chip.is-alerta{background:#1e293b;color:#fff;}"
         + "#fin-alerta .fin-al-chip.is-venc{background:#fee2e2;color:#991b1b;}#fin-alerta .fin-al-chip.is-mes{background:#fef3c7;color:#92400e;}#fin-alerta .fin-al-chip.is-seg{background:#f1f5f9;color:#475569;}";
       overlay.appendChild(estilo);
-      overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave));
+      // Fechar só fecha agora (volta ao recarregar); Ciente esconde até amanhã.
+      overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave, false));
+      overlay.querySelector("#fin-alerta-ciente").addEventListener("click", () => this.fecharAlertaEsteira(chave, true));
     } finally {
       this._alertaAbrindo = false;
     }
   },
 
-  fecharAlertaEsteira(chave) {
-    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+  /* Dias em alerta da parcela: ela entra no aviso quando fica "a vencer no mês seguinte", ou seja, no dia 1 do mês
+     anterior ao vencimento. Conta a partir da parcela mais antiga do aviso (vencida, deste mês ou do mês seguinte). */
+  diasAlertaParcela(p, hoje) {
+    const datas = [p && p.maisAntiga, p && p.primeiraMes, p && p.primeiraSeguinte]
+      .map((d) => String(d || "").slice(0, 10)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if (!datas.length) return null;
+    const v = datas[0].split("-").map(Number);
+    const entrada = new Date(v[0], v[1] - 2, 1);
+    const h = String(hoje || this.hojeIso()).split("-").map(Number);
+    const dias = Math.round((new Date(h[0], h[1] - 1, h[2]) - entrada) / 86400000);
+    return Math.max(0, dias);
+  },
+
+  /* "Ciente" do dia fica num cookie que vence à meia-noite: o localStorage do Integra costuma estar cheio e a
+     gravação falhava em silêncio, e o aviso voltava a cada Ctrl+F5. O localStorage fica como reserva. */
+  cookieCiente(chave) {
+    let h = 0;
+    const s = String(chave || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return "crm_fin_ciente_" + h.toString(36);
+  },
+
+  jaCienteHoje(chave) {
+    const nome = this.cookieCiente(chave);
+    try {
+      if (document.cookie.split(";").some((p) => p.trim() === nome + "=" + this.hojeIso())) return true;
+    } catch (e) {}
+    try { return localStorage.getItem(chave) === "ciente"; } catch (e) { return false; }
+  },
+
+  fecharAlertaEsteira(chave, ciente) {
+    if (ciente !== false) {
+      try {
+        const fim = new Date();
+        fim.setHours(23, 59, 59, 0);
+        document.cookie = this.cookieCiente(chave) + "=" + this.hojeIso() + "; expires=" + fim.toUTCString()
+          + "; path=/; SameSite=Lax" + (location.protocol === "https:" ? "; Secure" : "");
+      } catch (e) {}
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
     const pop = document.getElementById("fin-alerta");
     if (pop) pop.remove();
   },
