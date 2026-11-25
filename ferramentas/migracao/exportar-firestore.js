@@ -50,7 +50,7 @@ const CONHECIDAS = [
   "boletos_honorarios", "boletos_pagamentos", "relacionamento_docs_assinatura", "webro_repasse_pendente",
   "antecipacoes_mes", "cc_conta_parceria", "pagamento_lotes", "api_consumo", "usuarios_online",
   "suporte_chamados", "solicitacoes_producao", "ambientes_dev", "sienge_creditors", "sienge_sync_state",
-  "anexos_juridicos", "cartao_clara", "acordo_email_tag", "resultado_caixa_orig",
+  "anexos_juridicos", "cartao_clara", "acordo_email_tag", "resultado_caixa_orig", "followup_gestor",
 ];
 
 function varrerCodigo() {

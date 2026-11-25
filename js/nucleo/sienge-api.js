@@ -108,11 +108,9 @@ function getConfiguredInternalCompanyIds() {
   return [...ALLOWED_COMPANY_IDS];
 }
 
-/** A base das 7h continua válida. Revisão nova não pode jogar fora o batimento do dia. */
+/** Revisão 6 busca a fila de novo: baixa parcial deixava de entrar no saldo em aberto. */
 function filaCacheDoDiaServe(rev) {
-  if (rev == null || rev === "") return true;
-  const n = Number(rev);
-  return n === 3 || n === 4 || n === 5;
+  return Number(rev) === 6;
 }
 
 /** Cache do dia só vale se cobriu as empresas internas esperadas (evita base só 1+2). */
@@ -123,15 +121,24 @@ function defaultersCacheLooksIncomplete(data, meta, expectedIds) {
   const metaIds = meta && Array.isArray(meta.companyIds)
     ? meta.companyIds.map(Number).filter(Number.isFinite)
     : null;
+  const contagem = {};
+  (Array.isArray(data) ? data : []).forEach((b) => {
+    const id = Number(b && b.companyId);
+    if (!Number.isFinite(id)) return;
+    contagem[id] = (contagem[id] || 0) + 1;
+  });
+  // A empresa 1 é a maior carteira. Três títulos e valor zerado, como na carga de 25/11, não é a fila do dia.
+  if ((contagem[1] || 0) > 0 && (contagem[1] || 0) < 50) return true;
+  if (expected.indexOf(1) >= 0 && (contagem[1] || 0) < 50 && (Array.isArray(data) ? data.length : 0) > 0) return true;
+
   if (metaIds && metaIds.length) {
     const have = new Set(metaIds);
-    return expected.some((id) => !have.has(id));
+    if (expected.some((id) => !have.has(id))) return true;
+    return expected.some((id) => (contagem[id] || 0) < 1);
   }
 
   const found = new Set();
-  (Array.isArray(data) ? data : []).forEach((b) => {
-    if (b && b.companyId != null) found.add(Number(b.companyId));
-  });
+  Object.keys(contagem).forEach((id) => found.add(Number(id)));
   const beyond12 = expected.filter((id) => id !== 1 && id !== 2);
   if (!beyond12.length) return false;
   const only12 = [...found].every((id) => id === 1 || id === 2);
@@ -142,31 +149,91 @@ function installmentDueIso(inst) {
   return String((inst && inst.dueDate) || "").slice(0, 10);
 }
 
+function valorNumero() {
+  for (let i = 0; i < arguments.length; i++) {
+    const n = Number(arguments[i]);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
+}
+
+function faceParcela(inst) {
+  if (!inst) return 0;
+  const n = valorNumero(inst.originalValue, inst.originalAmount, inst.installmentValue, inst.value, inst.baseValue);
+  return Number.isFinite(n) && n > 0.009 ? n : 0;
+}
+
+function valorRecebidoRecibo(r) {
+  if (!r) return 0;
+  const n = valorNumero(r.netAmount, r.receiptNetAmount, r.netReceiptValue, r.grossAmount, r.correctedNetAmount, r.receiptValue, r.receivedAmount);
+  if (Number.isFinite(n) && n > 0) return n;
+  const temData = r.paymentDate || r.receiptDate || r.operationTypeId;
+  const v = Number(r.value);
+  if (temData && Number.isFinite(v) && v > 0) return v;
+  return 0;
+}
+
+function valorRecebidoParcela(inst) {
+  const recs = Array.isArray(inst && inst.receipts) ? inst.receipts : [];
+  return recs.reduce((s, r) => s + valorRecebidoRecibo(r), 0);
+}
+
+/* Saldo que o Sienge ainda deixa em aberto. Baixa parcial não zera a parcela. */
+function saldoCorrigidoParcela(inst) {
+  if (!inst) return 0;
+  const cb = inst.currentBalance;
+  if (cb !== undefined && cb !== null && Number(cb) > 0.009) return Number(cb);
+  const sem = Number(inst.correctedValueWithoutAdditions);
+  if (Number.isFinite(sem) && sem > 0.009) return sem;
+  const com = Number(inst.correctedValueWithAdditions);
+  if (Number.isFinite(com) && com > 0.009) return com;
+  return 0;
+}
+
+function baixaQuitaParcela(face, pago) {
+  return face > 0.009 && pago + 0.05 >= face;
+}
+
 function installmentIsSettled(inst) {
   if (!inst) return true;
   const sit = String(inst.installmentSituation || inst.situation || inst.status || "").toLowerCase();
   if (sit === "2" || sit === "paid" || /quitad|paga/.test(sit)) return true;
-  if (inst.isValidReceipt === true) return true;
   const cb = inst.currentBalance;
   if (cb !== undefined && cb !== null && Number(cb) <= 0.009) return true;
+  const face = faceParcela(inst);
+  const pago = valorRecebidoParcela(inst);
+  if (baixaQuitaParcela(face, pago)) return true;
+  if (cb !== undefined && cb !== null && Number(cb) > 0.009) return false;
+  if (pago > 0.009 && face > 0.009 && pago + 0.05 < face && saldoCorrigidoParcela(inst) > 0.009) return false;
+  if (inst.isValidReceipt === true) return true;
   const recs = Array.isArray(inst.receipts) ? inst.receipts : [];
-  const hasBaixa = recs.some((r) => {
+  return recs.some((r) => {
     const op = String(r.operationTypeId || r.typeId || r.type || "");
-    const val = Number(r.netReceiptValue || r.receiptValue || r.value || 0);
+    const val = valorRecebidoRecibo(r);
     const dt = r.paymentDate || r.receiptDate || r.date;
     return dt && (String(op) === "2" || val > 0.009);
   });
-  return hasBaixa;
 }
 
 function installmentOverdueAmount(inst) {
+  const face = faceParcela(inst);
+  const pago = valorRecebidoParcela(inst);
+  const parcial = pago > 0.009 && face > 0.009 && !baixaQuitaParcela(face, pago);
+  let amount = 0;
   if (inst.correctedValueWithAdditions !== undefined && inst.correctedValueWithAdditions !== null) {
-    return Number(inst.correctedValueWithAdditions) || 0;
+    amount = Number(inst.correctedValueWithAdditions) || 0;
+  } else if (inst.correctedValueWithoutAdditions !== undefined && inst.correctedValueWithoutAdditions !== null) {
+    amount = (Number(inst.correctedValueWithoutAdditions) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+  } else {
+    amount = (Number(inst.value) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
   }
-  if (inst.correctedValueWithoutAdditions !== undefined && inst.correctedValueWithoutAdditions !== null) {
-    return (Number(inst.correctedValueWithoutAdditions) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+  if (parcial && amount > face + 0.05) {
+    const cb = Number(inst.currentBalance);
+    if (Number.isFinite(cb) && cb > 0.009) {
+      return cb + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+    }
   }
-  return (Number(inst.value) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+  return amount;
 }
 
 function mesclarTitulosInadimplentes(bills) {
@@ -203,7 +270,7 @@ function mesclarTitulosInadimplentes(bills) {
  * recebimento recente e só resta uma parcela em aberto. A revisão 2 já trazia
  * as parcelas de tipo que não gera cobrança.
  */
-const DEFAULTERS_CACHE_REV = 5;
+const DEFAULTERS_CACHE_REV = 6;
 
 function linhasBulkDefaulters(res) {
   if (!res || typeof res !== "object") return null;
@@ -492,6 +559,17 @@ function serializePaidInstallmentIds() {
   return null;
 }
 
+function baixaRegistrada(billIds, instKey) {
+  if (typeof window === "undefined" || !window.advFilters || !(window.advFilters.paidInstallmentAmounts instanceof Map)) return null;
+  const amounts = window.advFilters.paidInstallmentAmounts;
+  const ids = billIds || [];
+  for (let i = 0; i < ids.length; i++) {
+    const info = amounts.get(String(ids[i]) + ":" + String(instKey));
+    if (info && Number(info.amount) > 0.009) return info;
+  }
+  return null;
+}
+
 window.summarizeOpenDefaulterBill = function(bill) {
   const todayIso = new Date().toISOString().slice(0, 10);
   const all = (bill && bill.defaulterInstallments) || [];
@@ -505,7 +583,15 @@ window.summarizeOpenDefaulterBill = function(bill) {
     const due = installmentDueIso(inst);
     if (due && due > todayIso) return false;
     const instKey = String(inst.installmentId || inst.installmentNumber || "");
-    if (paidInst && instKey && billIds.some((id) => paidInst.has(id + ":" + instKey))) return false;
+    if (paidInst && instKey && billIds.some((id) => paidInst.has(id + ":" + instKey))) {
+      const info = baixaRegistrada(billIds, instKey);
+      const face = faceParcela(inst);
+      const pago = info ? Number(info.amount) || 0 : 0;
+      if (baixaQuitaParcela(face, pago)) return false;
+      if (!(face > 0.009) && pago > 0.009 && info.date === filaLocalTodayStr()) return false;
+      if (saldoCorrigidoParcela(inst) > 0.009 || installmentOverdueAmount(inst) > 0.009) return true;
+      return false;
+    }
     return true;
   });
 
@@ -753,7 +839,7 @@ const IdbDefaultersCache = {
 };
 
 window.IdbDefaultersCache = IdbDefaultersCache;
-window.FILA_PRONTA_REV = 1;
+window.FILA_PRONTA_REV = 2;
 
 const FILA_PRONTA_CAMPOS = [
   "customerId", "customerName", "customerCpf", "saleId", "companyId", "costCenterId",
@@ -2475,7 +2561,13 @@ const SiengeApiService = {
           const fetchedCompanyIds = (result && result._fetchedCompanyIds)
             ? result._fetchedCompanyIds
             : expectedCompanyIds;
+          const filaIncompleta = !!(result && result._filaIncompleta);
           if (result && result._fetchedCompanyIds) delete result._fetchedCompanyIds;
+          if (result && result._empresasFalhas) delete result._empresasFalhas;
+          if (result) delete result._filaIncompleta;
+          if (filaIncompleta) {
+            console.warn("%c[Sienge] Fila incompleta. O cache do dia e o sprint não serão gravados com essa carga.", "color:#f59e0b;font-weight:bold;");
+          }
 
           if (isFilaNonBusinessDay(todayStr) && !defaultersCacheLooksIncomplete(result, { companyIds: fetchedCompanyIds }, expectedCompanyIds)) {
             markFilaFullRefreshDone(todayStr);
@@ -2487,6 +2579,8 @@ const SiengeApiService = {
             console.warn("[Sienge] paidMap diário", e);
           }
           
+          if (filaIncompleta) return result;
+
           if (window.DadosCobranca) {
               const CHUNK_SIZE = 100;
               const numChunks = Math.ceil(result.length / CHUNK_SIZE);
@@ -2553,9 +2647,9 @@ const SiengeApiService = {
               })();
 
               
-              this.saveDefaultersSnapshot(result).catch(console.error);
+              if (!filaIncompleta) this.saveDefaultersSnapshot(result).catch(console.error);
               if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
-          } else {
+          } else if (!filaIncompleta) {
              this.saveDefaultersSnapshot(result).catch(console.error);
              if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
           }
@@ -2582,11 +2676,41 @@ const SiengeApiService = {
   ingestBulkIncomeRows(rows, paidMap, paidInst) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+    if (typeof window !== "undefined") {
+      window.advFilters = window.advFilters || {};
+      if (!(window.advFilters.paidInstallmentAmounts instanceof Map)) window.advFilters.paidInstallmentAmounts = new Map();
+    }
+    const amounts = (typeof window !== "undefined" && window.advFilters && window.advFilters.paidInstallmentAmounts) || null;
+    const registrarBaixa = (billId, instId, receipt) => {
+      if (!billId || !instId || !receipt) return;
+      const key = String(billId) + ":" + String(instId);
+      const val = valorRecebidoRecibo(receipt);
+      const dt = String(receipt.paymentDate || receipt.receiptDate || receipt.date || "").slice(0, 10);
+      if (amounts && val > 0) {
+        const prev = amounts.get(key) || { amount: 0, date: "" };
+        prev.amount += val;
+        if (dt && dt > prev.date) prev.date = dt;
+        amounts.set(key, prev);
+      }
+      if (paidInst) paidInst.add(key);
+    };
     (rows || []).forEach((item) => {
       const bId = item.billReceivableId || item.receivableBillId || item.billId || item.documentId || item.invoiceId || item.id;
       const instId = item.installmentId || item.installmentNumber
         || (item.receipts && item.receipts[0] && (item.receipts[0].installmentId || item.receipts[0].installmentNumber));
-      if (bId && instId && paidInst) paidInst.add(String(bId) + ":" + String(instId));
+      const aninhados = [];
+      (item.receipts || []).forEach((receipt) => aninhados.push(receipt));
+      (item.receiptsCategories || []).forEach((cat) => {
+        (cat.receipts || []).forEach((receipt) => aninhados.push(receipt));
+      });
+      if (aninhados.length) {
+        aninhados.forEach((receipt) => {
+          const idInst = receipt.installmentId || receipt.installmentNumber || instId;
+          registrarBaixa(bId, idInst, receipt);
+        });
+      } else if (bId && instId) {
+        registrarBaixa(bId, instId, item);
+      }
       if (!bId || !paidMap) return;
       const validDates = [];
       (item.receipts || []).forEach((receipt) => {
@@ -2864,6 +2988,7 @@ const SiengeApiService = {
       let rawArray = [];
       let rawUnderJudgment = [];
       const idsSemConfirmacao = new Set();
+      let empresaFalhou = false;
 
       for (let i = 0; i < ccBatches.length; i++) {
         const batch = ccBatches[i];
@@ -2896,11 +3021,15 @@ const SiengeApiService = {
 
         let resAll = null;
         let resJudge = null;
-        try {
-          resAll = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qAll}`);
-        } catch (err) {
-          console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId} (Lote ${i + 1}):`, err);
+        for (let tentativa = 0; tentativa < 3 && !resAll; tentativa++) {
+          try {
+            resAll = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qAll}`);
+          } catch (err) {
+            console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId} (Lote ${i + 1}, tentativa ${tentativa + 1}):`, err);
+            if (tentativa < 2) await new Promise((r) => setTimeout(r, 1500 * (tentativa + 1)));
+          }
         }
+        if (!resAll) empresaFalhou = true;
         const allRows = linhasBulkDefaulters(resAll) || [];
         if (resAll) {
           try {
@@ -3000,6 +3129,11 @@ const SiengeApiService = {
         }
         console.log(`[Sienge] Empresa ${cId}: ${foraDaCobranca} parcela(s) de tipo que não gera cobrança incluída(s) no vencido.`);
         console.log(`[Sienge] Retornou ${normalizedArray.length} títulos inadimplentes da empresa ${cId}`);
+        if (empresaFalhou) {
+          console.warn(`[Sienge] Empresa ${cId} ficou incompleta: um lote não respondeu. Essa empresa não entra no cache do dia.`);
+          allNormalized._empresasFalhas = allNormalized._empresasFalhas || [];
+          allNormalized._empresasFalhas.push(Number(cId));
+        }
         allNormalized.push(...normalizedArray.filter(b => b.subjudice === "S" || (b.daysDelay > 0 && (b.value || 0) > 0.009)));
 
       } catch (err) {
@@ -3012,7 +3146,9 @@ const SiengeApiService = {
       currentWeightAccum += thisWeight;
     }
 
-    allNormalized._fetchedCompanyIds = [...targetCompanies];
+    const falhas = new Set((allNormalized._empresasFalhas || []).map(Number));
+    allNormalized._fetchedCompanyIds = targetCompanies.filter((id) => !falhas.has(Number(id)));
+    allNormalized._filaIncompleta = falhas.size > 0;
     return allNormalized;
   },
 

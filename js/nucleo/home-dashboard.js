@@ -201,6 +201,7 @@ const HomeDashboard = {
     return notes.some(n => {
       const canal = String(n.canal || '').toLowerCase();
       if (canal === 'nota interna' || n.fase === 'Nota Interna') return false;
+      if (typeof window.isFollowUpGestorCanal === 'function' && window.isFollowUpGestorCanal(n.canal)) return false;
       return !!(n.text || n.date);
     });
   },
@@ -297,6 +298,34 @@ const HomeDashboard = {
     const thresholdJuridico = juridicoNode ? juridicoNode.dias : 151;
     const groups = [];
     const back = this.isBackOfficeUser(user);
+
+    // Follow-up do gestor: títulos em que o gestor pediu atualização e o operador ainda não respondeu.
+    const fg = window.FollowupGestor && typeof window.FollowupGestor.itensInsight === 'function'
+      ? window.FollowupGestor.itensInsight(user)
+      : [];
+    groups.push({
+      id: 'followup-gestor',
+      label: fg.length + (fg.length === 1 ? ' título com' : ' títulos com') + ' pedido de atualização do gestor',
+      items: fg,
+      hideIfEmpty: true,
+      count: fg.length
+    });
+
+    // Distrato e TCD gerados por esta pessoa, em aberto há mais de 7 dias (Documentos para assinar).
+    // Na home só; o sprint traz o time inteiro numa seção própria.
+    const DA = window.DocAssinaturaApp;
+    if (DA && typeof DA.parados === 'function' && user) {
+      const par = DA.parados(user);
+      const dias = DA.DIAS_PARADO || 7;
+      const itensDoc = (rows) => rows.map(r => ({
+        customerId: 'doc-' + r.id,
+        saleId: r.titulo,
+        customerName: r.cliente || ('Título ' + r.titulo),
+        hint: 'Gerado em ' + (typeof DA.quando === 'function' ? DA.quando(r.createdAt) : '') + ' · ' + DA.diasDesde(r.createdAt) + ' dias'
+      }));
+      groups.push({ id: 'docs-distrato-7', soHome: true, label: par.distrato.length + (par.distrato.length === 1 ? ' distrato' : ' distratos') + ' com mais de ' + dias + ' dias', items: itensDoc(par.distrato), hideIfEmpty: true, count: par.distrato.length });
+      groups.push({ id: 'docs-tcd-7', soHome: true, label: par.cessao.length + ' TCD com mais de ' + dias + ' dias', items: itensDoc(par.cessao), hideIfEmpty: true, count: par.cessao.length });
+    }
 
     if (back) {
       const vencidos = scopeClients.filter(c => {
@@ -683,6 +712,16 @@ const HomeDashboard = {
         ev.stopPropagation();
         const customerId = btn.getAttribute('data-customer-id');
         const saleId = btn.getAttribute('data-sale-id');
+        const insightId = btn.getAttribute('data-insight-id');
+        if ((insightId === 'docs-distrato-7' || insightId === 'docs-tcd-7') && typeof window.switchTab === 'function') {
+          window.switchTab('relacionamento_assinaturas', 'Documentos para assinar');
+          return;
+        }
+        if (btn.getAttribute('data-insight-id') === 'followup-gestor' && window.FollowupGestor
+          && typeof window.FollowupGestor.abrirPorCliente === 'function'
+          && window.FollowupGestor.abrirPorCliente(customerId, saleId, this.getViewUser())) {
+          return;
+        }
         if (btn.getAttribute('data-insight-id') === 'nex-validade' && typeof window.abrirAvaliacaoCancelamento === 'function') {
           window.abrirAvaliacaoCancelamento(customerId, saleId);
           return;
@@ -2013,6 +2052,7 @@ window.buildSprintOperatorSummaries = function() {
     const mine = hd.clientsOfOperator(u, all);
     if (!mine.length) return;
     const groups = hd.collectInsightGroups(mine, u).filter(g => {
+      if (g.soHome) return false;
       const n = g.count != null ? g.count : (g.items || []).length;
       return n > 0;
     });
@@ -2031,6 +2071,17 @@ window.buildSprintOperatorSummaries = function() {
       if (g === nexId) nexCumprida += 1;
     });
   }
+  // Títulos da fila com a tag "Acordo Judicial - Alterar p/ Sub judice Sienge" (mesmo grupo da Fila de Cobrança).
+  const G = window.FILA_QUEUE_GROUPS || {};
+  const titulosSubjudice = new Set();
+  if (G.ALTERAR_SUBJUDICE_SIENGE && typeof window.getFilaQueueGroup === 'function') {
+    all.forEach(c => {
+      try {
+        if (window.getFilaQueueGroup(c) === G.ALTERAR_SUBJUDICE_SIENGE) titulosSubjudice.add(String(c.customerId) + '-' + String(c.saleId));
+      } catch (e) {}
+    });
+  }
+  const alterarSj = titulosSubjudice.size;
   boUsers.forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
     if (seenBo.has(id)) return;
@@ -2040,10 +2091,13 @@ window.buildSprintOperatorSummaries = function() {
     const validar = Number(counts.validar) || 0;
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
-    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida) return;
+    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida && !alterarSj) return;
     lines.push('*' + hd.sprintOperatorLabel(u) + '*');
     if (nexCumprida > 0) {
       lines.push('• Há ' + nexCumprida + (nexCumprida === 1 ? ' título com NEX cumprida' : ' títulos com NEX cumprida'));
+    }
+    if (alterarSj > 0) {
+      lines.push('• Há ' + alterarSj + (alterarSj === 1 ? ' título' : ' títulos') + ' para alterar para sub judice no Sienge');
     }
     if (enviar > 0) {
       lines.push('• Há ' + enviar + ' vistoria' + (enviar === 1 ? '' : 's') + ' para enviar');
@@ -2058,6 +2112,10 @@ window.buildSprintOperatorSummaries = function() {
       lines.push('• Há ' + validarSj + ' vistoria' + (validarSj === 1 ? '' : 's') + ' sub judice para validar');
     }
   });
+  // Distrato e TCD em aberto há mais de 7 dias, por quem gerou (Documentos para assinar).
+  if (window.DocAssinaturaApp && typeof window.DocAssinaturaApp.linhasSprintParados === 'function') {
+    try { window.DocAssinaturaApp.linhasSprintParados().forEach(l => lines.push(l)); } catch (e) {}
+  }
   return lines.join('\n');
 };
 

@@ -1441,12 +1441,29 @@ const CessaoPopup = {
     return fatia;
   },
 
+  /**
+   * Valor original, no Sienge, da parcela que vence na data informada (o 1º vencimento da condição).
+   * A 1ª parcela ainda não teve correção anual: é o valor nominal do contrato.
+   */
+  valorOriginalNoVencimento(installments, venc) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(venc || ""))) return 0;
+    const p = (installments || []).find((x) => String((x && (x.dueDate || x.originalDueDate)) || "").slice(0, 10) === venc);
+    if (!p) return 0;
+    const v = Number(p.originalAmount != null ? p.originalAmount : p.originalValue);
+    return Number.isFinite(v) && v > 0.009 ? Math.round(v * 100) / 100 : 0;
+  },
+
   condicoesDoContrato(conds, installments, contract, jurosSerie) {
     const rows = (conds || []).map((c, i) => {
       const qtde = Number(c.installmentsNumber || c.numberOfInstallments || c.quantity || c.installments) || 0;
       const total = Number(c.totalValue || c.totalAmount || c.value) || 0;
-      const valor = this.valorNominalCondicao(c, qtde, total, contract, jurosSerie);
+      let valor = this.valorNominalCondicao(c, qtde, total, contract, jurosSerie);
       const venc = String(c.firstPayment || c.firstDueDate || c.baseDate || c.dueDate || "").slice(0, 10);
+      // A parcela do 1º vencimento no Sienge é o valor do contrato. O cálculo pela Price com os
+      // meses até o 1º vencimento acerta uns contratos (título 13276: 559,56) e erra outros
+      // (título 7629: dava 405,39 em vez de 399,00). Quando a parcela existe, vale ela.
+      const daParcela = this.valorOriginalNoVencimento(installments, String(c.firstPayment || c.firstDueDate || c.dueDate || "").slice(0, 10));
+      if (daParcela > 0) valor = daParcela;
       const tipo = c.conditionTypeName || c.description || c.conditionType || "Mensal";
       if (!(qtde > 0) || !(valor > 0)) return null;
       return {

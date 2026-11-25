@@ -1072,8 +1072,14 @@
                 <li data-tab="followup-cnd" data-module="sub_fin_cr_followup_cnd_acessar">
                   <a onclick="switchTab('followup-cnd', 'Follow-up CND')">Follow-up CND</a>
                 </li>
+                <li data-tab="followup-cobranca" data-module="sub_fin_cr_followup_cobranca_acessar">
+                  <a onclick="switchTab('followup-cobranca', 'Follow-up Cobrança')">Follow-up Cobrança</a>
+                </li>
                 <li data-tab="recebimentos-webro" data-module="sub_fin_cr_recebimentos_webro_acessar">
                   <a onclick="switchTab('recebimentos-webro', 'Recebimentos Webro')">Recebimentos Webro</a>
+                </li>
+                <li data-tab="remessa-avulsa" data-module="sub_fin_cr_remessa_avulsa_acessar">
+                  <a onclick="switchTab('remessa-avulsa', 'Remessa avulsa')">Remessa avulsa</a>
                 </li>
                 <li data-tab="scod" data-module="sub_fin_cr_scod_acessar">
                   <a onclick="switchTab('scod', 'Scod')">Scod</a>
@@ -1473,7 +1479,7 @@
             font-size: 0.67rem;
             color: rgba(255,255,255,0.4);
           ">
-            v1.0.2213 &nbsp;&middot;&nbsp; 24/11/2026
+            v1.0.2228 &nbsp;&middot;&nbsp; 25/11/2026
           </span>
         </div>
       </div>
@@ -2095,6 +2101,15 @@
               </div>
               <div class="doc-menu-item" onclick="selectDocTemplate('permuta')" id="menu-doc-permuta">
                 <i data-lucide="arrow-left-right"></i> Permuta de lote
+              </div>
+              <div class="doc-menu-item" onclick="selectDocTemplate('simiq')" id="menu-doc-simiq">
+                <i data-lucide="calculator"></i> Termo de simulação do saldo devedor (IQ)
+              </div>
+              <div class="doc-menu-item" onclick="selectDocTemplate('deciq')" id="menu-doc-deciq">
+                <i data-lucide="file-badge"></i> Declaração de saldo devedor (IQ)
+              </div>
+              <div class="doc-menu-item" onclick="selectDocTemplate('quifin')" id="menu-doc-quifin">
+                <i data-lucide="file-check"></i> Termo de quitação por financiamento
               </div>
             </div>
             
@@ -2803,6 +2818,148 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                   </button>
                 </div>
               </div>
+
+              <div id="editor-simiq" class="doc-editor-form">
+                <h3 style="margin-top: 0; color: #1e293b; font-size: 1.3rem; margin-bottom: 20px;">Termo de simulação do saldo devedor para efeitos de interveniente quitante</h3>
+                <div class="form-group">
+                  <label>Título do Documento</label>
+                  <input type="text" class="form-control" id="doc-simiq-title" value="TERMO DE SIMULAÇÃO DO SALDO DEVEDOR PARA EFEITOS DE INTERVENIENTE QUITANTE">
+                </div>
+                <div class="form-group">
+                  <label>Texto Padrão</label>
+                  <div class="doc-fmt-bar">
+                    <button type="button" class="doc-fmt-btn" onclick="wrapDocPadraoBold('doc-simiq-corpo')" title="Negrito (Ctrl+B)"><b>N</b> Negrito</button>
+                    <span class="doc-fmt-hint">Usado no Financiamento, etapa 1 (Enviar termo de simulação). O saldo e a tabela saem do Sienge na hora de gerar. Esta simulação não quita o contrato.</span>
+                  </div>
+                  <textarea class="form-control" id="doc-simiq-corpo" rows="32" onkeydown="docPadraoEditorKey(event)" style="font-family: monospace; font-size: 0.8rem; line-height: 1.45; resize: vertical;">{{CIDADE_ATUAL}}, {{DATA_ATUAL_EXTENSO}}
+
+Pelo presente instrumento, {{PREAMBULO}}, na qualidade de promitente vendedora do loteamento {{EMPREENDIMENTO}}, apresenta a **simulação do saldo devedor** do compromisso de compra e venda abaixo, exclusivamente para análise de financiamento imobiliário em que a promitente vendedora figurará como **interveniente quitante**.
+
+**Promitente comprador(a):** {{NOME_CLIENTE}}, {{NACIONALIDADE_CLIENTE}}, {{PROFISSAO_CLIENTE}}, {{ESTADO_CIVIL}}, portador(a) da cédula de identidade RG nº {{RG_CLIENTE}}, inscrito(a) no CPF/CNPJ sob o nº {{CPF_CNPJ}}, residente e domiciliado(a) em {{ENDERECO_CLIENTE}}.
+
+{{#SE_CONJUGE}}
+**Cônjuge:** {{NOME_CONJUGE}}, {{NACIONALIDADE_CONJUGE}}, {{PROFISSAO_CONJUGE}}, {{ESTADO_CIVIL_CONJUGE}}, portador(a) do RG nº {{RG_CONJUGE}} e inscrito(a) no CPF sob o nº {{CPF_CONJUGE}}.
+{{/SE_CONJUGE}}
+
+**Imóvel:** lote {{LOTE}}, da quadra {{QUADRA}}, unidade {{UNIDADE_NOME}}, com área de {{AREA_LOTE}}, matrícula {{MATRICULA}}, no loteamento {{EMPREENDIMENTO}}, município de {{CIDADE_LOTEAMENTO}}/SP, {{REGISTRO_IMOVEL}}.
+
+**Contrato:** título {{TITULO}}, contrato nº {{NUM_CONTRATO}}, firmado em {{DATA_CONTRATO}}, no valor de {{VALOR_CONTRATO}} ({{VALOR_CONTRATO_EXTENSO}}). Valor já recebido até {{DATA_BASE_SALDO}}: {{VALOR_PAGO}} ({{VALOR_PAGO_EXTENSO}}).
+
+O saldo devedor **simulado** em {{DATA_BASE_SALDO}}, em valor presente, para quitação por instituição financeira na condição de interveniente quitante, é de **{{SALDO_DEVEDOR}}** ({{SALDO_DEVEDOR_EXTENSO}}).
+
+O saldo corrigido, sem o deságio do valor presente, é de {{SALDO_CORRIGIDO}} ({{SALDO_CORRIGIDO_EXTENSO}}). Parcelas em aberto: {{QTD_PARCELAS_ABERTAS}}.
+
+{{TABELA_PARCELAS}}
+
+A presente simulação **não importa quitação** do preço, não substitui a declaração de saldo devedor e pode ser alterada por correção, juros, pagamentos ou vencimentos ocorridos até o efetivo repasse. A validade desta simulação é de 10 (dez) dias corridos, salvo atualização formal da promitente vendedora.
+
+{{CIDADE_ATUAL}}, {{DATA_HOJE_EXTENSO}}
+
+____________________________________________
+{{EMPRESA_NOME}}
+Promitente vendedora</textarea>
+                </div>
+                <div style="display: flex; gap: 12px; margin-top: 16px;">
+                  <button class="btn btn-primary" onclick="saveDocPadrao('simiq')">
+                    <i data-lucide="save" style="width:18px;"></i> Salvar Modelo
+                  </button>
+                  <button class="btn btn-outline" onclick="previewDocPadrao('simiq')">
+                    <i data-lucide="eye" style="width:18px;"></i> Simular PDF
+                  </button>
+                </div>
+              </div>
+
+              <div id="editor-deciq" class="doc-editor-form">
+                <h3 style="margin-top: 0; color: #1e293b; font-size: 1.3rem; margin-bottom: 20px;">Declaração de saldo devedor para efeitos de interveniente quitante</h3>
+                <div class="form-group">
+                  <label>Título do Documento</label>
+                  <input type="text" class="form-control" id="doc-deciq-title" value="DECLARAÇÃO DE SALDO DEVEDOR PARA EFEITOS DE INTERVENIENTE QUITANTE">
+                </div>
+                <div class="form-group">
+                  <label>Texto Padrão</label>
+                  <div class="doc-fmt-bar">
+                    <button type="button" class="doc-fmt-btn" onclick="wrapDocPadraoBold('doc-deciq-corpo')" title="Negrito (Ctrl+B)"><b>N</b> Negrito</button>
+                    <span class="doc-fmt-hint">Usado no Financiamento, etapa 4 (Emitir carta de quitação para financiamento). Declara o saldo para a instituição financeira. A quitação só se aperfeiçoa com o recebimento e o termo da etapa 10.</span>
+                  </div>
+                  <textarea class="form-control" id="doc-deciq-corpo" rows="32" onkeydown="docPadraoEditorKey(event)" style="font-family: monospace; font-size: 0.8rem; line-height: 1.45; resize: vertical;">{{PREAMBULO}}, doravante denominada **PROMITENTE VENDEDORA**, declara, para os fins de financiamento imobiliário e na condição de **interveniente quitante**, o saldo devedor do compromisso particular de compra e venda abaixo.
+
+**Promitente comprador(a):** {{NOME_CLIENTE}}, {{NACIONALIDADE_CLIENTE}}, {{PROFISSAO_CLIENTE}}, {{ESTADO_CIVIL}}, portador(a) da cédula de identidade RG nº {{RG_CLIENTE}}, inscrito(a) no CPF/CNPJ sob o nº {{CPF_CNPJ}}, residente e domiciliado(a) em {{ENDERECO_CLIENTE}}.
+
+{{#SE_CONJUGE}}
+**Cônjuge:** {{NOME_CONJUGE}}, {{NACIONALIDADE_CONJUGE}}, {{PROFISSAO_CONJUGE}}, {{ESTADO_CIVIL_CONJUGE}}, portador(a) do RG nº {{RG_CONJUGE}} e inscrito(a) no CPF sob o nº {{CPF_CONJUGE}}.
+{{/SE_CONJUGE}}
+
+**Imóvel:** lote {{LOTE}}, da quadra {{QUADRA}}, unidade {{UNIDADE_NOME}}, com área de {{AREA_LOTE}}, matrícula {{MATRICULA}}, situado no loteamento {{EMPREENDIMENTO}}, município de {{CIDADE_LOTEAMENTO}}/SP, {{REGISTRO_IMOVEL}}.
+
+**Contrato:** título {{TITULO}}, contrato nº {{NUM_CONTRATO}}, firmado em {{DATA_CONTRATO}}, no valor de {{VALOR_CONTRATO}} ({{VALOR_CONTRATO_EXTENSO}}). Valor já recebido até {{DATA_BASE_SALDO}}: {{VALOR_PAGO}} ({{VALOR_PAGO_EXTENSO}}).
+
+O saldo devedor apurado em {{DATA_BASE_SALDO}}, em valor presente, para quitação pela instituição financeira, é de **{{SALDO_DEVEDOR}}** ({{SALDO_DEVEDOR_EXTENSO}}). O saldo corrigido, sem o deságio do valor presente, é de {{SALDO_CORRIGIDO}} ({{SALDO_CORRIGIDO_EXTENSO}}).
+
+{{TABELA_PARCELAS}}
+
+Recebido integralmente o valor presente acima, a promitente vendedora compromete-se a emitir o termo de quitação do preço e a intervir no financiamento na qualidade de interveniente quitante, nada mais havendo a reclamar do promitente comprador a título do preço do lote, ressalvados tributos, taxas e encargos que não componham esse preço.
+
+A presente declaração **não importa, por si, em quitação**. A quitação somente se aperfeiçoa com o recebimento integral do valor declarado e a emissão do termo de quitação por financiamento.
+
+{{CIDADE_ATUAL}}, {{DATA_HOJE_EXTENSO}}
+
+____________________________________________
+{{EMPRESA_NOME}}
+Promitente vendedora</textarea>
+                </div>
+                <div style="display: flex; gap: 12px; margin-top: 16px;">
+                  <button class="btn btn-primary" onclick="saveDocPadrao('deciq')">
+                    <i data-lucide="save" style="width:18px;"></i> Salvar Modelo
+                  </button>
+                  <button class="btn btn-outline" onclick="previewDocPadrao('deciq')">
+                    <i data-lucide="eye" style="width:18px;"></i> Simular PDF
+                  </button>
+                </div>
+              </div>
+
+              <div id="editor-quifin" class="doc-editor-form">
+                <h3 style="margin-top: 0; color: #1e293b; font-size: 1.3rem; margin-bottom: 20px;">Termo de quitação por financiamento</h3>
+                <div class="form-group">
+                  <label>Título do Documento</label>
+                  <input type="text" class="form-control" id="doc-quifin-title" value="TERMO DE QUITAÇÃO POR FINANCIAMENTO">
+                </div>
+                <div class="form-group">
+                  <label>Texto Padrão</label>
+                  <div class="doc-fmt-bar">
+                    <button type="button" class="doc-fmt-btn" onclick="wrapDocPadraoBold('doc-quifin-corpo')" title="Negrito (Ctrl+B)"><b>N</b> Negrito</button>
+                    <span class="doc-fmt-hint">Usado no Financiamento, etapa 10 (Emitir termo de quitação para financiamento). O valor é o saldo declarado na etapa 4, quando ainda estiver gravado neste financiamento; senão, o saldo em aberto ou o total recebido no título.</span>
+                  </div>
+                  <textarea class="form-control" id="doc-quifin-corpo" rows="28" onkeydown="docPadraoEditorKey(event)" style="font-family: monospace; font-size: 0.8rem; line-height: 1.45; resize: vertical;">{{PREAMBULO}}, doravante denominada **PROMITENTE VENDEDORA**, e, de outro lado, {{NOME_CLIENTE}}, {{NACIONALIDADE_CLIENTE}}, {{PROFISSAO_CLIENTE}}, {{ESTADO_CIVIL}}, portador(a) da cédula de identidade RG nº {{RG_CLIENTE}}, inscrito(a) no CPF/CNPJ sob o nº {{CPF_CNPJ}}, residente e domiciliado(a) em {{ENDERECO_CLIENTE}}, na qualidade de **PROMITENTE COMPRADOR(A)**,
+
+{{#SE_CONJUGE}}
+sendo também promitente comprador(a) {{NOME_CONJUGE}}, {{NACIONALIDADE_CONJUGE}}, {{PROFISSAO_CONJUGE}}, {{ESTADO_CIVIL_CONJUGE}}, portador(a) do RG nº {{RG_CONJUGE}} e inscrito(a) no CPF sob o nº {{CPF_CONJUGE}},
+{{/SE_CONJUGE}}
+
+**declaram** que o preço do lote {{LOTE}}, da quadra {{QUADRA}}, unidade {{UNIDADE_NOME}}, matrícula {{MATRICULA}}, área {{AREA_LOTE}}, do loteamento {{EMPREENDIMENTO}}, município de {{CIDADE_LOTEAMENTO}}/SP, objeto do contrato nº {{NUM_CONTRATO}}, título {{TITULO}}, firmado em {{DATA_CONTRATO}}, foi quitado por **financiamento imobiliário**.
+
+A promitente vendedora, na condição de interveniente quitante, recebeu o valor de **{{VALOR_QUITACAO}}** ({{VALOR_QUITACAO_EXTENSO}}) e, por esse recebimento, confere ao promitente comprador **plena, geral e irrevogável quitação** do preço do lote, para nada mais reclamar a esse título.
+
+Permanecem a cargo do promitente comprador a lavratura da escritura, o registro do imóvel e o pagamento das respectivas custas e emolumentos, além dos tributos e encargos do imóvel que não componham o preço ora quitado.
+
+{{CIDADE_ATUAL}}, {{DATA_HOJE_EXTENSO}}
+
+____________________________________________
+{{EMPRESA_NOME}}
+Promitente vendedora
+
+____________________________________________
+{{NOME_CLIENTE}}
+Promitente comprador(a)</textarea>
+                </div>
+                <div style="display: flex; gap: 12px; margin-top: 16px;">
+                  <button class="btn btn-primary" onclick="saveDocPadrao('quifin')">
+                    <i data-lucide="save" style="width:18px;"></i> Salvar Modelo
+                  </button>
+                  <button class="btn btn-outline" onclick="previewDocPadrao('quifin')">
+                    <i data-lucide="eye" style="width:18px;"></i> Simular PDF
+                  </button>
+                </div>
+              </div>
             </div>
 
             <!-- Variáveis Lateral (Right Sidebar) -->
@@ -2988,6 +3145,22 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                 <div class="var-pill" onclick="copyVar(this)">{{SALDO_DEVEDOR_EXTENSO}}</div>
                 <div class="var-pill" onclick="copyVar(this)">{{INDEXADOR}}</div>
                 <div class="var-pill" onclick="copyVar(this)">{{CERTIFICADO_GRAPROHAB}}</div>
+
+                <div class="var-pill-group-title">Financiamento / Interveniente quitante</div>
+                <div class="var-pill" onclick="copyVar(this)" title="Valor presente do saldo em aberto, usado na simulação e na declaração">{{SALDO_DEVEDOR}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{SALDO_DEVEDOR_EXTENSO}}</div>
+                <div class="var-pill" onclick="copyVar(this)" title="Saldo corrigido, sem o deságio do valor presente">{{SALDO_CORRIGIDO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{SALDO_CORRIGIDO_EXTENSO}}</div>
+                <div class="var-pill" onclick="copyVar(this)" title="Valor recebido na quitação por financiamento">{{VALOR_QUITACAO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{VALOR_QUITACAO_EXTENSO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{VALOR_PAGO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{VALOR_PAGO_EXTENSO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{QTD_PARCELAS_ABERTAS}}</div>
+                <div class="var-pill" onclick="copyVar(this)" title="Quadro das parcelas em aberto na data da geração">{{TABELA_PARCELAS}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{DATA_BASE_SALDO}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{MATRICULA}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{AREA_LOTE}}</div>
+                <div class="var-pill" onclick="copyVar(this)">{{NUM_CONTRATO}}</div>
 
                 <div class="var-pill-group-title">Termo de Quitação</div>
                 <div class="var-pill" onclick="copyVar(this)" title="Só aparece no termo de aviso; no formal fica em branco">{{CANAIS_ATENDIMENTO}}</div>
@@ -3293,6 +3466,10 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
 
       <section id="tab-recebimentos-webro" class="tab-pane" style="display: none;">
         <div id="recebimentos-webro-root"></div>
+      </section>
+
+      <section id="tab-remessa-avulsa" class="tab-pane" style="display: none;">
+        <div id="remessa-avulsa-root"></div>
       </section>
 
       <!-- TAB: POSIÇÃO DE ESTOQUE COMERCIAL -->
@@ -4720,6 +4897,9 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
 
 
 
+        <section id="tab-followup-cobranca" class="tab-pane" style="display: none;">
+          <div id="followup-cobranca-root"></div>
+        </section>
         <section id="tab-followup-cnd" class="tab-pane" style="display: none;">
           <div id="followup-cnd-root"></div>
         </section>
@@ -5892,6 +6072,9 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
               <button class="btn btn-sm" id="btn-toggle-whatsapp-alert" style="display: none; background-color: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; font-weight: 600;" onclick="toggleWhatsappAlert()" title="alerta para reenviar boleto da remessa mensal para cliente pelo whatsapp conforme o alerta o usuario que tiver o flag">
                 <i data-lucide="bell-off" style="width: 14px;" id="icon-whatsapp-alert"></i> <span id="text-whatsapp-alert">Alerta WhatsApp OFF</span>
               </button>
+              <button class="btn btn-sm" id="btn-followup-gestor" style="display: none; background-color: #fdf4ff; color: #86198f; border: 1px solid #f0abfc; font-weight: 600;" onclick="window.FollowupGestor && window.FollowupGestor.abrirPedido()" title="Só administrador. Manda ao operador responsável um pop-up pedindo atualização detalhada do caso, com o resumo do contrato.">
+                <i data-lucide="clipboard-list" style="width: 14px;"></i> Pedir atualização
+              </button>
               <button class="btn btn-primary btn-sm" id="btn-renegotiate-page">
                 <i data-lucide="handshake" style="width: 14px;"></i> Renegociar Dívida
               </button>
@@ -6406,6 +6589,7 @@ RG: {{TESTEMUNHA_1_RG}}                        RG: {{TESTEMUNHA_2_RG}}</textarea
                   <div id="simulador-right-panel">
                     <h4 style="margin: 0 0 12px 0; color: var(--color-primary); font-size: 1.1rem; font-weight: 700;">
                       Parcelas vencidas e boletos do contrato</h4>
+                    <div id="simulador-alerta-parcial" role="alert" style="display: none; margin: 0 0 12px; padding: 10px 14px; border-radius: 6px; background: #fff7ed; border: 1px solid #fdba74; border-left: 4px solid #ea580c; color: #7c2d12; font-size: 0.9rem; line-height: 1.45;"></div>
                     <p id="simulador-empty-msg" style="display:none; margin: 0 0 12px; font-size: 0.9rem; color: #64748b;">Não há parcelas vencidas nem boletos em aberto para este contrato no momento.</p>
 
                     <div id="simulador-table-container" style="display: none;">
@@ -8677,7 +8861,6 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       </div>
 
       <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 15px; padding-top: 15px; border-top: 1px solid #e2e8f0; position: sticky; bottom: 0; background: white; padding-bottom: 15px;">
-        <button type="button" class="btn btn-fechar" onclick="closeAdvFiltersModal()">Fechar</button>
         <button type="button" class="btn btn-outline" onclick="clearAdvFilters()" style="padding: 10px 18px; font-weight: 600; background-color: #f97316; color: white; border-color: #ea580c;">Limpar Filtros</button>
         <button type="button" class="btn btn-primary" onclick="applyAdvFilters()" style="padding: 10px 18px; font-weight: 600;">Aplicar Filtros</button>
       </div>
@@ -8691,7 +8874,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="module" src="js/nucleo/supabase-client.js?v=3"></script>
   <script defer src="js/nucleo/dados-base.js?v=2"></script>
   <script defer src="js/nucleo/storage-supabase.js?v=1"></script>
-  <script defer src="js/nucleo/mapas-nucleo.js?v=20261123sb"></script>
+  <script defer src="js/nucleo/mapas-nucleo.js?v=sb20261125a"></script>
   <script defer src="js/nucleo/dados-nucleo.js?v=1"></script>
   <script defer src="js/cobranca/mapas-cobranca.js?v=1"></script>
   <script defer src="js/cobranca/dados-cobranca.js?v=1"></script>
@@ -8704,16 +8887,17 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
-  <script defer src="js/nucleo/data.js?v=2213"></script>
-  <script defer src="js/nucleo/sienge-api.js?v=eecc180e03"></script>
+  <script defer src="js/nucleo/data.js?v=2228"></script>
+  <script defer src="js/nucleo/sienge-api.js?v=sb20261125a"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
-  <script defer src="js/nucleo/alertas-popup.js?v=c4c8f6825a"></script>
+  <script defer src="js/nucleo/alertas-popup.js?v=b3e0775231"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=49f0427ab8"></script>
+  <script defer src="js/nucleo/app.js?v=afe45f8448"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=2a68948b70"></script>
-  <script defer src="js/nucleo/central-email.js?v=20261123sb"></script>
+  <script defer src="js/cobranca/followup-gestor.js?v=sb20261125a"></script>
+  <script defer src="js/nucleo/central-email.js?v=sb20261125a"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=720f06e7ab"></script>
@@ -8723,7 +8907,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/cartao-taxas.js?v=d66cfab366"></script>
   <script defer src="js/cobranca/alcada-desconto.js?v=e8826f2636"></script>
   <script defer src="js/cobranca/alcada-distrato.js?v=2811047cfb"></script>
-  <script defer src="js/nucleo/home-dashboard.js?v=848db2a7f0"></script>
+  <script defer src="js/nucleo/home-dashboard.js?v=ae1db36bed"></script>
   <script defer src="js/cobranca/anexos.js?v=d00cdbe807"></script>
   <script defer src="js/cobranca/boletos-baixa.js?v=83666a3816"></script>
   <script type="text/x-sob-demanda" data-grupo="contas-pagar" data-src="js/financeiro/contas-pagar.js?v=3f6d4ddbf5"></script>
@@ -8748,19 +8932,19 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="consultar-titulo" data-src="js/financeiro/consultar-titulo.js?v=4f7f885504"></script>
   <script type="text/x-sob-demanda" data-grupo="antecipacoes" data-src="js/financeiro/antecipacoes.js?v=1b1ee0b5f4"></script>
   <script defer src="js/nucleo/config-tags.js?v=3843c41147"></script>
-  <script defer src="js/nucleo/config-users.js?v=6d3797c561"></script>
-  <script defer src="js/nucleo/suporte.js?v=07bc755f0e"></script>
-  <script defer src="js/nucleo/aviso-develop.js?v=dd5836c556"></script>
+  <script defer src="js/nucleo/config-users.js?v=4a2adc43ab"></script>
+  <script defer src="js/nucleo/suporte.js?v=e11ee879be"></script>
+  <script defer src="js/nucleo/aviso-develop.js?v=2f25992866"></script>
   <script defer src="js/nucleo/ml-select-unico.js?v=4f7efa8871"></script>
   <script defer src="js/nucleo/escala-home-office.js?v=d269d4eced"></script>
   <script defer src="js/nucleo/alerta-ponto.js?v=a88902b2f0"></script>
   <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
   <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
   <script defer src="js/cobranca/relacionamento.js?v=cd43b98234"></script>
-  <script defer src="js/cobranca/aditamento.js?v=2213"></script>
-  <script defer src="js/cobranca/cessao-direitos.js?v=a362080a19"></script>
+  <script defer src="js/cobranca/aditamento.js?v=2228"></script>
+  <script defer src="js/cobranca/cessao-direitos.js?v=80db47f351"></script>
   <script defer src="js/cobranca/permuta-lote.js?v=c10be02302"></script>
-  <script defer src="js/cobranca/doc-assinatura.js?v=6707b12419"></script>
+  <script defer src="js/cobranca/doc-assinatura.js?v=sb20261125a"></script>
   <script defer src="js/cobranca/compromissario.js?v=58c6cdf4dd"></script>
   <script defer src="js/comercial/comercial.js?v=d470ed9e13"></script>
   <script defer src="js/comercial/estoque-comercial.js?v=c917a5d0e2"></script>
@@ -8769,6 +8953,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
   <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
   <script defer src="js/comercial/recebimentos-webro.js?v=7963d39f8a"></script>
+  <script defer src="js/financeiro/remessa-avulsa.js?v=sb20261125a"></script>
   <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
   <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
   <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
@@ -8797,21 +8982,22 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
   <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=f3400cbefb"></script>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=828eb9da0e"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=05060dfa3b"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>
   <script defer src="js/fiscal/fiscal-inserir-nota.js?v=a21f49f1c3"></script>
   <script defer src="js/fiscal/fiscal-enviar-nota.js?v=fbbe582aef"></script>
   <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
   <script defer src="js/nucleo/indexadores.js?v=0adcce7721"></script>
   <script defer src="js/engenharia/verificar-construcao.js?v=45a891d287"></script>
-  <script defer src="js/cobranca/financiamento.js?v=30c290930a"></script>
+  <script defer src="js/cobranca/financiamento.js?v=sb20261125a"></script>
+  <script defer src="js/cobranca/financiamento-docs.js?v=e9d1459aaa"></script>
   <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
   <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>
   <script defer src="js/cobranca/registro.js?v=8ebdb13ff0"></script>
   
   <!-- Dashboard de Inadimplência -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script defer src="js/cobranca/dashboard-inadimplencia.js?v=7d7168e6bb"></script>
+  <script defer src="js/cobranca/dashboard-inadimplencia.js?v=3bf497dbdd"></script>
 
   <!-- Modal Compartilhar Lembrete -->
   <div id="share-agenda-modal" class="modal-overlay" style="display: none; z-index: 999999;">

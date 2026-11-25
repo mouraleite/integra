@@ -86,6 +86,17 @@
       tabela: "acordo_email_tag",
       campos: { customerId: ["customer_id", "texto"], titulo: ["titulo", "texto"], tag: "tag", em: ["em", "ms"] },
     },
+    // Follow-up do gestor (js/cobranca/followup-gestor.js). "criadoEm" vai para pedido_em; resumo e nota ficam em extra.
+    followup_gestor: {
+      tabela: "followup_gestor",
+      campos: {
+        customerId: ["customer_id", "texto"], saleId: ["sale_id", "texto"], titulo: ["titulo", "texto"],
+        cliente: "cliente", unidade: "unidade", empreendimento: "empreendimento", operador: "operador",
+        pedidoPor: "pedido_por", pedidoPorEmail: "pedido_por_email", mensagem: "mensagem", status: "status",
+        criadoEm: ["pedido_em", "iso"], vistoEm: ["visto_em", "iso"], resposta: "resposta",
+        respondidoEm: ["respondido_em", "iso"], respondidoPor: "respondido_por", notaId: ["nota_id", "texto"],
+      },
+    },
     obra_vgv: {
       tabela: "obra_vgv",
       campos: { nome: "nome", vgv: ["vgv", "num"], lancamento: ["lancamento", "data"], at: ["at", "ms"] },

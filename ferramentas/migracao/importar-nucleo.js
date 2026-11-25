@@ -160,7 +160,7 @@ function montar(pasta, usuariosBanco) {
 
   // ---- coleções com um doc por linha
   ["tags", "anexos_tag_memory", "auditoria_logs", "auditoria_login_relatorios", "usuarios_online",
-    "suporte_chamados", "documentos_autenticados", "central_email_envios", "acordo_email_tag"].forEach((c) => {
+    "suporte_chamados", "documentos_autenticados", "central_email_envios", "acordo_email_tag", "followup_gestor"].forEach((c) => {
     add(c, lerColecao(pasta, c).map((d) => B.paraLinha(M[c], d.data, d.id)));
   });
   add("sienge_sync_state", lerColecao(pasta, "sienge_sync_state").map((d) => B.paraLinha(M.sienge_sync_state, d.data, d.id)));
@@ -255,7 +255,7 @@ const ORDEM = ["perfis", "usuarios", "configuracoes", "centros_custo", "empresas
   "motivos_cancelamento", "preambulos", "cartorios", "central_email_templates", "obra_vgv", "parcerias",
   "fluxos_processo", "tags", "anexos_tag_memory", "anexos_mapa", "auditoria_logs", "auditoria_login_relatorios",
   "auditoria_login_linhas", "usuarios_online", "api_consumo", "ambientes_dev", "alertas_ciente", "suporte_chamados",
-  "documentos_autenticados", "agenda_personal_notes", "agenda_recurring_notes", "central_email_envios", "acordo_email_tag",
+  "documentos_autenticados", "agenda_personal_notes", "agenda_recurring_notes", "central_email_envios", "acordo_email_tag", "followup_gestor",
   "sienge_sync_state", "kmz_coordinates"];
 
 async function principal() {

@@ -442,7 +442,9 @@ const ConfigUsersApp = {
             { id: "zero_paid", label: "Clientes 0% Pago" },
             { id: "notificacoes", label: "Notificações" },
             { id: "followup_cnd", label: "Follow-up CND", permBase: "sub_fin_cr_followup_cnd" },
+            { id: "followup_cobranca", label: "Follow-up Cobrança", permBase: "sub_fin_cr_followup_cobranca" },
             { id: "recebimentos_webro", label: "Recebimentos Webro" },
+            { id: "remessa_avulsa", label: "Remessa avulsa", permBase: "sub_fin_cr_remessa_avulsa" },
             { id: "scod", label: "Scod" },
             { id: "relatorios", label: "Relatórios" },
             { id: "configuracoes", label: "Configurações" }

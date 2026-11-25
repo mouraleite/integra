@@ -23,6 +23,17 @@ const AlertasPopupApp = {
         <div class="apa-item"><strong>Cliente exemplo · QD 04 LT 18</strong><span>Água: sim · Energia: sim · Estágio: alvenaria</span></div>`
     },
     {
+      id: "followup-gestor",
+      nome: "Pedido de atualização do gestor",
+      quando: "No login e assim que o administrador envia o pedido. Responder depois esconde até a próxima entrada no Integra. Some quando o operador responde.",
+      logica: "O administrador clica em Pedir atualização na ficha do cliente e escreve as considerações. O pedido leva o resumo do contrato daquele momento: valores pagos, vencidos e a vencer, percentual pago, construção (com o lote do KMZ, se houver), Nex, renegociações, PMP e último contato. Nas Ocorrências e Promessas entra a nota Follow up do Gestor, e a resposta do operador fica como resposta dessa nota. Essas notas não contam como contato com o cliente. Os títulos pendentes aparecem nos Insights da home, e Contas a Receber > Follow-up Cobrança lista todos os pedidos.",
+      quem: "O operador responsável pelo título, escolhido pelo administrador no pedido (vem preenchido com o operador da fila). Administrador não recebe.",
+      titulo: "O gestor gostaria de uma atualização detalhada deste caso",
+      corpo: `<p>Pedido de Administrador exemplo · 24/11/2026 08:40</p>
+        <div class="apa-item"><strong>Cliente exemplo · Título 13444</strong><span>Pagos 26 parc. R$ 24.914,58 · Vencidos 3 parc. R$ 5.289,12 · 27% pago</span><span>Nex enviada em 10/10/2026 · 2 renegociações · PMP 33 dias</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real há Visualizar Extrato, Abrir ficha, o campo da resposta e Enviar resposta.</p>`
+    },
+    {
       id: "vistoria",
       nome: "Vistoria aguardando validação",
       quando: "No login e de novo quando uma vistoria entra em aguardando validação. Some ao confirmar a lista ou ao adiar.",
@@ -146,11 +157,13 @@ const AlertasPopupApp = {
       id: "esteira",
       nome: "Etapas vencidas na esteira",
       quando: "Todo dia às 08:00, enquanto a etapa continuar vencida. Se a pessoa entra depois, abre na hora. Fechar dispensa só aquele dia, inclusive depois de atualizar a página.",
-      logica: "Lista só financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. Esses mesmos casos ficam em destaque na lista de financiamentos em aberto.",
+      logica: "Lista financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. No mesmo aviso, mostra cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte. O batimento das 7h grava essas parcelas; se ainda não houver batimento do dia, a consulta é feita na hora.",
       quem: "Administrador e operador de cobrança back office.",
       titulo: "Etapas vencidas na esteira",
       corpo: `<p>Estes financiamentos estão com a etapa atual fora do prazo.</p>
-        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>`
+        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>
+        <p style="margin-top:12px;">Clientes de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>
+        <div class="apa-item"><strong>Erick Henrique · título 9336</strong><span>8 parcelas vencidas · 1 a vencer neste mês · 1 a vencer no mês seguinte</span></div>`
     },
     {
       id: "documentos",

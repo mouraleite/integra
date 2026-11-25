@@ -669,9 +669,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof window.updateOperatorTabsUI === "function") window.updateOperatorTabsUI();
     if (typeof window.syncWebroHideToggleUI === "function") window.syncWebroHideToggleUI();
     setTimeout(() => {
-      if (typeof window.ensureAllNexCleared === "function") window.ensureAllNexCleared();
-      if (typeof window.ensureNexTodayPurged === "function") window.ensureNexTodayPurged();
-      if (typeof window.ensureNexTitulo12753Removed === "function") window.ensureNexTitulo12753Removed();
+      // As limpezas de NEX de agosto (todas as NEX, as de 27/08 e as do título 12753) já rodaram e
+      // não são mais chamadas: com a trava do Firebase fora do ar, a limpeza geral apagava tudo de novo (19/11).
       if (typeof window.ensureBoletoNotesTitulo4868Removed === "function") window.ensureBoletoNotesTitulo4868Removed();
     }, 1500);
 });
@@ -2965,6 +2964,70 @@ window.baseCorrigidaParcela = function(inst) {
   return base;
 };
 
+/* Saldo em aberto menor que o original: houve baixa e a parcela não quitou. */
+window.parcelaBaixaParcial = function(inst) {
+  if (!inst || Number(inst.installmentSituation) === 2) return null;
+  const face = Number(inst.originalValue != null ? inst.originalValue : inst.value);
+  const saldo = Number(inst.cb != null ? inst.cb : inst.currentBalance);
+  if (!(face > 1) || !(saldo > 0.009) || !(saldo + 1 < face)) return null;
+  let pago = 0;
+  let data = "";
+  (Array.isArray(inst.receipts) ? inst.receipts : []).forEach(function(r) {
+    if (!r) return;
+    if (typeof window.isWriteOffReceipt === "function" && window.isWriteOffReceipt(r)) return;
+    const v = Number(r.receiptValue != null ? r.receiptValue : (r.netAmount != null ? r.netAmount : (r.netReceiptValue != null ? r.netReceiptValue : r.value)));
+    if (!(v > 0.009)) return;
+    pago += v;
+    const dt = String(r.paymentDate || r.receiptDate || r.date || "").slice(0, 10);
+    if (dt && dt > data) data = dt;
+  });
+  if (!(pago > 0.009) && String(inst.receiptTypeStr || "") === "Recebimento") {
+    pago = Number(inst.receiptValue) || 0;
+    data = String(inst.receiptDate || "").slice(0, 10);
+  }
+  if (pago > 0.05 && pago + 0.05 >= face) return null;
+  return {
+    parcela: inst.installmentNumber || inst.installmentId || "",
+    pago: pago,
+    data: data,
+    saldo: saldo,
+    face: face
+  };
+};
+
+window.renderAlertaBaixaParcial = function(lista) {
+  const box = document.getElementById("simulador-alerta-parcial");
+  if (!box) return;
+  const money = function(n) {
+    return (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  };
+  const dataBr = function(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    return p.length === 3 ? (p[2] + "/" + p[1] + "/" + p[0]) : "";
+  };
+  const itens = [];
+  (lista || []).forEach(function(inst) {
+    const info = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+    if (info) itens.push(info);
+  });
+  if (!itens.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const linhas = itens.map(function(info) {
+    const quando = dataBr(info.data);
+    const baixa = info.pago > 0.009
+      ? (" Baixa de " + money(info.pago) + (quando ? (" em " + quando) : "") + ".")
+      : "";
+    return "<li><b>Parcela " + info.parcela + "</b> tem baixa parcial." + baixa
+      + " O valor em aberto é " + money(info.saldo) + ", e o original era " + money(info.face) + ".</li>";
+  }).join("");
+  box.innerHTML = "<b>Há parcela com baixa parcial.</b> O corrigido não é o valor original da parcela."
+    + "<ul style=\"margin: 6px 0 0 18px; padding: 0;\">" + linhas + "</ul>";
+  box.style.display = "block";
+};
+
 /** Se o extrato já traz o valor atualizado do Sienge e ele é maior que a mora
  *  recalculada, usa esse total. A multa continua 2% e o restante fica em juros. */
 window.encargosParcelaSienge = function(inst, base, dias, taxa) {
@@ -4028,6 +4091,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "Fluxo de caixa diário",
     mutuo: "Mútuo",
     "relatorios-cr": "Relatórios",
+    "remessa-avulsa": "Remessa avulsa",
     "importar-acionamentos": "Importar acionamentos",
     "resultado-caixa": "Resultado de caixa",
     "orcamento-novo": "Novo orçamento",
@@ -4044,7 +4108,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "parametrizacoes": "Gestão de Empresas",
     "centros-custo": "Gestão de Centros de Custo",
     "followup-cnd": "Follow-up CND",
-    "kmz": "Upload de Mapeamento (KMZ)",
+    "followup-cobranca": "Follow-up Cobrança",
+    "kmz":"Upload de Mapeamento (KMZ)",
     "upload-kmz": "Upload de KMZ",
     "imagem-satelite": "Imagem de Satélite",
     "upload-mapa": "Upload de Projeto Urbanístico",
@@ -4129,6 +4194,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "calendar-clock",
     mutuo: "handshake",
     "relatorios-cr": "file-bar-chart",
+    "remessa-avulsa": "file-spreadsheet",
     "resultado-caixa": "scale",
     "orcamento-novo": "file-plus",
     "orcamento-forecast": "line-chart",
@@ -4283,6 +4349,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     loadCentrosCustoTab();
   } else if (tabId === "followup-cnd") {
     if (window.FollowupCndApp && typeof FollowupCndApp.abrir === "function") FollowupCndApp.abrir();
+  } else if (tabId === "followup-cobranca") {
+    if (window.FollowupGestor && typeof window.FollowupGestor.abrir === "function") window.FollowupGestor.abrir();
   } else if (tabId === "central-email") {
     if (window.CentralEmailApp && typeof CentralEmailApp.abrir === "function") CentralEmailApp.abrir();
   } else if (tabId === "doc-padrao") {
@@ -5402,6 +5470,9 @@ async function processSuccessfulLogin(loggedUser) {
       }
       if (window.FollowupCndApp && typeof FollowupCndApp.avisar === "function") {
         FollowupCndApp.avisar();
+      }
+      if (window.FollowupGestor && typeof window.FollowupGestor.iniciar === "function") {
+        window.FollowupGestor.iniciar();
       }
       if (window.GerarPagamentoApp && typeof window.GerarPagamentoApp.avisoFechamento === "function") {
         window.GerarPagamentoApp.avisoFechamento();
@@ -11665,6 +11736,20 @@ window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloud
     chosen.at = Date.now();
     chosen.winner = "local";
   }
+  /* Nuvem e navegador vazios (produção sem configuração) recebem o modelo.
+     Etapa que a pessoa excluiu fica no túmulo e não volta. */
+  if (!chosen.list.length) {
+    const modelo = (window.ETAPAS_FINANCIAMENTO_PADRAO || []).map((e, i) => ({
+      id: e.id,
+      nome: e.nome,
+      dias: e.dias,
+      descricao: e.descricao,
+      parentId: null,
+      order: (i + 1) * 10
+    }));
+    const padrao = window.finEtapasSemExcluidas(modelo, tomb);
+    if (padrao.length) chosen = pack(padrao, Date.now(), "local");
+  }
   return chosen;
 };
 
@@ -12566,10 +12651,13 @@ window.applyAdvFiltersTo = (sourceList) => {
                   ? window.getEnvioJuridicoThreshold()
                   : 151;
                 filteredList = filteredList.filter((c) => {
-                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) return true;
-                    if (webroWanted.size && typeof window.getWebroBaixaStatus === "function") {
-                        const st = window.getWebroBaixaStatus(c);
-                        if (st && webroWanted.has(st)) return true;
+                    const st = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+                    if (st && webroWanted.has(st)) return true;
+                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) {
+                        // A tag Aguardando Webro ou Pendente Repasse substitui a do grupo na fila.
+                        // Sem essa tag marcada, o cliente não entra no grupo selecionado.
+                        if (st === "AGUARDANDO" || st === "PENDENTE") return false;
+                        return true;
                     }
                     return false;
                 });
@@ -15615,7 +15703,8 @@ async function viewCustomerCard(customerId, saleId, specificTitulo = null) {
   });
   if (typeof window.applyFichaPerfilVista === "function") window.applyFichaPerfilVista(false);
   if (typeof window.syncQuitacaoAdvogadoVista === "function") window.syncQuitacaoAdvogadoVista();
-  
+  if (window.FollowupGestor && typeof window.FollowupGestor.atualizarBotaoFicha === "function") window.FollowupGestor.atualizarBotaoFicha();
+
   // Abas judiciais: menu Sub Judice, advogado, ou contrato/cliente já sub judice (ex.: fila de cobrança)
   syncCobrancaJudicialTabs(isSubjudice, isAdvogado);
 
@@ -18121,7 +18210,8 @@ function formatCpfCnpj(val) {
        kpiPago, kpiAcrescimo, kpiDesconto, kpiLiquido, kpiQtdPagas,
        kpiVencidas, kpiVencidasOriginal, kpiQtdVencidas,
        kpiAVencer, kpiQtdAVencer,
-       kpiTotalContrato, kpiTotalQtd
+       kpiTotalContrato, kpiTotalQtd,
+       _customerId: String(customerId)
     };
 
     const elTotalSum = document.getElementById("ext-kpi-total-sum");
@@ -18238,7 +18328,9 @@ function formatCpfCnpj(val) {
     }
     
     const kpiPctPaid = kpiSomaOriginal > 0 ? (kpiPago / kpiSomaOriginal) : (sale.status === 'Quitado' ? 1 : 0);
-    
+    // Follow-up do gestor: o resumo leva o mesmo percentual do medidor "Pago do Contrato".
+    if (AppState.currentContractKpis) AppState.currentContractKpis.kpiPctPago = kpiPctPaid;
+
     AppState.isCurrentContractPaid = (kpiPctPaid >= 1 || sale.status === 'Quitado');
     if (AppState.isCurrentContractPaid) {
         let payoffDateMsg = sale.payOffDate ? new Date(sale.payOffDate + 'T12:00:00').toLocaleDateString('pt-BR') : "";
@@ -18446,7 +18538,8 @@ function formatCpfCnpj(val) {
     }
 
     if (simInput && dbContract && dbContract.installments) {
-      if (sale.status === "Quitado") {
+         if (sale.status === "Quitado") {
+         if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial([]);
          if (simTableContainer) simTableContainer.style.display = "none";
          if (simFullContainer) simFullContainer.style.display = "none";
          if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(0);
@@ -18776,11 +18869,16 @@ function formatCpfCnpj(val) {
                   }
 
                   const valorAtualizadoHtml = kpiFmt(inst.cb + multa + juros);
+                  const baixaParcial = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+                  if (baixaParcial && bgStyle.indexOf("transparent") >= 0) bgStyle = "background-color: #fffbeb;";
+                  const marcaParcial = baixaParcial
+                    ? `<div style="margin-top:4px;display:inline-flex;align-items:center;padding:1px 6px;border-radius:999px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Esta parcela teve baixa parcial. O corrigido é o saldo que ainda está em aberto.">Baixa parcial</div>`
+                    : "";
                   const tr = document.createElement("tr");
                   tr.style.cssText = `opacity: ${inst.selected || inst.isActiveBoleto || inst.boletoBaixado ? "1" : "0.55"}; ${bgStyle} border-bottom: 1px solid #f1f5f9;`;
                   tr.innerHTML = `
                      <td style="text-align: center;">${chkHtml}</td>
-                     <td>${inst.installmentNumber || inst.installmentId || "—"}</td>
+                     <td>${inst.installmentNumber || inst.installmentId || "—"}${marcaParcial}</td>
                      <td style="font-weight: 500;">${dateLabel}</td>
                      <td>${vencBoleto}</td>
                      <td>${diasAtraso > 0 ? diasAtraso : "—"}</td>
@@ -18797,6 +18895,7 @@ function formatCpfCnpj(val) {
                }
             });
             if (window.lucide) lucide.createIcons();
+            if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial(vencidasSimulador);
             
             if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(totalPrincipal);
             if (simJurosEl) simJurosEl.textContent = kpiFmt(totalMulta + totalJuros);
@@ -18808,6 +18907,23 @@ function formatCpfCnpj(val) {
             const totalAtualizado = totalPrincipal + totalMulta + totalJuros;
             const totalComHonorarios = totalAtualizado + totalHonorarios;
             if (simTotalEl) simTotalEl.textContent = kpiFmt(margemHon > 0 ? totalComHonorarios : totalAtualizado);
+
+            // Desconto em multa e juros: por enquanto o Sienge não aplica pela API (aviso abaixo da negociação).
+            try {
+              const taxaSim = typeof window.getSimuladorTaxaMultiplier === "function" ? window.getSimuladorTaxaMultiplier() : 1;
+              const selTaxa = document.getElementById("simulador-taxa");
+              let avisoSim = document.getElementById("simulador-aviso-sienge");
+              if (!avisoSim && selTaxa && selTaxa.parentNode) {
+                avisoSim = document.createElement("div");
+                avisoSim.id = "simulador-aviso-sienge";
+                selTaxa.parentNode.appendChild(avisoSim);
+              }
+              if (avisoSim) {
+                avisoSim.innerHTML = (taxaSim < 1 && typeof window.avisoDescontoSiengeHtml === "function")
+                  ? window.avisoDescontoSiengeHtml({ finePct: 2 * taxaSim, interestPct: 1 * taxaSim, alvo: margemHon > 0 ? totalComHonorarios : totalAtualizado })
+                  : "";
+              }
+            } catch (e) {}
 
             // Atualiza VF do Funil
             window.funnelCurrentVF = kpiAVencer + totalAtualizado;
@@ -18982,7 +19098,15 @@ function formatCpfCnpj(val) {
       }
       
       const badgeClass = riskLevel === "high" ? "risk-high" : riskLevel === "medium" ? "risk-medium" : "risk-low";
-      
+      // Follow-up do gestor: PMP e renegociações do mesmo Perfil Analítico da ficha.
+      AppState.currentFichaPerfil = {
+        _customerId: String(customerId),
+        pmp: mediaPMP,
+        renegociacoes: reparcelamentosCount,
+        pctEmDia: totalPagamentos > 0 ? pctEmDia : null,
+        perfil: profileName
+      };
+
       chronicBanner.innerHTML = `
         <div style="padding: 15px; border-radius: 6px; display: flex; align-items: flex-start; gap: 12px; border: 1.5px solid; margin-bottom: 20px;" class="${badgeClass}">
           <i data-lucide="${iconName}" style="width: 24px; height: 24px; flex-shrink: 0; margin-top: 2px;"></i>
@@ -19405,6 +19529,7 @@ function renderCustomerOccurrences() {
     }
     const isWebroBaixa = !!(occ.webroBaixa || (typeof window.isWebroBaixaCanal === "function" && window.isWebroBaixaCanal(occ.canal)));
     const isReuniaoSemanal = !!(typeof window.isReuniaoSemanalTerceirizadaCanal === "function" && window.isReuniaoSemanalTerceirizadaCanal(occ.canal));
+    const isFollowupGestor = !!(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(occ.canal));
     if (isNexLocked) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#fef2f2', 'important');
@@ -19417,6 +19542,12 @@ function renderCustomerOccurrences() {
       card.style.setProperty('border', '1px solid #c7d2fe', 'important');
       card.style.setProperty('border-left', '4px solid #4f46e5', 'important');
       card.style.setProperty('box-shadow', '0 0 0 1px rgba(79,70,229,0.10)', 'important');
+    } else if (isFollowupGestor) {
+      card.style.setProperty('position', 'relative', 'important');
+      card.style.setProperty('background-color', '#fdf4ff', 'important');
+      card.style.setProperty('border', '1px solid #f0abfc', 'important');
+      card.style.setProperty('border-left', '4px solid #a21caf', 'important');
+      card.style.setProperty('box-shadow', '0 0 0 1px rgba(162,28,175,0.10)', 'important');
     } else if (isWebroBaixa) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#ecfdf5', 'important');
@@ -19445,11 +19576,12 @@ function renderCustomerOccurrences() {
       else if (occ.canal.toLowerCase() === 'presencial') canalIcon = 'user';
       else if (isNotaInterna) canalIcon = 'sticky-note';
       else if (isReuniaoSemanal) canalIcon = 'users';
+      else if (isFollowupGestor) canalIcon = 'clipboard-list';
       else if (isWebroBaixa) canalIcon = 'banknote';
       else if (isNexLocked) canalIcon = 'mail';
-      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : 'rgba(0,0,0,0.05)';
-      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)');
-      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa) ? '700' : '400';
+      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : (isFollowupGestor ? '#fae8ff' : 'rgba(0,0,0,0.05)');
+      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isFollowupGestor ? '#86198f' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)'));
+      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa || isFollowupGestor) ? '700' : '400';
       tagsHtml += `<span style="background: ${canalTagBg}; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; color: ${canalTagColor}; font-weight: ${canalTagWeight};"><i data-lucide="${canalIcon}" style="width: 10px; height: 10px; display: inline-block; margin-right: 2px;"></i>${occ.canal}</span>`;
     }
     if (occ.iniciativa) {
@@ -19557,6 +19689,15 @@ function renderCustomerOccurrences() {
           `);
       }
       
+      // Follow up do Gestor sem resposta: o operador responde pelo pop-up do pedido.
+      if (isFollowupGestor && occ.followupGestorId && !(occ.replies && occ.replies.length) && window.FollowupGestor) {
+          const fgId = String(occ.followupGestorId).replace(/[^A-Za-z0-9_-]/g, "");
+          btns.push(`
+            <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; border-color: #f0abfc; color: #86198f;" onclick="window.FollowupGestor.responderPelaNota('${fgId}')">
+              <i data-lucide="message-square" style="width:10px; height:10px;"></i> ${window.FollowupGestor.souAdmin() ? "Ver pedido" : "Responder"}
+            </button>
+          `);
+      }
       if (isNotaInterna) {
           btns.push(`
             <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px;" onclick="window.toggleReplyInput('${occ.date}')">
@@ -19583,14 +19724,14 @@ function renderCustomerOccurrences() {
     }
 
     let repliesHtml = "";
-    if (isNotaInterna && occ.replies && occ.replies.length > 0) {
-      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid rgba(245,158,11,0.4); padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
+    if ((isNotaInterna || isFollowupGestor) && occ.replies && occ.replies.length > 0) {
+      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid ${isFollowupGestor ? 'rgba(162,28,175,0.4)' : 'rgba(245,158,11,0.4)'}; padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
       occ.replies.forEach(reply => {
         const rDate = new Date(reply.date).toLocaleString('pt-BR');
         repliesHtml += `
           <div style="background: rgba(255,255,255,0.6); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.05); font-size: 0.75rem;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 0.7rem; color: var(--color-text-muted);">
-              <strong>${reply.author}</strong> <span>${rDate}</span>
+              <strong>${reply.tipo === "resposta" ? "Resposta · " : ""}${reply.author}</strong> <span>${rDate}</span>
             </div>
             <div style="color: #1e293b; white-space: pre-wrap;">${reply.text}</div>
           </div>
@@ -24338,7 +24479,7 @@ async function renegGuardarProva(codigo, hash, info, payload) {
   }, { merge: true });
 }
 
-async function renegCarimbarAcordo(bytes, results, codigoPronto) {
+async function renegCarimbarAcordo(bytes, results, codigoPronto, opts) {
   const codigo = codigoPronto || ("ac-" + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "").slice(0, 12) : Date.now().toString(36)));
   const payload = renegPayloadRemade(results);
   const sale = g_renegSale || {};
@@ -24350,6 +24491,16 @@ async function renegCarimbarAcordo(bytes, results, codigoPronto) {
     unidade: [unit.costCenterId || sale.costCenterId || sale.enterpriseId, unit.name || unit.unitName || sale.unitName].filter(Boolean).join(" - "),
     cliente: cli.name || ""
   };
+  if (opts && opts.imprimirQr === false) {
+    let aviso = "";
+    try {
+      const hash = await renegSha256(bytes);
+      await renegGuardarProva(codigo, hash, info, payload);
+    } catch (e) {
+      aviso = "A proposta foi gerada, mas a prova do reparcelamento não ficou salva. " + ((e && e.message) || "");
+    }
+    return { bytes: bytes, codigo: codigo, reparcelamento: payload, aviso: aviso };
+  }
   try {
     const rel = window.RelacionamentoApp;
     if (!rel || typeof rel._carregarPdfLib !== "function") throw new Error("O editor de PDF não está disponível.");
@@ -24604,14 +24755,13 @@ function renegPedirPdfPix() {
 
 async function renegMontarPdfAcordo(results, nomeArquivo, pixBytes) {
   const pdf = baixarPropostaAcordoPdf(results, nomeArquivo);
-  let cru = new Uint8Array(pdf.output("arraybuffer"));
+  const cru = new Uint8Array(pdf.output("arraybuffer"));
   if (pixBytes) {
     const textoPix = await renegTextoPdf(pixBytes);
     const erroPix = renegValidarPdfPix(textoPix, Number(results && results.sinalValue) || 0);
     if (erroPix) throw new Error(erroPix);
-    cru = await renegAnexarPdf(cru, pixBytes);
   }
-  return renegCarimbarAcordo(cru, results, "");
+  return renegCarimbarAcordo(cru, results, "", { imprimirQr: false });
 }
 
 window.subirReparcelamentoPorCodigo = async function(codigo) {
@@ -25102,8 +25252,8 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
     abatido
       ? abatido.texto
       : (temSinal
-        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
-        : "A proposta só tem validade com o pagamento do sinal, pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale."),
+        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
+        : "A proposta só tem validade com o pagamento do sinal, pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale."),
     abatido
       ? "O pagamento do sinal em " + abatido.dataBr + " é o aceite do cliente. Não há assinatura nesta proposta."
       : "O pagamento do sinal é o aceite do cliente. Não há assinatura nesta proposta.",
@@ -30419,6 +30569,20 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
     alert("Abra o simulador de distrato a partir de um contrato.");
     return;
   }
+  // Um distrato em aberto por título: outro só depois da baixa aprovada pelo administrador.
+  if (window.DocAssinaturaApp && typeof DocAssinaturaApp.distratoAbertoDoTitulo === "function") {
+    const tituloDist = g_distSale.receivableBillId || g_distSale.id || "";
+    const aberto = await DocAssinaturaApp.distratoAbertoDoTitulo(tituloDist);
+    if (aberto) {
+      const quando = typeof DocAssinaturaApp.quando === "function" ? DocAssinaturaApp.quando(aberto.createdAt) : String(aberto.createdAt || "");
+      const pedida = aberto.baixa && aberto.baixa.status === "pendente";
+      alert("Já existe um distrato em aberto para o título " + tituloDist + ", gerado em " + quando + " por " + (aberto.userName || "—") + ".\n\n"
+        + (pedida
+          ? "A baixa dele já foi pedida e aguarda a aprovação do administrador. Depois da aprovação, gere o novo distrato."
+          : "Para gerar outro, peça a baixa do anterior em Relacionamento > Documentos para assinar (botão Pedir baixa), com a justificativa. O administrador precisa aprovar."));
+      return;
+    }
+  }
   if (typeof window.enrichCustomerForLegalDocs === "function") {
     g_distCustomer = await window.enrichCustomerForLegalDocs(g_distCustomer);
   }
@@ -31741,6 +31905,17 @@ window.renderAlertaDescontoEncargos = function(customerId) {
   box.style.display = "block";
 };
 
+/** Aviso enquanto o Sienge não aplica pela API a multa e os juros com desconto (teste de 24/11/2026). */
+window.avisoDescontoSiengeHtml = function(o) {
+  const pct = (v) => (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return `<div style="margin-top:8px;padding:9px 11px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.8rem;line-height:1.45;">
+    <strong>Atenção: boleto com desconto de multa e juros deve ser gerado direto no Sienge.</strong>
+    Pelo Integra, o Sienge ainda aplica a multa e os juros do contrato (2% e 1% a.m.), mesmo com o desconto escolhido. Estamos aguardando resposta do suporte do Sienge.
+    No Sienge, informe multa <b>${pct(o && o.finePct)}%</b> e juros <b>${pct(o && o.interestPct)}% a.m.</b> para chegar em <b>${money(o && o.alvo)}</b>.
+  </div>`;
+};
+
 window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultiplier) {
   const box = document.getElementById("reprocess-charges-summary");
   if (!box) return { multa: 0, juros: 0, principal: 0 };
@@ -31797,6 +31972,12 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
   } else {
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.82rem;line-height:1.45;";
     box.innerHTML = `<strong>Este boleto será gerado COM acréscimos.</strong> A API do Sienge receberá multa <b>${Number(finePct).toFixed(2)}%</b> e juros <b>${Number(interestPct).toFixed(2)}% a.m.</b>${(multa + juros) > 0.009 ? ` · Estimativa: multa ${money(multa)} + juros ${money(juros)} · Total ${money(principal + multa + juros)}` : ""}.${honHint}${graceHint}`;
+  }
+  // Enquanto o Sienge não responde: a API ignora multa e juros enviados e aplica os do contrato
+  // (teste no título 14394 em 24/11/2026). Desconto ou isenção precisa ser gerado direto no Sienge.
+  if (waiver.waive || taxa < 1) {
+    const alvo = isento ? principal : principal + multa + juros;
+    box.innerHTML += window.avisoDescontoSiengeHtml({ finePct: finePct, interestPct: interestPct, alvo: alvo });
   }
   return { multa, juros, principal, honorarios, finePct, interestPct, waive: waiver.waive };
 };
@@ -34557,8 +34738,10 @@ window.getLatestCustomerContact = function(customerId) {
     ? notesFn(AppState.judNotes, customerId)
     : ((AppState.judNotes && AppState.judNotes[customerId]) || []);
   let latest = null;
+  // Pedido do gestor e resposta do operador (Follow up do Gestor) não são contato com o cliente.
+  const followupGestor = (n) => typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n && n.canal);
   (Array.isArray(notesNormal) ? notesNormal : []).forEach(n => {
-    if (!n || !n.date) return;
+    if (!n || !n.date || followupGestor(n)) return;
     if (!latest || new Date(n.date) > new Date(latest.date)) latest = n;
   });
   (Array.isArray(notesJud) ? notesJud : []).forEach(n => {
@@ -35957,7 +36140,7 @@ async function _loadZeroPaidTab_Impl() {
       // Obter último contato
       const notesNormal = (AppState.notes && AppState.notes[bill.customerId]) ? AppState.notes[bill.customerId] : [];
       const notesJud = (AppState.judNotes && AppState.judNotes[bill.customerId]) ? AppState.judNotes[bill.customerId] : [];
-      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna'; });
+      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna' && !(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n.canal)); });
       
       if (notes.length > 0) {
         notes.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -38706,7 +38889,13 @@ window.purgeAllNexOccurrenceNotes = async function() {
   }
 };
 
+// Limpeza geral de 28/08/2026: já foi feita. Desligada de vez, porque, quando a leitura da trava
+// no Firebase falhava, ela rodava de novo e apagava todas as NEX e as notas de NEX (aconteceu em 19/11).
 window.ensureAllNexCleared = async function() {
+  return 0;
+};
+
+window.ensureAllNexClearedAntiga = async function() {
   const flag = "crm_nex_cleared_all_v20260828";
   try {
     if (localStorage.getItem(flag) === "1") return 0;
@@ -45347,9 +45536,6 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   if (window.EtapasFinanciamentoState.length) return false;
-  let stored = null;
-  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
-  if (stored != null) return false;
   const base = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
@@ -45358,13 +45544,20 @@ window.ensureEtapasFinanciamento = function() {
     parentId: null,
     order: (i + 1) * 10
   }));
-  window.EtapasFinanciamentoState = typeof window.finEtapasSemExcluidas === "function"
+  const limpa = typeof window.finEtapasSemExcluidas === "function"
     ? window.finEtapasSemExcluidas(base)
     : base;
-  try {
-    localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
-  } catch (e) {}
+  if (!limpa.length) return false;
+  window.EtapasFinanciamentoState = limpa;
   window._finEtapasVeioDoPadrao = true;
+  let stored = null;
+  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
+  /* Lista "[]" já gravada não ganha data nova aqui: a sincronização compara com a nuvem
+     e só sobe o modelo quando os dois lados estão vazios. */
+  if (stored != null) return false;
+  try {
+    localStorage.setItem("crm_moura_financiamento", JSON.stringify(limpa));
+  } catch (e) {}
   return true;
 };
 
@@ -46406,6 +46599,9 @@ async function saveDocPadrao(tipo) {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   const ids = keyMap[tipo] || [];
   const data = {};
@@ -46465,6 +46661,9 @@ async function previewDocPadrao(tipo) {
     vencimento: 'Alteração de Vencimento',
     aditamento: 'Aditamento Contratual',
     permuta: 'Permuta de lote',
+    simiq: 'Termo de simulação do saldo devedor (IQ)',
+    deciq: 'Declaração de saldo devedor (IQ)',
+    quifin: 'Termo de quitação por financiamento',
   };
   const label = labelMap[tipo] || tipo;
   const fillLegalPreview = async (rawText) => {
@@ -46587,6 +46786,35 @@ async function previewDocPadrao(tipo) {
       .replace(/\{\{\s*CERTIFICADO_GRAPROHAB\s*\}\}/g, '071/2021');
     const filled = window.centerDistratoSignatures ? window.centerDistratoSignatures(await fillLegalPreview(exemplo)) : await fillLegalPreview(exemplo);
     content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">Na prévia, o lote de destino e os valores usam um exemplo de troca dentro do mesmo empreendimento. Na geração entram o lote ativo escolhido e o saldo do título.</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
+  } else if (tipo === 'simiq' || tipo === 'deciq' || tipo === 'quifin') {
+    const title = document.getElementById('doc-' + tipo + '-title')?.value || '';
+    let corpo = document.getElementById('doc-' + tipo + '-corpo')?.value || '';
+    if (typeof applyDistratoConditionals === 'function') corpo = applyDistratoConditionals(corpo, { hasConjuge: true });
+    let filled = await fillLegalPreview(corpo);
+    const exemplosFin = {
+      SALDO_DEVEDOR: 'R$ 48.320,15',
+      SALDO_DEVEDOR_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      SALDO_CORRIGIDO: 'R$ 51.040,00',
+      SALDO_CORRIGIDO_EXTENSO: 'cinquenta e um mil e quarenta reais',
+      VALOR_QUITACAO: 'R$ 48.320,15',
+      VALOR_QUITACAO_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      VALOR_PAGO: 'R$ 36.500,00',
+      VALOR_PAGO_EXTENSO: 'trinta e seis mil e quinhentos reais',
+      QTD_PARCELAS_ABERTAS: '42',
+      DATA_BASE_SALDO: new Date().toLocaleDateString('pt-BR'),
+      TABELA_PARCELAS: '<table style="width:100%;border-collapse:collapse;font-size:12px;margin:8px 0;"><tr><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Parcela</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Vencimento</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">Valor presente</th></tr><tr><td style="border:1px solid #cbd5e1;padding:4px 6px;">48</td><td style="border:1px solid #cbd5e1;padding:4px 6px;">10/12/2026</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">R$ 1.150,48</td></tr></table>',
+      MATRICULA: '27.403',
+      AREA_LOTE: '250,00 m²',
+      NUM_CONTRATO: '1042'
+    };
+    filled = filled.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (full, key) => Object.prototype.hasOwnProperty.call(exemplosFin, key) ? exemplosFin[key] : full);
+    if (window.centerSimpleDocSignature) filled = window.centerSimpleDocSignature(filled);
+    const nota = tipo === 'simiq'
+      ? 'Na prévia, saldo e parcelas usam um exemplo. Na etapa 1 do financiamento entram o saldo e as parcelas em aberto do título no Sienge.'
+      : (tipo === 'deciq'
+        ? 'Na prévia, o saldo usa um exemplo. Na etapa 4 do financiamento entra o saldo devedor do título no Sienge.'
+        : 'Na prévia, o valor quitado usa um exemplo. Na etapa 10 entra o saldo declarado neste financiamento ou, se ele já estiver zerado, o total recebido no título.');
+    content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">${nota}</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
   }
   
   const win = window.open('', '_blank', 'width=700,height=600,scrollbars=yes');
@@ -46629,7 +46857,7 @@ function applySavedDocPadraoFields(tipo, data, fieldMap) {
 
 // Carregar templates salvos ao inicializar
 async function loadDocPadraoTemplates() {
-  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta'];
+  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta', 'simiq', 'deciq', 'quifin'];
   const fieldMap = {
     reneg: ['doc-reneg-title', 'doc-reneg-subtitle', 'doc-reneg-clauses'],
     boleto: ['doc-boleto-inst1', 'doc-boleto-inst2', 'doc-boleto-obs'],
@@ -46643,6 +46871,9 @@ async function loadDocPadraoTemplates() {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   
   if (window.DadosNucleo) {
@@ -49066,6 +49297,10 @@ window.fichaAtualizarBotaoLote = function(estado, coords, lotName, empId) {
     span.appendChild(btn);
   }
   const base = "border:none;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;justify-content:center;margin-left:8px;border-radius:4px;font-size:0.75rem;font-weight:bold;white-space:nowrap;";
+  // Follow-up do gestor: guarda o lote do KMZ da ficha aberta para o botão do resumo.
+  window._fichaLoteAtual = (estado === "abrir" && coords)
+    ? { customerId: String((window.AppState && AppState.selectedCustomerId) || ""), lotName: lotName, coords: coords, empId: empId }
+    : null;
   if (estado === "abrir" && coords) {
     btn.disabled = false;
     btn.style.cssText = base + "background:#105436;color:#fff;cursor:pointer;";
@@ -51881,6 +52116,7 @@ window.searchRelacionamento = async function() {
       return nome;
     }
 
+    window._billsDoPrincipal = {};
     results = await Promise.all(contratos.map(async c => {
        const tituloId = c.receivableBillId || c.contractNumber || c.id;
 
@@ -51985,6 +52221,28 @@ window.searchRelacionamento = async function() {
                        realContractStr = contractData.contractNumber;
                }
            } catch(e) {}
+       }
+
+       // Comprador secundário: o título fica no cliente principal e a lista do pesquisado vem vazia.
+       // Sem isso o contrato aparecia "Adimplente" mesmo quitado. Lê o título na lista do principal (traz payOffDate).
+       if (!contractBills.length && c.receivableBillId && typeof window.salesContractPeople === "function"
+         && typeof SiengeApiService.getReceivableBills === "function") {
+           try {
+               const pessoas = window.salesContractPeople(c) || [];
+               const principal = pessoas.find((p) => p.main) || null;
+               if (principal && principal.id != null && String(principal.id) !== String(customerId)) {
+                   window._billsDoPrincipal = window._billsDoPrincipal || {};
+                   const chave = String(principal.id);
+                   if (!window._billsDoPrincipal[chave]) {
+                       window._billsDoPrincipal[chave] = SiengeApiService.getReceivableBills(principal.id).catch(() => null);
+                   }
+                   const resP = await window._billsDoPrincipal[chave];
+                   const listaP = (resP && (resP.results || resP)) || [];
+                   const doContrato = (Array.isArray(listaP) ? listaP : []).find((b) =>
+                       String(b.receivableBillId || b.id) === String(c.receivableBillId));
+                   if (doContrato) contractBills.push(doContrato);
+               }
+           } catch (e) {}
        }
 
        const cStatus = String(c.status || '').toUpperCase();
@@ -60538,23 +60796,37 @@ window.resolveBrokerCreditorNames = async function(ids) {
 };
 
 window.gerarMapaZeropaidPDF = async function() {
-    const zeroList = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
-    const zeroKeys = new Set(zeroList.map(c => `${c.customerId}-${c.saleId}`));
     const opFilter = window.activeZeroOperatorFilter
         || (typeof activeZeroOperatorFilter !== "undefined" ? activeZeroOperatorFilter : "TODOS");
     const normOp = (v) => (typeof window.normalizeOperatorName === "function")
         ? window.normalizeOperatorName(v)
         : String(v || "").toUpperCase();
-    const webroList = (window.rawClientList || []).filter(c => {
-        if (!c || zeroKeys.has(`${c.customerId}-${c.saleId}`) || c.isZeroPaid) return false;
+    // Entrada = as três tags da fila: Pagamento de entrada Webro, Aguardando Webro e Pendente Repasse Webro.
+    const tagEntrada = (c) => {
+        const baixa = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+        if (baixa) return baixa === "PENDENTE" ? "pendente" : "aguardando";
+        if (typeof window.clientHasPagamentoEntradaWebro === "function" && window.clientHasPagamentoEntradaWebro(c)) return "pagamento";
+        return "";
+    };
+    const chave = (c) => `${c.customerId}-${c.saleId}`;
+    const zeroBase = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
+    const zeroList = zeroBase.filter(c => c && !tagEntrada(c));
+    const vistosEntrada = new Set();
+    const webroList = zeroBase.concat(window.rawClientList || []).filter(c => {
+        if (!c || vistosEntrada.has(chave(c))) return false;
         const subj = typeof window.clientIsSubjudice === "function"
             ? window.clientIsSubjudice(c)
             : (c.subjudice === "S" || c.subjudice === true);
         if (subj) return false;
-        if (typeof window.clientHasPagamentoEntradaWebro !== "function" || !window.clientHasPagamentoEntradaWebro(c)) return false;
+        const tag = tagEntrada(c);
+        if (!tag) return false;
         if (opFilter && opFilter !== "TODOS" && normOp(c.assignedOperator) !== normOp(opFilter)) return false;
+        vistosEntrada.add(chave(c));
+        c._tagEntrada = tag;
         return true;
     });
+    const porTag = { pagamento: 0, aguardando: 0, pendente: 0 };
+    webroList.forEach(c => { porTag[c._tagEntrada] = (porTag[c._tagEntrada] || 0) + 1; });
     if (!zeroList.length && !webroList.length) {
         alert("Não há clientes 0% pago nem pagando entrada Webro para gerar o mapa.");
         return;
@@ -60577,6 +60849,13 @@ window.gerarMapaZeropaidPDF = async function() {
     }
 
     const yieldUI = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 40)));
+    const comPrazo = (p, ms) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("tempo esgotado")), ms);
+        Promise.resolve(p).then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
     await yieldUI();
 
     let container = null;
@@ -60594,13 +60873,15 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const needFetch = all.filter(c => c && c.customerId && (!c.saleDate || (!c.brokerId && !c.brokerName)));
         const fetchIds = [...new Set(needFetch.map(c => c.customerId))];
+        const limiteBusca = Date.now() + 25000;
         if (fetchIds.length && typeof SiengeApiService !== "undefined" && typeof SiengeApiService.getSales === "function") {
             const batchSize = 6;
             for (let i = 0; i < fetchIds.length; i += batchSize) {
+                if (Date.now() > limiteBusca) break;
                 const batch = fetchIds.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (custId) => {
                     try {
-                        const sales = await SiengeApiService.getSales(custId);
+                        const sales = await comPrazo(SiengeApiService.getSales(custId), 8000);
                         if (!window.AppState.sales) window.AppState.sales = [];
                         sales.forEach(s => {
                             const idx = window.AppState.sales.findIndex(xs => String(xs.id) === String(s.id));
@@ -60619,7 +60900,13 @@ window.gerarMapaZeropaidPDF = async function() {
         }
 
         const brokerIds = all.map(c => c.brokerId).filter(Boolean);
-        const brokerNames = brokerIds.length ? await window.resolveBrokerCreditorNames(brokerIds) : {};
+        let brokerNames = {};
+        try {
+            brokerNames = brokerIds.length ? await comPrazo(window.resolveBrokerCreditorNames(brokerIds), 12000) : {};
+        } catch (err) {
+            console.warn("Mapa 0% pago: nomes dos corretores ficaram de fora", err);
+            brokerNames = window._brokerNameCache || {};
+        }
         all.forEach(c => {
             if (c.brokerId && brokerNames[c.brokerId]) c.brokerName = brokerNames[c.brokerId];
         });
@@ -60662,19 +60949,21 @@ window.gerarMapaZeropaidPDF = async function() {
         const stats = (list) => {
             const s = { value: 0, titles: 0, clients: new Set(), delaySum: 0, delayN: 0, ageSum: 0, ageN: 0,
                 months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, recency: recencyDefs.map(() => 0) };
+            // Tudo em número de títulos.
             list.forEach(c => {
+                const t = titleCount(c);
                 s.value += clientValue(c);
-                s.titles += titleCount(c);
+                s.titles += t;
                 s.clients.add(String(c.customerId));
                 if (c.maxDaysDelay > 0) { s.delaySum += c.maxDaysDelay; s.delayN++; }
                 const d = parseSale(c);
-                if (!d) { s.noDate++; s.recency[5]++; return; }
+                if (!d) { s.noDate += t; s.recency[5] += t; return; }
                 const days = Math.max(0, Math.round((now - d) / 86400000));
                 s.ageSum += days; s.ageN++;
                 const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-                if (s.months[key] != null) s.months[key]++; else s.older++;
+                if (s.months[key] != null) s.months[key] += t; else s.older += t;
                 const idx = recencyDefs.findIndex(r => r.max != null && days <= r.max);
-                s.recency[idx >= 0 ? idx : 4]++;
+                s.recency[idx >= 0 ? idx : 4] += t;
             });
             const avgAge = s.ageN ? Math.round(s.ageSum / s.ageN) : 0;
             s.clientsN = s.clients.size;
@@ -60685,10 +60974,13 @@ window.gerarMapaZeropaidPDF = async function() {
         const sz = stats(zeroList);
         const sw = stats(webroList);
 
-        const C_ZERO = "#334155";
-        const C_WEB = "#94a3b8";
-        const C_HEAD = "#1e293b";
-        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f8fafc";
+        // Cores do mapa: verde da marca nos cabeçalhos, vermelho para 0% pago e laranja para entrada Webro.
+        const C_ZERO = "#dc2626";
+        const C_WEB = "#ea580c";
+        const C_HEAD = "#105436";
+        const BG_ZERO = "#fef2f2";
+        const BG_WEB = "#fff7ed";
+        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f3f8f5";
         const ellipsisTd = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
         const dot = (color) => `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
 
@@ -60709,30 +61001,32 @@ window.gerarMapaZeropaidPDF = async function() {
                     const h = (v / maxVal) * (H - padTop - padBot);
                     const y = H - padBot - h;
                     out += `<rect x="${x - barW / 2}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${v ? color : "#e2e8f0"}" rx="2"/>`;
-                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">${v}</text>`;
+                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="9" font-weight="800" fill="${color}">${v}</text>`;
                 });
-                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="7" fill="#64748b">${s.label}</text>`;
+                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="8.5" font-weight="600" fill="#475569">${s.label}</text>`;
             });
             return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;">
                 <line x1="0" y1="${H - padBot}" x2="${W}" y2="${H - padBot}" stroke="#e2e8f0" stroke-width="1.5"/>${out}
             </svg>`;
         };
 
-        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:4px 6px;font-size:8px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
-        const totalTd = (v, align) => `<td style="padding:5px 6px;border-top:2px solid #cbd5e1;text-align:${align || "center"};font-weight:800;color:${C_HEAD};">${v}</td>`;
+        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:5px 7px;font-size:9px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
+        const totalTd = (v, align, extra) => `<td style="padding:6px 7px;border-top:2px solid ${C_HEAD};text-align:${align || "center"};font-weight:800;color:${C_HEAD};${extra || ""}">${v}</td>`;
+        const celZero = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_ZERO};background:${v ? BG_ZERO : "transparent"};">${v || "-"}</td>`;
+        const celWeb = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_WEB};background:${v ? BG_WEB : "transparent"};">${v || "-"}</td>`;
 
         const recencyTable = `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup><col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%"></colgroup>
-                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th("0% pago", "center")}${th("Entrada", "center")}${th("Total", "center")}</tr></thead>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup><col style="width:43%"><col style="width:19%"><col style="width:19%"><col style="width:19%"></colgroup>
+                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th(`${dot("#fca5a5")}0% pago`, "center")}${th(`${dot("#fdba74")}Entrada`, "center")}${th("Total", "center")}</tr></thead>
                 <tbody>
                     ${recencyDefs.map((r, i) => `<tr style="background:${zebra(i)};">
-                        <td style="padding:4px 6px;font-weight:700;color:#334155;">${esc(r.label)}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};">${sz.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;">${sw.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;">${sz.recency[i] + sw.recency[i]}</td>
+                        <td style="padding:5px 7px;font-weight:700;color:#1e293b;">${esc(r.label)}</td>
+                        ${celZero(sz.recency[i])}
+                        ${celWeb(sw.recency[i])}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.recency[i] + sw.recency[i] || "-"}</td>
                     </tr>`).join("")}
-                    <tr style="background:#f1f5f9;">${totalTd("Total", "left")}${totalTd(zeroList.length)}${totalTd(webroList.length)}${totalTd(zeroList.length + webroList.length)}</tr>
+                    <tr style="background:#e7f6ee;">${totalTd("Total de títulos", "left")}${totalTd(sz.titles, "center", `color:${C_ZERO};`)}${totalTd(sw.titles, "center", `color:${C_WEB};`)}${totalTd(sz.titles + sw.titles)}</tr>
                 </tbody>
             </table>`;
 
@@ -60747,7 +61041,7 @@ window.gerarMapaZeropaidPDF = async function() {
             add(zeroList, "z");
             add(webroList, "w");
             return Object.values(map).map(r => ({ ...r, zc: r.z.cl.size, zt: r.z.t, wc: r.w.cl.size, wt: r.w.t }))
-                .sort((a, b) => (b.zc + b.wc) - (a.zc + a.wc) || (b.zt + b.wt) - (a.zt + a.wt));
+                .sort((a, b) => (b.zt + b.wt) - (a.zt + a.wt) || b.zt - a.zt);
         };
         const capRows = (rows, max, otherLabel) => {
             if (rows.length <= max) return rows;
@@ -60756,7 +61050,7 @@ window.gerarMapaZeropaidPDF = async function() {
             return rows.slice(0, max - 1).concat([{ id: "", name: `${otherLabel} (${rest.length})`, isOther: true, zc: sum("zc"), zt: sum("zt"), wc: sum("wc"), wt: sum("wt") }]);
         };
         const ccIdOf = (c) => (typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(c.costCenterId) : c.costCenterId) || "N/D";
-        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 16, "OUTROS EMPREENDIMENTOS");
+        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 13, "OUTROS EMPREENDIMENTOS");
         const brokerRows = capRows(combine(
             c => c.brokerId ? `id:${c.brokerId}` : (c.brokerName ? `n:${String(c.brokerName).trim().toUpperCase()}` : "sem"),
             c => ({
@@ -60764,31 +61058,29 @@ window.gerarMapaZeropaidPDF = async function() {
                 name: c.brokerName ? String(c.brokerName).trim().toUpperCase() : (c.brokerId ? `CREDOR ${c.brokerId}` : "SEM CORRETOR NO CONTRATO"),
                 isOther: !c.brokerId && !c.brokerName
             })
-        ), 16, "OUTROS CORRETORES");
+        ), 13, "OUTROS CORRETORES");
 
         const zt = sz.titles, wt = sw.titles;
+        // Só títulos: 0% pago, entrada e total.
         const splitTable = (rows, firstCols, firstHeads, emptyMsg) => `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup>${firstCols}<col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"></colgroup>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup>${firstCols}<col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup>
                 <thead>
-                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1], "vertical-align:bottom;")).join("")}
-                        ${th(`${dot(C_ZERO)}0% pago`, "center", "border-left:1px solid #475569;")}${th("", "center")}
-                        ${th(`${dot(C_WEB)}Entrada`, "center", "border-left:1px solid #475569;")}${th("", "center")}</tr>
-                    <tr style="background:#334155;">${firstHeads.map(() => th("")).join("")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}</tr>
+                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1])).join("")}
+                        ${th(`${dot("#fca5a5")}0% pago`, "center")}
+                        ${th(`${dot("#fdba74")}Entrada`, "center")}
+                        ${th("Total", "center")}</tr>
                 </thead>
                 <tbody>
                     ${rows.map((r, i) => `<tr style="background:${zebra(i)};">
                         ${r.cells}
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};border-left:1px solid #e2e8f0;">${r.zc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:${C_ZERO};">${r.zt || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;border-left:1px solid #e2e8f0;">${r.wc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:#64748b;">${r.wt || "-"}</td>
-                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 4}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
-                    <tr style="background:#f1f5f9;">
-                        <td colspan="${firstHeads.length}" style="padding:5px 6px;border-top:2px solid #cbd5e1;font-weight:800;color:${C_HEAD};">Total</td>
-                        ${totalTd(sz.clientsN)}${totalTd(zt)}${totalTd(sw.clientsN)}${totalTd(wt)}
+                        ${celZero(r.zt)}
+                        ${celWeb(r.wt)}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${(r.zt + r.wt) || "-"}</td>
+                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 3}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
+                    <tr style="background:#e7f6ee;">
+                        <td colspan="${firstHeads.length}" style="padding:6px 7px;border-top:2px solid ${C_HEAD};font-weight:800;color:${C_HEAD};">Total de títulos</td>
+                        ${totalTd(zt, "center", `color:${C_ZERO};`)}${totalTd(wt, "center", `color:${C_WEB};`)}${totalTd(zt + wt)}
                     </tr>
                 </tbody>
             </table>`;
@@ -60810,34 +61102,36 @@ window.gerarMapaZeropaidPDF = async function() {
             "Sem corretores no contrato"
         );
 
-        const kpi = (label, value) => `
-            <div style="flex:1;min-width:0;padding:6px 10px;border-left:1px solid #e2e8f0;">
-                <div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
-                <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;white-space:nowrap;">${value}</div>
+        const kpi = (label, value, color) => `
+            <div style="flex:1;min-width:0;padding:8px 12px;border-left:1px solid rgba(15,23,42,0.08);">
+                <div style="font-size:9px;font-weight:800;color:#475569;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
+                <div style="font-size:20px;font-weight:800;color:${color || "#0f172a"};margin-top:2px;white-space:nowrap;">${value}</div>
             </div>`;
-        const kpiGroup = (color, title, sub, s) => `
-            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:#fff;border:1px solid #e2e8f0;border-top:3px solid ${color};border-radius:8px;">
-                <div style="width:150px;flex-shrink:0;padding:6px 10px;display:flex;flex-direction:column;justify-content:center;">
-                    <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;letter-spacing:0.3px;">${dot(color)}${title}</div>
-                    <div style="font-size:8px;color:#64748b;margin-top:2px;">${sub}</div>
+        const kpiGroup = (color, bg, title, sub, s, extra) => `
+            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:${bg};border:1px solid ${color}33;border-left:6px solid ${color};border-radius:10px;">
+                <div style="width:190px;flex-shrink:0;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:12px;font-weight:800;color:${color};text-transform:uppercase;letter-spacing:0.3px;">${title}</div>
+                    <div style="font-size:9px;color:#475569;margin-top:2px;line-height:1.35;">${sub}</div>
+                    ${extra || ""}
                 </div>
-                ${kpi("Valor em atraso", fmtInt(s.value))}
-                ${kpi("Clientes", s.clientsN)}
-                ${kpi("Títulos", s.titles)}
+                ${kpi("Títulos", s.titles, color)}
+                ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
                 ${kpi("Desde a venda", s.avgSaleLabel)}
             </div>`;
+        const chip = (txt, n, color) => `<span style="display:inline-block;margin:3px 4px 0 0;padding:1px 6px;border-radius:10px;background:#fff;border:1px solid ${color}55;color:${color};font-size:8.5px;font-weight:800;white-space:nowrap;">${txt}: ${n}</span>`;
+        const chipsEntrada = `<div>${chip("Entrada Webro", porTag.pagamento || 0, C_WEB)}${chip("Aguardando", porTag.aguardando || 0, C_WEB)}${chip("Pendente repasse", porTag.pendente || 0, C_WEB)}</div>`;
         const quadro = (title, body, extra) => `
-            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
-                <div style="background:${C_HEAD};color:#fff;padding:6px 10px;font-weight:800;font-size:10px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
-                <div style="flex:1;min-height:0;padding:6px 8px;overflow:hidden;">${body}</div>
+            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
+                <div style="background:${C_HEAD};color:#fff;padding:7px 12px;font-weight:800;font-size:11px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
+                <div style="flex:1;min-height:0;padding:8px 10px;overflow:hidden;">${body}</div>
             </div>`;
 
-        const legend = `<div style="display:flex;gap:14px;justify-content:center;font-size:8px;font-weight:700;color:#475569;margin-bottom:2px;">
-            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Pagando entrada (boleto Webro)</span></div>`;
+        const legend = `<div style="display:flex;gap:16px;justify-content:center;font-size:9.5px;font-weight:800;color:#334155;margin-bottom:2px;">
+            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Entrada Webro (pagamento, aguardando e pendente repasse)</span></div>`;
         const saleBand = `
             <div style="display:flex;gap:12px;height:100%;align-items:stretch;">
                 <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;">
-                    <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;text-align:center;">Vendas nos últimos 12 meses</div>
+                    <div style="font-size:9.5px;font-weight:800;color:${C_HEAD};text-transform:uppercase;text-align:center;">Títulos por mês da venda (últimos 12 meses)</div>
                     ${legend}
                     ${groupedBarChart(chartSlots)}
                 </div>
@@ -60851,18 +61145,22 @@ window.gerarMapaZeropaidPDF = async function() {
         container.style.cssText = "position:absolute;top:-9999px;left:-9999px;width:1122px;height:793px;background:#fff;padding:14px 18px;font-family:'Inter','Segoe UI',sans-serif;box-sizing:border-box;display:flex;flex-direction:column;";
         container.id = "mapa-zeropaid-pdf-container";
         container.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:8px;margin-bottom:8px;flex-shrink:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg, #105436 0%, #1b8253 100%);border-radius:10px;padding:8px 14px;margin-bottom:8px;flex-shrink:0;">
                 <div style="display:flex;align-items:center;gap:12px;">
-                    <img src="${logoUrl}" alt="Logo" style="height:32px;object-fit:contain;">
+                    <img src="${logoUrl}" alt="Logo" style="height:34px;object-fit:contain;background:#fff;border-radius:6px;padding:2px;">
                     <div>
-                        <h1 style="margin:0;color:#0f172a;font-size:16px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
-                        <p style="margin:2px 0 0 0;color:#64748b;font-size:10px;">Posição em: ${nowLabel} · Atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
+                        <h1 style="margin:0;color:#fff;font-size:17px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
+                        <p style="margin:2px 0 0 0;color:#d1fae5;font-size:10px;">Posição em ${nowLabel} · em número de títulos · atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
                     </div>
+                </div>
+                <div style="text-align:right;color:#fff;">
+                    <div style="font-size:9px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:#d1fae5;">Total de títulos</div>
+                    <div style="font-size:24px;font-weight:800;line-height:1;">${sz.titles + sw.titles}</div>
                 </div>
             </div>
             <div style="display:flex;gap:8px;margin-bottom:8px;flex-shrink:0;">
-                ${kpiGroup(C_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz)}
-                ${kpiGroup(C_WEB, "Pagando entrada", "Entrada em boleto Webro em aberto", sw)}
+                ${kpiGroup(C_ZERO, BG_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz, "")}
+                ${kpiGroup(C_WEB, BG_WEB, "Entrada Webro", "Entrada paga ou em boleto Webro", sw, chipsEntrada)}
             </div>
             ${quadro("Quando o cliente comprou o lote", saleBand, "flex-shrink:0;height:196px;margin-bottom:8px;")}
             <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -60873,7 +61171,28 @@ window.gerarMapaZeropaidPDF = async function() {
 
         document.body.appendChild(container);
         await yieldUI();
-        const canvas = await html2canvas(container, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false });
+        let liberouFonte = false;
+        const fonts = document.fonts;
+        if (fonts && fonts.ready) {
+            const fontePronta = await Promise.race([
+                fonts.ready.then(() => true).catch(() => true),
+                new Promise(r => setTimeout(() => r(false), 2000))
+            ]);
+            if (!fontePronta) {
+                try {
+                    Object.defineProperty(fonts, "ready", { configurable: true, get() { return Promise.resolve(); } });
+                    liberouFonte = true;
+                } catch (e) {}
+            }
+        }
+        let canvas;
+        try {
+            canvas = await comPrazo(html2canvas(container, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
+        } finally {
+            if (liberouFonte) {
+                try { delete fonts.ready; } catch (e) {}
+            }
+        }
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF("l", "mm", "a4");
         const imgData = canvas.toDataURL("image/jpeg", 0.92);
@@ -60886,11 +61205,10 @@ window.gerarMapaZeropaidPDF = async function() {
         if (h > pdfHeight) { h = pdfHeight; w = pdfHeight * ratio; }
         pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
         pdf.save("Mapa_Clientes_0_Pago.pdf");
-        if (container.parentNode) document.body.removeChild(container);
-        restoreBtn();
     } catch (e) {
         console.error("Erro ao gerar mapa 0% pago:", e);
-        alert("Ocorreu um erro ao gerar o PDF. Verifique o console.");
+        alert("Ocorreu um erro ao gerar o PDF. " + ((e && e.message) || ""));
+    } finally {
         if (container && container.parentNode) document.body.removeChild(container);
         restoreBtn();
     }
