@@ -38,6 +38,13 @@ module.exports = async function handler(req, res) {
   } catch (e) {
     acesso = { ok: false, motivo: "erro-verificacao" };
   }
+  if (!acesso.ok && acesso.motivo === "acesso-restrito") {
+    console.warn("[supabase-token] " + JSON.stringify({ motivo: acesso.motivo, email: acesso.email || "" }));
+    return responder(res, 403, {
+      error: "O Integra novo ainda está em teste. Continue usando https://crm-gestao.vercel.app até 30/11/2026.",
+      motivo: acesso.motivo
+    });
+  }
   if (!acesso.ok) {
     console.warn("[supabase-token] " + JSON.stringify({ motivo: acesso.motivo, email: acesso.email || "" }));
     return responder(res, 401, { error: "Faça login no Integra.", motivo: acesso.motivo });

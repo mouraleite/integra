@@ -22,6 +22,30 @@ function gravarCookieArquivo(token, expMs) {
   } catch (e) {}
 }
 
+// Fase de teste do site novo: quem não está liberado vê este aviso e o link do endereço atual (não dá para fechar).
+function avisarAcessoRestrito(texto) {
+  if (document.getElementById("acesso-restrito")) return;
+  const ov = document.createElement("div");
+  ov.id = "acesso-restrito";
+  ov.setAttribute("role", "alertdialog");
+  ov.style.cssText = "position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:16px;font-family:Outfit,Segoe UI,sans-serif;";
+  const caixa = document.createElement("div");
+  caixa.style.cssText = "width:500px;max-width:100%;background:#fff;border-radius:10px;border-top:5px solid #105436;box-shadow:0 18px 40px rgba(0,0,0,.25);padding:22px 24px;";
+  const h = document.createElement("h3");
+  h.style.cssText = "margin:0 0 10px;color:#105436;font-size:1.15rem;";
+  h.textContent = "O Integra novo ainda está em teste";
+  const p = document.createElement("p");
+  p.style.cssText = "margin:0 0 16px;color:#1c2e24;font-size:0.92rem;line-height:1.45;";
+  p.textContent = texto || "Continue usando o endereço atual do Integra até 30/11/2026.";
+  const a = document.createElement("a");
+  a.href = "https://crm-gestao.vercel.app/";
+  a.textContent = "Ir para o endereço atual";
+  a.style.cssText = "display:inline-flex;align-items:center;height:38px;padding:0 16px;border-radius:8px;background:#105436;color:#fff;font-weight:700;text-decoration:none;";
+  caixa.appendChild(h); caixa.appendChild(p); caixa.appendChild(a);
+  ov.appendChild(caixa);
+  (document.body || document.documentElement).appendChild(ov);
+}
+
 async function pedirToken() {
   const auth = window.MouraAuth;
   if (!auth || typeof auth.getIntegraToken !== "function") return null;
@@ -34,6 +58,11 @@ async function pedirToken() {
   const r = await fetch("/api/supabase-token", { method: "POST", headers, cache: "no-store" });
   if (!r.ok) {
     console.warn("[supabase] token recusado: " + r.status);
+    if (r.status === 403) {
+      let corpo = {};
+      try { corpo = await r.json(); } catch (e) {}
+      if (corpo && corpo.motivo === "acesso-restrito") avisarAcessoRestrito(corpo.error);
+    }
     return null;
   }
   const dados = await r.json();
