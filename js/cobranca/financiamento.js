@@ -2389,29 +2389,51 @@ const FinanciamentoApp = {
     return this.ehEtapaTermoSaldo(stageId) || this.ehEtapaDeclaracaoSaldo(stageId);
   },
 
-  declaracaoModalHtml(dados, parcelas) {
+  declaracaoModalHtml(dados, parcelas, avisoParcelas) {
     const valorInicial = dados.valorComercial == null
       ? ""
       : Number(dados.valorComercial).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const itens = parcelas.map((parcela, index) => `
+    const lista = Array.isArray(parcelas) ? parcelas : [];
+    const itens = lista.map((parcela, index) => `
       <label class="fin-declaracao-parcela">
         <input type="checkbox" value="${index}" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
         <span><strong>Parcela ${this.esc(parcela.numero)}</strong><small>Vencimento ${this.esc(this.fmtDate(parcela.vencimento))}</small></span>
         <b>${this.esc(this.fmtMoney(parcela.saldo))}</b>
       </label>`).join("");
+    const periodoManual = !lista.length ? `
+      <div class="fin-declaracao-periodo-manual">
+        <p class="fin-declaracao-ajuda">Informe o período de congelamento que entrará no texto da declaração.</p>
+        <div class="fin-declaracao-periodo-campos">
+          <label for="fin-declaracao-inicio">Data inicial
+            <input id="fin-declaracao-inicio" type="date" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+          </label>
+          <label for="fin-declaracao-fim">Data final
+            <input id="fin-declaracao-fim" type="date" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+          </label>
+          <label for="fin-declaracao-qtd">Quantidade de parcelas
+            <input id="fin-declaracao-qtd" type="number" min="1" step="1" inputmode="numeric" placeholder="Ex.: 12" oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+          </label>
+        </div>
+      </div>` : "";
+    const aviso = avisoParcelas
+      ? `<p class="fin-declaracao-aviso">${this.esc(avisoParcelas)}</p>`
+      : "";
     return `<div class="fin-declaracao-overlay" id="fin-declaracao-modal">
       <section class="fin-declaracao-dialog" role="dialog" aria-modal="true" aria-labelledby="fin-declaracao-titulo">
         <header><div><span>ETAPA 4 · FINANCIAMENTO</span><h2 id="fin-declaracao-titulo">Gerar declaração de saldo devedor</h2></div>
           <button type="button" class="fin-declaracao-fechar" aria-label="Fechar" onclick="FinanciamentoApp.fecharModalDeclaracaoSaldo()">×</button></header>
         <div class="fin-declaracao-conteudo">
-          <p>Confirme o valor comercial e selecione as parcelas que ficarão abrangidas pelo congelamento temporário.</p>
+          <p>Confirme o valor comercial e ${lista.length ? "selecione as parcelas que ficarão abrangidas pelo congelamento temporário." : "informe o período de congelamento temporário."}</p>
+          ${aviso}
           <label class="fin-declaracao-valor" for="fin-declaracao-valor">Valor comercial de compra e venda (R$)
             <input id="fin-declaracao-valor" type="text" inputmode="decimal" autocomplete="off" value="${this.esc(valorInicial)}" oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
           </label>
           <div class="fin-declaracao-selecao">
-            <div class="fin-declaracao-lista-titulo"><strong>Parcelas em aberto no Sienge</strong><span>${parcelas.length} disponíveis</span></div>
-            <p class="fin-declaracao-ajuda">A seleção precisa formar um intervalo contínuo de vencimentos para corresponder ao texto da declaração.</p>
-            <div class="fin-declaracao-lista">${itens}</div>
+            <div class="fin-declaracao-lista-titulo"><strong>Parcelas em aberto no Sienge</strong><span>${lista.length} disponíveis</span></div>
+            ${lista.length
+              ? `<p class="fin-declaracao-ajuda">A seleção precisa formar um intervalo contínuo de vencimentos para corresponder ao texto da declaração.</p>
+                 <div class="fin-declaracao-lista">${itens}</div>`
+              : periodoManual}
           </div>
           <div class="fin-declaracao-resumo" id="fin-declaracao-resumo" aria-live="polite"></div>
           <p class="fin-declaracao-status" id="fin-declaracao-status" role="status"></p>
@@ -2430,6 +2452,7 @@ const FinanciamentoApp = {
         .fin-declaracao-fechar { border:0; padding:0 4px; color:#fff; background:transparent; font-size:1.65rem; line-height:1; cursor:pointer; }
         .fin-declaracao-conteudo { overflow:auto; padding:18px 20px; }
         .fin-declaracao-conteudo > p:first-child { margin:0 0 14px; color:#475569; font-size:.82rem; }
+        .fin-declaracao-aviso { margin:0 0 14px; padding:10px 12px; border:1px solid #fde68a; border-radius:8px; background:#fffbeb; color:#92400e; font-size:.78rem; line-height:1.4; }
         .fin-declaracao-valor { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
         .fin-declaracao-valor input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
         .fin-declaracao-selecao { margin-top:18px; }
@@ -2444,23 +2467,35 @@ const FinanciamentoApp = {
         .fin-declaracao-parcela span { display:flex; flex:1; flex-direction:column; gap:3px; font-size:.76rem; }
         .fin-declaracao-parcela small { color:#64748b; font-size:.7rem; }
         .fin-declaracao-parcela > b { color:#105436; font-size:.76rem; font-variant-numeric:tabular-nums; }
+        .fin-declaracao-periodo-campos { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+        .fin-declaracao-periodo-campos label { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
+        .fin-declaracao-periodo-campos input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
         .fin-declaracao-resumo { margin-top:12px; padding:10px; border-radius:7px; color:#105436; background:#e7f6ee; font-size:.76rem; font-weight:700; }
         .fin-declaracao-status { min-height:18px; margin:8px 0 0; color:#b45309; font-size:.75rem; }
         .fin-declaracao-dialog > footer { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid #e2e8f0; }
         .fin-declaracao-dialog > footer .btn { display:inline-flex; align-items:center; justify-content:center; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; }
-        @media (max-width:560px) { .fin-declaracao-dialog > footer { flex-direction:column-reverse; } }
+        @media (max-width:560px) {
+          .fin-declaracao-dialog > footer { flex-direction:column-reverse; }
+          .fin-declaracao-periodo-campos { grid-template-columns:1fr; }
+        }
       </style>
     </div>`;
   },
 
-  abrirModalDeclaracaoSaldo(stageId, dados, parcelas) {
+  abrirModalDeclaracaoSaldo(stageId, dados, parcelas, avisoParcelas) {
     this.fecharModalDeclaracaoSaldo();
-    const state = { stageId: String(stageId), dados: dados, parcelas: parcelas, gerando: false };
+    const state = {
+      stageId: String(stageId),
+      dados: dados,
+      parcelas: Array.isArray(parcelas) ? parcelas : [],
+      avisoParcelas: String(avisoParcelas || ""),
+      gerando: false
+    };
     state.onKeyDown = (event) => {
       if (event.key === "Escape" && !state.gerando) this.fecharModalDeclaracaoSaldo();
     };
     this._declaracaoModal = state;
-    document.body.insertAdjacentHTML("beforeend", this.declaracaoModalHtml(dados, parcelas));
+    document.body.insertAdjacentHTML("beforeend", this.declaracaoModalHtml(dados, state.parcelas, state.avisoParcelas));
     const overlay = document.getElementById("fin-declaracao-modal");
     if (overlay) {
       overlay.addEventListener("click", (event) => {
@@ -2483,15 +2518,62 @@ const FinanciamentoApp = {
     return true;
   },
 
+  normalizarVencimentoParcela(raw) {
+    const s = String(raw == null ? "" : raw).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (br) {
+      return br[3] + "-" + String(Number(br[2])).padStart(2, "0") + "-" + String(Number(br[1])).padStart(2, "0");
+    }
+    return "";
+  },
+
+  saldoAbertoParcela(item) {
+    if (!item || typeof item !== "object") return null;
+    const candidatos = [
+      item.currentBalance,
+      item.currentBalanceWithAddition,
+      item.balanceDue,
+      item.remainingBalance,
+      item.openBalance,
+      item.balance
+    ];
+    for (let i = 0; i < candidatos.length; i++) {
+      const raw = candidatos[i];
+      if (raw == null || String(raw).trim() === "") continue;
+      const numerico = Number(raw);
+      const saldo = Number.isFinite(numerico) ? numerico : this.parseValorComercialTermo(raw);
+      if (Number.isFinite(saldo) && saldo > 0.009) return saldo;
+    }
+    return null;
+  },
+
   dadosSelecaoDeclaracao() {
     const state = this._declaracaoModal;
     const modal = document.getElementById("fin-declaracao-modal");
-    if (!state || !modal) return { selecionadas: [], intervalo: [], continuo: false };
+    if (!state || !modal) return { selecionadas: [], intervalo: [], continuo: false, manual: false };
+    if (!(state.parcelas && state.parcelas.length)) {
+      const inicio = String((document.getElementById("fin-declaracao-inicio") || {}).value || "").slice(0, 10);
+      const fim = String((document.getElementById("fin-declaracao-fim") || {}).value || "").slice(0, 10);
+      const qtdRaw = String((document.getElementById("fin-declaracao-qtd") || {}).value || "").trim();
+      const quantidade = Number(qtdRaw);
+      const datasOk = /^\d{4}-\d{2}-\d{2}$/.test(inicio) && /^\d{4}-\d{2}-\d{2}$/.test(fim) && inicio <= fim;
+      const qtdOk = Number.isInteger(quantidade) && quantidade > 0;
+      return {
+        selecionadas: [],
+        intervalo: [],
+        inicio: inicio,
+        fim: fim,
+        quantidade: qtdOk ? quantidade : 0,
+        continuo: datasOk && qtdOk,
+        manual: true
+      };
+    }
     const selecionados = Array.from(modal.querySelectorAll(".fin-declaracao-parcela input:checked"))
       .map((input) => state.parcelas[Number(input.value)])
       .filter(Boolean)
       .sort((a, b) => a.vencimento.localeCompare(b.vencimento) || a.indice - b.indice);
-    if (!selecionados.length) return { selecionadas: [], intervalo: [], continuo: false };
+    if (!selecionados.length) return { selecionadas: [], intervalo: [], continuo: false, manual: false };
     const inicio = selecionados[0].vencimento;
     const fim = selecionados[selecionados.length - 1].vencimento;
     const intervalo = state.parcelas.filter((parcela) => parcela.vencimento >= inicio && parcela.vencimento <= fim);
@@ -2501,7 +2583,9 @@ const FinanciamentoApp = {
       intervalo: intervalo,
       inicio: inicio,
       fim: fim,
-      continuo: intervalo.length === selecionados.length && intervalo.every((parcela) => ids.has(parcela.indice))
+      quantidade: selecionados.length,
+      continuo: intervalo.length === selecionados.length && intervalo.every((parcela) => ids.has(parcela.indice)),
+      manual: false
     };
   },
 
@@ -2516,18 +2600,21 @@ const FinanciamentoApp = {
     const inputValor = document.getElementById("fin-declaracao-valor");
     const valor = this.parseValorComercialTermo(inputValor && inputValor.value);
     if (resumo) {
-      resumo.textContent = selecao.selecionadas.length && selecao.continuo
-        ? "Período: " + this.fmtDate(selecao.inicio) + " a " + this.fmtDate(selecao.fim) + " · " + selecao.selecionadas.length + " parcela(s)"
-        : "Selecione um intervalo contínuo de parcelas em aberto.";
+      resumo.textContent = selecao.continuo
+        ? ("Período: " + this.fmtDate(selecao.inicio) + " a " + this.fmtDate(selecao.fim)
+          + " · " + selecao.quantidade + " parcela(s)" + (selecao.manual ? " · informado manualmente" : ""))
+        : (selecao.manual
+          ? "Informe data inicial, data final e a quantidade de parcelas."
+          : "Selecione um intervalo contínuo de parcelas em aberto.");
     }
     if (status && !state.gerando) {
       status.textContent = !valor
         ? "Informe um valor comercial válido, maior que zero."
-        : (selecao.selecionadas.length && !selecao.continuo
+        : (!selecao.manual && selecao.selecionadas.length && !selecao.continuo
           ? "Inclua todas as parcelas em aberto entre o primeiro e o último vencimento selecionado."
           : "");
     }
-    if (botao) botao.disabled = state.gerando || !valor || !selecao.selecionadas.length || !selecao.continuo;
+    if (botao) botao.disabled = state.gerando || !valor || !selecao.continuo;
   },
 
   async listarParcelasParaCongelamento(billId) {
@@ -2539,14 +2626,14 @@ const FinanciamentoApp = {
     );
     const rows = Array.isArray(response) ? response : ((response && (response.results || response.data)) || []);
     const parcelas = rows.map((item, index) => {
-      const rawSaldo = item && (item.currentBalance != null ? item.currentBalance : item.balanceDue);
-      if (rawSaldo == null || String(rawSaldo).trim() === "") return null;
-      const numerico = Number(rawSaldo);
-      const saldo = Number.isFinite(numerico) ? numerico : this.parseValorComercialTermo(rawSaldo);
-      const vencimento = String(item.dueDate || item.originalDueDate || "").slice(0, 10);
-      if (!Number.isFinite(saldo) || saldo <= 0.009 || !/^\d{4}-\d{2}-\d{2}$/.test(vencimento)) return null;
+      if (!item || typeof item !== "object") return null;
+      const situacao = String(item.situation || item.status || item.installmentSituation || "").toLowerCase();
+      if (/cancel|revog|baixad|inativ|paid|pago|quitad/.test(situacao)) return null;
+      const saldo = this.saldoAbertoParcela(item);
+      const vencimento = this.normalizarVencimentoParcela(item.dueDate || item.originalDueDate || item.due);
+      if (saldo == null || !vencimento) return null;
       return {
-        numero: item.installmentNumber || item.installmentId || index + 1,
+        numero: item.installmentNumber || item.number || item.installmentId || index + 1,
         id: item.installmentId || item.id || item.installmentNumber || String(index + 1),
         vencimento: vencimento,
         saldo: saldo,
@@ -2554,9 +2641,6 @@ const FinanciamentoApp = {
       };
     }).filter(Boolean).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || String(a.numero).localeCompare(String(b.numero), "pt-BR", { numeric: true }));
     parcelas.forEach((parcela, index) => { parcela.indice = index; });
-    if (!parcelas.length) {
-      throw new Error("O Sienge não retornou parcelas em aberto com saldo e vencimento para este título.");
-    }
     return parcelas;
   },
 
@@ -2571,9 +2655,24 @@ const FinanciamentoApp = {
     if (status) status.textContent = "Buscando os dados do contrato e as parcelas em aberto no Sienge…";
     try {
       const dados = await this.obterDadosTermoSaldo(proc);
-      const parcelas = await this.listarParcelasParaCongelamento(dados.billId);
-      this.abrirModalDeclaracaoSaldo(stageId, dados, parcelas);
-      if (status) status.textContent = "Selecione as parcelas e confirme o valor comercial.";
+      let parcelas = [];
+      let avisoParcelas = "";
+      try {
+        parcelas = await this.listarParcelasParaCongelamento(dados.billId);
+      } catch (erroParcelas) {
+        avisoParcelas = (erroParcelas && erroParcelas.message)
+          || "Não foi possível consultar as parcelas no Sienge.";
+        console.warn("[Financiamento] parcelas da declaração", erroParcelas);
+      }
+      if (!parcelas.length && !avisoParcelas) {
+        avisoParcelas = "O Sienge não retornou parcelas em aberto com saldo e vencimento para este título. Informe o período manualmente e o valor comercial para gerar a declaração.";
+      }
+      this.abrirModalDeclaracaoSaldo(stageId, dados, parcelas, avisoParcelas);
+      if (status) {
+        status.textContent = parcelas.length
+          ? "Selecione as parcelas e confirme o valor comercial."
+          : "Confirme o valor comercial e informe o período manualmente.";
+      }
       return true;
     } catch (e) {
       if (status) status.textContent = (e && e.message) || "Não foi possível carregar os dados da declaração.";
@@ -2596,7 +2695,7 @@ const FinanciamentoApp = {
     const valorComercial = this.parseValorComercialTermo(inputValor && inputValor.value);
     const status = document.getElementById("fin-declaracao-status");
     const botao = document.getElementById("fin-declaracao-confirmar");
-    if (!valorComercial || !selecao.selecionadas.length || !selecao.continuo) {
+    if (!valorComercial || !selecao.continuo) {
       this.atualizarSelecaoDeclaracao();
       return false;
     }
@@ -2610,16 +2709,18 @@ const FinanciamentoApp = {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }) + " (" + window.valorPorExtensoBRL(valorComercial) + ")";
-      dados.parcelasCongeladas = selecao.selecionadas.map((parcela) => ({
-        id: parcela.id,
-        numero: parcela.numero,
-        vencimento: parcela.vencimento,
-        saldo: parcela.saldo
-      }));
+      dados.parcelasCongeladas = selecao.manual
+        ? []
+        : selecao.selecionadas.map((parcela) => ({
+          id: parcela.id,
+          numero: parcela.numero,
+          vencimento: parcela.vencimento,
+          saldo: parcela.saldo
+        }));
       dados.periodoCongelamento = {
         inicio: selecao.inicio,
         fim: selecao.fim,
-        quantidade: selecao.selecionadas.length
+        quantidade: selecao.quantidade
       };
       const validade = new Date(dados.emissao + "T12:00:00");
       validade.setDate(validade.getDate() + 90);
