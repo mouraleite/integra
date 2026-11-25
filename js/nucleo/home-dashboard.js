@@ -293,6 +293,26 @@ const HomeDashboard = {
     });
   },
 
+  /** Financiamentos com a etapa atual vencida (FinanciamentoApp.atrasadosEsteira), no formato dos insights. */
+  financiamentosEtapaVencida() {
+    const F = window.FinanciamentoApp;
+    if (!F || typeof F.atrasadosEsteira !== 'function') return [];
+    let lista = [];
+    try { lista = F.atrasadosEsteira() || []; } catch (e) { return []; }
+    return lista.map(item => {
+      const proc = (item.row && item.row.proc) || {};
+      const n = Math.abs((item.prazo && item.prazo.restantes) || 0);
+      const etapa = (item.etapa && (item.etapa.label || item.etapa.nome)) || 'Etapa';
+      const venc = item.prazo && item.prazo.limite && typeof F.fmtDate === 'function' ? F.fmtDate(item.prazo.limite) : '';
+      return {
+        customerId: 'fin-' + item.row.key,
+        saleId: proc.titulo || '',
+        customerName: proc.customerName || ('Título ' + (proc.titulo || '')),
+        hint: etapa + (venc ? ' · venceu em ' + venc : '') + ' · ' + n + (n === 1 ? ' dia' : ' dias')
+      };
+    });
+  },
+
   collectInsightGroups(scopeClients, user) {
     const juridicoNode = window.TimelineState ? window.TimelineState.find(n => n.acao === 'juridico') : null;
     const thresholdJuridico = juridicoNode ? juridicoNode.dias : 151;
@@ -325,6 +345,19 @@ const HomeDashboard = {
       }));
       groups.push({ id: 'docs-distrato-7', soHome: true, label: par.distrato.length + (par.distrato.length === 1 ? ' distrato' : ' distratos') + ' com mais de ' + dias + ' dias', items: itensDoc(par.distrato), hideIfEmpty: true, count: par.distrato.length });
       groups.push({ id: 'docs-tcd-7', soHome: true, label: par.cessao.length + ' TCD com mais de ' + dias + ' dias', items: itensDoc(par.cessao), hideIfEmpty: true, count: par.cessao.length });
+    }
+
+    // Financiamentos na esteira com a etapa atual fora do prazo (back office). Clicar abre o processo.
+    if (back) {
+      const fe = this.financiamentosEtapaVencida();
+      groups.push({
+        id: 'fin-etapas-vencidas',
+        soHome: true,
+        label: fe.length + (fe.length === 1 ? ' financiamento com etapa vencida' : ' financiamentos com etapa vencida'),
+        items: fe,
+        hideIfEmpty: true,
+        count: fe.length
+      });
     }
 
     if (back) {
@@ -713,6 +746,10 @@ const HomeDashboard = {
         const customerId = btn.getAttribute('data-customer-id');
         const saleId = btn.getAttribute('data-sale-id');
         const insightId = btn.getAttribute('data-insight-id');
+        if (insightId === 'fin-etapas-vencidas' && window.FinanciamentoApp && typeof window.FinanciamentoApp.abrirDoAlerta === 'function') {
+          window.FinanciamentoApp.abrirDoAlerta(String(customerId || '').replace(/^fin-/, ''));
+          return;
+        }
         if ((insightId === 'docs-distrato-7' || insightId === 'docs-tcd-7') && typeof window.switchTab === 'function') {
           window.switchTab('relacionamento_assinaturas', 'Documentos para assinar');
           return;
@@ -2083,6 +2120,7 @@ window.buildSprintOperatorSummaries = function() {
     });
   }
   const alterarSj = titulosSubjudice.size;
+  const finEtapaVencida = hd.financiamentosEtapaVencida().length;
   boUsers.forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
     if (seenBo.has(id)) return;
@@ -2092,8 +2130,11 @@ window.buildSprintOperatorSummaries = function() {
     const validar = Number(counts.validar) || 0;
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
-    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida && !alterarSj) return;
+    if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida && !alterarSj && !finEtapaVencida) return;
     lines.push('*' + hd.sprintOperatorLabel(u) + '*');
+    if (finEtapaVencida > 0) {
+      lines.push('• Há ' + finEtapaVencida + (finEtapaVencida === 1 ? ' financiamento com etapa vencida' : ' financiamentos com etapa vencida'));
+    }
     if (nexCumprida > 0) {
       lines.push('• Há ' + nexCumprida + (nexCumprida === 1 ? ' título com NEX cumprida' : ' títulos com NEX cumprida'));
     }

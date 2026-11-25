@@ -1,0 +1,16 @@
+---
+description: Padrão visual obrigatório para toda tabela ou lista em linhas na tela do Integra (igual à tela Centros de Custo). Use ao criar, refazer ou mexer no visual de uma tabela.
+globs: js/**/*.js,css/**/*.css,index.html
+alwaysApply: false
+---
+
+# Tabela padrão do Integra
+
+A regra completa, com exemplos, está em `.claude/skills/tabela-padrao/SKILL.md`. Leia esse arquivo antes de mexer em qualquer tabela. Resumo:
+
+- Use `<div class="cc-scroll"><table class="cc-table minha-tela-table">` com `<colgroup>`. O CSS é global em `css/style.css` (`.cc-scroll`, `.cc-table`).
+- Não crie cores de cabeçalho, zebra, hover nem `style` inline de cor/padding nas `td`. Não use `onmouseover` para pintar linha.
+- Linha clicável: `tr.is-clicavel` (com `tabindex="0"` e `role="button"`). Linha vencida/atrasada: `tr.is-alerta`. Selo: `<span class="cc-selo-alerta">VENCIDA</span>`.
+- Alinhamento com `is-right` (valores) e `is-center` (colunas curtas). Texto cortado vai também em `title`.
+- Tabela vazia: `<td colspan="N" style="text-align:center;padding:30px;white-space:normal;">Nenhum … para exibir.</td>`.
+- Ao mudar CSS ou JS, troque o `?v=` do arquivo no `index.html`.

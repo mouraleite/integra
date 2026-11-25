@@ -10908,6 +10908,13 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .cc-table tbody tr:hover td { color: #0f3d27; }
 .cc-table .is-right { text-align: right; }
 .cc-table .is-center { text-align: center; }
+/* Variações do padrão: linha que abre algo ao clicar e linha em alerta (vencida, atrasada, com erro). */
+.cc-table tbody tr.is-clicavel { cursor: pointer; }
+.cc-table tbody tr.is-clicavel:focus-visible { outline: 2px solid #1b8253; outline-offset: -2px; }
+.cc-table tbody tr.is-alerta td { background: #fef2f2; color: #991b1b; }
+.cc-table tbody tr.is-alerta td:first-child { box-shadow: inset 4px 0 0 #b91c1c; }
+.cc-table tbody tr.is-alerta:hover td { background: #fee2e2; color: #7f1d1d; }
+.cc-table .cc-selo-alerta { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-size: 0.65rem; font-weight: 800; }
 .cc-table .cc-vgv { font-weight: 600; color: #1b8253; }
 .cc-table .cc-conta { color: #105436; font-weight: 600; }
 .cc-table .cc-sem-conta { color: #b91c1c; font-weight: 700; }
