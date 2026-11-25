@@ -107,7 +107,10 @@ const FinanciamentoApp = {
     const corpo = painel === "dashboard" ? this.dashboardHtml()
       : (painel === "esteira" ? this.esteiraHtml()
         : (painel === "concluidos" ? this.concluidosHtml() : this.buscaHtml()));
-    if (noFluxo) this.carregarSaldoQuitacao(FinanciamentoState.process);
+    if (noFluxo) {
+      this.carregarSaldoQuitacao(FinanciamentoState.process);
+      this.carregarMetragemLote(FinanciamentoState.process);
+    }
     root.innerHTML = noFluxo ? this.fluxoHtml() : (this.abasHtml(painel) + corpo);
     if (window.lucide) lucide.createIcons();
     if (!noFluxo && painel === "pesquisa") this.restoreBuscaUi();
@@ -153,6 +156,28 @@ const FinanciamentoApp = {
     const valor = typeof proc.saldoDevedorDeclarado === "number"
       ? proc.saldoDevedorDeclarado : this.parseValorComercialTermo(proc.saldoDevedorDeclarado);
     return Number.isFinite(valor) && valor >= 0 ? valor : null;
+  },
+
+  valorComercialFicha(proc) {
+    if (!proc) return null;
+    const direto = proc.valorComercial != null && String(proc.valorComercial).trim() !== ""
+      ? Number(proc.valorComercial) : NaN;
+    if (Number.isFinite(direto) && direto > 0) return direto;
+    const termos = proc.termos || {};
+    let melhor = null;
+    let quando = 0;
+    Object.keys(termos).forEach((sid) => {
+      (Array.isArray(termos[sid]) ? termos[sid] : []).forEach((termo) => {
+        const valor = Number(termo && termo.valorComercial);
+        if (!(Number.isFinite(valor) && valor > 0)) return;
+        const em = Date.parse(termo.generatedAt || 0) || 0;
+        if (em >= quando) {
+          quando = em;
+          melhor = valor;
+        }
+      });
+    });
+    return melhor;
   },
 
   cidadeDoProc(proc) {
@@ -3790,6 +3815,105 @@ const FinanciamentoApp = {
     return this.carregarSaldoQuitacao(FinanciamentoState.process, true);
   },
 
+  async obterMetragemLoteDoProcesso(proc) {
+    if (!proc || !proc.contractId) throw new Error("Contrato não informado para consultar a metragem.");
+    let sale = {};
+    const selecionado = FinanciamentoState.selected || {};
+    if (String(selecionado.contractId || "") === String(proc.contractId)) {
+      sale = Object.assign({}, selecionado.contract || {});
+    }
+    const svc = window.SiengeApiService;
+    if (svc && typeof svc.getSales === "function" && proc.customerId) {
+      try {
+        const vendas = await svc.getSales(proc.customerId);
+        const encontrada = (Array.isArray(vendas) ? vendas : []).find((c) =>
+          String(c.id || c.contractId || "") === String(proc.contractId)
+        );
+        if (encontrada) sale = Object.assign({}, sale, encontrada);
+      } catch (e) {}
+    }
+    if (typeof window.siengeFetchWithRetry === "function") {
+      try {
+        const detalhe = await window.siengeFetchWithRetry("/sales-contracts/" + encodeURIComponent(proc.contractId));
+        if (detalhe && typeof detalhe === "object") sale = Object.assign({}, sale, detalhe);
+      } catch (e) {}
+    }
+    const unidades = Array.isArray(sale.salesContractUnits) ? sale.salesContractUnits : [];
+    const unidadeRaw = unidades.find((u) => u && (u.main === true || u.main === "true")) || unidades[0] || {};
+    const unidadeNome = String(unidadeRaw.name || sale.unitName || sale.unityName || proc.unitName || proc.unit || "").trim();
+    const centroCusto = String(sale.enterpriseId || sale.costCenterId || proc.costCenterId || proc.empId || "").trim();
+    const unit = {
+      id: unidadeRaw.id || sale.siengeUnitId || proc.siengeUnitId || "",
+      name: unidadeNome,
+      unitName: unidadeNome,
+      costCenterId: centroCusto,
+      enterpriseId: centroCusto,
+      privateArea: unidadeRaw.privateArea || unidadeRaw.Privatearea || sale.privateArea,
+      terrainArea: unidadeRaw.terrainArea || sale.terrainArea,
+      totalArea: unidadeRaw.totalArea || sale.totalArea
+    };
+    const area = await this.obterMetragemLoteContrato({
+      sale: sale,
+      unit: unit,
+      empreendimento: this.obraDoProc(proc).empreendimento
+    });
+    if (area == null) throw new Error("Metragem do lote não encontrada na ficha da unidade no Sienge.");
+    return area;
+  },
+
+  carregarMetragemLote(proc, forcar) {
+    if (!proc || !proc.customerId || !proc.contractId) return Promise.resolve(null);
+    const key = this.procKey(proc.customerId, proc.contractId);
+    this._metragemLotePromises = this._metragemLotePromises || {};
+    if (this._metragemLotePromises[key]) return this._metragemLotePromises[key];
+    const atualizado = Date.parse(proc.metragemLoteAtualizadoEm || "") || 0;
+    const tentado = Number(proc.metragemLoteTentadoEm) || 0;
+    if (!forcar && proc.metragemLote != null && String(proc.metragemLote).trim() !== ""
+      && Number.isFinite(Number(proc.metragemLote))
+      && atualizado && Date.now() - atualizado < 30 * 60 * 1000) {
+      return Promise.resolve(Number(proc.metragemLote));
+    }
+    if (!forcar && tentado && Date.now() - tentado < 60 * 1000) return Promise.resolve(null);
+    proc.metragemLoteCarregando = true;
+    const promise = (async () => {
+      try {
+        const valor = await this.obterMetragemLoteDoProcesso(proc);
+        const salvo = this.getProcess(proc.customerId, proc.contractId) || proc;
+        salvo.metragemLote = valor;
+        salvo.metragemLoteAtualizadoEm = new Date().toISOString();
+        salvo.metragemLoteTentadoEm = Date.now();
+        salvo.metragemLoteErro = "";
+        salvo.updatedAt = new Date().toISOString();
+        this.saveProcess(salvo);
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = salvo;
+        }
+        return valor;
+      } catch (e) {
+        const salvo = this.getProcess(proc.customerId, proc.contractId) || proc;
+        salvo.metragemLoteErro = (e && e.message) || "Não foi possível consultar a metragem do lote.";
+        salvo.metragemLoteTentadoEm = Date.now();
+        this.saveProcess(salvo);
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = salvo;
+        }
+        console.warn("[Financiamento] consulta da metragem do lote", e);
+        return null;
+      } finally {
+        const atual = this.getProcess(proc.customerId, proc.contractId) || proc;
+        atual.metragemLoteCarregando = false;
+        if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
+          FinanciamentoState.process = atual;
+          this.render();
+        }
+      }
+    })();
+    this._metragemLotePromises[key] = promise;
+    return promise.finally(() => {
+      if (this._metragemLotePromises[key] === promise) delete this._metragemLotePromises[key];
+    });
+  },
+
   async obterDadosTermoSaldo(proc) {
     const selecionado = FinanciamentoState.selected || {};
     let sale = String(selecionado.contractId || "") === String(proc.contractId)
@@ -3929,6 +4053,16 @@ const FinanciamentoApp = {
       if (Number.isFinite(Number(options.saldoDevedorDeclarado))) {
         proc.saldoDevedorDeclarado = Number(options.saldoDevedorDeclarado);
         proc.saldoDevedorDeclaradoEm = dados.emissao;
+      }
+      if (Number.isFinite(Number(dados.valorComercial)) && Number(dados.valorComercial) > 0) {
+        proc.valorComercial = Number(dados.valorComercial);
+        proc.valorComercialEm = dados.emissao || termo.generatedAt;
+        if (dados.metragemLote != null && Number.isFinite(Number(dados.metragemLote))) {
+          proc.metragemLote = Number(dados.metragemLote);
+        }
+        if (dados.valorM2 != null && Number.isFinite(Number(dados.valorM2))) {
+          proc.valorM2Comercial = Number(dados.valorM2);
+        }
       }
       proc.updatedAt = termo.generatedAt;
       this.saveProcess(proc);
@@ -4189,7 +4323,15 @@ const FinanciamentoApp = {
       ? Number(proc.saldoQuitacaoSistema) : null;
     const credito = proc.valorLiberadoCaixa != null && String(proc.valorLiberadoCaixa).trim() !== "" && Number.isFinite(Number(proc.valorLiberadoCaixa))
       ? Number(proc.valorLiberadoCaixa) : null;
-    const diferenca = saldo != null && credito != null ? saldo - credito : null;
+    const valorComercial = this.valorComercialFicha(proc);
+    const metragem = proc.metragemLote != null && String(proc.metragemLote).trim() !== "" && Number.isFinite(Number(proc.metragemLote))
+      ? Number(proc.metragemLote) : null;
+    const metragemTexto = metragem != null
+      ? (this.fmtMetragemFin(metragem) + " m²")
+      : (proc.metragemLoteCarregando ? "Consultando…" : "—");
+    const metragemTitulo = metragem != null
+      ? (this.fmtMetragemFin(metragem) + " m²")
+      : (proc.metragemLoteErro || "Metragem cadastrada na unidade no Sienge");
     const concluidas = ativoIdx < 0 ? folhas.length : ativoIdx;
     const etapaAtual = ativoIdx >= 0 ? (folhas[ativoIdx].label || folhas[ativoIdx].nome) : (this.isProcessoConcluido(proc) ? "Financiamento concluído" : "Aguardando primeira etapa");
     const etapaExibidaIdx = ativoIdx >= 0 ? ativoIdx : folhas.length - 1;
@@ -4233,14 +4375,16 @@ const FinanciamentoApp = {
             ${proc.saldoQuitacaoErro ? '<button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.atualizarSaldoQuitacao()">Tentar novamente</button>' : ""}
           </article>
           <article class="fin-visao-kpi">
+            <span>Valor comercial</span>
+            <strong>${valorComercial == null ? "—" : this.esc(this.fmtMoney(valorComercial))}</strong>
+            <small>${valorComercial != null
+              ? "Informado no termo de simulação / declaração"
+              : "Será preenchido ao gerar o termo ou a declaração"}</small>
+          </article>
+          <article class="fin-visao-kpi">
             <span>Crédito liberado pela CAIXA</span>
             <strong>${credito == null ? "Aguardando Carta SIOPI" : this.esc(this.fmtMoney(credito))}</strong>
             <small>${credito != null ? "Identificado na Carta SIOPI" : this.esc(proc.valorLiberadoCaixaErro || "Será preenchido ao anexar a Carta SIOPI")}</small>
-          </article>
-          <article class="fin-visao-kpi">
-            <span>Diferença</span>
-            <strong>${diferenca == null ? "—" : this.esc(this.fmtMoney(diferenca))}</strong>
-            <small>Saldo de quitação menos crédito CAIXA</small>
           </article>
           <article class="fin-visao-kpi fin-visao-etapa">
             <span>Etapa atual</span>
@@ -4267,6 +4411,7 @@ const FinanciamentoApp = {
                 <div class="cessao-customer-field" title="${this.esc(proc.contractNumber || "—")}"><span class="cessao-lbl">Contrato</span><span class="cessao-val">${this.esc(proc.contractNumber || "—")}</span></div>
                 <div class="cessao-customer-field" title="${this.esc(proc.titulo || "—")}"><span class="cessao-lbl">Título</span><span class="cessao-val">${this.esc(proc.titulo || "—")}</span></div>
                 <div class="cessao-customer-field" title="${this.esc(unidade)}"><span class="cessao-lbl">Unidade</span><span class="cessao-val">${this.esc(unidade)}</span></div>
+                <div class="cessao-customer-field" title="${this.esc(metragemTitulo)}"><span class="cessao-lbl">Metragem do lote</span><span class="cessao-val">${this.esc(metragemTexto)}</span></div>
               </div>
             </div>
           </div>
