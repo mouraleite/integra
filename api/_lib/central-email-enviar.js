@@ -83,6 +83,42 @@ function gravarAcordoTag(customerId, titulo, em) {
   });
 }
 
+// Lê um envio pelo caminho "central_email_envios/<id>" (null se não existir).
+function lerDoc(caminho) {
+  return lerEnvio(String(caminho).split("/").pop());
+}
+
+// Atualiza só os campos informados de um envio que já existe (fusão com o que está gravado).
+async function gravarCampos(caminho, obj) {
+  const id = String(caminho).split("/").pop();
+  const atual = await lerEnvio(id);
+  if (!atual) return false;
+  await tabela("central_email_envios").gravar(id, obj, { merge: true });
+  return true;
+}
+
+// Envios de um período (dia de/até, AAAA-MM-DD), para o acompanhamento e para casar as confirmações.
+function enviosDoPeriodo(de, ate, limite) {
+  return tabela("central_email_envios").listar({
+    filtros: [["dia", "gte", de], ["dia", "lte", ate]],
+    limite: Math.min(Number(limite) || 3000, 5000)
+  });
+}
+
+/* Rastreio de abertura: uma imagem 1x1 aponta para /api/email-aberto com o id do envio e uma assinatura
+   (HMAC com o CRON_SECRET), para ninguém marcar abertura de outro envio só trocando o id. */
+function tokenAbertura(id) {
+  const segredo = process.env.CRON_SECRET || "";
+  if (!segredo) return "";
+  return require("crypto").createHmac("sha256", segredo).update("abertura:" + id).digest("hex").slice(0, 24);
+}
+
+function baseUrl(req) {
+  const h = (req && req.headers) || {};
+  const host = String(h["x-forwarded-host"] || h.host || "").split(",")[0].trim();
+  return /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? "https://" + host : "";
+}
+
 /* ---------- Sienge ---------- */
 function siengeAuth() {
   return "Basic " + Buffer.from((process.env.SIENGE_API_USER || "") + ":" + (process.env.SIENGE_API_PASSWORD || "")).toString("base64");
@@ -245,12 +281,24 @@ module.exports = async function handler(req, res) {
       }
       // Remetente do template (vazio = caixa padrão); o graph-mail só aceita caixas liberadas na Vercel.
       const de = String(t.remetente || "").trim().toLowerCase();
-      await sendMail({ from: de, to: para.join(","), cc: cc.join(","), subject: assunto, html, attachments: anexos });
+      const caixa = de || String(process.env.GRAPH_MAILBOX || "").trim().toLowerCase();
+      // Imagem de rastreio de abertura (não vai no registro: o PDF mostra o e-mail como o cliente leu).
+      const tok = tokenAbertura(id);
+      const base = baseUrl(req);
+      const pixel = tok && base
+        ? "<img src=\"" + base + "/api/email-aberto?e=" + encodeURIComponent(id) + "&t=" + tok + "\" width=\"1\" height=\"1\" alt=\"\" style=\"display:block;width:1px;height:1px;border:0;\">"
+        : "";
+      await sendMail({
+        from: de, to: para.join(","), cc: cc.join(","), subject: assunto, html: html + pixel, attachments: anexos,
+        confirmarEntrega: true, confirmarLeitura: true
+      });
       r.status = "enviado";
       r.para = para.length;
       await gravarEnvio(id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
-        de: de || "padrao", para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
+        de: de || "padrao", caixa, para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0,
+        assunto, html: html.slice(0, 200000), clienteNome: String(v.nome || "").slice(0, 200), templateNome: String(t.nome || "").slice(0, 200),
+        confirmacoesPedidas: true, rastreio: !!pixel
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
         await gravarAcordoTag(customerId, titulo);
@@ -274,5 +322,10 @@ module.exports = async function handler(req, res) {
 
 // Para a tela montar a mesma prévia que vai no e-mail.
 module.exports.montarHtml = montarHtml;
+// Para as rotas de acompanhamento (abertura e confirmações).
+module.exports.lerDoc = lerDoc;
+module.exports.gravarCampos = gravarCampos;
+module.exports.enviosDoPeriodo = enviosDoPeriodo;
+module.exports.tokenAbertura = tokenAbertura;
 module.exports.montarAssunto = montarAssunto;
 module.exports.quadroHtml = quadroHtml;
