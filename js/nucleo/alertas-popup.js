@@ -175,6 +175,17 @@ const AlertasPopupApp = {
       corpo: `<p>O documento Cessão de direitos de ELISABETE FALCI, título 6526, foi emitido em 15/10/2026 e não foi concluído no Sienge ainda.</p>`
     },
     {
+      id: "mudanca-endereco",
+      nome: "Mudança de endereço do Integra",
+      quando: "Ao abrir o Integra no endereço antigo (crm-gestao.vercel.app), uma vez por dia em cada navegador, até a virada. No dia da virada passa a bloquear o endereço antigo e levar para o novo.",
+      logica: "Só age no endereço antigo de produção; bolhas de teste e o endereço novo não mostram. A chave BLOQUEAR em js/nucleo/aviso-endereco.js é ligada depois da carga final dos dados.",
+      quem: "Todos os usuários.",
+      titulo: "O Integra vai mudar de endereço",
+      corpo: `<p>A partir de <strong>sábado, 28/11/2026</strong>, o Integra passa a funcionar neste endereço:</p>
+        <div class="apa-item"><strong>integra-mouraleite.vercel.app</strong></div>
+        <p><strong>Até lá, continue usando este endereço normalmente.</strong> Salve o endereço novo nos favoritos.</p>`
+    },
+    {
       id: "repactuacao",
       nome: "Repactuação no virar do mês",
       quando: "No login, no primeiro e no último dia útil do mês. Uma vez por pessoa e por dia, ao fechar.",
