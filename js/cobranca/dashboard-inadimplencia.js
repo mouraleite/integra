@@ -285,7 +285,8 @@ const DashboardInadimplencia = (function() {
         const prevTitles = Number(prev.sprint_titles) || 0;
         const carteiraMaior = (prevClients > 0 && metrics.clients > prevClients * 1.2)
           || (prevTitles > 0 && metrics.titles > prevTitles * 1.2);
-        if (publicado && carteiraMaior) {
+        const antigoIncompleto = prevTitles > 0 && metrics.titles > prevTitles * 1.5;
+        if (publicado && carteiraMaior && !antigoIncompleto) {
           console.warn(`[Sprint] Base ${dateStr} mantida (${prevClients} clientes / ${prevTitles} títulos). O relatório novo (${metrics.clients} clientes / ${metrics.titles} títulos) é outra carteira.`);
           return;
         }
@@ -1925,6 +1926,34 @@ const DashboardInadimplencia = (function() {
     }
   }
 
+  function filaCargaIncompleta(fila) {
+    const contagem = {};
+    const valor = {};
+    (fila || []).forEach((b) => {
+      const id = Number(b && b.companyId);
+      if (!Number.isFinite(id)) return;
+      contagem[id] = (contagem[id] || 0) + 1;
+      valor[id] = (valor[id] || 0) + (Number(b.overdueValue != null ? b.overdueValue : b.value) || 0);
+    });
+    let esperadas = [];
+    try {
+      if (typeof getConfiguredInternalCompanyIds === "function") esperadas = getConfiguredInternalCompanyIds();
+    } catch (e) {}
+    if (!esperadas.length) esperadas = [1, 2, 3, 6, 13, 20, 32, 36];
+    if ((contagem[1] || 0) < 50 || (valor[1] || 0) < 100000) {
+      return "A fila não carregou a empresa 1. Atualize a fila e espere todas as empresas entrarem antes de gerar o sprint.";
+    }
+    const faltando = esperadas.filter((id) => {
+      const n = contagem[id] || 0;
+      const v = valor[id] || 0;
+      return n < 1 || (n < 5 && v < 1000);
+    });
+    if (faltando.length) {
+      return "A fila não carregou todas as empresas (" + faltando.join(", ") + "). Atualize a fila e espere o fim da busca antes de gerar o sprint.";
+    }
+    return "";
+  }
+
   async function listaDaFilaParaSprint() {
     if (Array.isArray(window.rawClientList) && window.rawClientList.length) return window.rawClientList;
     if (typeof window.carregarFilaProntaDoDia === "function") {
@@ -1944,6 +1973,11 @@ const DashboardInadimplencia = (function() {
     let fila = await listaDaFilaParaSprint();
     if (!fila.length) {
       alert("A fila de cobrança de hoje ainda não está carregada. Abra a Fila de cobrança e espere ela terminar de montar.");
+      return;
+    }
+    const avisoFila = filaCargaIncompleta(fila);
+    if (avisoFila) {
+      alert(avisoFila);
       return;
     }
     // Baixas lançadas depois da carga da madrugada (mesmo com data de ontem) saem do Sprint.
@@ -2081,7 +2115,31 @@ const DashboardInadimplencia = (function() {
         return `d-${chartSnaps.length - 1 - i}`;
     });
     const fechSnap = fechSnapReal;
-    const hojeSnap = snapshots[snapshots.length-1];
+    let hojeSnap = snapshots[snapshots.length-1];
+    if (totalOverdue > 0 && (!hojeSnap || Number(hojeSnap.total_value) < totalOverdue * 0.85)) {
+      hojeSnap = {
+        date: hojeSnap && hojeSnap.date ? hojeSnap.date : todayIsoLocal(),
+        total_value: totalOverdue,
+        total_count: totalBills,
+        data_json: {
+          companies: Object.keys(companyData).map((id) => {
+            const c = companyData[id];
+            return {
+              count: c.totalBills,
+              value: c.totalValue,
+              aging: {
+                d0_30: { value: c.d30_v, count: 0 },
+                d31_60: { value: c.d60_v, count: 0 },
+                d61_90: { value: c.d90_v, count: 0 },
+                d91_120: { value: c.d120_v, count: 0 },
+                d120p: { value: c.d120p_v, count: 0 }
+              }
+            };
+          })
+        }
+      };
+      if (chartSnaps.length) chartSnaps[chartSnaps.length - 1] = hojeSnap;
+    }
 
     function fmtK(v) { if(!v) return '0'; if(v>=1000000) return (v/1000000).toFixed(1)+'M'; if(v>=1000) return (v/1000).toFixed(0)+'K'; return formatMoney(v); }
     function fmtMoneyNoRs(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
@@ -2125,6 +2183,7 @@ const DashboardInadimplencia = (function() {
       
       const b1Raw = getBands(snap1), b2Raw = getBands(snap2);
       const t1 = snap1.total_value || 1, t2 = snap2.total_value || 1;
+      const escala = Math.max(t1, t2, 1);
       
       // Proporcional fallback para o fechamento se não tivermos histórico de aging
       if (b1Raw.d30 === 0 && b1Raw.d60 === 0 && b1Raw.d90 === 0 && snap1.total_value > 0) {
@@ -2172,9 +2231,9 @@ const DashboardInadimplencia = (function() {
       
       let rects = '';
       let y1 = 0;
-      b1.forEach(b => { const h = (b.v/t1)*(H-padTop-padBot); rects += `<rect x="${x1 - barW/2}" y="${H-padBot-y1-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y1+=h; });
+      b1.forEach(b => { const h = (b.v/escala)*(H-padTop-padBot); rects += `<rect x="${x1 - barW/2}" y="${H-padBot-y1-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y1+=h; });
       let y2 = 0;
-      b2.forEach(b => { const h = (b.v/t2)*(H-padTop-padBot); rects += `<rect x="${x2 - barW/2}" y="${H-padBot-y2-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y2+=h; });
+      b2.forEach(b => { const h = (b.v/escala)*(H-padTop-padBot); rects += `<rect x="${x2 - barW/2}" y="${H-padBot-y2-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y2+=h; });
       
       return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;margin:0 auto;">
           ${topArrowSvg}

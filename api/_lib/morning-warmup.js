@@ -1596,6 +1596,23 @@ async function handler(req, res) {
         } catch (e) {
           log.push(`defaulters emp ${cId} lote ${state.batchIndex}: ${e.message}`);
         }
+        if (!allOk) {
+          state.falhasLote = (Number(state.falhasLote) || 0) + 1;
+          log.push(`emp ${cId} lote ${state.batchIndex + 1} sem resposta (${state.falhasLote}/3)`);
+          await saveState(state);
+          if (state.falhasLote < 3) continue;
+          state.incompleto = true;
+          state.falhasLote = 0;
+          state.batchIndex += 1;
+          if (state.batchIndex >= ccBatches.length) {
+            state.companyIndex += 1;
+            state.batchIndex = 0;
+          }
+          if (state.companyIndex >= companies.length) state.step = "income";
+          await saveState(state);
+          continue;
+        }
+        state.falhasLote = 0;
         if (allOk) {
           try {
             await new Promise((r) => setTimeout(r, 1000));
@@ -1653,6 +1670,7 @@ async function handler(req, res) {
       }
       await saveState(state);
       if (state.step === "defaulters") {
+        await continuarWarmup(req);
         return res.status(200).json({ done: false, filaPronta: false, date: today, step: state.step, companyIndex: state.companyIndex, batchIndex: state.batchIndex, log });
       }
     }
@@ -1699,6 +1717,7 @@ async function handler(req, res) {
       }
       await saveState(state);
       if (state.step === "income") {
+        await continuarWarmup(req);
         return res.status(200).json({ done: false, filaPronta: false, date: today, step: state.step, incomeIndex: state.incomeIndex, log });
       }
     }
@@ -1730,6 +1749,20 @@ async function handler(req, res) {
       }
       const bills = mesclarNormalizados(billsRaw);
       const subCount = bills.filter((b) => b && b.subjudice === "S").length;
+      const porEmpresa = {};
+      bills.forEach((b) => {
+        const id = Number(b && b.companyId);
+        if (!Number.isFinite(id)) return;
+        porEmpresa[id] = (porEmpresa[id] || 0) + 1;
+      });
+      const empresasPedidas = state.companies || [];
+      const empresa1Curta = empresasPedidas.map(Number).indexOf(1) >= 0 && (porEmpresa[1] || 0) < 50;
+      const empresaSemTitulo = empresasPedidas.filter((id) => (porEmpresa[Number(id)] || 0) < 1);
+      if (state.incompleto || empresa1Curta || empresaSemTitulo.length) {
+        log.push(`finalize recusado: emp1=${porEmpresa[1] || 0} sem título=${empresaSemTitulo.join(",") || "—"}`);
+        await saveState(state);
+        return res.status(200).json({ done: false, filaPronta: false, date: today, step: "finalize", incompleto: true, log });
+      }
       if (bills.length >= 200 && subCount === 0) {
         log.push(`finalize adiado: ${bills.length} títulos e nenhum sub judice`);
         await saveState(state);
