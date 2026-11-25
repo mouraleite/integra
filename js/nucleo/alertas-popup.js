@@ -157,11 +157,13 @@ const AlertasPopupApp = {
       id: "esteira",
       nome: "Etapas vencidas na esteira",
       quando: "Todo dia às 08:00, enquanto a etapa continuar vencida. Se a pessoa entra depois, abre na hora. Fechar dispensa só aquele dia, inclusive depois de atualizar a página.",
-      logica: "Lista só financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. Esses mesmos casos ficam em destaque na lista de financiamentos em aberto.",
+      logica: "Lista financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. No mesmo aviso, mostra cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte. O batimento das 7h grava essas parcelas; se ainda não houver batimento do dia, a consulta é feita na hora.",
       quem: "Administrador e operador de cobrança back office.",
       titulo: "Etapas vencidas na esteira",
       corpo: `<p>Estes financiamentos estão com a etapa atual fora do prazo.</p>
-        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>`
+        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>
+        <p style="margin-top:12px;">Clientes de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>
+        <div class="apa-item"><strong>Erick Henrique · título 9336</strong><span>8 parcelas vencidas · 1 a vencer neste mês · 1 a vencer no mês seguinte</span></div>`
     },
     {
       id: "documentos",

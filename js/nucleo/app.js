@@ -11728,6 +11728,20 @@ window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloud
     chosen.at = Date.now();
     chosen.winner = "local";
   }
+  /* Nuvem e navegador vazios (produção sem configuração) recebem o modelo.
+     Etapa que a pessoa excluiu fica no túmulo e não volta. */
+  if (!chosen.list.length) {
+    const modelo = (window.ETAPAS_FINANCIAMENTO_PADRAO || []).map((e, i) => ({
+      id: e.id,
+      nome: e.nome,
+      dias: e.dias,
+      descricao: e.descricao,
+      parentId: null,
+      order: (i + 1) * 10
+    }));
+    const padrao = window.finEtapasSemExcluidas(modelo, tomb);
+    if (padrao.length) chosen = pack(padrao, Date.now(), "local");
+  }
   return chosen;
 };
 
@@ -45575,9 +45589,6 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   if (window.EtapasFinanciamentoState.length) return false;
-  let stored = null;
-  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
-  if (stored != null) return false;
   const base = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
@@ -45586,13 +45597,20 @@ window.ensureEtapasFinanciamento = function() {
     parentId: null,
     order: (i + 1) * 10
   }));
-  window.EtapasFinanciamentoState = typeof window.finEtapasSemExcluidas === "function"
+  const limpa = typeof window.finEtapasSemExcluidas === "function"
     ? window.finEtapasSemExcluidas(base)
     : base;
-  try {
-    localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
-  } catch (e) {}
+  if (!limpa.length) return false;
+  window.EtapasFinanciamentoState = limpa;
   window._finEtapasVeioDoPadrao = true;
+  let stored = null;
+  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
+  /* Lista "[]" já gravada não ganha data nova aqui: a sincronização compara com a nuvem
+     e só sobe o modelo quando os dois lados estão vazios. */
+  if (stored != null) return false;
+  try {
+    localStorage.setItem("crm_moura_financiamento", JSON.stringify(limpa));
+  } catch (e) {}
   return true;
 };
 

@@ -52,11 +52,11 @@ const FinanciamentoApp = {
   async puxarNuvem(forcar) {
     const agora = Date.now();
     if (!forcar && this._nuvemEm && agora - this._nuvemEm < 20000) return;
-    if (this._nuvemLendo) return;
+    if (this._nuvemLendo && typeof this._nuvemLendo.then === "function") return this._nuvemLendo;
     const fc = window.firebaseCollections;
     if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function" || typeof window.crmFinanciamentosMesclar !== "function") return;
-    this._nuvemLendo = true;
     this._nuvemEm = agora;
+    const leitura = (async () => {
     try {
       const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
@@ -81,9 +81,11 @@ const FinanciamentoApp = {
       if (chegouNovo && FinanciamentoState.view !== "fluxo" && document.getElementById("financiamento-root")) this.render();
     } catch (e) {
       console.warn("[Financiamento] leitura da nuvem", e);
-    } finally {
-      this._nuvemLendo = false;
     }
+    })();
+    this._nuvemLendo = leitura;
+    try { await leitura; }
+    finally { if (this._nuvemLendo === leitura) this._nuvemLendo = null; }
   },
 
   render() {
@@ -1053,44 +1055,235 @@ const FinanciamentoApp = {
     this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, amanha.getTime() - Date.now()));
   },
 
-  abrirAlertaEsteira() {
+  fimDoMes(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    const y = Number(p[0]);
+    const m = Number(p[1]);
+    const d = new Date(y, m, 0, 12);
+    return this.hojePartes(d);
+  },
+
+  hojePartes(d) {
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  },
+
+  fimDoMesSeguinte(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    const d = new Date(Number(p[0]), Number(p[1]) + 1, 0, 12);
+    return this.hojePartes(d);
+  },
+
+  soDigitos(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  async lerBatimentoRemessa() {
+    const fc = window.firebaseCollections;
+    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return null;
+    const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    if (!existe) return null;
+    return snap.data() || null;
+  },
+
+  parcelaEmAberto(inst) {
+    if (!inst) return false;
+    const bal = inst.currentBalance != null ? inst.currentBalance : inst.balance;
+    if (bal != null && bal !== "" && !isNaN(Number(bal))) return Number(bal) > 0.009;
+    const recs = inst.receipts;
+    if (!recs) return true;
+    const lista = Array.isArray(recs) ? recs : [recs];
+    if (!lista.length) return true;
+    return lista.every((r) => !r || r.type == null || String(r.type).trim() === "");
+  },
+
+  async extratoDoTitulo(titulo, ate) {
+    const once = window.siengeFetchWithRetry;
+    if (typeof once !== "function" || !titulo) return [];
+    const path = "/bulk-data/v1/customer-extract-history?startDueDate=1996-01-01&endDueDate=" + encodeURIComponent(ate)
+      + "&billReceivableId=" + encodeURIComponent(titulo)
+      + "&documentsId=" + encodeURIComponent("CT,TC")
+      + "&includeRemadeInstallments=false&includeCanceledInstallments=false&includeRevokedInstallments=false&includeRenegotiatedDischarge=false";
+    const payload = await once(path, 3);
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.data)) return payload.data;
+    if (Array.isArray(payload.results)) return payload.results;
+    return [];
+  },
+
+  resumirParcelas(proc, key, itens, hoje, fimMes, fimSeg) {
+    let vencidas = 0;
+    let mes = 0;
+    let seguinte = 0;
+    let maisAntiga = "";
+    let primeiraMes = "";
+    let primeiraSeguinte = "";
+    itens.forEach((inst) => {
+      if (!this.parcelaEmAberto(inst)) return;
+      const venc = String(inst.dueDate || inst.originalDueDate || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(venc) || venc > fimSeg) return;
+      if (venc < hoje) {
+        vencidas += 1;
+        if (!maisAntiga || venc < maisAntiga) maisAntiga = venc;
+      } else if (venc <= fimMes) {
+        mes += 1;
+        if (!primeiraMes || venc < primeiraMes) primeiraMes = venc;
+      } else {
+        seguinte += 1;
+        if (!primeiraSeguinte || venc < primeiraSeguinte) primeiraSeguinte = venc;
+      }
+    });
+    if (!vencidas && !mes && !seguinte) return null;
+    return {
+      key: key,
+      cliente: String(proc.customerName || ""),
+      titulo: String(proc.titulo || ""),
+      clienteId: String(proc.customerId || ""),
+      vencidas: vencidas,
+      mes: mes,
+      seguinte: seguinte,
+      maisAntiga: maisAntiga,
+      primeiraMes: primeiraMes,
+      primeiraSeguinte: primeiraSeguinte
+    };
+  },
+
+  async calcularParcelasAlerta() {
+    const hoje = this.hojeIso();
+    const fimMes = this.fimDoMes(hoje);
+    const fimSeg = this.fimDoMesSeguinte(hoje);
+    const fila = this.listOpenProcesses().filter((row) => this.soDigitos(row.proc && row.proc.titulo));
+    const out = [];
+    const limite = Date.now() + 14000;
+    for (let i = 0; i < fila.length; i += 3) {
+      if (Date.now() > limite) break;
+      const parte = fila.slice(i, i + 3);
+      const achados = await Promise.all(parte.map(async (row) => {
+        const proc = row.proc || {};
+        const titulo = this.soDigitos(proc.titulo);
+        try {
+          const extrato = await this.extratoDoTitulo(titulo, fimSeg);
+          const itens = [];
+          extrato.forEach((item) => {
+            const bills = item && (item.billReceivableId || item.receivableBillId || Array.isArray(item.installments))
+              ? [item]
+              : ((item && (item.billsReceivable || item.bills)) || []);
+            (Array.isArray(bills) ? bills : []).forEach((bill) => {
+              if (this.soDigitos(bill.billReceivableId || bill.receivableBillId) !== titulo) return;
+              (bill.installments || []).forEach((inst) => itens.push(inst));
+            });
+          });
+          return this.resumirParcelas(proc, row.key, itens, hoje, fimMes, fimSeg);
+        } catch (e) {
+          return null;
+        }
+      }));
+      achados.forEach((p) => { if (p) out.push(p); });
+    }
+    return out;
+  },
+
+  async parcelasDoAlerta() {
+    const hoje = this.hojeIso();
+    try {
+      const salvo = await this.lerBatimentoRemessa();
+      if (salvo && salvo.date === hoje && salvo.done && Array.isArray(salvo.parcelas)) return salvo.parcelas;
+    } catch (e) {}
+    return this.calcularParcelasAlerta();
+  },
+
+  textoContagem(n, uma, varias) {
+    return n + " " + (n === 1 ? uma : varias);
+  },
+
+  async abrirAlertaEsteira() {
     if (!this.usuarioVeAlertaEsteira()) return;
     const hoje = this.hojeIso();
     if (Date.now() < new Date(hoje + "T08:00:00").getTime()) return;
     const chave = this.chaveAlertaEsteira(hoje);
     try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
-    const lista = this.atrasadosEsteira();
-    if (!lista.length || document.getElementById("fin-alerta")) return;
-    const linhas = lista.map((item) => {
-      const proc = item.row.proc || {};
-      const n = Math.abs(item.prazo.restantes || 0);
-      const safe = String(item.row.key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      return `<button type="button" class="fin-alerta-item" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
-        <strong>${this.esc(proc.customerName || "—")}</strong>
-        <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
-        <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))} · ${n} dia${n === 1 ? "" : "s"}</span>
-      </button>`;
-    }).join("");
-    const overlay = document.createElement("div");
-    overlay.id = "fin-alerta";
-    overlay.setAttribute("role", "dialog");
-    overlay.setAttribute("aria-labelledby", "fin-alerta-titulo");
-    overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
-    overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
-        <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Etapas vencidas na esteira</h2>
-        <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
-      </div>
-      <div style="padding:12px 18px 18px;overflow:auto;">
-        <p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${lista.length} financiamento${lista.length === 1 ? "" : "s"} na esteira com a etapa atual fora do prazo.</p>
-        <div style="display:flex;flex-direction:column;gap:8px;">${linhas}</div>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    const estilo = document.createElement("style");
-    estilo.textContent = "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}";
-    overlay.appendChild(estilo);
-    overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave));
+    if (document.getElementById("fin-alerta") || this._alertaAbrindo) return;
+    this._alertaAbrindo = true;
+    try {
+      await this.puxarNuvem();
+      try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+      const lista = this.atrasadosEsteira();
+      let parcelas = [];
+      let parcelasErro = false;
+      try {
+        parcelas = await Promise.race([
+          this.parcelasDoAlerta(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("tempo")), 15000))
+        ]);
+      } catch (e) {
+        parcelasErro = true;
+        parcelas = [];
+      }
+      if (document.getElementById("fin-alerta")) return;
+      try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+      if (!lista.length && !parcelas.length && !parcelasErro) return;
+      if (!lista.length && parcelasErro) return;
+      const linhas = lista.map((item) => {
+        const proc = item.row.proc || {};
+        const n = Math.abs(item.prazo.restantes || 0);
+        const safe = String(item.row.key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        return `<button type="button" class="fin-alerta-item" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
+          <strong>${this.esc(proc.customerName || "—")}</strong>
+          <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
+          <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))} · ${n} dia${n === 1 ? "" : "s"}</span>
+        </button>`;
+      }).join("");
+      const cards = parcelas.map((p) => {
+        const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const partes = [];
+        if (p.vencidas) partes.push(this.textoContagem(p.vencidas, "parcela vencida", "parcelas vencidas") + (p.maisAntiga ? " · a mais antiga em " + this.fmtDate(p.maisAntiga) : ""));
+        if (p.mes) partes.push(this.textoContagem(p.mes, "parcela a vencer neste mês", "parcelas a vencer neste mês") + (p.primeiraMes ? " · " + this.fmtDate(p.primeiraMes) : ""));
+        if (p.seguinte) partes.push(this.textoContagem(p.seguinte, "parcela a vencer no mês seguinte", "parcelas a vencer no mês seguinte") + (p.primeiraSeguinte ? " · a primeira em " + this.fmtDate(p.primeiraSeguinte) : ""));
+        const tom = p.vencidas ? "fin-alerta-item" : "fin-alerta-item fin-alerta-item--aviso";
+        return `<button type="button" class="${tom}" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
+          <strong>${this.esc(p.cliente || "—")}</strong>
+          <span>Título ${this.esc(p.titulo || "—")}</span>
+          <span>${this.esc(partes.join(" · "))}</span>
+        </button>`;
+      }).join("");
+      const blocoEtapas = lista.length
+        ? `<p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${lista.length} financiamento${lista.length === 1 ? "" : "s"} na esteira com a etapa atual fora do prazo.</p>
+           <div style="display:flex;flex-direction:column;gap:8px;">${linhas}</div>`
+        : `<p style="margin:0 0 12px;color:#64748b;font-size:0.92rem;line-height:1.45;">Nenhuma etapa da esteira está vencida.</p>`;
+      const blocoParcelas = parcelas.length
+        ? `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
+           <p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${parcelas.length} cliente${parcelas.length === 1 ? "" : "s"} de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>
+           <div style="display:flex;flex-direction:column;gap:8px;">${cards}</div>`
+        : (parcelasErro
+          ? `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
+             <p style="margin:0;color:#64748b;font-size:0.92rem;">A consulta das parcelas não terminou. O batimento das 7h traz essa lista.</p>`
+          : `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
+             <p style="margin:0;color:#64748b;font-size:0.92rem;">Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>`);
+      const overlay = document.createElement("div");
+      overlay.id = "fin-alerta";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-labelledby", "fin-alerta-titulo");
+      overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
+      overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
+          <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Etapas vencidas na esteira</h2>
+          <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
+        </div>
+        <div style="padding:12px 18px 18px;overflow:auto;">
+          ${blocoEtapas}
+          ${blocoParcelas}
+        </div>
+      </div>`;
+      document.body.appendChild(overlay);
+      const estilo = document.createElement("style");
+      estilo.textContent = "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}#fin-alerta .fin-alerta-item--aviso{border-color:#fde68a;border-left-color:#d97706;}#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}";
+      overlay.appendChild(estilo);
+      overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave));
+    } finally {
+      this._alertaAbrindo = false;
+    }
   },
 
   fecharAlertaEsteira(chave) {

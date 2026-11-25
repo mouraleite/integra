@@ -23,7 +23,8 @@ const RemessaAvulsaApp = {
     erro: "",
     linhas: [],
     contas: {},
-    analisou: false
+    analisou: false,
+    origem: ""
   },
 
   COLS: [
@@ -79,6 +80,7 @@ const RemessaAvulsaApp = {
     this.state.inited = true;
     this.render();
     this.carregarEmpresas();
+    this.carregarBatimento();
   },
 
   async carregarEmpresas() {
@@ -98,7 +100,8 @@ const RemessaAvulsaApp = {
     root.innerHTML = `
       <p style="margin:0 0 14px;color:#64748b;font-size:0.84rem;max-width:820px;">
         Parcelas do período que ainda não têm boleto nem recebimento, com situação Normal e condição Parcelas Mensais ou Parcela Acordo.
-        Entrada, sinal e parcela única não entram. A conta é a cadastrada no centro de custo.
+        Entrada, sinal e parcela única não entram. Cliente com financiamento em aberto também fica de fora.
+        O batimento do mês corrente roda todo dia às 7h. A conta é a cadastrada no centro de custo.
       </p>
       <div class="search-filter-panel" style="margin-bottom:14px;">
         <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
@@ -277,6 +280,10 @@ const RemessaAvulsaApp = {
       box.innerHTML = `<p style="margin:8px 0 12px;color:#b91c1c;font-size:0.84rem;">${this.esc(this.state.erro)}</p>`;
       return;
     }
+    if (this.state.origem === "7h" && this.state.batimentoEm) {
+      box.innerHTML = `<p style="margin:0 0 12px;color:#64748b;font-size:0.84rem;">Batimento das 7h · ${this.esc(this.state.batimentoEm)}. Analisar lê o Sienge de novo.</p>`;
+      return;
+    }
     box.innerHTML = "";
   },
 
@@ -452,6 +459,69 @@ const RemessaAvulsaApp = {
     };
   },
 
+  soDigitos(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  async financiamentosAbertos() {
+    const titulos = new Set();
+    const clientes = new Set();
+    const app = window.FinanciamentoApp;
+    if (!app || typeof app.listOpenProcesses !== "function") return { titulos, clientes };
+    try { if (app.puxarNuvem) await app.puxarNuvem(true); } catch (e) {}
+    app.listOpenProcesses().forEach((row) => {
+      const proc = row && row.proc;
+      if (!proc) return;
+      const titulo = this.soDigitos(proc.titulo);
+      const cliente = this.soDigitos(proc.customerId);
+      if (titulo) titulos.add(titulo);
+      if (cliente) clientes.add(cliente);
+    });
+    return { titulos, clientes };
+  },
+
+  semFinanciamento(linhas, fin) {
+    return linhas.filter((r) => !fin.titulos.has(this.soDigitos(r.titulo)) && !fin.clientes.has(this.soDigitos(r.clienteId)));
+  },
+
+  async carregarBatimento() {
+    if (this.state.analisou || this.state.loading) return;
+    const fc = window.firebaseCollections;
+    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+    const mes = this.mesCorrente();
+    try {
+      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+      if (!existe || this.state.analisou || this.state.loading) return;
+      const data = snap.data() || {};
+      if (!data.done || data.de !== mes.de || data.ate !== mes.ate || !Array.isArray(data.linhas)) return;
+      const fin = await this.financiamentosAbertos();
+      if (this.state.analisou || this.state.loading) return;
+      const contas = await this.mapaContas();
+      this.state.de = mes.de;
+      this.state.ate = mes.ate;
+      this.state.linhas = this.semFinanciamento(data.linhas, fin).map((r) => ({
+        conta: r.conta || contas[String(r.cc)] || "",
+        empresaId: r.empresaId,
+        empresa: this.nomeEmpresa(r.empresaId, r.empresa),
+        cc: r.cc,
+        empreendimento: this.nomeCc(r.cc, r.empreendimento),
+        titulo: r.titulo,
+        parcela: r.parcela,
+        clienteId: r.clienteId,
+        cliente: r.cliente,
+        vencimento: r.vencimento
+      }));
+      this.state.analisou = true;
+      this.state.origem = "7h";
+      const quando = data.at ? new Date(data.at) : null;
+      this.state.batimentoEm = quando && !isNaN(quando.getTime())
+        ? quando.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
+        : this.fmtData(data.date);
+      this.render();
+    } catch (e) {}
+  },
+
   async analisar() {
     const de = String((document.getElementById("remav-de") || {}).value || this.state.de || "");
     const ate = String((document.getElementById("remav-ate") || {}).value || this.state.ate || "");
@@ -559,7 +629,10 @@ const RemessaAvulsaApp = {
         || String(a.cc).localeCompare(b.cc, "pt-BR", { numeric: true })
         || String(a.cliente).localeCompare(b.cliente, "pt-BR"));
       if (geracao !== this.state.geracao) return;
-      this.state.linhas = linhas;
+      const fin = await this.financiamentosAbertos();
+      if (geracao !== this.state.geracao) return;
+      this.state.linhas = this.semFinanciamento(linhas, fin);
+      this.state.origem = "";
       this.state.contas = contas;
       this.state.analisou = true;
       this.state.loading = false;
