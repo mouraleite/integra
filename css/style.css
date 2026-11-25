@@ -12379,6 +12379,7 @@ tr.pr-liberado td { background: #f7faf8; }
 /* Tabelas da Central de e-mail seguem o padrão .cc-table (Centros de Custo); aqui só os ajustes da tela. */
 .cem-painel .cc-scroll { margin-bottom: 16px; overflow-x: hidden; }
 .cem-tabela td.cem-para { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; overflow-wrap: anywhere; }
+.cem-tabela td.cem-data { white-space: nowrap; overflow: visible; text-overflow: clip; font-variant-numeric: tabular-nums; }
 .cem-tabela td.cem-acoes { overflow: hidden; text-overflow: clip; white-space: nowrap; }
 .cem-tabela td.cem-quebra, .cem-tabela td.cem-etapas { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; }
 .cem-tabela td.cem-etapas .cem-env { white-space: normal; text-align: center; line-height: 1.25; }
