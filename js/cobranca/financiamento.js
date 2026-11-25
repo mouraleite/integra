@@ -966,11 +966,23 @@ const FinanciamentoApp = {
     return String(valor == null ? "" : valor).replace(/\D/g, "");
   },
 
+  nomeClienteProc(proc) {
+    return String(proc && proc.customerName || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ");
+  },
+
   assinaturaTituloProc(proc) {
-    const cliente = String(proc && proc.customerId || "").trim();
     const titulo = this.digitosProc(proc && proc.titulo);
-    if (cliente && titulo) return cliente + ":t:" + titulo;
-    return "";
+    if (!titulo) return "";
+    const cliente = String(proc && proc.customerId || "").trim();
+    if (cliente) return "c:" + cliente + ":t:" + titulo;
+    const nome = this.nomeClienteProc(proc);
+    if (nome) return "n:" + nome + ":t:" + titulo;
+    return "t:" + titulo;
   },
 
   indiceEtapaProc(proc) {
@@ -984,6 +996,7 @@ const FinanciamentoApp = {
     if (pts < 0) pts = proc && proc.currentStageId ? 0 : -1;
     if (proc && (proc.enterpriseName || proc.empId || proc.costCenterId)) pts += 0.2;
     if (proc && (proc.companyName || proc.companyId)) pts += 0.1;
+    if (proc && String(proc.unit || proc.unitName || "").trim()) pts += 0.05;
     if (proc && proc.concluidas) pts += Object.keys(proc.concluidas).length * 0.01;
     if (proc && proc.anexos) pts += Object.keys(proc.anexos).length * 0.02;
     if (proc && proc.notas) pts += Object.keys(proc.notas).length * 0.01;
@@ -998,10 +1011,16 @@ const FinanciamentoApp = {
 
   processosMesmoTitulo(a, b) {
     if (!a || !b) return false;
-    if (String(a.customerId || "") !== String(b.customerId || "")) return false;
     const ta = this.digitosProc(a.titulo);
     const tb = this.digitosProc(b.titulo);
-    return !!(ta && tb && ta === tb);
+    if (!ta || !tb || ta !== tb) return false;
+    const ca = String(a.customerId || "").trim();
+    const cb = String(b.customerId || "").trim();
+    if (ca && cb) return ca === cb;
+    const na = this.nomeClienteProc(a);
+    const nb = this.nomeClienteProc(b);
+    if (na && nb) return na === nb || na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0;
+    return !!(ca || cb || na || nb);
   },
 
   preferirProcessoAberto(a, b) {
@@ -1013,6 +1032,18 @@ const FinanciamentoApp = {
     return tb >= ta ? b : a;
   },
 
+  marcarProcessoDescartado(proc, motivo) {
+    const agora = new Date().toISOString();
+    proc.status = "cancelado";
+    proc.closedAt = agora;
+    proc.finishedAt = "";
+    proc.descartadoComoDuplicata = true;
+    proc.descartadoEm = agora;
+    proc.descartadoMotivo = motivo || "duplicata";
+    proc.updatedAt = agora;
+    return proc;
+  },
+
   persistirMapaProcessos(all) {
     window._finProcMem = all || {};
     const raw = JSON.stringify(window._finProcMem);
@@ -1021,7 +1052,29 @@ const FinanciamentoApp = {
     if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(() => {});
   },
 
-  /* Remove duplicatas: mesmo cliente + mesmo título fica só o mais avançado; casca aberta some se já houver concluído. */
+  deduplicarAbertosPorTitulo(rows) {
+    const escolhidos = new Map();
+    const semTitulo = [];
+    (rows || []).forEach((row) => {
+      if (!row || !row.proc) return;
+      const sig = this.assinaturaTituloProc(row.proc);
+      if (!sig) {
+        semTitulo.push(row);
+        return;
+      }
+      const atual = escolhidos.get(sig);
+      if (!atual) {
+        escolhidos.set(sig, row);
+        return;
+      }
+      escolhidos.set(sig, this.preferirProcessoAberto(atual, row));
+    });
+    return Array.from(escolhidos.values()).concat(semTitulo).sort((a, b) =>
+      String(b.proc.updatedAt || b.proc.startedAt || "").localeCompare(String(a.proc.updatedAt || a.proc.startedAt || ""))
+    );
+  },
+
+  /* Descarta duplicatas (não apaga a chave): a nuvem não recria o registro antigo. */
   sanearDuplicadosProcessos() {
     const all = this.loadAllProcesses();
     const abertos = [];
@@ -1032,20 +1085,21 @@ const FinanciamentoApp = {
       if (this.isProcessoConcluido(proc)) concluidos.push({ key: key, proc: proc });
       else if (this.isProcessoAberto(proc)) abertos.push({ key: key, proc: proc });
     });
-    const remover = new Set();
+    const descartar = new Set();
     abertos.forEach((row) => {
       if (concluidos.some((c) => this.processosMesmoTitulo(row.proc, c.proc))) {
-        remover.add(row.key);
+        descartar.add(row.key);
         return;
       }
       if (this.ehCascaAberta(row.proc)
-        && concluidos.some((c) => String(c.proc.customerId || "") === String(row.proc.customerId || ""))) {
-        remover.add(row.key);
+        && concluidos.some((c) => this.processosMesmoTitulo(row.proc, c.proc)
+          || String(c.proc.customerId || "") === String(row.proc.customerId || ""))) {
+        descartar.add(row.key);
       }
     });
     const porTitulo = new Map();
     abertos.forEach((row) => {
-      if (remover.has(row.key)) return;
+      if (descartar.has(row.key)) return;
       const sig = this.assinaturaTituloProc(row.proc);
       if (!sig) return;
       const atual = porTitulo.get(sig);
@@ -1056,14 +1110,17 @@ const FinanciamentoApp = {
       const melhor = this.preferirProcessoAberto(atual, row);
       const pior = melhor.key === atual.key ? row : atual;
       porTitulo.set(sig, melhor);
-      remover.add(pior.key);
+      descartar.add(pior.key);
     });
-    if (!remover.size) return false;
-    remover.forEach((key) => { delete all[key]; });
+    if (!descartar.size) return false;
+    descartar.forEach((key) => {
+      if (!all[key]) return;
+      this.marcarProcessoDescartado(all[key], "duplicata-mesmo-titulo");
+    });
     this.persistirMapaProcessos(all);
     if (FinanciamentoState.process) {
       const atualKey = this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId);
-      if (remover.has(atualKey)) FinanciamentoState.process = null;
+      if (descartar.has(atualKey)) FinanciamentoState.process = null;
     }
     return true;
   },
@@ -1073,7 +1130,7 @@ const FinanciamentoApp = {
     const st = String(proc.status || "").toLowerCase();
     if (st === "concluido" || st === "concluída" || st === "completed" || st === "complete"
       || st === "encerrado" || st === "cancelado" || st === "cancelada" || st === "closed") return false;
-    if (proc.closedAt || proc.finishedAt) return false;
+    if (proc.closedAt || proc.finishedAt || proc.descartadoComoDuplicata) return false;
     return true;
   },
 
@@ -1088,12 +1145,13 @@ const FinanciamentoApp = {
       const ts = Date.parse((saved && (saved.updatedAt || saved.startedAt)) || 0) || 0;
       if (!saved || tm >= ts) all[key] = mem;
     }
-    return Object.keys(all).map((key) => {
+    const rows = Object.keys(all).map((key) => {
       const proc = all[key];
       if (!proc || typeof proc !== "object") return null;
       if (!this.isProcessoAberto(proc)) return null;
       return { key, proc };
-    }).filter(Boolean).sort((a, b) => String(b.proc.updatedAt || b.proc.startedAt || "").localeCompare(String(a.proc.updatedAt || a.proc.startedAt || "")));
+    }).filter(Boolean);
+    return this.deduplicarAbertosPorTitulo(rows);
   },
 
   isProcessoConcluido(proc) {
@@ -2389,51 +2447,373 @@ const FinanciamentoApp = {
     return this.ehEtapaTermoSaldo(stageId) || this.ehEtapaDeclaracaoSaldo(stageId);
   },
 
-  declaracaoModalHtml(dados, parcelas, avisoParcelas) {
+  foldTextoFin(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+  },
+
+  parseAreaMetragem(raw) {
+    if (typeof window.parseAreaNumber === "function") {
+      const n = window.parseAreaNumber(raw);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    }
+    if (raw == null || String(raw).trim() === "") return null;
+    let s = String(raw).trim().replace(/\s/g, "").replace(/m²|m2/gi, "");
+    if (s.indexOf(",") >= 0) s = s.replace(/\./g, "").replace(",", ".");
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  },
+
+  obterLinhasValorM2Comercial() {
+    try {
+      if (window.TabelasVigentesApp && typeof TabelasVigentesApp.loadM2 === "function") {
+        TabelasVigentesApp.loadM2();
+        const linhas = TabelasVigentesApp.state && TabelasVigentesApp.state.m2 && TabelasVigentesApp.state.m2.linhas;
+        if (Array.isArray(linhas) && linhas.length) return linhas;
+      }
+    } catch (e) {}
+    try {
+      const o = JSON.parse(localStorage.getItem("crm_moura_valor_padrao_m2") || "null");
+      if (o && Array.isArray(o.linhas) && o.linhas.length) return o.linhas;
+    } catch (e) {}
+    try {
+      if (window.TabelasVigentesApp && typeof TabelasVigentesApp.m2Seed === "function") {
+        return (TabelasVigentesApp.m2Seed().linhas) || [];
+      }
+    } catch (e) {}
+    return [];
+  },
+
+  obterValorM2Comercial(costCenterId, empreendimento) {
+    const linhas = this.obterLinhasValorM2Comercial();
+    if (!linhas.length) return null;
+    const cc = String(costCenterId || "").trim();
+    let hit = cc ? linhas.find((l) => String(l.cc) === cc) : null;
+    if (!hit) {
+      const emp = this.foldTextoFin(empreendimento);
+      if (emp) {
+        hit = linhas.find((l) => {
+          const nome = this.foldTextoFin(l.empreendimento);
+          return nome && (emp.indexOf(nome) >= 0 || nome.indexOf(emp) >= 0);
+        }) || null;
+      }
+    }
+    if (!hit || !hit.valores) return null;
+    const ano = String(new Date().getFullYear());
+    const candidatos = [hit.valores[ano], hit.valores["2026"], hit.valores["2025"]];
+    const anos = Object.keys(hit.valores).sort();
+    if (anos.length) candidatos.push(hit.valores[anos[anos.length - 1]]);
+    for (let i = 0; i < candidatos.length; i++) {
+      const n = Number(candidatos[i]);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  },
+
+  cidadeDoContratoFin(dados, proc) {
+    const unit = (dados && dados.unit) || {};
+    const sale = (dados && dados.sale) || {};
+    const ccId = String(unit.costCenterId || sale.enterpriseId || sale.costCenterId
+      || (proc && (proc.costCenterId || proc.empId)) || "").trim();
+    const ccs = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    const cc = ccId ? ccs.find((c) => String(c.id) === ccId) : null;
+    const direta = String((cc && (cc.city || cc.cidade || cc.cityName)) || (proc && proc.cidade) || "").trim();
+    if (direta) return direta;
+    if (typeof window.extractCityDisplayName === "function" && ccId) {
+      const extra = String(window.extractCityDisplayName(ccId, (cc && cc.name) || (dados && dados.empreendimento) || "") || "").trim();
+      if (extra) return extra;
+    }
+    const emp = String((dados && dados.empreendimento) || (proc && this.obraDoProc(proc).empreendimento) || "").trim();
+    const partes = emp.split(/\s+-\s+/);
+    if (partes.length >= 2 && partes[0]) return partes[0].trim();
+    return this.cidadeDoProc(proc || FinanciamentoState.process || {});
+  },
+
+  ehEmpreendimentoBoituvaSemTabela(dados, proc, valorM2) {
+    if (valorM2 != null) return false;
+    const cidade = this.foldTextoFin(this.cidadeDoContratoFin(dados, proc));
+    const emp = this.foldTextoFin(dados && dados.empreendimento);
+    return cidade.indexOf("BOITUVA") >= 0 || emp.indexOf("BOITUVA") >= 0;
+  },
+
+  async obterMetragemLoteContrato(dados) {
+    const unit = (dados && dados.unit) || {};
+    const sale = (dados && dados.sale) || {};
+    const tentar = (obj) => {
+      if (!obj || typeof obj !== "object") return null;
+      return this.parseAreaMetragem(
+        obj.privateArea || obj.Privatearea || obj.terrainArea || obj.totalArea
+        || obj.indexedPrivateArea || obj.landArea || obj.area
+      );
+    };
+    let area = tentar(unit) || tentar(sale);
+    const unitId = unit.id || sale.siengeUnitId || sale.unitId || "";
+    if (area == null && unitId && typeof window.siengeFetchWithRetry === "function") {
+      try {
+        const det = await window.siengeFetchWithRetry("/units/" + encodeURIComponent(unitId));
+        area = tentar(det);
+      } catch (e) {}
+    }
+    if (area == null && window.SiengeApiService && typeof SiengeApiService.getUnitDetails === "function") {
+      try {
+        const det = await SiengeApiService.getUnitDetails(unit.costCenterId || sale.enterpriseId, unit.name || unit.unitName);
+        const lista = (det && det.results) || (Array.isArray(det) ? det : det ? [det] : []);
+        for (let i = 0; i < lista.length; i++) {
+          area = tentar(lista[i]);
+          if (area != null) break;
+        }
+      } catch (e) {}
+    }
+    const unidades = Array.isArray(sale.salesContractUnits) ? sale.salesContractUnits : [];
+    if (area == null) {
+      for (let i = 0; i < unidades.length; i++) {
+        area = tentar(unidades[i]);
+        if (area != null) break;
+      }
+    }
+    return area;
+  },
+
+  async listarProximasParcelasAVencer(billId, qtd) {
+    const limite = Number.isInteger(qtd) && qtd > 0 ? qtd : 3;
+    if (typeof window.siengeFetchWithRetry !== "function") {
+      throw new Error("A consulta de parcelas no Sienge não está disponível.");
+    }
+    const response = await window.siengeFetchWithRetry(
+      "/accounts-receivable/receivable-bills/" + encodeURIComponent(billId) + "/installments?limit=200"
+    );
+    const rows = Array.isArray(response) ? response : ((response && (response.results || response.data)) || []);
+    const hoje = this.hojeIso();
+    const todas = rows.map((item, index) => {
+      if (!item || typeof item !== "object") return null;
+      const situacao = String(item.situation || item.status || item.installmentSituation || "").toLowerCase();
+      if (/cancel|revog|baixad|inativ|paid|pago|quitad/.test(situacao)) return null;
+      const vencimento = this.normalizarVencimentoParcela(item.dueDate || item.originalDueDate || item.due);
+      if (!vencimento) return null;
+      return {
+        numero: item.installmentNumber || item.number || item.installmentId || index + 1,
+        id: item.installmentId || item.id || item.installmentNumber || String(index + 1),
+        vencimento: vencimento,
+        saldo: this.saldoAbertoParcela(item),
+        indice: index
+      };
+    }).filter(Boolean).sort((a, b) => a.vencimento.localeCompare(b.vencimento)
+      || String(a.numero).localeCompare(String(b.numero), "pt-BR", { numeric: true }));
+    const futuras = todas.filter((p) => p.vencimento >= hoje);
+    const base = futuras.length ? futuras : todas;
+    const escolhidas = base.slice(0, limite);
+    escolhidas.forEach((parcela, index) => { parcela.indice = index; });
+    return {
+      parcelas: escolhidas,
+      inicio: escolhidas[0] ? escolhidas[0].vencimento : "",
+      fim: escolhidas.length ? escolhidas[escolhidas.length - 1].vencimento : "",
+      quantidade: escolhidas.length
+    };
+  },
+
+  fmtMetragemFin(n) {
+    return Number(n).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  atualizarCalculoBoituvaM2() {
+    const metragem = Number((document.getElementById("fin-boituva-metragem") || {}).dataset.metragem || "");
+    const input = document.getElementById("fin-boituva-m2");
+    const out = document.getElementById("fin-boituva-total");
+    const status = document.getElementById("fin-boituva-status");
+    const botao = document.getElementById("fin-boituva-confirmar");
+    const m2 = this.parseValorComercialTermo(input && input.value);
+    const ok = Number.isFinite(metragem) && metragem > 0 && m2 != null;
+    if (out) {
+      out.textContent = ok
+        ? ("R$ " + Number(metragem * m2).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }))
+        : "—";
+    }
+    if (status && !(this._boituvaModal && this._boituvaModal.fechando)) {
+      status.textContent = ok ? "" : "Informe o valor do metro quadrado para calcular o valor comercial.";
+    }
+    if (botao) botao.disabled = !ok;
+  },
+
+  fecharModalBoituvaM2(resultado) {
+    const state = this._boituvaModal;
+    if (!state) return;
+    state.fechando = true;
+    if (state.onKeyDown) document.removeEventListener("keydown", state.onKeyDown);
+    const modal = document.getElementById("fin-boituva-modal");
+    if (modal) modal.remove();
+    this._boituvaModal = null;
+    if (typeof state.resolve === "function") state.resolve(resultado == null ? null : resultado);
+  },
+
+  confirmarModalBoituvaM2() {
+    const state = this._boituvaModal;
+    if (!state) return;
+    const metragem = Number(state.metragem);
+    const input = document.getElementById("fin-boituva-m2");
+    const m2 = this.parseValorComercialTermo(input && input.value);
+    if (!(Number.isFinite(metragem) && metragem > 0) || m2 == null) {
+      this.atualizarCalculoBoituvaM2();
+      return;
+    }
+    this.fecharModalBoituvaM2({
+      metragem: metragem,
+      valorM2: m2,
+      valorComercial: Math.round(metragem * m2 * 100) / 100,
+      fonte: "boituva-manual"
+    });
+  },
+
+  promptValorM2Boituva(metragem, empreendimento) {
+    return new Promise((resolve) => {
+      this.fecharModalBoituvaM2(null);
+      const state = {
+        metragem: metragem,
+        resolve: resolve,
+        fechando: false
+      };
+      state.onKeyDown = (event) => {
+        if (event.key === "Escape") this.fecharModalBoituvaM2(null);
+      };
+      this._boituvaModal = state;
+      const emp = this.esc(empreendimento || "Boituva");
+      const metTxt = this.esc(this.fmtMetragemFin(metragem));
+      document.body.insertAdjacentHTML("beforeend", `<div class="fin-declaracao-overlay" id="fin-boituva-modal">
+        <section class="fin-declaracao-dialog" role="dialog" aria-modal="true" aria-labelledby="fin-boituva-titulo" style="width:min(480px,100%)">
+          <header><div><span>BOITUVA · VALOR COMERCIAL</span><h2 id="fin-boituva-titulo">Informe o valor do m²</h2></div>
+            <button type="button" class="fin-declaracao-fechar" aria-label="Fechar" onclick="FinanciamentoApp.fecharModalBoituvaM2(null)">×</button></header>
+          <div class="fin-declaracao-conteudo">
+            <p>Este empreendimento de Boituva ainda não consta na planilha de valor padrão m². Informe o valor do metro quadrado para calcular o valor comercial.</p>
+            <p class="fin-declaracao-ajuda" style="margin:0 0 12px">Empreendimento: <strong>${emp}</strong></p>
+            <label class="fin-declaracao-valor">Metragem do lote (m²)
+              <input id="fin-boituva-metragem" type="text" value="${metTxt}" readonly data-metragem="${this.esc(String(metragem))}">
+            </label>
+            <label class="fin-declaracao-valor" for="fin-boituva-m2" style="margin-top:12px">Valor do metro quadrado (R$)
+              <input id="fin-boituva-m2" type="text" inputmode="decimal" autocomplete="off" placeholder="Ex.: 350,00" oninput="FinanciamentoApp.atualizarCalculoBoituvaM2()">
+            </label>
+            <div class="fin-declaracao-resumo" style="margin-top:14px">Valor comercial: <span id="fin-boituva-total">—</span></div>
+            <p class="fin-declaracao-status" id="fin-boituva-status" role="status"></p>
+          </div>
+          <footer>
+            <button type="button" class="btn btn-outline" onclick="FinanciamentoApp.fecharModalBoituvaM2(null)">Cancelar</button>
+            <button type="button" class="btn btn-primary" id="fin-boituva-confirmar" onclick="FinanciamentoApp.confirmarModalBoituvaM2()" disabled>Usar valor comercial</button>
+          </footer>
+        </section>
+        <style>
+          .fin-declaracao-overlay { position:fixed; inset:0; z-index:100000; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(15,23,42,.58); }
+          .fin-declaracao-dialog { width:min(680px,100%); max-height:calc(100vh - 32px); display:flex; flex-direction:column; overflow:hidden; border-radius:14px; background:#fff; box-shadow:0 20px 60px rgba(15,23,42,.3); }
+          .fin-declaracao-dialog > header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:18px 20px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
+          .fin-declaracao-dialog > header span { font-size:.68rem; font-weight:800; letter-spacing:.08em; opacity:.85; }
+          .fin-declaracao-dialog > header h2 { margin:5px 0 0; font-size:1.05rem; }
+          .fin-declaracao-fechar { border:0; padding:0 4px; color:#fff; background:transparent; font-size:1.65rem; line-height:1; cursor:pointer; }
+          .fin-declaracao-conteudo { overflow:auto; padding:18px 20px; }
+          .fin-declaracao-conteudo > p:first-child { margin:0 0 14px; color:#475569; font-size:.82rem; }
+          .fin-declaracao-valor { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
+          .fin-declaracao-valor input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
+          .fin-declaracao-valor input[readonly] { background:#f8fafc; color:#0f172a; }
+          .fin-declaracao-ajuda { margin:6px 0 10px; color:#64748b; font-size:.72rem; }
+          .fin-declaracao-resumo { margin-top:12px; padding:10px; border-radius:7px; color:#105436; background:#e7f6ee; font-size:.76rem; font-weight:700; }
+          .fin-declaracao-status { min-height:18px; margin:8px 0 0; color:#b45309; font-size:.75rem; }
+          .fin-declaracao-dialog > footer { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid #e2e8f0; }
+          .fin-declaracao-dialog > footer .btn { display:inline-flex; align-items:center; justify-content:center; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; }
+        </style>
+      </div>`);
+      const overlay = document.getElementById("fin-boituva-modal");
+      if (overlay) {
+        overlay.addEventListener("click", (event) => {
+          if (event.target === overlay) this.fecharModalBoituvaM2(null);
+        });
+        document.addEventListener("keydown", state.onKeyDown);
+      }
+      this.atualizarCalculoBoituvaM2();
+      const input = document.getElementById("fin-boituva-m2");
+      if (input) input.focus();
+    });
+  },
+
+  async resolverValorComercialLote(dados, proc) {
+    const processo = proc || FinanciamentoState.process || {};
+    const metragem = await this.obterMetragemLoteContrato(dados);
+    if (metragem == null) {
+      throw new Error("Não encontrei a metragem do lote na ficha/contrato do cliente.");
+    }
+    const cc = String((dados.unit && dados.unit.costCenterId) || (dados.sale && (dados.sale.enterpriseId || dados.sale.costCenterId))
+      || processo.costCenterId || processo.empId || "").trim();
+    const valorM2Tabela = this.obterValorM2Comercial(cc, dados.empreendimento);
+    if (valorM2Tabela != null) {
+      return {
+        metragem: metragem,
+        valorM2: valorM2Tabela,
+        valorComercial: Math.round(metragem * valorM2Tabela * 100) / 100,
+        fonte: "tabela-comercial"
+      };
+    }
+    if (this.ehEmpreendimentoBoituvaSemTabela(dados, processo, valorM2Tabela)) {
+      const manual = await this.promptValorM2Boituva(metragem, dados.empreendimento);
+      if (!manual) return null;
+      return manual;
+    }
+    throw new Error("Não há valor de m² cadastrado para este empreendimento no módulo Comercial (Tabelas vigentes). Cadastre o valor padrão m² ou, se for Boituva, use o cálculo manual.");
+  },
+
+  declaracaoModalHtml(dados, parcelas, avisoParcelas, opcoes) {
+    const opt = opcoes || {};
+    const auto = !!opt.auto;
+    const periodo = opt.periodo || {};
     const valorInicial = dados.valorComercial == null
       ? ""
       : Number(dados.valorComercial).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const lista = Array.isArray(parcelas) ? parcelas : [];
+    const lista = (!auto && Array.isArray(parcelas)) ? parcelas : [];
     const itens = lista.map((parcela, index) => `
       <label class="fin-declaracao-parcela">
         <input type="checkbox" value="${index}" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
         <span><strong>Parcela ${this.esc(parcela.numero)}</strong><small>Vencimento ${this.esc(this.fmtDate(parcela.vencimento))}</small></span>
         <b>${this.esc(this.fmtMoney(parcela.saldo))}</b>
       </label>`).join("");
-    const periodoManual = !lista.length ? `
+    const readonlyAttr = auto ? " readonly" : "";
+    const periodoCampos = (auto || !lista.length) ? `
       <div class="fin-declaracao-periodo-manual">
-        <p class="fin-declaracao-ajuda">Informe o período de congelamento que entrará no texto da declaração.</p>
+        <p class="fin-declaracao-ajuda">${auto
+          ? "Período das próximas 3 parcelas a vencer (preenchido automaticamente)."
+          : "Informe o período de congelamento que entrará no texto da declaração."}</p>
         <div class="fin-declaracao-periodo-campos">
           <label for="fin-declaracao-inicio">Data inicial
-            <input id="fin-declaracao-inicio" type="date" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+            <input id="fin-declaracao-inicio" type="date" value="${this.esc(periodo.inicio || "")}"${readonlyAttr} onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
           </label>
           <label for="fin-declaracao-fim">Data final
-            <input id="fin-declaracao-fim" type="date" onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+            <input id="fin-declaracao-fim" type="date" value="${this.esc(periodo.fim || "")}"${readonlyAttr} onchange="FinanciamentoApp.atualizarSelecaoDeclaracao()">
           </label>
           <label for="fin-declaracao-qtd">Quantidade de parcelas
-            <input id="fin-declaracao-qtd" type="number" min="1" step="1" inputmode="numeric" placeholder="Ex.: 12" oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+            <input id="fin-declaracao-qtd" type="number" min="1" step="1" inputmode="numeric" value="${this.esc(String(periodo.quantidade || (auto ? 3 : "")))}"${readonlyAttr} oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
           </label>
         </div>
       </div>` : "";
     const aviso = avisoParcelas
       ? `<p class="fin-declaracao-aviso">${this.esc(avisoParcelas)}</p>`
       : "";
+    const detalheCalc = opt.detalheCalc
+      ? `<p class="fin-declaracao-ajuda" style="margin:0 0 12px">${this.esc(opt.detalheCalc)}</p>`
+      : "";
+    const intro = auto
+      ? "Revise o valor comercial e o período das próximas 3 parcelas e gere a declaração."
+      : ("Confirme o valor comercial e " + (lista.length
+        ? "selecione as parcelas que ficarão abrangidas pelo congelamento temporário."
+        : "informe o período de congelamento temporário."));
     return `<div class="fin-declaracao-overlay" id="fin-declaracao-modal">
       <section class="fin-declaracao-dialog" role="dialog" aria-modal="true" aria-labelledby="fin-declaracao-titulo">
         <header><div><span>ETAPA 4 · FINANCIAMENTO</span><h2 id="fin-declaracao-titulo">Gerar declaração de saldo devedor</h2></div>
           <button type="button" class="fin-declaracao-fechar" aria-label="Fechar" onclick="FinanciamentoApp.fecharModalDeclaracaoSaldo()">×</button></header>
         <div class="fin-declaracao-conteudo">
-          <p>Confirme o valor comercial e ${lista.length ? "selecione as parcelas que ficarão abrangidas pelo congelamento temporário." : "informe o período de congelamento temporário."}</p>
+          <p>${intro}</p>
           ${aviso}
+          ${detalheCalc}
           <label class="fin-declaracao-valor" for="fin-declaracao-valor">Valor comercial de compra e venda (R$)
-            <input id="fin-declaracao-valor" type="text" inputmode="decimal" autocomplete="off" value="${this.esc(valorInicial)}" oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
+            <input id="fin-declaracao-valor" type="text" inputmode="decimal" autocomplete="off" value="${this.esc(valorInicial)}"${readonlyAttr} oninput="FinanciamentoApp.atualizarSelecaoDeclaracao()">
           </label>
           <div class="fin-declaracao-selecao">
-            <div class="fin-declaracao-lista-titulo"><strong>Parcelas em aberto no Sienge</strong><span>${lista.length} disponíveis</span></div>
+            <div class="fin-declaracao-lista-titulo"><strong>${auto ? "Período de congelamento" : "Parcelas em aberto no Sienge"}</strong><span>${auto ? (periodo.quantidade || 0) + " parcela(s)" : lista.length + " disponíveis"}</span></div>
             ${lista.length
               ? `<p class="fin-declaracao-ajuda">A seleção precisa formar um intervalo contínuo de vencimentos para corresponder ao texto da declaração.</p>
                  <div class="fin-declaracao-lista">${itens}</div>`
-              : periodoManual}
+              : periodoCampos}
           </div>
           <div class="fin-declaracao-resumo" id="fin-declaracao-resumo" aria-live="polite"></div>
           <p class="fin-declaracao-status" id="fin-declaracao-status" role="status"></p>
@@ -2455,6 +2835,7 @@ const FinanciamentoApp = {
         .fin-declaracao-aviso { margin:0 0 14px; padding:10px 12px; border:1px solid #fde68a; border-radius:8px; background:#fffbeb; color:#92400e; font-size:.78rem; line-height:1.4; }
         .fin-declaracao-valor { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
         .fin-declaracao-valor input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
+        .fin-declaracao-valor input[readonly] { background:#f8fafc; color:#0f172a; }
         .fin-declaracao-selecao { margin-top:18px; }
         .fin-declaracao-lista-titulo { display:flex; justify-content:space-between; gap:10px; color:#105436; font-size:.8rem; }
         .fin-declaracao-lista-titulo span { color:#64748b; font-weight:500; }
@@ -2470,6 +2851,7 @@ const FinanciamentoApp = {
         .fin-declaracao-periodo-campos { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
         .fin-declaracao-periodo-campos label { display:flex; flex-direction:column; gap:6px; color:#334155; font-size:.76rem; font-weight:700; }
         .fin-declaracao-periodo-campos input { height:40px; box-sizing:border-box; padding:0 10px; border:1px solid #cbd5e1; border-radius:6px; font:inherit; }
+        .fin-declaracao-periodo-campos input[readonly] { background:#f8fafc; color:#0f172a; }
         .fin-declaracao-resumo { margin-top:12px; padding:10px; border-radius:7px; color:#105436; background:#e7f6ee; font-size:.76rem; font-weight:700; }
         .fin-declaracao-status { min-height:18px; margin:8px 0 0; color:#b45309; font-size:.75rem; }
         .fin-declaracao-dialog > footer { display:flex; justify-content:flex-end; gap:8px; padding:14px 20px; border-top:1px solid #e2e8f0; }
@@ -2482,20 +2864,27 @@ const FinanciamentoApp = {
     </div>`;
   },
 
-  abrirModalDeclaracaoSaldo(stageId, dados, parcelas, avisoParcelas) {
+  abrirModalDeclaracaoSaldo(stageId, dados, parcelas, avisoParcelas, opcoes) {
     this.fecharModalDeclaracaoSaldo();
+    const opt = opcoes || {};
     const state = {
       stageId: String(stageId),
       dados: dados,
       parcelas: Array.isArray(parcelas) ? parcelas : [],
       avisoParcelas: String(avisoParcelas || ""),
+      auto: !!opt.auto,
+      periodo: opt.periodo || null,
       gerando: false
     };
     state.onKeyDown = (event) => {
       if (event.key === "Escape" && !state.gerando) this.fecharModalDeclaracaoSaldo();
     };
     this._declaracaoModal = state;
-    document.body.insertAdjacentHTML("beforeend", this.declaracaoModalHtml(dados, state.parcelas, state.avisoParcelas));
+    document.body.insertAdjacentHTML("beforeend", this.declaracaoModalHtml(dados, state.auto ? [] : state.parcelas, state.avisoParcelas, {
+      auto: state.auto,
+      periodo: state.periodo || {},
+      detalheCalc: opt.detalheCalc || ""
+    }));
     const overlay = document.getElementById("fin-declaracao-modal");
     if (overlay) {
       overlay.addEventListener("click", (event) => {
@@ -2504,7 +2893,7 @@ const FinanciamentoApp = {
       document.addEventListener("keydown", state.onKeyDown);
     }
     this.atualizarSelecaoDeclaracao();
-    const input = document.getElementById("fin-declaracao-valor");
+    const input = document.getElementById(state.auto ? "fin-declaracao-confirmar" : "fin-declaracao-valor");
     if (input) input.focus();
   },
 
@@ -2552,16 +2941,19 @@ const FinanciamentoApp = {
     const state = this._declaracaoModal;
     const modal = document.getElementById("fin-declaracao-modal");
     if (!state || !modal) return { selecionadas: [], intervalo: [], continuo: false, manual: false };
-    if (!(state.parcelas && state.parcelas.length)) {
-      const inicio = String((document.getElementById("fin-declaracao-inicio") || {}).value || "").slice(0, 10);
-      const fim = String((document.getElementById("fin-declaracao-fim") || {}).value || "").slice(0, 10);
-      const qtdRaw = String((document.getElementById("fin-declaracao-qtd") || {}).value || "").trim();
+    const usaPeriodoCampos = !!(state.auto || document.getElementById("fin-declaracao-inicio") || !(state.parcelas && state.parcelas.length));
+    if (usaPeriodoCampos) {
+      const inicio = String((document.getElementById("fin-declaracao-inicio") || {}).value || (state.periodo && state.periodo.inicio) || "").slice(0, 10);
+      const fim = String((document.getElementById("fin-declaracao-fim") || {}).value || (state.periodo && state.periodo.fim) || "").slice(0, 10);
+      const qtdRaw = String((document.getElementById("fin-declaracao-qtd") || {}).value
+        || (state.periodo && state.periodo.quantidade) || "").trim();
       const quantidade = Number(qtdRaw);
       const datasOk = /^\d{4}-\d{2}-\d{2}$/.test(inicio) && /^\d{4}-\d{2}-\d{2}$/.test(fim) && inicio <= fim;
       const qtdOk = Number.isInteger(quantidade) && quantidade > 0;
+      const selecionadas = state.auto && Array.isArray(state.parcelas) ? state.parcelas : [];
       return {
-        selecionadas: [],
-        intervalo: [],
+        selecionadas: selecionadas,
+        intervalo: selecionadas,
         inicio: inicio,
         fim: fim,
         quantidade: qtdOk ? quantidade : 0,
@@ -2602,7 +2994,8 @@ const FinanciamentoApp = {
     if (resumo) {
       resumo.textContent = selecao.continuo
         ? ("Período: " + this.fmtDate(selecao.inicio) + " a " + this.fmtDate(selecao.fim)
-          + " · " + selecao.quantidade + " parcela(s)" + (selecao.manual ? " · informado manualmente" : ""))
+          + " · " + selecao.quantidade + " parcela(s)"
+          + (state.auto ? " · próximas a vencer" : (selecao.manual ? " · informado manualmente" : "")))
         : (selecao.manual
           ? "Informe data inicial, data final e a quantidade de parcelas."
           : "Selecione um intervalo contínuo de parcelas em aberto.");
@@ -2649,29 +3042,50 @@ const FinanciamentoApp = {
     const btn = document.getElementById("fin-termo-gerar-" + stageId);
     const status = document.getElementById("fin-termo-st-" + stageId);
     if (!proc || String(proc.currentStageId || "") !== String(stageId) || !this.ehEtapaDeclaracaoSaldo(stageId)) return false;
-    if (this._gerandoDeclaracao || this._declaracaoModal) return false;
+    if (this._gerandoDeclaracao || this._declaracaoModal || this._boituvaModal) return false;
     this._gerandoDeclaracao = true;
     if (btn) { btn.disabled = true; btn.textContent = "Carregando…"; }
-    if (status) status.textContent = "Buscando os dados do contrato e as parcelas em aberto no Sienge…";
+    if (status) status.textContent = "Buscando contrato, metragem, valor m² e próximas parcelas…";
     try {
       const dados = await this.obterDadosTermoSaldo(proc);
-      let parcelas = [];
+      if (status) status.textContent = "Calculando o valor comercial (metragem × m²)…";
+      const resolucao = await this.resolverValorComercialLote(dados, proc);
+      if (!resolucao) {
+        if (status) status.textContent = "Geração da declaração cancelada.";
+        return false;
+      }
+      dados.valorComercial = resolucao.valorComercial;
+      dados.metragemLote = resolucao.metragem;
+      dados.valorM2 = resolucao.valorM2;
+      let periodo = { inicio: "", fim: "", quantidade: 0, parcelas: [] };
       let avisoParcelas = "";
       try {
-        parcelas = await this.listarParcelasParaCongelamento(dados.billId);
+        periodo = await this.listarProximasParcelasAVencer(dados.billId, 3);
       } catch (erroParcelas) {
         avisoParcelas = (erroParcelas && erroParcelas.message)
           || "Não foi possível consultar as parcelas no Sienge.";
         console.warn("[Financiamento] parcelas da declaração", erroParcelas);
       }
-      if (!parcelas.length && !avisoParcelas) {
-        avisoParcelas = "O Sienge não retornou parcelas em aberto com saldo e vencimento para este título. Informe o período manualmente e o valor comercial para gerar a declaração.";
+      if (!(periodo.parcelas && periodo.parcelas.length) && !avisoParcelas) {
+        avisoParcelas = "Não encontrei as próximas parcelas a vencer neste título. Informe o período manualmente para gerar a declaração.";
       }
-      this.abrirModalDeclaracaoSaldo(stageId, dados, parcelas, avisoParcelas);
+      const auto = !!(periodo.inicio && periodo.fim && periodo.quantidade);
+      const detalheCalc = "Metragem " + this.fmtMetragemFin(resolucao.metragem) + " m² × R$ "
+        + Number(resolucao.valorM2).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        + "/m² (" + (resolucao.fonte === "boituva-manual" ? "Boituva, valor informado" : "tabela Comercial") + ").";
+      this.abrirModalDeclaracaoSaldo(stageId, dados, periodo.parcelas || [], avisoParcelas, {
+        auto: auto,
+        periodo: {
+          inicio: periodo.inicio || "",
+          fim: periodo.fim || "",
+          quantidade: periodo.quantidade || 3
+        },
+        detalheCalc: detalheCalc
+      });
       if (status) {
-        status.textContent = parcelas.length
-          ? "Selecione as parcelas e confirme o valor comercial."
-          : "Confirme o valor comercial e informe o período manualmente.";
+        status.textContent = auto
+          ? "Revise o valor comercial e o período das próximas 3 parcelas."
+          : "Confirme o valor comercial e informe o período das parcelas.";
       }
       return true;
     } catch (e) {
@@ -2709,14 +3123,14 @@ const FinanciamentoApp = {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }) + " (" + window.valorPorExtensoBRL(valorComercial) + ")";
-      dados.parcelasCongeladas = selecao.manual
-        ? []
-        : selecao.selecionadas.map((parcela) => ({
+      dados.parcelasCongeladas = (selecao.selecionadas && selecao.selecionadas.length)
+        ? selecao.selecionadas.map((parcela) => ({
           id: parcela.id,
           numero: parcela.numero,
           vencimento: parcela.vencimento,
           saldo: parcela.saldo
-        }));
+        }))
+        : [];
       dados.periodoCongelamento = {
         inicio: selecao.inicio,
         fim: selecao.fim,
@@ -3535,37 +3949,40 @@ const FinanciamentoApp = {
     const btn = document.getElementById("fin-termo-gerar-" + stageId);
     const status = document.getElementById("fin-termo-st-" + stageId);
     if (!proc || String(proc.currentStageId || "") !== String(stageId) || !this.ehEtapaTermoSaldo(stageId)) return false;
-    if (this._gerandoTermo) return false;
+    if (this._gerandoTermo || this._boituvaModal) return false;
     this._gerandoTermo = true;
     if (btn) { btn.disabled = true; btn.textContent = "Gerando…"; }
     if (status) status.textContent = "Buscando os dados do contrato…";
     try {
       const dados = await this.obterDadosTermoSaldo(proc);
-      if (status) status.textContent = "Confirme o valor comercial do lote.";
-      const valorInicial = dados.valorComercial == null
-        ? ""
-        : Number(dados.valorComercial).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const valorInformado = typeof window.mouraPrompt === "function"
-        ? await window.mouraPrompt("Informe o valor comercial de compra e venda do lote (R$). Confirme ou ajuste o valor sugerido.", valorInicial)
-        : window.prompt("Informe o valor comercial de compra e venda do lote (R$).", valorInicial);
-      if (valorInformado == null) {
+      if (status) status.textContent = "Calculando o valor comercial (metragem × m²)…";
+      const resolucao = await this.resolverValorComercialLote(dados, proc);
+      if (!resolucao) {
         if (status) status.textContent = "Geração do termo cancelada.";
         return false;
       }
-      const valorComercial = this.parseValorComercialTermo(valorInformado);
-      if (valorComercial == null) throw new Error("Informe um valor comercial válido, maior que zero.");
+      const valorComercial = resolucao.valorComercial;
+      if (!(Number.isFinite(valorComercial) && valorComercial > 0)) {
+        throw new Error("Não foi possível calcular um valor comercial válido.");
+      }
       if (typeof window.valorPorExtensoBRL !== "function") throw new Error("A conversão dos valores por extenso não está disponível.");
       dados.valorComercial = valorComercial;
+      dados.metragemLote = resolucao.metragem;
+      dados.valorM2 = resolucao.valorM2;
       dados.valorComercialTexto = Number(valorComercial).toLocaleString("pt-BR", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
       }) + " (" + window.valorPorExtensoBRL(valorComercial) + ")";
-      if (status) status.textContent = "Preenchendo o modelo Word…";
+      if (status) {
+        status.textContent = "Valor comercial: metragem " + this.fmtMetragemFin(resolucao.metragem)
+          + " m² × R$ " + Number(resolucao.valorM2).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          + "/m². Preenchendo o modelo Word…";
+      }
       const docxBuffer = await this.montarDocxTermoSaldo(dados);
       if (status) status.textContent = "Gerando o PDF…";
       const arquivoPdf = await this.converterDocxTermoParaPdf(docxBuffer);
       if (status) status.textContent = "Salvando o PDF nesta etapa…";
-      const termo = await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
+      await this.guardarTermoSaldo(proc, stageId, arquivoPdf.blob, dados);
       this.atualizarTermosEtapa(stageId);
       if (status) status.textContent = "Termo salvo nesta etapa. Você pode continuar o processo ou abrir o PDF abaixo.";
       return true;
@@ -4115,6 +4532,8 @@ window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {
     if (recenteConcluido) {
       junto.status = recente.status || "concluido";
       junto.finishedAt = recente.finishedAt || antigo.finishedAt || "";
+      delete junto.closedAt;
+      delete junto.descartadoComoDuplicata;
     } else if (antigoConcluido) {
       const fin = Date.parse(antigo.finishedAt || antigo.updatedAt || 0) || 0;
       const undo = Object.keys(recente.desfeitos || {}).some((id) => {
@@ -4127,9 +4546,24 @@ window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {
       } else {
         junto.status = antigo.status || "concluido";
         junto.finishedAt = antigo.finishedAt || "";
+        delete junto.closedAt;
+        delete junto.descartadoComoDuplicata;
       }
     } else {
       delete junto.finishedAt;
+    }
+    const descartadoDe = (p) => !!(p && (p.descartadoComoDuplicata || (String(p.status || "").toLowerCase() === "cancelado" && p.closedAt)));
+    if (descartadoDe(recente) || descartadoDe(antigo)) {
+      const origem = descartadoDe(recente) && (!descartadoDe(antigo)
+        || (Date.parse(recente.descartadoEm || recente.updatedAt || 0) || 0)
+          >= (Date.parse(antigo.descartadoEm || antigo.updatedAt || 0) || 0))
+        ? recente : antigo;
+      junto.status = "cancelado";
+      junto.closedAt = origem.closedAt || origem.descartadoEm || origem.updatedAt || new Date().toISOString();
+      junto.descartadoComoDuplicata = true;
+      junto.descartadoEm = origem.descartadoEm || junto.closedAt;
+      junto.descartadoMotivo = origem.descartadoMotivo || "duplicata";
+      junto.finishedAt = "";
     }
     if (!junto.currentStageId) junto.currentStageId = antigo.currentStageId || recente.currentStageId || null;
     if (!junto.customerName) junto.customerName = antigo.customerName || recente.customerName || "";
