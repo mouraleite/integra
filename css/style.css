@@ -12380,6 +12380,32 @@ tr.pr-liberado td { background: #f7faf8; }
 .cem-painel .cc-scroll { margin-bottom: 16px; overflow-x: hidden; }
 .cem-tabela td.cem-para { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; overflow-wrap: anywhere; }
 .cem-tabela td.cem-acoes { overflow: hidden; text-overflow: clip; white-space: nowrap; }
+.cem-tabela td.cem-quebra, .cem-tabela td.cem-etapas { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; }
+.cem-tabela td.cem-etapas .cem-env { white-space: normal; text-align: center; line-height: 1.25; }
+.cem-tabela td.cem-regua { overflow: visible; text-overflow: clip; }
+.cem-tabela tr.cem-desligada td { color: #64748b; }
+.cem-dias { display: inline-block; min-width: 30px; padding: 2px 8px; border-radius: 99px; background: #e7f6ee; color: #105436; font-weight: 800; }
+/* Interruptor da régua: verde e "Ligada" / cinza e "Desligada" (antes era o mesmo ícone nos dois estados). */
+.cem-switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; padding: 2px 4px; cursor: pointer; font: inherit; }
+.cem-switch-trilho { position: relative; width: 38px; height: 22px; border-radius: 99px; background: #cbd5e1; transition: background .15s; flex-shrink: 0; }
+.cem-switch-bola { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .15s; }
+.cem-switch.is-on .cem-switch-trilho { background: #1b8253; }
+.cem-switch.is-on .cem-switch-bola { left: 19px; }
+.cem-switch-txt { font-weight: 800; font-size: 0.74rem; color: #64748b; min-width: 62px; text-align: left; }
+.cem-switch.is-on .cem-switch-txt { color: #105436; }
+.cem-switch:focus-visible { outline: 2px solid #1b8253; outline-offset: 2px; border-radius: 6px; }
+.cem-sit { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.72rem; font-weight: 800; }
+.cem-sit.is-on { background: #dcfce7; color: #166534; }
+.cem-sit.is-off { background: #f1f5f9; color: #475569; }
+.cem-sit.is-pendente { background: #fef3c7; color: #92400e; white-space: normal; }
+.cem-aprovar { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 6px; border: 1px solid #d97706; background: #fffbeb; color: #92400e; font-weight: 800; font-size: 0.74rem; cursor: pointer; }
+.cem-aprovar:hover { background: #fef3c7; }
+/* Acompanhamento */
+.cem-ac-filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 8px; }
+.cem-ac-filtros label { display: flex; flex-direction: column; gap: 4px; font-size: 0.72rem; font-weight: 700; color: #64748b; }
+.cem-ac-filtros .cem-ac-busca { flex: 1 1 220px; }
+.cem-ac-filtros .cc-atualizar { margin-left: auto; }
+.cem-ac-info { margin: 0 0 10px; color: #64748b; font-size: 0.78rem; line-height: 1.4; }
 .cem-vazio { margin: 8px 0 0; color: #64748b; font-size: 0.85rem; }
 .cem-bloco h4 { margin: 8px 0 4px; color: #105436; font-size: 0.95rem; }
 .cem-bloco p { margin: 0 0 8px; color: #64748b; font-size: 0.8rem; }

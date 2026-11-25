@@ -5,6 +5,9 @@ const rotas = {
   "sienge-upload": require("./_lib/sienge-upload"),
   "github-leitura": require("./_lib/github-leitura"),
   "central-email-enviar": require("./_lib/central-email-enviar"),
+  "central-email-confirmacoes": require("./_lib/central-email-confirmacoes"),
+  // Imagem de rastreio de abertura: pública (leitor de e-mail do cliente), protegida pela assinatura do id.
+  "email-aberto": require("./_lib/email-aberto"),
   "sienge-builder-proxy": require("./_lib/sienge-builder-proxy"),
   "sync-customers": require("./_lib/sync-customers"),
   "sync-creditors": require("./_lib/sync-creditors"),
@@ -37,7 +40,7 @@ const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/in
 // proxy-download fica fora: o boleto/extrato abre numa aba nova, que não leva o login. Ele só aceita
 // links do próprio Sienge (que já trazem a chave do relatório), então não serve de passagem para outros sites.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "central-email-confirmacoes", "sienge-builder-proxy", "sync-customers", "sync-creditors",
   "cvcrm-proxy", "scod-proxy", "clicksign",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
