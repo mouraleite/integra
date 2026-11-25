@@ -5502,6 +5502,9 @@ async function processSuccessfulLogin(loggedUser) {
       if (typeof window.avisarRepactuacaoUltimoDia === "function") {
         window.avisarRepactuacaoUltimoDia();
       }
+      if (typeof window.avisarTitulosMonitorados === "function") {
+        window.avisarTitulosMonitorados().catch(function() {});
+      }
     }, 2500);
   } catch (err) {
     console.error("Erro no login:", err);
@@ -41487,6 +41490,78 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
     fechar();
     if (typeof window.switchTab === "function") window.switchTab("repactuacao-lote", "Repactuação");
   });
+};
+
+// Títulos fora da carteira de lotes que o back office acompanha de perto. Continuam na inadimplência;
+// quando têm parcela vencida, o back office recebe um aviso no login (uma vez por dia, até pagar).
+window.TITULOS_MONITORADOS_BACK_OFFICE = [
+  { titulo: "16955", motivo: "Casa SPA (centro de custo 16300), fora do relatório de inadimplência dos empreendimentos no Sienge." }
+];
+
+window.avisarTitulosMonitorados = async function() {
+  const u = window.AppState && window.AppState.currentUser;
+  if (!u || typeof window.crmProfileKind !== "function") return;
+  const rec = typeof window.findCrmRegisteredUser === "function" ? window.findCrmRegisteredUser(u) : null;
+  const perfil = (rec && rec.profile_name) || u.profile_name || "";
+  if (window.crmProfileKind(perfil) !== "back_office") return;
+  const lista = window.TITULOS_MONITORADOS_BACK_OFFICE || [];
+  if (!lista.length || !window.SiengeApiService || typeof SiengeApiService.getDefaulters !== "function") return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  const hoje = window.crmIsoLocal(new Date());
+  const chave = "crm_titulos_monitorados_" + String(u.email || u.name || "op").toLowerCase() + "_" + hoje;
+  try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+  let bills = [];
+  try { bills = await SiengeApiService.getDefaulters(); } catch (e) { return; }
+  if (!Array.isArray(bills)) return;
+  const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const brl = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const dataBr = (iso) => { const p = String(iso || "").slice(0, 10).split("-"); return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : ""; };
+  const vencidos = [];
+  for (const item of lista) {
+    const bill = bills.find((b) => String(b && (b.id || b.saleId)) === String(item.titulo));
+    if (!bill) continue;
+    const parcelas = (bill.defaulterInstallments || []).filter((p) => p && String(p.dueDate || "").slice(0, 10) < hoje);
+    if (!parcelas.length) continue;
+    vencidos.push({ item, bill, parcelas });
+  }
+  if (!vencidos.length) return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  const blocos = vencidos.map(({ item, bill, parcelas }) => {
+    const total = parcelas.reduce((s, p) => s + (Number(p.correctedValueWithAdditions) || 0), 0);
+    const linhas = parcelas.map((p) => `<div class="apa-item"><strong>Parcela ${esc(p.installmentNumber || p.installmentId)} · venceu em ${esc(dataBr(p.dueDate))}</strong><span>${esc(p.daysOfDelay)} dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">${esc(brl(p.correctedValueWithAdditions))}</span></div>`).join("");
+    return `<div style="margin-bottom:12px;">
+      <p style="margin:0 0 4px 0;"><strong>Título ${esc(item.titulo)}</strong> · ${esc(bill.clientName || "")}${bill.units ? " · " + esc(bill.units) : ""}</p>
+      <p style="margin:0 0 6px 0;color:#475569;font-size:0.82rem;">${esc(item.motivo)}</p>
+      ${linhas}
+      <p style="margin:6px 0 0 0;">Total vencido: <strong style="color:#b91c1c;">${esc(brl(total))}</strong></p>
+      <button type="button" class="btn btn-primary" data-tm-cliente="${esc(bill.customerId)}" data-tm-venda="${esc(bill.saleId || bill.id)}" data-tm-titulo="${esc(item.titulo)}" style="margin-top:8px;">Abrir ficha do cliente</button>
+    </div>`;
+  }).join("");
+  const overlay = document.createElement("div");
+  overlay.id = "titulos-monitorados-aviso";
+  overlay.className = "repac-dia";
+  overlay.setAttribute("role", "alertdialog");
+  overlay.setAttribute("aria-labelledby", "titulos-monitorados-titulo");
+  overlay.innerHTML = `<div class="repac-dia-box">
+    <div class="repac-dia-head">
+      <h3 id="titulos-monitorados-titulo">Título acompanhado está vencido</h3>
+      <button type="button" class="btn btn-fechar" id="titulos-monitorados-fechar">Fechar</button>
+    </div>
+    <p>Este título está na inadimplência e precisa de contato do back office.</p>
+    ${blocos}
+  </div>`;
+  document.body.appendChild(overlay);
+  const fechar = () => {
+    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    overlay.remove();
+  };
+  overlay.querySelector("#titulos-monitorados-fechar").addEventListener("click", fechar);
+  overlay.querySelectorAll("[data-tm-cliente]").forEach((btn) => btn.addEventListener("click", function() {
+    fechar();
+    if (typeof window.openCustomerFromRelacionamento === "function") {
+      window.openCustomerFromRelacionamento(this.getAttribute("data-tm-cliente"), this.getAttribute("data-tm-venda"), this.getAttribute("data-tm-titulo"));
+    }
+  }));
 };
 
 window.checkDistratoPrazoMes = function() {
