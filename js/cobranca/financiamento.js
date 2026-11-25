@@ -3573,14 +3573,17 @@ const FinanciamentoApp = {
     if (listaAtual) {
       listaAtual.outerHTML = html;
       if (window.lucide) window.lucide.createIcons();
-      return;
+    } else {
+      const botaoGerar = document.getElementById("fin-termo-gerar-" + sid);
+      const gerador = botaoGerar && botaoGerar.closest(".fin-termo-gerar");
+      if (gerador && html) {
+        gerador.insertAdjacentHTML("afterend", html);
+        if (window.lucide) window.lucide.createIcons();
+      }
     }
-    const botaoGerar = document.getElementById("fin-termo-gerar-" + sid);
-    const gerador = botaoGerar && botaoGerar.closest(".fin-termo-gerar");
-    if (gerador && html) {
-      gerador.insertAdjacentHTML("afterend", html);
-      if (window.lucide) window.lucide.createIcons();
-    }
+    const ui = this._tagUi && this._tagUi[stageId];
+    if (ui) ui.open = false;
+    this.pintarTag(stageId);
   },
 
   async removerTermoSaldo(stageId, termoId) {
@@ -4747,13 +4750,76 @@ const FinanciamentoApp = {
             #financiamento-root .fin-nota label { display: block; font-size: 0.72rem; font-weight: 700; color: #64748b; margin-bottom: 4px; }
             #financiamento-root .fin-nota textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; font: inherit; background: #fff; min-height: 52px; resize: vertical; }
             #financiamento-root .fin-nota-linha { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px; }
-            #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; }
+            #financiamento-root .fin-etapa,
+            #financiamento-root .fin-etapa-corpo,
+            #financiamento-root .fin-anexo,
+            #financiamento-root .crm-card-content { overflow: visible; }
+            #financiamento-root .fin-anexo { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 10px; position: relative; z-index: 1; }
             #financiamento-root .fin-anexo-arquivo { display:flex; flex:0 1 260px; flex-direction:column; min-width:220px; max-width:260px; }
             #financiamento-root .fin-anexo-label { display:block; margin-bottom:6px; color:#64748b; font-size:0.7rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; }
             #financiamento-root .fin-anexo-arquivo input[type="file"] { width:100%; max-width:none; padding:0; font-size:0.8rem; }
-            #financiamento-root .fin-tag-box { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
-            #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
+            #financiamento-root .fin-tag-box { flex: 1 1 260px; min-width: 240px; max-width: 420px; position: relative; z-index: 30; overflow: visible; }
+            #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; position: relative; overflow: visible; z-index: 30; }
+            #financiamento-root .fin-tag-box .ml-emp-filter.is-open { z-index: 80; }
             #financiamento-root .fin-tag-box .ml-emp-filter-btn { height:40px; min-height:40px; box-sizing:border-box; }
+            #financiamento-root .fin-tag-box .ml-emp-filter-panel {
+              display: none;
+              position: absolute;
+              left: 0;
+              right: auto;
+              top: calc(100% + 4px);
+              width: max(100%, 360px);
+              max-width: min(480px, 92vw);
+              z-index: 90;
+              background: #fff;
+              border: 1px solid #cbd5e1;
+              border-radius: 8px;
+              box-shadow: 0 12px 28px rgba(15,23,42,.14);
+              overflow: hidden;
+              box-sizing: border-box;
+            }
+            #financiamento-root .fin-tag-box .ml-emp-filter.is-open .ml-emp-filter-panel { display: block; }
+            #financiamento-root .fin-tag-box .ml-emp-filter-list {
+              display: block;
+              max-height: 260px;
+              overflow-x: hidden;
+              overflow-y: auto;
+            }
+            #financiamento-root .fin-tag-box .ml-emp-filter-item {
+              display: flex !important;
+              flex-direction: row !important;
+              align-items: center !important;
+              gap: 10px;
+              width: 100%;
+              box-sizing: border-box;
+              margin: 0;
+              padding: 10px 14px;
+              border-bottom: 1px solid #f1f5f9;
+              font-size: 0.82rem;
+              font-weight: 600;
+              color: #334155;
+              line-height: 1.3;
+              white-space: nowrap;
+            }
+            #financiamento-root .fin-tag-box .ml-emp-filter-item:last-child { border-bottom: 0; }
+            #financiamento-root .fin-tag-box .ml-emp-filter-item input {
+              width: 16px;
+              height: 16px;
+              min-width: 16px;
+              margin: 0;
+              padding: 0;
+              flex: 0 0 16px;
+              accent-color: #105436;
+            }
+            #financiamento-root .fin-tag-box .ml-emp-filter-item span {
+              flex: 1 1 auto;
+              min-width: 0;
+              display: block;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              line-height: 1.3;
+            }
             #financiamento-root .fin-nota input[type="date"] { height: 40px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
             #financiamento-root .fin-nota-historico { display:flex; flex-direction:column; gap:8px; margin-top:12px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; }
