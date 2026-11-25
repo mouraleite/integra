@@ -181,7 +181,7 @@ const AlertasPopupApp = {
       logica: "Só age no endereço antigo de produção; bolhas de teste e o endereço novo não mostram. A chave BLOQUEAR em js/nucleo/aviso-endereco.js é ligada depois da carga final dos dados.",
       quem: "Todos os usuários.",
       titulo: "O Integra vai mudar de endereço",
-      corpo: `<p>A partir de <strong>sábado, 28/11/2026</strong>, o Integra passa a funcionar neste endereço:</p>
+      corpo: `<p>A partir de <strong>segunda-feira, 30/11/2026</strong>, o Integra passa a funcionar neste endereço:</p>
         <div class="apa-item"><strong>integra-mouraleite.vercel.app</strong></div>
         <p><strong>Até lá, continue usando este endereço normalmente.</strong> Salve o endereço novo nos favoritos.</p>`
     },
