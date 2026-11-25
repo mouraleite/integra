@@ -1227,7 +1227,7 @@ const FinanciamentoApp = {
           <strong>${this.esc(proc.customerName || "—")}</strong>
           <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
           <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))}</span>
-          <div class="fin-al-chips"><em class="fin-al-chip is-alerta">Em alerta há ${n} dia${n === 1 ? "" : "s"}</em></div>
+          <div class="fin-al-chips"><em class="fin-al-chip is-alerta">${this.textoEmAlerta(n)}</em></div>
         </button>`;
       }).join("");
       // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
@@ -1235,7 +1235,7 @@ const FinanciamentoApp = {
         const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const chips = [];
         const emAlerta = this.diasAlertaParcela(p, hoje);
-        if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">Em alerta há ${emAlerta} dia${emAlerta === 1 ? "" : "s"}</em>`);
+        if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">${this.textoEmAlerta(emAlerta)}</em>`);
         if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
         if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
         if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
@@ -1310,6 +1310,12 @@ const FinanciamentoApp = {
     }
   },
 
+  textoEmAlerta(n) {
+    const d = Math.max(0, Number(n) || 0);
+    if (!d) return "Em alerta desde hoje";
+    return "Em alerta há " + d + (d === 1 ? " dia" : " dias");
+  },
+
   /* Dias em alerta da parcela: ela entra no aviso quando fica "a vencer no mês seguinte", ou seja, no dia 1 do mês
      anterior ao vencimento. Conta a partir da parcela mais antiga do aviso (vencida, deste mês ou do mês seguinte). */
   diasAlertaParcela(p, hoje) {
@@ -1317,7 +1323,10 @@ const FinanciamentoApp = {
       .map((d) => String(d || "").slice(0, 10)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
     if (!datas.length) return null;
     const v = datas[0].split("-").map(Number);
-    const entrada = new Date(v[0], v[1] - 2, 1);
+    let entrada = new Date(v[0], v[1] - 2, 1);
+    // O aviso de parcelas começou em 25/11/2026: antes disso ninguém foi avisado, então a conta não passa dessa data.
+    const inicioAviso = new Date(2026, 10, 25);
+    if (entrada < inicioAviso) entrada = inicioAviso;
     const h = String(hoje || this.hojeIso()).split("-").map(Number);
     const dias = Math.round((new Date(h[0], h[1] - 1, h[2]) - entrada) / 86400000);
     return Math.max(0, dias);
