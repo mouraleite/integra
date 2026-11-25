@@ -306,6 +306,19 @@ const FinanciamentoApp = {
       return cidade;
     });
     const porEmpreendimento = this.agruparDashboard(abertosRows, (proc) => this.obraDoProc(proc).empreendimento);
+    porEmpreendimento.forEach((item) => {
+      const amostra = item.itens && item.itens[0] && item.itens[0].proc;
+      let cidade = amostra ? String(this.cidadeDoProc(amostra) || "").trim() : "";
+      if (!cidade || cidade === "—" || /^sem cidade$/i.test(cidade)) {
+        const partes = String(item.nome || "").split(/\s+-\s+/);
+        cidade = partes.length >= 2 ? partes[0].trim() : "Sem cidade";
+      }
+      item.cidade = cidade || "Sem cidade";
+    });
+    porEmpreendimento.sort((a, b) =>
+      String(a.cidade || "").localeCompare(String(b.cidade || ""), "pt-BR", { sensitivity: "base" })
+      || String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR", { sensitivity: "base" })
+    );
     const semCidade = porCidade.find((item) => this.foldTextoFin(item.nome) === "SEM CIDADE");
     const cidadesComNome = porCidade.filter((item) => this.foldTextoFin(item.nome) !== "SEM CIDADE");
     const ano = Number(String(periodo || "").slice(0, 4));
@@ -494,7 +507,7 @@ const FinanciamentoApp = {
           <div class="fin-dash-coluna-direita">
             <section class="fin-dash-bloco">
               <div class="fin-dash-titulo"><h3>Por cidade</h3></div>
-              <div class="fin-dash-barras">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
+              <div class="fin-dash-barras fin-dash-barras-cidade">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
               ${avisoCidade}
             </section>
             <section class="fin-dash-bloco">
@@ -507,7 +520,7 @@ const FinanciamentoApp = {
         <p class="fin-dash-rodape">Clique em uma etapa, cidade ou empreendimento para visualizar os contratos.</p>
       </div>
       <style>
-        #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-verde-2:#1b8253; --fin-dash-fundo:#f4f7f5; }
+        #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-verde-2:#1b8253; --fin-dash-laranja:#ea580c; --fin-dash-laranja-2:#f59e0b; --fin-dash-fundo:#f4f7f5; }
         #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; padding:4px 2px 8px; }
         #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
         #financiamento-root .fin-dash-cabecalho h2 { margin:0; color:#0f172a; font-size:1.45rem; letter-spacing:-0.02em; }
@@ -533,15 +546,17 @@ const FinanciamentoApp = {
         #financiamento-root .fin-dash-barra-item { position:relative; width:100%; min-width:0; padding:10px 12px; border:1px solid transparent; border-radius:10px; background:#f8fafc; text-align:left; font:inherit; cursor:pointer; transition:border-color .15s, background .15s, box-shadow .15s; }
         #financiamento-root .fin-dash-barra-item:hover { border-color:#bbf7d0; background:#f0fdf4; }
         #financiamento-root .fin-dash-barra-item.is-aberto { border-color:#86efac; background:#ecfdf5; box-shadow:inset 3px 0 0 #16a34a; }
-        #financiamento-root .fin-dash-barra-item.is-destaque { background:#fff7ed; border-color:#fed7aa; }
-        #financiamento-root .fin-dash-barra-item.is-destaque.is-aberto { background:#ffedd5; }
+        #financiamento-root .fin-dash-barras-etapa .fin-dash-barra-item.is-destaque { background:#ecfdf5; border-color:#86efac; }
+        #financiamento-root .fin-dash-barras-etapa .fin-dash-barra-item.is-destaque.is-aberto { background:#dcfce7; }
         #financiamento-root .fin-dash-barra-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; color:#334155; font-size:0.8rem; }
         #financiamento-root .fin-dash-barra-topo strong { font-weight:700; line-height:1.35; }
         #financiamento-root .fin-dash-barra-topo span { flex:0 0 auto; color:#0f172a; font-weight:800; font-variant-numeric:tabular-nums; }
-        #financiamento-root .fin-dash-badge { display:inline-block; margin:6px 0 0; padding:2px 8px; border-radius:999px; background:#fff7ed; color:#c2410c; font-size:0.65rem; font-style:normal; font-weight:800; }
+        #financiamento-root .fin-dash-badge { display:inline-block; margin:6px 0 0; padding:2px 8px; border-radius:999px; background:#dcfce7; color:#166534; font-size:0.65rem; font-style:normal; font-weight:800; }
         #financiamento-root .fin-dash-barra { height:8px; margin-top:8px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
-        #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--fin-dash-verde),var(--fin-dash-verde-2)); }
-        #financiamento-root .fin-dash-barra-item.is-destaque .fin-dash-barra i { background:linear-gradient(90deg,#ea580c,#f59e0b); }
+        #financiamento-root .fin-dash-barras-etapa .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--fin-dash-verde),var(--fin-dash-verde-2)); }
+        #financiamento-root .fin-dash-barras-cidade .fin-dash-barra-item:hover { border-color:#fdba74; background:#fff7ed; }
+        #financiamento-root .fin-dash-barras-cidade .fin-dash-barra-item.is-aberto { border-color:#fb923c; background:#ffedd5; box-shadow:inset 3px 0 0 #ea580c; }
+        #financiamento-root .fin-dash-barras-cidade .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--fin-dash-laranja),var(--fin-dash-laranja-2)); }
         #financiamento-root .fin-dash-toggle { display:inline-flex; align-items:center; gap:8px; margin-top:14px; color:#64748b; font-size:0.76rem; cursor:pointer; user-select:none; }
         #financiamento-root .fin-dash-toggle input { accent-color:var(--fin-dash-verde); }
         #financiamento-root .fin-dash-aviso { margin:12px 0 0; padding:10px 12px; border:1px solid #fde68a; border-radius:10px; background:#fffbeb; color:#92400e; font-size:0.74rem; line-height:1.4; }
