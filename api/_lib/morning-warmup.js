@@ -8,6 +8,7 @@ const { marcarBaixados } = require("../../lib/distrato-followup-core");
 const { aplicarFila, normalizarOutcome, chaveTitulo } = require("../../lib/titulos-incompletos-batimento");
 const { runReembolsoBatimento } = require("../../lib/reembolso-batimento");
 const { runAntecipacoesBatimento } = require("../../lib/antecipacoes-batimento");
+const { runRemessaAvulsaBatimento } = require("../../lib/remessa-avulsa-batimento");
 
 const SIENGE_DOMAIN = "mouraleite";
 // Usuário e senha da API do Sienge ficam nas variáveis da Vercel, nunca no código.
@@ -1444,6 +1445,46 @@ async function antecipacoesBatimentoHandler(req, res) {
   }
 }
 
+async function remessaAvulsaHandler(req, res) {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(204).end();
+  }
+  if (!authorized(req)) return res.status(401).json({ error: "unauthorized" });
+  try {
+    const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
+    const out = await runRemessaAvulsaBatimento({
+      db: db,
+      doc: doc,
+      getDoc: getDoc,
+      setDoc: setDoc,
+      today: todayIsoSP(),
+      force: force,
+      bulkBase: SIENGE_BULK_BASE,
+      getJson: siengeFetchOnce
+    });
+    return res.status(200).json(out);
+  } catch (e) {
+    console.error("[remessa-avulsa]", e);
+    return res.status(500).json({ error: String((e && e.message) || e) });
+  }
+}
+
+/** Remessa avulsa entra no mesmo batimento das 7h. A chamada é abandonada; a função segue sozinha. */
+async function dispararRemessaAvulsa(req) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2500);
+  try {
+    await fetch(`${originFromReq(req)}/api/remessa-avulsa-batimento`, {
+      headers: { Authorization: req.headers.authorization || "" },
+      signal: ctrl.signal
+    });
+  } catch (e) {
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Antecipações (últimos 7 dias) entram no batimento das 7h. A chamada é abandonada; a função segue sozinha. */
 async function dispararAntecipacoes(req) {
   const ctrl = new AbortController();
@@ -1460,6 +1501,7 @@ async function dispararAntecipacoes(req) {
 }
 
 async function handler(req, res) {
+  if (String(req.url || "").indexOf("remessa-avulsa-batimento") >= 0) return remessaAvulsaHandler(req, res);
   if (String(req.url || "").indexOf("antecipacoes-batimento") >= 0) return antecipacoesBatimentoHandler(req, res);
   if (String(req.url || "").indexOf("reembolso-batimento") >= 0) return reembolsoBatimentoHandler(req, res);
   if (String(req.url || "").indexOf("caucao-batimento") >= 0) return caucaoHandler(req, res);
@@ -1481,6 +1523,7 @@ async function handler(req, res) {
   await dispararTitulosIncompletos(req);
   await dispararReembolso(req);
   await dispararAntecipacoes(req);
+  await dispararRemessaAvulsa(req);
 
   const force = !!(req.query && (req.query.force === "1" || req.query.force === "true"));
   const today = todayIsoSP();
@@ -1553,6 +1596,23 @@ async function handler(req, res) {
         } catch (e) {
           log.push(`defaulters emp ${cId} lote ${state.batchIndex}: ${e.message}`);
         }
+        if (!allOk) {
+          state.falhasLote = (Number(state.falhasLote) || 0) + 1;
+          log.push(`emp ${cId} lote ${state.batchIndex + 1} sem resposta (${state.falhasLote}/3)`);
+          await saveState(state);
+          if (state.falhasLote < 3) continue;
+          state.incompleto = true;
+          state.falhasLote = 0;
+          state.batchIndex += 1;
+          if (state.batchIndex >= ccBatches.length) {
+            state.companyIndex += 1;
+            state.batchIndex = 0;
+          }
+          if (state.companyIndex >= companies.length) state.step = "income";
+          await saveState(state);
+          continue;
+        }
+        state.falhasLote = 0;
         if (allOk) {
           try {
             await new Promise((r) => setTimeout(r, 1000));
@@ -1610,6 +1670,7 @@ async function handler(req, res) {
       }
       await saveState(state);
       if (state.step === "defaulters") {
+        await continuarWarmup(req);
         return res.status(200).json({ done: false, filaPronta: false, date: today, step: state.step, companyIndex: state.companyIndex, batchIndex: state.batchIndex, log });
       }
     }
@@ -1656,6 +1717,7 @@ async function handler(req, res) {
       }
       await saveState(state);
       if (state.step === "income") {
+        await continuarWarmup(req);
         return res.status(200).json({ done: false, filaPronta: false, date: today, step: state.step, incomeIndex: state.incomeIndex, log });
       }
     }
@@ -1687,6 +1749,20 @@ async function handler(req, res) {
       }
       const bills = mesclarNormalizados(billsRaw);
       const subCount = bills.filter((b) => b && b.subjudice === "S").length;
+      const porEmpresa = {};
+      bills.forEach((b) => {
+        const id = Number(b && b.companyId);
+        if (!Number.isFinite(id)) return;
+        porEmpresa[id] = (porEmpresa[id] || 0) + 1;
+      });
+      const empresasPedidas = state.companies || [];
+      const empresa1Curta = empresasPedidas.map(Number).indexOf(1) >= 0 && (porEmpresa[1] || 0) < 50;
+      const empresaSemTitulo = empresasPedidas.filter((id) => (porEmpresa[Number(id)] || 0) < 1);
+      if (state.incompleto || empresa1Curta || empresaSemTitulo.length) {
+        log.push(`finalize recusado: emp1=${porEmpresa[1] || 0} sem título=${empresaSemTitulo.join(",") || "—"}`);
+        await saveState(state);
+        return res.status(200).json({ done: false, filaPronta: false, date: today, step: "finalize", incompleto: true, log });
+      }
       if (bills.length >= 200 && subCount === 0) {
         log.push(`finalize adiado: ${bills.length} títulos e nenhum sub judice`);
         await saveState(state);

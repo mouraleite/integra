@@ -121,15 +121,24 @@ function defaultersCacheLooksIncomplete(data, meta, expectedIds) {
   const metaIds = meta && Array.isArray(meta.companyIds)
     ? meta.companyIds.map(Number).filter(Number.isFinite)
     : null;
+  const contagem = {};
+  (Array.isArray(data) ? data : []).forEach((b) => {
+    const id = Number(b && b.companyId);
+    if (!Number.isFinite(id)) return;
+    contagem[id] = (contagem[id] || 0) + 1;
+  });
+  // A empresa 1 é a maior carteira. Três títulos e valor zerado, como na carga de 25/11, não é a fila do dia.
+  if ((contagem[1] || 0) > 0 && (contagem[1] || 0) < 50) return true;
+  if (expected.indexOf(1) >= 0 && (contagem[1] || 0) < 50 && (Array.isArray(data) ? data.length : 0) > 0) return true;
+
   if (metaIds && metaIds.length) {
     const have = new Set(metaIds);
-    return expected.some((id) => !have.has(id));
+    if (expected.some((id) => !have.has(id))) return true;
+    return expected.some((id) => (contagem[id] || 0) < 1);
   }
 
   const found = new Set();
-  (Array.isArray(data) ? data : []).forEach((b) => {
-    if (b && b.companyId != null) found.add(Number(b.companyId));
-  });
+  Object.keys(contagem).forEach((id) => found.add(Number(id)));
   const beyond12 = expected.filter((id) => id !== 1 && id !== 2);
   if (!beyond12.length) return false;
   const only12 = [...found].every((id) => id === 1 || id === 2);
@@ -2621,7 +2630,13 @@ const SiengeApiService = {
           const fetchedCompanyIds = (result && result._fetchedCompanyIds)
             ? result._fetchedCompanyIds
             : expectedCompanyIds;
+          const filaIncompleta = !!(result && result._filaIncompleta);
           if (result && result._fetchedCompanyIds) delete result._fetchedCompanyIds;
+          if (result && result._empresasFalhas) delete result._empresasFalhas;
+          if (result) delete result._filaIncompleta;
+          if (filaIncompleta) {
+            console.warn("%c[Sienge] Fila incompleta. O cache do dia e o sprint não serão gravados com essa carga.", "color:#f59e0b;font-weight:bold;");
+          }
 
           if (isFilaNonBusinessDay(todayStr) && !defaultersCacheLooksIncomplete(result, { companyIds: fetchedCompanyIds }, expectedCompanyIds)) {
             markFilaFullRefreshDone(todayStr);
@@ -2633,6 +2648,8 @@ const SiengeApiService = {
             console.warn("[Sienge] paidMap diário", e);
           }
           
+          if (filaIncompleta) return result;
+
           if (window.firebaseDb && window.firebaseCollections) {
               const CHUNK_SIZE = 100;
               const numChunks = Math.ceil(result.length / CHUNK_SIZE);
@@ -2699,9 +2716,9 @@ const SiengeApiService = {
               })();
 
               
-              this.saveDefaultersSnapshot(result).catch(console.error);
+              if (!filaIncompleta) this.saveDefaultersSnapshot(result).catch(console.error);
               if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
-          } else {
+          } else if (!filaIncompleta) {
              this.saveDefaultersSnapshot(result).catch(console.error);
              if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
           }
@@ -3040,6 +3057,7 @@ const SiengeApiService = {
       let rawArray = [];
       let rawUnderJudgment = [];
       const idsSemConfirmacao = new Set();
+      let empresaFalhou = false;
 
       for (let i = 0; i < ccBatches.length; i++) {
         const batch = ccBatches[i];
@@ -3072,11 +3090,15 @@ const SiengeApiService = {
 
         let resAll = null;
         let resJudge = null;
-        try {
-          resAll = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qAll}`);
-        } catch (err) {
-          console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId} (Lote ${i + 1}):`, err);
+        for (let tentativa = 0; tentativa < 3 && !resAll; tentativa++) {
+          try {
+            resAll = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qAll}`);
+          } catch (err) {
+            console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId} (Lote ${i + 1}, tentativa ${tentativa + 1}):`, err);
+            if (tentativa < 2) await new Promise((r) => setTimeout(r, 1500 * (tentativa + 1)));
+          }
         }
+        if (!resAll) empresaFalhou = true;
         const allRows = linhasBulkDefaulters(resAll) || [];
         if (resAll) {
           try {
@@ -3176,6 +3198,11 @@ const SiengeApiService = {
         }
         console.log(`[Sienge] Empresa ${cId}: ${foraDaCobranca} parcela(s) de tipo que não gera cobrança incluída(s) no vencido.`);
         console.log(`[Sienge] Retornou ${normalizedArray.length} títulos inadimplentes da empresa ${cId}`);
+        if (empresaFalhou) {
+          console.warn(`[Sienge] Empresa ${cId} ficou incompleta: um lote não respondeu. Essa empresa não entra no cache do dia.`);
+          allNormalized._empresasFalhas = allNormalized._empresasFalhas || [];
+          allNormalized._empresasFalhas.push(Number(cId));
+        }
         allNormalized.push(...normalizedArray.filter(b => b.subjudice === "S" || (b.daysDelay > 0 && (b.value || 0) > 0.009)));
 
       } catch (err) {
@@ -3188,7 +3215,9 @@ const SiengeApiService = {
       currentWeightAccum += thisWeight;
     }
 
-    allNormalized._fetchedCompanyIds = [...targetCompanies];
+    const falhas = new Set((allNormalized._empresasFalhas || []).map(Number));
+    allNormalized._fetchedCompanyIds = targetCompanies.filter((id) => !falhas.has(Number(id)));
+    allNormalized._filaIncompleta = falhas.size > 0;
     return allNormalized;
   },
 

@@ -45,6 +45,7 @@
       { id: "fila", label: "Fila de Cobrança" },
       { id: "agenda", label: "Agenda do Operador" },
       { id: "zeropaid", label: "Clientes 0% Pago" },
+      { id: "remessa_avulsa", label: "Remessa avulsa" },
       { id: "notificacoes", label: "Notificações", abas: [
         { id: "followup", label: "Follow-up de NEX" },
         { id: "elegiveis-zero", label: "Elegíveis 0% pago" },

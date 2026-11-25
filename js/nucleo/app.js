@@ -2963,6 +2963,70 @@ window.baseCorrigidaParcela = function(inst) {
   return base;
 };
 
+/* Saldo em aberto menor que o original: houve baixa e a parcela não quitou. */
+window.parcelaBaixaParcial = function(inst) {
+  if (!inst || Number(inst.installmentSituation) === 2) return null;
+  const face = Number(inst.originalValue != null ? inst.originalValue : inst.value);
+  const saldo = Number(inst.cb != null ? inst.cb : inst.currentBalance);
+  if (!(face > 1) || !(saldo > 0.009) || !(saldo + 1 < face)) return null;
+  let pago = 0;
+  let data = "";
+  (Array.isArray(inst.receipts) ? inst.receipts : []).forEach(function(r) {
+    if (!r) return;
+    if (typeof window.isWriteOffReceipt === "function" && window.isWriteOffReceipt(r)) return;
+    const v = Number(r.receiptValue != null ? r.receiptValue : (r.netAmount != null ? r.netAmount : (r.netReceiptValue != null ? r.netReceiptValue : r.value)));
+    if (!(v > 0.009)) return;
+    pago += v;
+    const dt = String(r.paymentDate || r.receiptDate || r.date || "").slice(0, 10);
+    if (dt && dt > data) data = dt;
+  });
+  if (!(pago > 0.009) && String(inst.receiptTypeStr || "") === "Recebimento") {
+    pago = Number(inst.receiptValue) || 0;
+    data = String(inst.receiptDate || "").slice(0, 10);
+  }
+  if (pago > 0.05 && pago + 0.05 >= face) return null;
+  return {
+    parcela: inst.installmentNumber || inst.installmentId || "",
+    pago: pago,
+    data: data,
+    saldo: saldo,
+    face: face
+  };
+};
+
+window.renderAlertaBaixaParcial = function(lista) {
+  const box = document.getElementById("simulador-alerta-parcial");
+  if (!box) return;
+  const money = function(n) {
+    return (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  };
+  const dataBr = function(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    return p.length === 3 ? (p[2] + "/" + p[1] + "/" + p[0]) : "";
+  };
+  const itens = [];
+  (lista || []).forEach(function(inst) {
+    const info = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+    if (info) itens.push(info);
+  });
+  if (!itens.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const linhas = itens.map(function(info) {
+    const quando = dataBr(info.data);
+    const baixa = info.pago > 0.009
+      ? (" Baixa de " + money(info.pago) + (quando ? (" em " + quando) : "") + ".")
+      : "";
+    return "<li><b>Parcela " + info.parcela + "</b> tem baixa parcial." + baixa
+      + " O valor em aberto é " + money(info.saldo) + ", e o original era " + money(info.face) + ".</li>";
+  }).join("");
+  box.innerHTML = "<b>Há parcela com baixa parcial.</b> O corrigido não é o valor original da parcela."
+    + "<ul style=\"margin: 6px 0 0 18px; padding: 0;\">" + linhas + "</ul>";
+  box.style.display = "block";
+};
+
 /** Se o extrato já traz o valor atualizado do Sienge e ele é maior que a mora
  *  recalculada, usa esse total. A multa continua 2% e o restante fica em juros. */
 window.encargosParcelaSienge = function(inst, base, dias, taxa) {
@@ -4026,6 +4090,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "Fluxo de caixa diário",
     mutuo: "Mútuo",
     "relatorios-cr": "Relatórios",
+    "remessa-avulsa": "Remessa avulsa",
     "importar-acionamentos": "Importar acionamentos",
     "resultado-caixa": "Resultado de caixa",
     "orcamento-novo": "Novo orçamento",
@@ -4128,6 +4193,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "calendar-clock",
     mutuo: "handshake",
     "relatorios-cr": "file-bar-chart",
+    "remessa-avulsa": "file-spreadsheet",
     "resultado-caixa": "scale",
     "orcamento-novo": "file-plus",
     "orcamento-forecast": "line-chart",
@@ -11662,6 +11728,20 @@ window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloud
     chosen.at = Date.now();
     chosen.winner = "local";
   }
+  /* Nuvem e navegador vazios (produção sem configuração) recebem o modelo.
+     Etapa que a pessoa excluiu fica no túmulo e não volta. */
+  if (!chosen.list.length) {
+    const modelo = (window.ETAPAS_FINANCIAMENTO_PADRAO || []).map((e, i) => ({
+      id: e.id,
+      nome: e.nome,
+      dias: e.dias,
+      descricao: e.descricao,
+      parentId: null,
+      order: (i + 1) * 10
+    }));
+    const padrao = window.finEtapasSemExcluidas(modelo, tomb);
+    if (padrao.length) chosen = pack(padrao, Date.now(), "local");
+  }
   return chosen;
 };
 
@@ -12564,10 +12644,13 @@ window.applyAdvFiltersTo = (sourceList) => {
                   ? window.getEnvioJuridicoThreshold()
                   : 151;
                 filteredList = filteredList.filter((c) => {
-                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) return true;
-                    if (webroWanted.size && typeof window.getWebroBaixaStatus === "function") {
-                        const st = window.getWebroBaixaStatus(c);
-                        if (st && webroWanted.has(st)) return true;
+                    const st = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+                    if (st && webroWanted.has(st)) return true;
+                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) {
+                        // A tag Aguardando Webro ou Pendente Repasse substitui a do grupo na fila.
+                        // Sem essa tag marcada, o cliente não entra no grupo selecionado.
+                        if (st === "AGUARDANDO" || st === "PENDENTE") return false;
+                        return true;
                     }
                     return false;
                 });
@@ -18449,7 +18532,8 @@ function formatCpfCnpj(val) {
     }
 
     if (simInput && dbContract && dbContract.installments) {
-      if (sale.status === "Quitado") {
+         if (sale.status === "Quitado") {
+         if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial([]);
          if (simTableContainer) simTableContainer.style.display = "none";
          if (simFullContainer) simFullContainer.style.display = "none";
          if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(0);
@@ -18779,11 +18863,16 @@ function formatCpfCnpj(val) {
                   }
 
                   const valorAtualizadoHtml = kpiFmt(inst.cb + multa + juros);
+                  const baixaParcial = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+                  if (baixaParcial && bgStyle.indexOf("transparent") >= 0) bgStyle = "background-color: #fffbeb;";
+                  const marcaParcial = baixaParcial
+                    ? `<div style="margin-top:4px;display:inline-flex;align-items:center;padding:1px 6px;border-radius:999px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Esta parcela teve baixa parcial. O corrigido é o saldo que ainda está em aberto.">Baixa parcial</div>`
+                    : "";
                   const tr = document.createElement("tr");
                   tr.style.cssText = `opacity: ${inst.selected || inst.isActiveBoleto || inst.boletoBaixado ? "1" : "0.55"}; ${bgStyle} border-bottom: 1px solid #f1f5f9;`;
                   tr.innerHTML = `
                      <td style="text-align: center;">${chkHtml}</td>
-                     <td>${inst.installmentNumber || inst.installmentId || "—"}</td>
+                     <td>${inst.installmentNumber || inst.installmentId || "—"}${marcaParcial}</td>
                      <td style="font-weight: 500;">${dateLabel}</td>
                      <td>${vencBoleto}</td>
                      <td>${diasAtraso > 0 ? diasAtraso : "—"}</td>
@@ -18800,6 +18889,7 @@ function formatCpfCnpj(val) {
                }
             });
             if (window.lucide) lucide.createIcons();
+            if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial(vencidasSimulador);
             
             if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(totalPrincipal);
             if (simJurosEl) simJurosEl.textContent = kpiFmt(totalMulta + totalJuros);
@@ -24387,7 +24477,7 @@ async function renegGuardarProva(codigo, hash, info, payload) {
   }, { merge: true });
 }
 
-async function renegCarimbarAcordo(bytes, results, codigoPronto) {
+async function renegCarimbarAcordo(bytes, results, codigoPronto, opts) {
   const codigo = codigoPronto || ("ac-" + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "").slice(0, 12) : Date.now().toString(36)));
   const payload = renegPayloadRemade(results);
   const sale = g_renegSale || {};
@@ -24399,6 +24489,16 @@ async function renegCarimbarAcordo(bytes, results, codigoPronto) {
     unidade: [unit.costCenterId || sale.costCenterId || sale.enterpriseId, unit.name || unit.unitName || sale.unitName].filter(Boolean).join(" - "),
     cliente: cli.name || ""
   };
+  if (opts && opts.imprimirQr === false) {
+    let aviso = "";
+    try {
+      const hash = await renegSha256(bytes);
+      await renegGuardarProva(codigo, hash, info, payload);
+    } catch (e) {
+      aviso = "A proposta foi gerada, mas a prova do reparcelamento não ficou salva. " + ((e && e.message) || "");
+    }
+    return { bytes: bytes, codigo: codigo, reparcelamento: payload, aviso: aviso };
+  }
   try {
     const rel = window.RelacionamentoApp;
     if (!rel || typeof rel._carregarPdfLib !== "function") throw new Error("O editor de PDF não está disponível.");
@@ -24653,14 +24753,13 @@ function renegPedirPdfPix() {
 
 async function renegMontarPdfAcordo(results, nomeArquivo, pixBytes) {
   const pdf = baixarPropostaAcordoPdf(results, nomeArquivo);
-  let cru = new Uint8Array(pdf.output("arraybuffer"));
+  const cru = new Uint8Array(pdf.output("arraybuffer"));
   if (pixBytes) {
     const textoPix = await renegTextoPdf(pixBytes);
     const erroPix = renegValidarPdfPix(textoPix, Number(results && results.sinalValue) || 0);
     if (erroPix) throw new Error(erroPix);
-    cru = await renegAnexarPdf(cru, pixBytes);
   }
-  return renegCarimbarAcordo(cru, results, "");
+  return renegCarimbarAcordo(cru, results, "", { imprimirQr: false });
 }
 
 window.subirReparcelamentoPorCodigo = async function(codigo) {
@@ -25153,8 +25252,8 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
     abatido
       ? abatido.texto
       : (temSinal
-        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
-        : "A proposta só tem validade com o pagamento do sinal, pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale."),
+        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
+        : "A proposta só tem validade com o pagamento do sinal, pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale."),
     abatido
       ? "O pagamento do sinal em " + abatido.dataBr + " é o aceite do cliente. Não há assinatura nesta proposta."
       : "O pagamento do sinal é o aceite do cliente. Não há assinatura nesta proposta.",
@@ -45490,9 +45589,6 @@ window.ETAPAS_FINANCIAMENTO_PADRAO = [
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   if (window.EtapasFinanciamentoState.length) return false;
-  let stored = null;
-  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
-  if (stored != null) return false;
   const base = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
@@ -45501,13 +45597,20 @@ window.ensureEtapasFinanciamento = function() {
     parentId: null,
     order: (i + 1) * 10
   }));
-  window.EtapasFinanciamentoState = typeof window.finEtapasSemExcluidas === "function"
+  const limpa = typeof window.finEtapasSemExcluidas === "function"
     ? window.finEtapasSemExcluidas(base)
     : base;
-  try {
-    localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
-  } catch (e) {}
+  if (!limpa.length) return false;
+  window.EtapasFinanciamentoState = limpa;
   window._finEtapasVeioDoPadrao = true;
+  let stored = null;
+  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
+  /* Lista "[]" já gravada não ganha data nova aqui: a sincronização compara com a nuvem
+     e só sobe o modelo quando os dois lados estão vazios. */
+  if (stored != null) return false;
+  try {
+    localStorage.setItem("crm_moura_financiamento", JSON.stringify(limpa));
+  } catch (e) {}
   return true;
 };
 
@@ -60843,6 +60946,13 @@ window.gerarMapaZeropaidPDF = async function() {
     }
 
     const yieldUI = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 40)));
+    const comPrazo = (p, ms) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("tempo esgotado")), ms);
+        Promise.resolve(p).then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
     await yieldUI();
 
     let container = null;
@@ -60860,13 +60970,15 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const needFetch = all.filter(c => c && c.customerId && (!c.saleDate || (!c.brokerId && !c.brokerName)));
         const fetchIds = [...new Set(needFetch.map(c => c.customerId))];
+        const limiteBusca = Date.now() + 25000;
         if (fetchIds.length && typeof SiengeApiService !== "undefined" && typeof SiengeApiService.getSales === "function") {
             const batchSize = 6;
             for (let i = 0; i < fetchIds.length; i += batchSize) {
+                if (Date.now() > limiteBusca) break;
                 const batch = fetchIds.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (custId) => {
                     try {
-                        const sales = await SiengeApiService.getSales(custId);
+                        const sales = await comPrazo(SiengeApiService.getSales(custId), 8000);
                         if (!window.AppState.sales) window.AppState.sales = [];
                         sales.forEach(s => {
                             const idx = window.AppState.sales.findIndex(xs => String(xs.id) === String(s.id));
@@ -60885,7 +60997,13 @@ window.gerarMapaZeropaidPDF = async function() {
         }
 
         const brokerIds = all.map(c => c.brokerId).filter(Boolean);
-        const brokerNames = brokerIds.length ? await window.resolveBrokerCreditorNames(brokerIds) : {};
+        let brokerNames = {};
+        try {
+            brokerNames = brokerIds.length ? await comPrazo(window.resolveBrokerCreditorNames(brokerIds), 12000) : {};
+        } catch (err) {
+            console.warn("Mapa 0% pago: nomes dos corretores ficaram de fora", err);
+            brokerNames = window._brokerNameCache || {};
+        }
         all.forEach(c => {
             if (c.brokerId && brokerNames[c.brokerId]) c.brokerName = brokerNames[c.brokerId];
         });
@@ -61165,8 +61283,30 @@ window.gerarMapaZeropaidPDF = async function() {
         const fotografar = async (el, novaPagina) => {
             document.body.appendChild(el);
             await yieldUI();
-            const canvas = await html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false });
-            if (el.parentNode) document.body.removeChild(el);
+            // Fonte que não termina de carregar travava o html2canvas: espera 2 s e segue sem ela.
+            let liberouFonte = false;
+            const fonts = document.fonts;
+            if (fonts && fonts.ready) {
+                const fontePronta = await Promise.race([
+                    fonts.ready.then(() => true).catch(() => true),
+                    new Promise(r => setTimeout(() => r(false), 2000))
+                ]);
+                if (!fontePronta) {
+                    try {
+                        Object.defineProperty(fonts, "ready", { configurable: true, get() { return Promise.resolve(); } });
+                        liberouFonte = true;
+                    } catch (e) {}
+                }
+            }
+            let canvas;
+            try {
+                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
+            } finally {
+                if (liberouFonte) {
+                    try { delete fonts.ready; } catch (e) {}
+                }
+                if (el.parentNode) document.body.removeChild(el);
+            }
             const imgData = canvas.toDataURL("image/jpeg", 0.92);
             const props = pdf.getImageProperties(imgData);
             const ratio = props.width / props.height;
@@ -61239,11 +61379,10 @@ window.gerarMapaZeropaidPDF = async function() {
             await fotografar(pag, true);
         }
         pdf.save("Mapa_Clientes_0_Pago.pdf");
-        if (container.parentNode) document.body.removeChild(container);
-        restoreBtn();
     } catch (e) {
         console.error("Erro ao gerar mapa 0% pago:", e);
-        alert("Ocorreu um erro ao gerar o PDF. Verifique o console.");
+        alert("Ocorreu um erro ao gerar o PDF. " + ((e && e.message) || ""));
+    } finally {
         if (container && container.parentNode) document.body.removeChild(container);
         restoreBtn();
     }
