@@ -39,6 +39,14 @@ function classificar(assunto) {
   return null;
 }
 
+// "em" pode vir em ISO (Firestore) ou em milissegundos (Supabase, mapa "ms").
+function ms(v) {
+  return typeof v === "number" ? v : Date.parse(v) || 0;
+}
+
+// Campo que cada tipo de confirmação grava (só a primeira de cada tipo).
+const CAMPO = { leitura: "leituraConfirmadaEm", nao_lida: "naoLidaEm", entregue: "entregaEm", retransmitido: "entregaEm", nao_entregue: "naoEntregueEm" };
+
 function emails(texto) {
   return String(texto || "").toLowerCase().split(/[\s,;]+/).filter((e) => e.indexOf("@") > 0);
 }
@@ -74,13 +82,16 @@ module.exports = async function handler(req, res) {
       continue;
     }
     const daCaixa = envios.filter((x) => String(x.caixa || "").toLowerCase() === caixa);
+    // Da mais antiga para a mais nova: com e-mails iguais (mesmo assunto e destinatário), cada confirmação vai para um
+    // envio que ainda não tem aquele tipo, em vez de cair sempre no mesmo e ser descartada.
+    msgs.sort((a, b) => ms(a && a.receivedDateTime) - ms(b && b.receivedDateTime));
     for (const m of msgs) {
       const c = classificar(m && m.subject);
       if (!c) continue;
       const recebida = String(m.receivedDateTime || "");
       const remetente = String((m.from && m.from.emailAddress && m.from.emailAddress.address) || "").toLowerCase();
       const corpo = String(m.bodyPreview || "").toLowerCase();
-      let candidatos = daCaixa.filter((x) => norm(x.assunto) === norm(c.original) && String(x.em || "") <= recebida);
+      let candidatos = daCaixa.filter((x) => norm(x.assunto) === norm(c.original) && ms(x.em) <= ms(recebida));
       if (c.tipo === "leitura" || c.tipo === "nao_lida") {
         const comLeitor = candidatos.filter((x) => emails(x.para + "," + (x.cc || "")).indexOf(remetente) >= 0);
         if (comLeitor.length) candidatos = comLeitor;
@@ -89,7 +100,9 @@ module.exports = async function handler(req, res) {
         if (noCorpo.length) candidatos = noCorpo;
       }
       if (!candidatos.length) { resumo.semPar++; continue; }
-      candidatos.sort((a, b) => String(b.em || "").localeCompare(String(a.em || "")));
+      const livres = candidatos.filter((x) => !x[CAMPO[c.tipo]]);
+      if (livres.length) candidatos = livres;
+      candidatos.sort((a, b) => ms(b.em) - ms(a.em));
       const alvo = candidatos[0];
       const campos = {};
       if (c.tipo === "leitura" && !alvo.leituraConfirmadaEm) campos.leituraConfirmadaEm = recebida;

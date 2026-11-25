@@ -502,7 +502,7 @@ const CentralEmailApp = {
     return (a.lista || []).filter((e) => {
       if (a.template && e.templateId !== a.template) return false;
       if (termo) {
-        const nome = this.norm(e.clienteNome || "");
+        const nome = this.norm(this.nomeClienteEnvio(e));
         const okTitulo = digitos && String(e.titulo || "").indexOf(digitos) >= 0;
         if (!okTitulo && nome.indexOf(termo) < 0) return false;
       }
@@ -515,6 +515,20 @@ const CentralEmailApp = {
         default: return true;
       }
     });
+  },
+
+  // Nome do cliente do envio: o gravado no envio ou, nos envios antigos (sem nome), o da carteira carregada.
+  nomeClienteEnvio(e) {
+    if (e && e.clienteNome) return String(e.clienteNome);
+    const id = String((e && e.customerId) || "");
+    if (!id) return "";
+    if (!this._nomesClientes || this._nomesClientesBase !== window.rawClientList) {
+      const m = {};
+      (window.rawClientList || []).forEach((c) => { if (c && c.customerId && c.customerName && !m[c.customerId]) m[String(c.customerId)] = String(c.customerName).trim(); });
+      this._nomesClientes = m;
+      this._nomesClientesBase = window.rawClientList;
+    }
+    return this._nomesClientes[id] || "Cliente " + id;
   },
 
   norm(s) {
@@ -532,8 +546,9 @@ const CentralEmailApp = {
     const linhas = lista.map((e) => {
       const s = this.etapasEnvio(e);
       return `<tr>
-        <td class="is-center">${this.esc(this.dataHora(e.em) || e.dia || "")}</td>
-        <td title="${this.esc(e.clienteNome || "")}"><strong>${this.esc(e.clienteNome || "Cliente " + (e.customerId || ""))}</strong><br><small class="cem-cc">Título ${this.esc(e.titulo || "—")}</small></td>
+        <td class="is-center cem-data">${this.esc(String(this.dataHora(e.em) || e.dia || "").replace(",", ""))}</td>
+        <td class="cem-quebra"><strong>${this.esc(this.nomeClienteEnvio(e))}</strong></td>
+        <td class="is-center">${this.esc(e.titulo || "—")}</td>
         <td title="${this.esc(nomeTemplate(e))}">${this.esc(nomeTemplate(e))}</td>
         <td class="cem-para">${this.esc(e.para || "—")}<br><small class="cem-cc">De: ${this.esc(e.caixa || (e.de === "padrao" ? "caixa padrão" : e.de) || "—")}</small></td>
         <td class="cem-etapas">${etq(s.envio)}</td>
@@ -557,9 +572,9 @@ const CentralEmailApp = {
       </div>
       <p class="cem-ac-info">${a.carregando ? "Carregando…" : `${lista.length} de ${total} envio(s) no período.`} Entrega e leitura chegam por e-mail na caixa de envio e dependem do servidor e do leitor do cliente; a abertura vem da imagem de rastreio e não aparece se o cliente bloquear imagens.${a.msg ? ` <strong>${this.esc(a.msg)}</strong>` : ""}</p>
       <div class="cc-scroll"><table class="cc-table is-confortavel cem-tabela">
-        <colgroup><col style="width:112px"><col style="width:17%"><col style="width:13%"><col><col style="width:118px"><col style="width:128px"><col style="width:128px"><col style="width:128px"><col style="width:76px"></colgroup>
-        <thead><tr><th class="is-center">Envio</th><th>Cliente</th><th>Template</th><th>Para</th><th>Situação</th><th>Entrega</th><th>Leitura (Outlook)</th><th>Abertura</th><th class="is-right">Ações</th></tr></thead>
-        <tbody>${linhas || `<tr><td colspan="9" style="text-align:center;padding:30px;white-space:normal;">${a.carregando ? "Carregando…" : "Nenhum e-mail encontrado com esses filtros."}</td></tr>`}</tbody>
+        <colgroup><col style="width:128px"><col style="width:20%"><col style="width:70px"><col style="width:12%"><col><col style="width:118px"><col style="width:120px"><col style="width:124px"><col style="width:116px"><col style="width:76px"></colgroup>
+        <thead><tr><th class="is-center">Envio</th><th>Cliente</th><th class="is-center">Título</th><th>Template</th><th>Para</th><th>Situação</th><th>Entrega</th><th>Leitura (Outlook)</th><th>Abertura</th><th class="is-right">Ações</th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="10" style="text-align:center;padding:30px;white-space:normal;">${a.carregando ? "Carregando…" : "Nenhum e-mail encontrado com esses filtros."}</td></tr>`}</tbody>
       </table></div>`;
   },
 
@@ -571,7 +586,7 @@ const CentralEmailApp = {
     const s = this.etapasEnvio(e);
     const linha = (r, v) => `<tr><td style="padding:5px 8px;border:1px solid #e2e8f0;background:#f8fafc;font-weight:700;width:34%;">${r}</td><td style="padding:5px 8px;border:1px solid #e2e8f0;">${v}</td></tr>`;
     return `<table style="border-collapse:collapse;width:100%;font-size:12px;margin-bottom:12px;">
-      ${linha("Cliente", this.esc(e.clienteNome || "Cliente " + (e.customerId || "")))}
+      ${linha("Cliente", this.esc(this.nomeClienteEnvio(e)))}
       ${linha("Título", this.esc(e.titulo || "—"))}
       ${linha("Template", this.esc(e.templateNome || ((this.achar(e.templateId) || {}).nome) || e.templateId || "—"))}
       ${linha("De", this.esc(e.caixa || e.de || "—"))}
