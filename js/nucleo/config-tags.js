@@ -379,24 +379,36 @@ window.crmTagSolEsc = function(s) {
 };
 
 /** HTML da lista de TAGs parecidas (usado no pedido e na aprovação). */
-window.crmTagSemelhantesHtml = function(lista, destinoPedido) {
+/* idSolicitacao (opcional): na janela de aprovação, cada linha ganha "Usar esta", que abre a recusa já explicando
+   qual TAG existente usar. */
+window.crmTagSemelhantesHtml = function(lista, destinoPedido, idSolicitacao) {
   const esc = window.crmTagSolEsc;
   if (!lista.length) {
     return '<div class="tagsol-ok"><i data-lucide="check-circle" style="width:15px;height:15px;"></i> Nenhuma TAG parecida encontrada.</div>';
   }
+  const comAcao = idSolicitacao != null;
   const linhas = lista.map((s) => {
     const mesmoDestino = !destinoPedido || s.tag.destino === destinoPedido;
+    const usar = comAcao
+      ? `<td class="is-center"><button type="button" class="tagsol-usar" title="Recusar o pedido indicando esta TAG"
+          onclick='CrmTagSolicitacoes.usarExistente(${esc(JSON.stringify(idSolicitacao))}, ${esc(JSON.stringify(s.tag.name))})'>Usar esta</button></td>`
+      : "";
     return `<tr class="${s.igual && mesmoDestino ? "is-igual" : ""}">
       <td title="${esc(s.tag.name)}">${esc(s.tag.name)}</td>
       <td>${esc(s.tag.destino || "Unidade")}</td>
       <td title="${esc(s.motivo)}">${esc(s.motivo)}</td>
-      <td class="is-right">${Math.round(s.score * 100)}%</td>
+      <td class="is-right">${Math.round(s.score * 100)}%</td>${usar}
     </tr>`;
   }).join("");
-  return `<div class="tagsol-aviso"><i data-lucide="alert-triangle" style="width:15px;height:15px;"></i> Já existem TAGs parecidas. Veja se alguma serve antes de criar outra.</div>
+  const aviso = lista.some((s) => s.igual && (!destinoPedido || s.tag.destino === destinoPedido))
+    ? "Já existe uma TAG com esse nome. Use a existente em vez de criar outra."
+    : (comAcao
+      ? "Já existem TAGs parecidas. Se uma delas serve, clique em Usar esta; se não, aprove normalmente."
+      : "Já existem TAGs parecidas. Veja se alguma serve antes de criar outra.");
+  return `<div class="tagsol-aviso"><i data-lucide="alert-triangle" style="width:15px;height:15px;"></i> ${aviso}</div>
     <div class="cc-scroll tagsol-scroll"><table class="cc-table">
-      <colgroup><col><col style="width:70px"><col><col style="width:52px"></colgroup>
-      <thead><tr><th>TAG existente</th><th>Destino</th><th>Por que parece</th><th class="is-right">Grau</th></tr></thead>
+      <colgroup><col><col style="width:70px"><col><col style="width:52px">${comAcao ? '<col style="width:84px">' : ""}</colgroup>
+      <thead><tr><th>TAG existente</th><th>Destino</th><th>Por que parece</th><th class="is-right">Grau</th>${comAcao ? '<th class="is-center">Ação</th>' : ""}</tr></thead>
       <tbody>${linhas}</tbody>
     </table></div>`;
 };
@@ -495,6 +507,13 @@ window.crmTagsTodas = async function() {
     .tagsol-acoes[hidden], .tagsol-recusa[hidden] { display: none; }
     .tagsol-acoes { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
     .tagsol-acoes .btn { height: 36px; display: inline-flex; align-items: center; gap: 6px; }
+    .tagsol-motivo.is-vazio { color: #94a3b8; font-style: italic; }
+    .tagsol-usar { height: 24px; padding: 0 8px; border: 1px solid #1b8253; border-radius: 6px; background: #fff; color: #105436; font-size: 0.7rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
+    .tagsol-usar:hover { background: #e7f6ee; }
+    .tagsol-msg { display: none; border-radius: 6px; padding: 7px 10px; font-size: 0.8rem; margin-bottom: 8px; }
+    .tagsol-msg.is-erro { display: block; color: #991b1b; background: #fee2e2; }
+    .tagsol-msg.is-ok { display: block; color: #105436; background: #e7f6ee; }
+    .tagsol-msg.is-info { display: block; color: #92400e; background: #fef3c7; }
     #req-tag-similares { margin-top: 8px; }
     #req-tag-similares .tagsol-scroll { max-height: 150px; }
   `;
@@ -584,20 +603,25 @@ const CrmTagSolicitacoes = {
     const tags = this._tags || [];
     const cards = visiveis.map((p) => {
       const dest = p.type === "Cliente" ? "Cliente" : "Unidade";
-      const semelhantes = window.crmTagsSemelhantes(p.tag_name, tags);
+      const semelhantes = this.semelhantesDoDestino(p.tag_name, dest);
       const quando = p.criado_em ? new Date(p.criado_em).toLocaleString("pt-BR") : "";
       const idJs = esc(JSON.stringify(p.id));
+      // Motivo vazio ou só pontuação (ex.: ".") não diz nada: mostra que não foi informado.
+      const motivo = String(p.reason || "").trim();
+      const motivoVazio = !/[0-9A-Za-zÀ-ÿ]/.test(motivo);
       return `<div class="tagsol-card" data-sol-id="${esc(p.id)}">
         <div class="tagsol-meta">Pedido por <b>${esc(p.solicitado_por_nome || p.solicitado_por_email || "—")}</b>${quando ? " em " + esc(quando) : ""}</div>
         <div class="tagsol-campos">
-          <label class="tagsol-nome">Nome da TAG<input type="text" id="tagsol-nome-${esc(p.id)}" value="${esc(p.tag_name)}"></label>
-          <label>Destino<select id="tagsol-dest-${esc(p.id)}">
+          <label class="tagsol-nome">Nome da TAG<input type="text" id="tagsol-nome-${esc(p.id)}" value="${esc(p.tag_name)}"
+            oninput='CrmTagSolicitacoes.atualizarSemelhantes(${idJs})'></label>
+          <label>Destino<select id="tagsol-dest-${esc(p.id)}" onchange='CrmTagSolicitacoes.atualizarSemelhantes(${idJs})'>
             <option value="Unidade" ${dest === "Unidade" ? "selected" : ""}>Unidade</option>
             <option value="Cliente" ${dest === "Cliente" ? "selected" : ""}>Cliente</option>
           </select></label>
         </div>
-        <div class="tagsol-motivo"><b>Motivo:</b> ${esc(p.reason || "—")}</div>
-        ${window.crmTagSemelhantesHtml(semelhantes, dest)}
+        <div class="tagsol-motivo${motivoVazio ? " is-vazio" : ""}"><b>Motivo:</b> ${motivoVazio ? "não informado por quem pediu" : esc(motivo)}</div>
+        <div id="tagsol-sim-${esc(p.id)}">${window.crmTagSemelhantesHtml(semelhantes, dest, p.id)}</div>
+        <div class="tagsol-msg" id="tagsol-msg-${esc(p.id)}"></div>
         <div class="tagsol-acoes" id="tagsol-acoes-${esc(p.id)}">
           <button type="button" class="btn btn-cancel" onclick='CrmTagSolicitacoes.mostrarRecusa(${idJs}, true)'><i data-lucide="x" style="width:15px;"></i> Recusar</button>
           <button type="button" class="btn btn-primary" onclick='CrmTagSolicitacoes.aprovar(${idJs})'><i data-lucide="check" style="width:15px;"></i> Aprovar e criar TAG</button>
@@ -631,6 +655,44 @@ const CrmTagSolicitacoes = {
     if (window.lucide) lucide.createIcons();
   },
 
+  /** TAGs parecidas com o nome (todas as TAGs; as do mesmo destino com nome igual ficam em vermelho). */
+  semelhantesDoDestino(nome) {
+    return window.crmTagsSemelhantes(nome, this._tags || []);
+  },
+
+  /** Refaz a lista de parecidas quando quem aprova muda o nome ou o destino. */
+  atualizarSemelhantes(id) {
+    clearTimeout(this._simTimer);
+    this._simTimer = setTimeout(() => {
+      const nomeEl = document.getElementById("tagsol-nome-" + id);
+      const destEl = document.getElementById("tagsol-dest-" + id);
+      const box = document.getElementById("tagsol-sim-" + id);
+      if (!nomeEl || !box) return;
+      const dest = destEl && destEl.value === "Cliente" ? "Cliente" : "Unidade";
+      box.innerHTML = window.crmTagSemelhantesHtml(this.semelhantesDoDestino(nomeEl.value), dest, id);
+      this.msg(id, "");
+      if (window.lucide) lucide.createIcons();
+    }, 250);
+  },
+
+  /** "Usar esta": abre a recusa já dizendo qual TAG existente usar. */
+  usarExistente(id, nomeTag) {
+    this.mostrarRecusa(id, true);
+    const txt = document.getElementById("tagsol-motivo-" + id);
+    if (txt) {
+      txt.value = `Use a TAG já existente ${nomeTag}.`;
+      txt.focus();
+    }
+  },
+
+  /** Mensagem dentro do cartão da solicitação (no lugar do alert do navegador). tipo: erro | ok | info. */
+  msg(id, texto, tipo) {
+    const el = document.getElementById("tagsol-msg-" + id);
+    if (!el) { if (texto) alert(texto); return; }
+    el.textContent = texto || "";
+    el.className = "tagsol-msg" + (texto ? " is-" + (tipo || "info") : "");
+  },
+
   mostrarRecusa(id, mostrar) {
     const box = document.getElementById("tagsol-recusa-" + id);
     const acoes = document.getElementById("tagsol-acoes-" + id);
@@ -656,16 +718,17 @@ const CrmTagSolicitacoes = {
     const destEl = document.getElementById("tagsol-dest-" + id);
     const nome = String(nomeEl ? nomeEl.value : p.tag_name).trim().toUpperCase();
     const destino = destEl && destEl.value === "Cliente" ? "Cliente" : "Unidade";
-    if (!nome) { alert("Informe o nome da TAG."); return; }
+    if (!nome) { this.msg(id, "Informe o nome da TAG.", "erro"); if (nomeEl) nomeEl.focus(); return; }
     try {
       const tags = await window.crmTagsTodas();
       const igual = tags.find((t) => t.destino === destino && tagNorm(t.name) === tagNorm(nome));
       if (igual) {
-        alert(`Já existe a TAG "${igual.name}" para ${destino}` + (igual.status === "Inativa" ? " (inativa: reative em Configurações > Tags de anexos)." : ".") + "\nSe ela atende o pedido, use Recusar e informe essa TAG no motivo.");
+        this.msg(id, `Já existe a TAG "${igual.name}" para ${destino}`
+          + (igual.status === "Inativa" ? " (inativa: reative em Configurações > Tags de anexos)." : ".")
+          + " Clique em Usar esta na lista acima para recusar indicando essa TAG.", "erro");
         return;
       }
-      const parecidas = window.crmTagsSemelhantes(nome, tags.filter((t) => t.destino === destino));
-      if (parecidas.length && !confirm(`Existem ${parecidas.length} TAG(s) parecida(s), por exemplo "${parecidas[0].tag.name}".\nCriar "${nome}" mesmo assim?`)) return;
+      // As TAGs parecidas já aparecem na lista do cartão: quem aprova decidiu ao clicar (sem pop-up repetindo o aviso).
 
       const { email, nome: quem } = this.usuario();
       const { collection, addDoc, doc, updateDoc } = window.firebaseCollections;
@@ -679,9 +742,9 @@ const CrmTagSolicitacoes = {
       if (window.AnexosApp && typeof AnexosApp.loadTagsAtivas === "function") AnexosApp.loadTagsAtivas(true);
       const telaTags = document.getElementById("tab-config-tags");
       if (telaTags && telaTags.classList.contains("active") && window.ConfigTagsApp) ConfigTagsApp.loadTags();
-      alert(`TAG "${nome}" criada.`);
+      this.avisoRapido(`TAG "${nome}" criada.`);
     } catch (e) {
-      alert("Não foi possível aprovar: " + (e && e.message ? e.message : e));
+      this.msg(id, "Não foi possível aprovar: " + (e && e.message ? e.message : e), "erro");
     }
   },
 
@@ -691,7 +754,7 @@ const CrmTagSolicitacoes = {
     const txt = document.getElementById("tagsol-motivo-" + id);
     const motivo = String(txt ? txt.value : "").trim();
     if (!motivo) {
-      alert("Informe o motivo da recusa.");
+      this.msg(id, "Informe o motivo da recusa.", "erro");
       if (txt) txt.focus();
       return;
     }
@@ -702,9 +765,25 @@ const CrmTagSolicitacoes = {
         status: "Recusada", motivo_decisao: String(motivo).trim(),
         decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
       });
+      this.avisoRapido("Solicitação recusada. Quem pediu vai receber o motivo.");
     } catch (e) {
-      alert("Não foi possível recusar: " + (e && e.message ? e.message : e));
+      this.msg(id, "Não foi possível recusar: " + (e && e.message ? e.message : e), "erro");
     }
+  },
+
+  /** Aviso curto no canto da tela (o cartão some sozinho quando a solicitação sai de pendente). */
+  avisoRapido(texto) {
+    let el = document.getElementById("tagsol-toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "tagsol-toast";
+      el.style.cssText = "position:fixed;bottom:22px;right:22px;z-index:9100;max-width:420px;padding:12px 16px;border-radius:8px;font-size:0.86rem;font-weight:600;background:#e7f6ee;color:#105436;border:1px solid #bfe3cf;box-shadow:0 10px 24px rgba(15,23,42,.18);";
+      document.body.appendChild(el);
+    }
+    el.textContent = texto;
+    el.style.display = "block";
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => { el.style.display = "none"; }, 4000);
   }
 };
 
