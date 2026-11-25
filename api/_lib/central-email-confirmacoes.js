@@ -44,6 +44,9 @@ function ms(v) {
   return typeof v === "number" ? v : Date.parse(v) || 0;
 }
 
+// Campo que cada tipo de confirmação grava (só a primeira de cada tipo).
+const CAMPO = { leitura: "leituraConfirmadaEm", nao_lida: "naoLidaEm", entregue: "entregaEm", retransmitido: "entregaEm", nao_entregue: "naoEntregueEm" };
+
 function emails(texto) {
   return String(texto || "").toLowerCase().split(/[\s,;]+/).filter((e) => e.indexOf("@") > 0);
 }
@@ -79,6 +82,9 @@ module.exports = async function handler(req, res) {
       continue;
     }
     const daCaixa = envios.filter((x) => String(x.caixa || "").toLowerCase() === caixa);
+    // Da mais antiga para a mais nova: com e-mails iguais (mesmo assunto e destinatário), cada confirmação vai para um
+    // envio que ainda não tem aquele tipo, em vez de cair sempre no mesmo e ser descartada.
+    msgs.sort((a, b) => ms(a && a.receivedDateTime) - ms(b && b.receivedDateTime));
     for (const m of msgs) {
       const c = classificar(m && m.subject);
       if (!c) continue;
@@ -94,6 +100,8 @@ module.exports = async function handler(req, res) {
         if (noCorpo.length) candidatos = noCorpo;
       }
       if (!candidatos.length) { resumo.semPar++; continue; }
+      const livres = candidatos.filter((x) => !x[CAMPO[c.tipo]]);
+      if (livres.length) candidatos = livres;
       candidatos.sort((a, b) => ms(b.em) - ms(a.em));
       const alvo = candidatos[0];
       const campos = {};
