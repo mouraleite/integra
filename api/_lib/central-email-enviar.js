@@ -101,6 +101,50 @@ async function gravarDoc(caminho, obj) {
   return r.status === 200;
 }
 
+// Atualiza só os campos informados (o gravarDoc troca o documento inteiro).
+async function gravarCampos(caminho, obj) {
+  const fields = {};
+  const mascara = [];
+  Object.keys(obj).forEach((k) => { fields[k] = paraFs(obj[k]); mascara.push("updateMask.fieldPaths=" + encodeURIComponent(k)); });
+  const corpo = JSON.stringify({ fields });
+  const r = await http(FS + "/" + caminho + "?" + mascara.join("&") + "&currentDocument.exists=true",
+    { method: "PATCH", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
+  return r.status === 200;
+}
+
+// Envios de um período (dia de/até, AAAA-MM-DD), para o acompanhamento e para casar as confirmações.
+async function enviosDoPeriodo(de, ate, limite) {
+  const corpo = JSON.stringify({
+    structuredQuery: {
+      from: [{ collectionId: "central_email_envios" }],
+      where: { compositeFilter: { op: "AND", filters: [
+        { fieldFilter: { field: { fieldPath: "dia" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: de } } },
+        { fieldFilter: { field: { fieldPath: "dia" }, op: "LESS_THAN_OR_EQUAL", value: { stringValue: ate } } }
+      ] } },
+      limit: Math.min(Number(limite) || 3000, 5000)
+    }
+  });
+  const r = await http(FS + ":runQuery", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
+  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao listar os envios.");
+  return JSON.parse(r.buffer.toString("utf8"))
+    .filter((x) => x && x.document)
+    .map((x) => Object.assign({ id: x.document.name.split("/").pop() }, deFs({ mapValue: { fields: x.document.fields || {} } })));
+}
+
+/* Rastreio de abertura: uma imagem 1x1 aponta para /api/email-aberto com o id do envio e uma assinatura
+   (HMAC com o CRON_SECRET), para ninguém marcar abertura de outro envio só trocando o id. */
+function tokenAbertura(id) {
+  const segredo = process.env.CRON_SECRET || "";
+  if (!segredo) return "";
+  return require("crypto").createHmac("sha256", segredo).update("abertura:" + id).digest("hex").slice(0, 24);
+}
+
+function baseUrl(req) {
+  const h = (req && req.headers) || {};
+  const host = String(h["x-forwarded-host"] || h.host || "").split(",")[0].trim();
+  return /^[a-z0-9.-]+(:\d+)?$/i.test(host) ? "https://" + host : "";
+}
+
 /* ---------- Sienge ---------- */
 function siengeAuth() {
   return "Basic " + Buffer.from((process.env.SIENGE_API_USER || "") + ":" + (process.env.SIENGE_API_PASSWORD || "")).toString("base64");
@@ -265,12 +309,24 @@ module.exports = async function handler(req, res) {
       }
       // Remetente do template (vazio = caixa padrão); o graph-mail só aceita caixas liberadas na Vercel.
       const de = String(t.remetente || "").trim().toLowerCase();
-      await sendMail({ from: de, to: para.join(","), cc: cc.join(","), subject: assunto, html, attachments: anexos });
+      const caixa = de || String(process.env.GRAPH_MAILBOX || "").trim().toLowerCase();
+      // Imagem de rastreio de abertura (não vai no registro: o PDF mostra o e-mail como o cliente leu).
+      const tok = tokenAbertura(id);
+      const base = baseUrl(req);
+      const pixel = tok && base
+        ? "<img src=\"" + base + "/api/email-aberto?e=" + encodeURIComponent(id) + "&t=" + tok + "\" width=\"1\" height=\"1\" alt=\"\" style=\"display:block;width:1px;height:1px;border:0;\">"
+        : "";
+      await sendMail({
+        from: de, to: para.join(","), cc: cc.join(","), subject: assunto, html: html + pixel, attachments: anexos,
+        confirmarEntrega: true, confirmarLeitura: true
+      });
       r.status = "enviado";
       r.para = para.length;
       await gravarDoc("central_email_envios/" + id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
-        de: de || "padrao", para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
+        de: de || "padrao", caixa, para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0,
+        assunto, html: html.slice(0, 200000), clienteNome: String(v.nome || "").slice(0, 200), templateNome: String(t.nome || "").slice(0, 200),
+        confirmacoesPedidas: true, rastreio: !!pixel
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
         await gravarDoc("acordo_email_tag/" + customerId + "_" + titulo, {
@@ -296,5 +352,10 @@ module.exports = async function handler(req, res) {
 
 // Para a tela montar a mesma prévia que vai no e-mail.
 module.exports.montarHtml = montarHtml;
+// Para as rotas de acompanhamento (abertura e confirmações).
+module.exports.lerDoc = lerDoc;
+module.exports.gravarCampos = gravarCampos;
+module.exports.enviosDoPeriodo = enviosDoPeriodo;
+module.exports.tokenAbertura = tokenAbertura;
 module.exports.montarAssunto = montarAssunto;
 module.exports.quadroHtml = quadroHtml;
