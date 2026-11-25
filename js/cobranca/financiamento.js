@@ -150,6 +150,31 @@ const FinanciamentoApp = {
     return Number.isFinite(valor) && valor >= 0 ? valor : null;
   },
 
+  cidadeDoProc(proc) {
+    const obra = this.obraDoProc(proc);
+    const ccs = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    const id = String((proc && (proc.costCenterId || proc.empId)) || "");
+    const cc = id ? ccs.find((c) => String(c.id) === id) : null;
+    const direta = String((cc && (cc.city || cc.cidade || cc.cityName)) || (proc && proc.cidade) || "").trim();
+    if (direta) return direta;
+    const emp = String(obra.empreendimento || "").trim();
+    const partes = emp.split(/\s+-\s+/);
+    if (partes.length >= 2 && partes[0]) return partes[0].trim();
+    return "Sem cidade";
+  },
+
+  agruparDashboard(lista, rotuloDe) {
+    const mapa = new Map();
+    (lista || []).forEach((proc) => {
+      const nome = String(rotuloDe(proc) || "—").trim() || "—";
+      const atual = mapa.get(nome) || { nome: nome, quantidade: 0 };
+      atual.quantidade += 1;
+      mapa.set(nome, atual);
+    });
+    return Array.from(mapa.values()).sort((a, b) => b.quantidade - a.quantidade
+      || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
+  },
+
   dadosDashboard(periodo) {
     const unicos = new Map();
     this.listOpenProcesses().concat(this.listCompletedProcesses()).forEach(({ key, proc }) => unicos.set(String(key), proc));
@@ -168,18 +193,8 @@ const FinanciamentoApp = {
     const saldos = processos.map((proc) => ({ proc: proc, saldo: this.saldoDeclaradoDashboard(proc) }))
       .filter((item) => item.saldo != null);
     const valorTotal = saldos.reduce((total, item) => total + item.saldo, 0);
-    const divergencias = processos.map((proc) => {
-      const declarado = this.saldoDeclaradoDashboard(proc);
-      const caixa = Number(proc.valorLiberadoCaixa);
-      if (declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)) return null;
-      return { proc: proc, declarado: declarado, caixa: caixa, diferenca: Math.abs(caixa - declarado) };
-    }).filter((item) => item && item.diferenca > 0.01).sort((a, b) => b.diferenca - a.diferenca);
-    const diferencaTotal = processos.reduce((total, proc) => {
-      const declarado = this.saldoDeclaradoDashboard(proc);
-      const caixa = Number(proc.valorLiberadoCaixa);
-      return declarado == null || proc.valorLiberadoCaixa == null || !Number.isFinite(caixa)
-        ? total : total + Math.abs(caixa - declarado);
-    }, 0);
+    const porCidade = this.agruparDashboard(abertos, (proc) => this.cidadeDoProc(proc));
+    const porEmpreendimento = this.agruparDashboard(abertos, (proc) => this.obraDoProc(proc).empreendimento);
     const ano = Number(String(periodo || "").slice(0, 4));
     const mes = Number(String(periodo || "").slice(5, 7));
     const periodoLabel = Number.isInteger(ano) && Number.isInteger(mes) && mes >= 1 && mes <= 12
@@ -194,8 +209,8 @@ const FinanciamentoApp = {
       saldosDeclarados: saldos.length,
       saldosPendentes: processos.length - saldos.length,
       valorTotal: valorTotal,
-      divergencias: divergencias,
-      diferencaTotal: diferencaTotal
+      porCidade: porCidade,
+      porEmpreendimento: porEmpreendimento
     };
   },
 
@@ -206,69 +221,63 @@ const FinanciamentoApp = {
     FinanciamentoState.dashboardPeriodo = periodo;
     const dados = this.dadosDashboard(periodo);
     const totalAbertos = dados.abertos.length;
-    const estagios = dados.etapas.map((etapa) => {
-      const percentual = totalAbertos ? Math.round(etapa.quantidade / totalAbertos * 100) : 0;
+    const barraGrupo = (itens) => (itens || []).map((item) => {
+      const percentual = totalAbertos ? Math.round(item.quantidade / totalAbertos * 100) : 0;
       return `<article class="fin-dash-etapa">
-        <div><strong>${this.esc(etapa.nome)}</strong><span>${etapa.quantidade}</span></div>
+        <div><strong>${this.esc(item.nome)}</strong><span>${item.quantidade}</span></div>
         <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
       </article>`;
     }).join("");
-    const divergencias = dados.divergencias.map(({ proc, declarado, caixa, diferenca }) => `
-      <tr>
-        <td class="fin-dash-cliente">${this.esc(proc.customerName || proc.customerId || "—")}</td>
-        <td>${this.esc(proc.titulo || "—")}</td>
-        <td>${this.esc(this.etapaLabel(proc))}</td>
-        <td class="is-right">${this.esc(this.fmtMoney(declarado))}</td>
-        <td class="is-right">${this.esc(this.fmtMoney(caixa))}</td>
-        <td class="is-right fin-dash-diferenca">${this.esc(this.fmtMoney(diferenca))}</td>
-      </tr>`).join("");
+    const estagios = barraGrupo(dados.etapas);
+    const cidades = barraGrupo(dados.porCidade);
+    const empreendimentos = barraGrupo(dados.porEmpreendimento);
     return `<section class="fin-dashboard">
-      <div class="fin-dash-filtros">
-        <label for="fin-dashboard-periodo">Mês e ano de início do processo</label>
-        <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
-        <button type="button" class="btn btn-primary" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
-        <button type="button" class="btn btn-outline" id="fin-dashboard-botao-teste" onclick="FinanciamentoApp.botaoTeste()"><i data-lucide="flask-conical" style="width:16px;height:16px;"></i> Botão de teste</button>
-        <span id="fin-dashboard-pdf-status" role="status"></span>
-      </div>
       <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
         <header class="fin-dash-cabecalho">
-          <div><span class="fin-dash-marca">INTEGR.A · FINANCIAMENTO</span><h2>Dashboard de financiamentos</h2></div>
-          <p>Período: ${this.esc(dados.periodoLabel)} · contratos iniciados no período</p>
+          <div>
+            <span class="fin-dash-marca">INTEGR.A · FINANCIAMENTO</span>
+            <h2>Dashboard de financiamentos</h2>
+            <p>Período: ${this.esc(dados.periodoLabel)} · contratos iniciados no período</p>
+          </div>
+          <div class="fin-dash-acoes">
+            <label for="fin-dashboard-periodo">Mês e ano de início do processo
+              <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
+            </label>
+            <button type="button" class="btn btn-primary" id="fin-dashboard-botao-pdf" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
+            <span id="fin-dashboard-pdf-status" role="status"></span>
+          </div>
         </header>
         <div class="fin-dash-indicadores">
           <article class="fin-dash-kpi fin-dash-kpi-verde"><span>Contratos em andamento</span><strong>${totalAbertos}</strong><small>Na etapa atual</small></article>
           <article class="fin-dash-kpi fin-dash-kpi-laranja"><span>Concluídos</span><strong>${dados.concluidos.length}</strong><small>Finalizados no processo</small></article>
           <article class="fin-dash-kpi"><span>Valor de financiamento</span><strong>${this.esc(this.fmtMoney(dados.valorTotal))}</strong><small>${dados.saldosDeclarados} com saldo declarado · ${dados.saldosPendentes} pendentes</small></article>
-          <article class="fin-dash-kpi"><span>Diferença dos clientes</span><strong>${this.esc(this.fmtMoney(dados.diferencaTotal))}</strong><small>${dados.divergencias.length} com divergência · soma das diferenças absolutas</small></article>
         </div>
         <section class="fin-dash-bloco">
           <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento</span></div>
           <div class="fin-dash-etapas">${estagios || '<p class="fin-dash-vazio">Etapas de financiamento não cadastradas.</p>'}</div>
         </section>
         <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Divergências por cliente</h3><span>Valor absoluto entre a declaração e a Carta SIOPI</span></div>
-          <div class="cc-scroll">
-            <table class="cc-table fin-dash-tabela">
-              <colgroup><col><col style="width:100px"><col style="width:230px"><col style="width:130px"><col style="width:130px"><col style="width:130px"></colgroup>
-              <thead><tr><th>Cliente</th><th>Título</th><th>Etapa</th><th class="is-right">Declarado</th><th class="is-right">CAIXA / SIOPI</th><th class="is-right">Diferença</th></tr></thead>
-              <tbody>${divergencias || '<tr><td colspan="6" style="text-align:center;padding:24px;">Não há divergências registradas neste período.</td></tr>'}</tbody>
-            </table>
-          </div>
+          <div class="fin-dash-titulo"><h3>Em andamento por cidade</h3><span>${dados.porCidade.length} cidade${dados.porCidade.length === 1 ? "" : "s"}</span></div>
+          <div class="fin-dash-etapas">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
+        </section>
+        <section class="fin-dash-bloco">
+          <div class="fin-dash-titulo"><h3>Em andamento por empreendimento</h3><span>${dados.porEmpreendimento.length} empreendimento${dados.porEmpreendimento.length === 1 ? "" : "s"}</span></div>
+          <div class="fin-dash-etapas">${empreendimentos || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
         </section>
       </div>
       <style>
         #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-laranja:#f37021; }
-        #financiamento-root .fin-dash-filtros { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
-        #financiamento-root .fin-dash-filtros label { display:flex; flex-direction:column; gap:5px; color:#475569; font-size:0.75rem; font-weight:700; }
-        #financiamento-root .fin-dash-filtros input { width:190px; height:40px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:6px; padding:0 10px; font:inherit; }
-        #financiamento-root .fin-dash-filtros .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
-        #financiamento-root #fin-dashboard-pdf-status { color:#105436; font-size:0.78rem; font-weight:700; }
         #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; }
-        #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; padding:18px 20px; border-radius:12px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
+        #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; padding:18px 20px; border-radius:12px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
         #financiamento-root .fin-dash-marca { font-size:0.7rem; font-weight:800; letter-spacing:0.08em; opacity:.85; }
         #financiamento-root .fin-dash-cabecalho h2 { margin:4px 0 0; font-size:1.35rem; }
-        #financiamento-root .fin-dash-cabecalho p { margin:0; font-size:0.82rem; font-weight:700; }
-        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+        #financiamento-root .fin-dash-cabecalho > div > p { margin:6px 0 0; font-size:0.82rem; font-weight:700; }
+        #financiamento-root .fin-dash-acoes { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        #financiamento-root .fin-dash-acoes label { display:flex; flex-direction:column; gap:5px; color:rgba(255,255,255,.92); font-size:0.72rem; font-weight:700; }
+        #financiamento-root .fin-dash-acoes input { width:190px; height:40px; box-sizing:border-box; border:1px solid rgba(255,255,255,.35); border-radius:6px; padding:0 10px; font:inherit; color:#0f172a; background:#fff; }
+        #financiamento-root .fin-dash-acoes .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
+        #financiamento-root #fin-dashboard-pdf-status { color:#dcfce7; font-size:0.78rem; font-weight:700; max-width:220px; }
+        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
         #financiamento-root .fin-dash-kpi { min-width:0; display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #e2e8f0; border-top:4px solid #105436; border-radius:10px; background:#fff; box-shadow:0 2px 6px rgba(15,23,42,.04); }
         #financiamento-root .fin-dash-kpi-verde { border-top-color:#105436; }
         #financiamento-root .fin-dash-kpi-laranja { border-top-color:#f37021; }
@@ -287,13 +296,11 @@ const FinanciamentoApp = {
         #financiamento-root .fin-dash-barra { height:6px; margin-top:7px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
         #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
         #financiamento-root .fin-dash-vazio { grid-column:1/-1; margin:6px 0; color:#64748b; font-size:0.8rem; }
-        #financiamento-root .fin-dash-tabela { min-width:900px; }
-        #financiamento-root .fin-dash-tabela .fin-dash-cliente { white-space:normal; }
-        #financiamento-root .fin-dash-tabela .fin-dash-diferenca { color:#b45309; font-weight:800; }
         @media (max-width:900px) { #financiamento-root .fin-dash-indicadores { grid-template-columns:repeat(2,minmax(0,1fr)); } }
         @media (max-width:600px) {
           #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas { grid-template-columns:1fr; }
-          #financiamento-root .fin-dash-cabecalho { align-items:flex-start; flex-direction:column; }
+          #financiamento-root .fin-dash-cabecalho { align-items:stretch; flex-direction:column; }
+          #financiamento-root .fin-dash-acoes { justify-content:flex-start; }
           #financiamento-root .fin-dash-titulo { align-items:flex-start; flex-direction:column; }
         }
       </style>
@@ -306,18 +313,9 @@ const FinanciamentoApp = {
     this.render();
   },
 
-  botaoTeste() {
-    const status = document.getElementById("fin-dashboard-pdf-status");
-    const periodo = FinanciamentoState.dashboardPeriodo || "—";
-    const mensagem = "Botão de teste ok · período " + periodo;
-    if (status) status.textContent = mensagem;
-    alert(mensagem);
-    return true;
-  },
-
   async exportarDashboardPdf() {
     const conteudo = document.getElementById("fin-dashboard-conteudo");
-    const btn = document.querySelector("#fin-dashboard-periodo") && document.querySelector(".fin-dash-filtros .btn");
+    const btn = document.getElementById("fin-dashboard-botao-pdf");
     const status = document.getElementById("fin-dashboard-pdf-status");
     if (!conteudo) return false;
     if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
@@ -1774,7 +1772,15 @@ const FinanciamentoApp = {
     return (etapas || []).filter((s) => s && s.hasChildren !== true && s.selectable !== false);
   },
 
-  JANELA_DESFAZER_MS: 24 * 60 * 60 * 1000,
+  mesmoDiaLocal(iso) {
+    const em = Date.parse(iso || 0) || 0;
+    if (!em) return false;
+    const a = new Date(em);
+    const b = new Date();
+    return a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth()
+      && a.getDate() === b.getDate();
+  },
 
   concluidaEm(proc, stageId) {
     if (!proc || stageId == null) return "";
@@ -1814,8 +1820,7 @@ const FinanciamentoApp = {
   },
 
   avancoDentroDoPrazo(av) {
-    const em = Date.parse(av && av.em || 0) || 0;
-    return !!em && (Date.now() - em) <= this.JANELA_DESFAZER_MS;
+    return this.mesmoDiaLocal(av && av.em);
   },
 
   avancoEhMeu(av) {
@@ -1835,7 +1840,7 @@ const FinanciamentoApp = {
     const anterior = idx > 0 ? folhas[idx - 1] : (idx < 0 && folhas.length ? folhas[folhas.length - 1] : null);
     if (!anterior) return null;
     const em = this.concluidaEm(proc, anterior.id);
-    if (!em || (Date.now() - (Date.parse(em) || 0)) > this.JANELA_DESFAZER_MS) return null;
+    if (!em || !this.mesmoDiaLocal(em)) return null;
     if (!this.operadorAtual().id) return null;
     return { stageId: String(anterior.id), nome: anterior.nome || anterior.label || "etapa anterior", legado: true, em: em };
   },
@@ -3397,11 +3402,14 @@ const FinanciamentoApp = {
       <div class="fin-etapa-acoes">${desfazer}${acao}</div>
     </div>`;
     if (!atual) {
+      const historico = this.historicoHtml(proc, stageId);
       return `<div class="fin-etapa ${classe}">
         ${cabecalho}
         <div class="fin-etapa-corpo">
           ${orientacao}
-          ${encerrada ? "" : '<p class="fin-etapa-aguardando">Inicie esta etapa para registrar notas e anexar documentos.</p>'}
+          ${historico
+            ? `<section class="fin-nota-historico" aria-label="Histórico desta etapa (somente leitura)"><strong>Histórico desta etapa</strong>${historico}</section>`
+            : (encerrada ? "" : '<p class="fin-etapa-aguardando">Inicie esta etapa para registrar notas e anexar documentos.</p>')}
         </div>
       </div>`;
     }
@@ -3658,7 +3666,7 @@ const FinanciamentoApp = {
               #financiamento-root .fin-historico-item { grid-template-columns: 1fr; gap: 3px; }
             }
           </style>
-          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Somente a etapa atual fica aberta. Registre as informações indicadas, inclua notas e anexe os documentos necessários. O histórico do processo aparece abaixo, quando houver registros.</p>
+          <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Somente a etapa atual fica aberta para edição. Etapas concluídas ficam em somente leitura, com o histórico de notas e anexos. Quem concluiu pode desfazer o avanço no mesmo dia. O histórico do processo aparece abaixo, quando houver registros.</p>
           ${etapaHtml}
           ${historicoProcesso}
         </div>

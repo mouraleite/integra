@@ -484,6 +484,48 @@ async function anexosMultipartBody(fileBlob, filename) {
   return { body, contentType: `multipart/form-data; boundary=${boundary}`, fileName: safeName };
 }
 
+function anexosExtrairMensagemErroCorpo(corpo) {
+  if (corpo == null) return "";
+  if (typeof corpo === "string") {
+    const texto = corpo.trim();
+    if (!texto) return "";
+    try {
+      return anexosExtrairMensagemErroCorpo(JSON.parse(texto)) || texto.slice(0, 400);
+    } catch (e) {
+      return texto.slice(0, 400);
+    }
+  }
+  if (typeof corpo !== "object") return String(corpo).slice(0, 400);
+  const direto = corpo.error || corpo.clientMessage || corpo.developerMessage || corpo.message || corpo.detail || corpo.title;
+  if (direto) return String(direto).trim().slice(0, 400);
+  if (Array.isArray(corpo.errors) && corpo.errors.length) {
+    return corpo.errors.map((item) => {
+      if (item == null) return "";
+      if (typeof item === "string") return item;
+      return item.message || item.clientMessage || item.developerMessage || item.error || "";
+    }).filter(Boolean).join("; ").slice(0, 400);
+  }
+  return "";
+}
+
+async function anexosMensagemErroHttp(res) {
+  const status = res && res.status != null ? res.status : "?";
+  let msg = "";
+  try {
+    const texto = await res.text();
+    msg = anexosExtrairMensagemErroCorpo(texto);
+  } catch (e) {
+    msg = "";
+  }
+  return msg ? ("HTTP " + status + " - " + msg) : ("HTTP " + status);
+}
+
+function anexosMensagemErroXhr(xhr) {
+  const status = xhr && xhr.status != null ? xhr.status : "?";
+  const msg = anexosExtrairMensagemErroCorpo(xhr && xhr.responseText);
+  return msg ? ("HTTP " + status + " - " + msg) : ("HTTP " + status);
+}
+
 function anexosContractIsActive(c) {
   const sit = String((c && (c.situation || c.status)) || '').toUpperCase();
   return sit !== 'CANCELED' && sit !== 'CANCELADO' && sit !== 'DISTRATADO' && sit !== '3';
@@ -5080,7 +5122,7 @@ const AnexosApp = {
               }
               resolve();
             } else {
-              reject(new Error(`HTTP ${xhr.status}`));
+              reject(new Error(anexosMensagemErroXhr(xhr)));
             }
           };
 
@@ -5336,17 +5378,18 @@ window.anexosUploadCustomerAttachment = async function(customerId, file, tagLabe
     body: multipart.body
   });
   if (!res.ok) {
+    const erroHttp = await anexosMensagemErroHttp(res);
     if (typeof window.logCrmAudit === "function") {
       window.logCrmAudit({
         action: "ANEXO_ERRO",
         module: "GED / Anexos",
         status: "erro",
         customerId: id,
-        summary: "Falha no anexo de distrato · HTTP " + res.status,
-        details: { tag: tag, fileName: nomeFinalArquivo, destino: "Cliente", context: "distrato", httpStatus: res.status }
+        summary: "Falha no anexo de distrato · " + erroHttp,
+        details: { tag: tag, fileName: nomeFinalArquivo, destino: "Cliente", context: "distrato", httpStatus: res.status, apiMessage: erroHttp }
       });
     }
-    throw new Error("HTTP " + res.status);
+    throw new Error(erroHttp);
   }
   if (typeof window.logCrmAudit === "function") {
     window.logCrmAudit({
@@ -5480,6 +5523,7 @@ window.anexosUploadUnitAttachment = async function(opts) {
     body: multipart.body
   });
   if (!res.ok) {
+    const erroHttp = await anexosMensagemErroHttp(res);
     if (typeof window.logCrmAudit === "function") {
       window.logCrmAudit({
         action: "ANEXO_ERRO",
@@ -5489,11 +5533,11 @@ window.anexosUploadUnitAttachment = async function(opts) {
         enterpriseId: cc,
         unitId: siengeUnitId,
         unitName: unitName,
-        summary: "Falha no anexo da unidade · HTTP " + res.status,
-        details: { tag: tag, fileName: nomeFinalArquivo, destino: "Unidade", context: context, httpStatus: res.status }
+        summary: "Falha no anexo da unidade · " + erroHttp,
+        details: { tag: tag, fileName: nomeFinalArquivo, destino: "Unidade", context: context, httpStatus: res.status, apiMessage: erroHttp }
       });
     }
-    throw new Error("HTTP " + res.status);
+    throw new Error(erroHttp);
   }
   if (typeof window.logCrmAudit === "function") {
     window.logCrmAudit({
