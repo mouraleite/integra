@@ -125,8 +125,12 @@ const FinanciamentoApp = {
     this.puxarNuvem();
   },
 
+  listEsteiraProcesses() {
+    return this.listOpenProcesses().filter((row) => row && row.proc && row.proc.currentStageId);
+  },
+
   abasHtml(painel) {
-    const n = this.listOpenProcesses().length;
+    const n = this.listEsteiraProcesses().length;
     const concluidos = this.listCompletedProcesses().length;
     return `<div class="ml-tabs fin-abas" role="tablist">
       <button type="button" role="tab" aria-selected="${painel === "dashboard"}" class="ml-tab ${painel === "dashboard" ? "is-active" : ""}" onclick="FinanciamentoApp.setPainel('dashboard')"><i data-lucide="chart-no-axes-combined"></i> Dashboard</button>
@@ -1310,15 +1314,13 @@ const FinanciamentoApp = {
   esteiraHtml() {
     const catalogo = this.catalogoEtapas();
     const colunasEtapa = catalogo.filter((s) => s.selectable !== false && !s.hasChildren);
-    const abertos = this.listOpenProcesses();
+    const abertos = this.listEsteiraProcesses();
     const porId = {};
     colunasEtapa.forEach((s) => { porId[String(s.id)] = []; });
-    const aguardando = [];
     const fora = [];
     abertos.forEach((row) => {
       const id = row.proc && row.proc.currentStageId;
-      if (!id) aguardando.push(row);
-      else if (porId[String(id)]) porId[String(id)].push(row);
+      if (porId[String(id)]) porId[String(id)].push(row);
       else fora.push(row);
     });
     const ordenar = (lista, etapa) => lista.slice().sort((a, b) => {
@@ -1327,8 +1329,7 @@ const FinanciamentoApp = {
       const peso = (p) => p.status === "atrasado" ? -10000 + (p.restantes || 0) : (p.status === "no-prazo" ? (p.restantes || 0) : 10000);
       return peso(pa) - peso(pb);
     });
-    const colunas = [{ id: "", nome: "Aguardando", label: "Aguardando", dias: 0, itens: aguardando }]
-      .concat(colunasEtapa.map((s) => ({ ...s, itens: ordenar(porId[String(s.id)] || [], s) })));
+    const colunas = colunasEtapa.map((s) => ({ ...s, itens: ordenar(porId[String(s.id)] || [], s) }));
     if (fora.length) colunas.push({ id: "__fora", nome: "Etapa removida", label: "Etapa removida", dias: 0, itens: fora });
     const atrasados = abertos.filter((row) => {
       const etapa = colunasEtapa.find((s) => String(s.id) === String(row.proc.currentStageId));
@@ -1339,7 +1340,7 @@ const FinanciamentoApp = {
       return etapa && this.prazoEtapa(row.proc, etapa).status === "no-prazo";
     }).length;
     const resumo = abertos.length
-      ? `<p class="fin-esteira-resumo">${abertos.length} em andamento · ${noPrazo} no prazo · ${atrasados} atrasado${atrasados === 1 ? "" : "s"} · ${aguardando.length} aguardando a primeira etapa.</p>`
+      ? `<p class="fin-esteira-resumo">${abertos.length} em andamento · ${noPrazo} no prazo · ${atrasados} atrasado${atrasados === 1 ? "" : "s"}.</p>`
       : `<p class="fin-esteira-resumo">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</p>`;
     const vazioEtapas = colunasEtapa.length ? "" : `<p class="fin-esteira-resumo">Nenhuma etapa cadastrada. Cadastre em Financiamento → Configurações.</p>`;
     return `<style>
