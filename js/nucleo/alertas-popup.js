@@ -175,6 +175,17 @@ const AlertasPopupApp = {
       corpo: `<p>O documento Cessão de direitos de ELISABETE FALCI, título 6526, foi emitido em 15/10/2026 e não foi concluído no Sienge ainda.</p>`
     },
     {
+      id: "titulos-monitorados",
+      nome: "Título acompanhado vencido",
+      quando: "No login, depois que a fila do dia carrega, enquanto o título tiver parcela vencida. Uma vez por pessoa e por dia, ao fechar.",
+      logica: "A lista de títulos acompanhados fica no código (hoje só o 16955, Casa SPA). Eles continuam na inadimplência; o aviso abre quando algum deles tem parcela vencida na fila do dia.",
+      quem: "Operador de cobrança back office.",
+      titulo: "Título acompanhado está vencido",
+      corpo: `<p>Este título está na inadimplência e precisa de contato do back office.</p>
+        <p style="margin:0 0 4px 0;"><strong>Título 16955</strong> · Cliente exemplo · CASA SPA</p>
+        <div class="apa-item"><strong>Parcela 6 · venceu em 16/11/2026</strong><span>9 dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">R$ 6.000,00</span></div>`
+    },
+    {
       id: "mudanca-endereco",
       nome: "Mudança de endereço do Integra",
       quando: "Ao abrir o Integra no endereço antigo (crm-gestao.vercel.app), uma vez por dia em cada navegador, até a virada. No dia da virada passa a bloquear o endereço antigo e levar para o novo.",

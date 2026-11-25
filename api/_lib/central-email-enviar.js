@@ -263,12 +263,14 @@ module.exports = async function handler(req, res) {
         const pdf = await extratoPdf(customerId, titulo);
         anexos.push({ name: "Extrato " + titulo + ".pdf", contentType: "application/pdf", contentBytes: pdf.toString("base64") });
       }
-      await sendMail({ to: para.join(","), cc: cc.join(","), subject: assunto, html, attachments: anexos });
+      // Remetente do template (vazio = caixa padrão); o graph-mail só aceita caixas liberadas na Vercel.
+      const de = String(t.remetente || "").trim().toLowerCase();
+      await sendMail({ from: de, to: para.join(","), cc: cc.join(","), subject: assunto, html, attachments: anexos });
       r.status = "enviado";
       r.para = para.length;
       await gravarDoc("central_email_envios/" + id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
-        para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
+        de: de || "padrao", para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
         await gravarDoc("acordo_email_tag/" + customerId + "_" + titulo, {

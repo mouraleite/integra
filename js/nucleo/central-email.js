@@ -62,9 +62,26 @@ const CentralEmailApp = {
     return typeof window.isCrmAdministrator === "function" && window.isCrmAdministrator(u);
   },
 
+  /* Caixas de onde o e-mail pode sair. Vazio = caixa padrão do Integra (GRAPH_MAILBOX na Vercel).
+     Cada caixa extra também precisa estar em GRAPH_MAILBOXES_EXTRAS na Vercel; sem isso o servidor recusa o envio. */
+  CAIXAS_ENVIO: [
+    { valor: "", rotulo: "Caixa padrão do Integra" },
+    { valor: "recebimentos@mouraleite.com.br", rotulo: "recebimentos@mouraleite.com.br" }
+  ],
+
+  caixaValida(v) {
+    const alvo = String(v || "").trim().toLowerCase();
+    return this.CAIXAS_ENVIO.some((c) => c.valor === alvo) ? alvo : "";
+  },
+
+  rotuloCaixa(v) {
+    const c = this.CAIXAS_ENVIO.find((x) => x.valor === this.caixaValida(v));
+    return c ? c.rotulo : this.CAIXAS_ENVIO[0].rotulo;
+  },
+
   assinatura(t) {
     return [t && t.nome, t && t.assunto, t && t.corpo, t && t.tag, t && t.diasVencido,
-      (t && t.destino) || "contrato", (t && t.para) || "", (t && t.cc) || ""].join("\u0001");
+      (t && t.destino) || "contrato", (t && t.para) || "", (t && t.cc) || "", (t && t.remetente) || ""].join("\u0001");
   },
 
   // Lista de e-mails válidos, sem repetição, a partir de texto separado por vírgula, ponto e vírgula ou espaço.
@@ -292,6 +309,7 @@ const CentralEmailApp = {
         destino: t && t.destino === "fixo" ? "fixo" : "contrato",
         para: this.listaEmails(t && t.para).join(", "),
         cc: this.listaEmails(t && t.cc).join(", "),
+        remetente: this.caixaValida(t && t.remetente),
         status: status,
         ativo: status === "pendente" ? false : ativo,
         criadoPorEmail: String((t && t.criadoPorEmail) || "").trim().toLowerCase(),
@@ -371,11 +389,11 @@ const CentralEmailApp = {
     const pode = this.podeEditar();
     const admin = this.souAdmin();
     const linhas = this.state.templates.map((t) => `<tr>
-      <td>${this.esc(t.nome)}</td>
-      <td>${this.esc(this.rotuloTag(t.tag))}</td>
-      <td>${this.esc(t.diasVencido)}</td>
-      <td>${this.esc(t.destino === "fixo" ? (t.para || "—") : "E-mails do contrato")}${t.cc ? `<br><small class="cem-cc">Cópia: ${this.esc(t.cc)}</small>` : ""}</td>
-      <td>${this.esc(this.situacao(t))}</td>
+      <td title="${this.esc(t.nome)}">${this.esc(t.nome)}</td>
+      <td title="${this.esc(this.rotuloTag(t.tag))}">${this.esc(this.rotuloTag(t.tag))}</td>
+      <td class="is-center">${this.esc(t.diasVencido)}</td>
+      <td class="cem-para">${this.esc(t.destino === "fixo" ? (t.para || "—") : "E-mails do contrato")}${t.cc ? `<br><small class="cem-cc">Cópia: ${this.esc(t.cc)}</small>` : ""}${t.remetente ? `<br><small class="cem-cc">De: ${this.esc(t.remetente)}</small>` : ""}</td>
+      <td class="is-center">${this.esc(this.situacao(t))}</td>
       <td class="is-right cem-acoes">
         <button type="button" class="tvig-ico" title="Ver" onclick="CentralEmailApp.verTemplate('${this.esc(t.id)}')"><i data-lucide="eye" style="width:15px;height:15px;"></i></button>
         ${admin && t.status === "aprovado" ? `<button type="button" class="tvig-ico${t.ativo ? " cem-ligada" : ""}" title="${t.ativo ? "Desativar a régua" : "Ativar a régua"}" onclick="CentralEmailApp.alternarAtivo('${this.esc(t.id)}')"><i data-lucide="power" style="width:15px;height:15px;"></i></button>` : ""}
@@ -384,10 +402,11 @@ const CentralEmailApp = {
         <button type="button" class="tvig-ico is-danger" title="Excluir" onclick="CentralEmailApp.excluir('${this.esc(t.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>` : ""}
       </td>
     </tr>`).join("");
-    return `<table class="cem-tabela">
-      <thead><tr><th>Template</th><th>Tag</th><th>Dias vencido</th><th>Para</th><th>Régua</th><th class="is-right">Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="6">Nenhum template. Crie o texto, escolha a tag e quantos dias depois do vencimento.</td></tr>`}</tbody>
-    </table>`;
+    return `<div class="cc-scroll"><table class="cc-table cem-tabela">
+      <colgroup><col style="width:22%"><col style="width:26%"><col style="width:90px"><col><col style="width:96px"><col style="width:132px"></colgroup>
+      <thead><tr><th>Template</th><th>Tag</th><th class="is-center">Dias vencido</th><th>Para</th><th class="is-center">Régua</th><th class="is-right">Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum template. Crie o texto, escolha a tag e quantos dias depois do vencimento.</td></tr>`}</tbody>
+    </table></div>`;
   },
 
   filaHtml() {
@@ -399,19 +418,20 @@ const CentralEmailApp = {
     return ativos.map((t) => {
       const gente = this.clientesDoTemplate(t);
       const linhas = gente.map((c, i) => `<tr>
-        <td>${this.esc(c.customerName || "—")}</td>
+        <td title="${this.esc(c.customerName || "")}">${this.esc(c.customerName || "—")}</td>
         <td>${this.esc(c.unitName || "—")}</td>
-        <td>${this.esc(this.destinatarios(t, c).para.join(", ") || (t.destino === "fixo" ? "—" : "E-mail do cliente no Sienge"))}</td>
+        <td class="cem-para">${this.esc(this.destinatarios(t, c).para.join(", ") || (t.destino === "fixo" ? "—" : "E-mail do cliente no Sienge"))}</td>
         <td>${(() => { const e = this.envioDe(t, c); if (!e) return `<span class="cem-env">Aguardando</span>`; if (e.status === "enviado") return `<span class="cem-env ok" title="${this.esc(e.para || "")}">Enviado ${this.esc(String(e.em || "").slice(11, 16))}</span>`; return `<span class="cem-env erro" title="${this.esc(e.erro || "")}">Erro</span>`; })()}</td>
         <td class="is-right cem-acoes"><button type="button" class="tvig-ico" title="Ver e-mail" onclick="CentralEmailApp.verCliente('${this.esc(t.id)}', ${i})"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></td>
       </tr>`).join("");
       return `<section class="cem-bloco">
         <h4>${this.esc(t.nome)}</h4>
         <p>${this.esc(this.rotuloTag(t.tag))} · ${this.esc(t.diasVencido)} dia(s) depois de vencido · ${gente.length} cliente(s) hoje${t.cc ? " · Cópia: " + this.esc(t.cc) : ""}</p>
-        <table class="cem-tabela">
+        <div class="cc-scroll"><table class="cc-table cem-tabela">
+          <colgroup><col style="width:28%"><col style="width:110px"><col><col style="width:120px"><col style="width:70px"></colgroup>
           <thead><tr><th>Cliente</th><th>Unidade</th><th>E-mail</th><th>Envio de hoje</th><th class="is-right">Ações</th></tr></thead>
-          <tbody>${linhas || `<tr><td colspan="5">Ninguém completa esse atraso hoje.</td></tr>`}</tbody>
-        </table>
+          <tbody>${linhas || `<tr><td colspan="5" style="text-align:center;padding:30px;">Ninguém completa esse atraso hoje.</td></tr>`}</tbody>
+        </table></div>
       </section>`;
     }).join("");
   },
@@ -484,6 +504,7 @@ const CentralEmailApp = {
               </div>
               <label class="cem-dest-campo" id="cem-para-wrap"${destino === "fixo" ? "" : " hidden"}>E-mail de destino<input id="cem-para" class="cem-campo" placeholder="nome@empresa.com.br" value="${this.esc(atual ? atual.para : "")}"></label>
               <label class="cem-dest-campo">Cópia (CC)<input id="cem-cc" class="cem-campo" placeholder="Separe os e-mails por vírgula" value="${this.esc(atual ? atual.cc : "")}"></label>
+              <label class="cem-dest-campo">Enviar de<select id="cem-de" class="cem-campo">${this.CAIXAS_ENVIO.map((c) => `<option value="${this.esc(c.valor)}"${this.caixaValida(atual && atual.remetente) === c.valor ? " selected" : ""}>${this.esc(c.rotulo)}</option>`).join("")}</select></label>
             </div>
             <p class="cem-legenda">${atual && atual.status === "aprovado" ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga." : "Ao salvar, a régua fica desligada até o administrador aprovar."}</p>
             <label class="cem-bloco-campo">Texto<textarea id="cem-corpo" class="cem-campo">${this.esc(atual ? atual.corpo : "")}</textarea></label>
@@ -603,6 +624,7 @@ const CentralEmailApp = {
       destino,
       para: destino === "fixo" ? this.listaEmails(paraTxt).join(", ") : "",
       cc: this.listaEmails(ccTxt).join(", "),
+      remetente: this.caixaValida((document.getElementById("cem-de") || {}).value),
       criadoPorEmail: (anterior && anterior.criadoPorEmail) || quem.email,
       criadoPorNome: (anterior && anterior.criadoPorNome) || quem.nome,
       status: "pendente",
@@ -687,7 +709,8 @@ const CentralEmailApp = {
     const ctx = this.contextoCliente(c);
     const assunto = this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), ctx);
     const dest = this.destinatarios(t, c);
-    const cab = (dest.para.length ? "Para: " + this.esc(dest.para.join(", ")) + "<br>" : (t.destino === "fixo" ? "" : "Para: e-mail do cliente no Sienge<br>"))
+    const cab = "De: " + this.esc(this.rotuloCaixa(t.remetente)) + "<br>"
+      + (dest.para.length ? "Para: " + this.esc(dest.para.join(", ")) + "<br>" : (t.destino === "fixo" ? "" : "Para: e-mail do cliente no Sienge<br>"))
       + (dest.cc.length ? "Cópia: " + this.esc(dest.cc.join(", ")) + "<br>" : "");
     this.abrirLeitura(c.customerName || t.nome, `<span style="color:#64748b;">${cab}</span><br>` + (assunto ? `<strong>${this.esc(assunto)}</strong><br><br>` : "")
       + this.htmlEmail(t.corpo, ctx, this.parcelasDe(c))

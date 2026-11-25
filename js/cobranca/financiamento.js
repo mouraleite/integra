@@ -187,17 +187,11 @@ const FinanciamentoApp = {
           <span id="fin-abertos-count" style="font-size:0.75rem;color:#64748b;font-weight:700;"></span>
         </div>
         <div class="crm-card-content" style="padding:0;">
-          <div style="overflow:auto;max-height:280px;border-bottom-left-radius:8px;border-bottom-right-radius:8px;">
-            <table class="crm-table" style="width:100%;border-collapse:separate;border-spacing:0;">
-              <thead style="position:sticky;top:0;background:#f3f4f6;z-index:10;">
-                <tr>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Cliente</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Contrato</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Título</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Unidade</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Etapa</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Atualizado</th>
-                </tr>
+          <div class="cc-scroll" style="max-height:300px;border:0;border-radius:0 0 8px 8px;">
+            <table class="cc-table fin-abertos-table">
+              <colgroup><col style="width:24%"><col style="width:12%"><col style="width:70px"><col style="width:90px"><col><col style="width:96px"></colgroup>
+              <thead>
+                <tr><th>Cliente</th><th>Contrato</th><th class="is-center">Título</th><th>Unidade</th><th>Etapa</th><th class="is-center">Atualizado</th></tr>
               </thead>
               <tbody id="fin-abertos-tbody"></tbody>
             </table>
@@ -678,7 +672,7 @@ const FinanciamentoApp = {
         : "";
     }
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:22px;color:#94a3b8;">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;white-space:normal;">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</td></tr>';
       return;
     }
     const lista = rows.slice().sort((a, b) => {
@@ -689,15 +683,15 @@ const FinanciamentoApp = {
     tbody.innerHTML = lista.map(({ key, proc }) => {
       const safeKey = String(key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       const vencida = ordem.has(String(key));
-      const fundo = vencida ? "#fef2f2" : "";
-      const hover = vencida ? "#fee2e2" : "#f0fdf4";
-      return `<tr tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}" style="cursor:pointer;background:${fundo};${vencida ? "box-shadow:inset 4px 0 0 #b91c1c;" : ""}" onmouseover="this.style.background='${hover}'" onmouseout="this.style.background='${fundo}'">
-        <td style="padding:10px;font-weight:700;font-size:0.75rem;color:${vencida ? "#991b1b" : "#0f172a"};">${this.esc(proc.customerName || proc.customerId || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;">${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;font-weight:800;">${this.esc(proc.titulo || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;">${this.esc(this.formatUnidade(proc.unit || "—"))}</td>
-        <td style="padding:10px;font-size:0.75rem;color:${vencida ? "#b91c1c" : "#105436"};font-weight:700;">${this.esc(this.etapaLabel(proc))}${vencida ? ' <span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#fee2e2;color:#991b1b;font-size:0.65rem;font-weight:800;letter-spacing:0.02em;">VENCIDA</span>' : ""}</td>
-        <td style="padding:10px;font-size:0.75rem;color:#64748b;">${this.esc(this.fmtDate(proc.updatedAt || proc.startedAt))}</td>
+      const cliente = proc.customerName || proc.customerId || "—";
+      const etapa = this.etapaLabel(proc);
+      return `<tr class="is-clicavel${vencida ? " is-alerta" : ""}" tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}">
+        <td title="${this.esc(cliente)}" style="font-weight:700;">${this.esc(cliente)}</td>
+        <td>${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
+        <td class="is-center" style="font-weight:700;">${this.esc(proc.titulo || "—")}</td>
+        <td>${this.esc(this.formatUnidade(proc.unit || "—"))}</td>
+        <td title="${this.esc(etapa)}">${this.esc(etapa)}${vencida ? '<span class="cc-selo-alerta">VENCIDA</span>' : ""}</td>
+        <td class="is-center">${this.esc(this.fmtDate(proc.updatedAt || proc.startedAt))}</td>
       </tr>`;
     }).join("");
   },
@@ -1235,32 +1229,34 @@ const FinanciamentoApp = {
           <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))} · ${n} dia${n === 1 ? "" : "s"}</span>
         </button>`;
       }).join("");
+      // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
       const cards = parcelas.map((p) => {
         const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const partes = [];
-        if (p.vencidas) partes.push(this.textoContagem(p.vencidas, "parcela vencida", "parcelas vencidas") + (p.maisAntiga ? " · a mais antiga em " + this.fmtDate(p.maisAntiga) : ""));
-        if (p.mes) partes.push(this.textoContagem(p.mes, "parcela a vencer neste mês", "parcelas a vencer neste mês") + (p.primeiraMes ? " · " + this.fmtDate(p.primeiraMes) : ""));
-        if (p.seguinte) partes.push(this.textoContagem(p.seguinte, "parcela a vencer no mês seguinte", "parcelas a vencer no mês seguinte") + (p.primeiraSeguinte ? " · a primeira em " + this.fmtDate(p.primeiraSeguinte) : ""));
-        const tom = p.vencidas ? "fin-alerta-item" : "fin-alerta-item fin-alerta-item--aviso";
-        return `<button type="button" class="${tom}" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
+        const chips = [];
+        if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
+        if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
+        if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
+        return `<button type="button" class="fin-alerta-item fin-alerta-item--parcela" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
           <strong>${this.esc(p.cliente || "—")}</strong>
           <span>Título ${this.esc(p.titulo || "—")}</span>
-          <span>${this.esc(partes.join(" · "))}</span>
+          <div class="fin-al-chips">${chips.join("")}</div>
         </button>`;
       }).join("");
-      const blocoEtapas = lista.length
-        ? `<p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${lista.length} financiamento${lista.length === 1 ? "" : "s"} na esteira com a etapa atual fora do prazo.</p>
-           <div style="display:flex;flex-direction:column;gap:8px;">${linhas}</div>`
-        : `<p style="margin:0 0 12px;color:#64748b;font-size:0.92rem;line-height:1.45;">Nenhuma etapa da esteira está vencida.</p>`;
-      const blocoParcelas = parcelas.length
-        ? `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
-           <p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${parcelas.length} cliente${parcelas.length === 1 ? "" : "s"} de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>
-           <div style="display:flex;flex-direction:column;gap:8px;">${cards}</div>`
-        : (parcelasErro
-          ? `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
-             <p style="margin:0;color:#64748b;font-size:0.92rem;">A consulta das parcelas não terminou. O batimento das 7h traz essa lista.</p>`
-          : `<h3 style="margin:18px 0 8px;font-size:0.95rem;color:#105436;">Parcelas do financiamento</h3>
-             <p style="margin:0;color:#64748b;font-size:0.92rem;">Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>`);
+      const cab = (tipo, titulo, qtd, explica) => `<div class="fin-al-cab fin-al-cab--${tipo}">
+          <span class="fin-al-tipo">${tipo === "etapa" ? "ESTEIRA" : "COBRANÇA"}</span>
+          <strong>${titulo}</strong>
+          <b class="fin-al-qtd">${qtd}</b>
+        </div>
+        <p class="fin-al-explica">${explica}</p>`;
+      const blocoEtapas = `<section class="fin-al-sec fin-al-sec--etapa">
+          ${cab("etapa", "Etapas vencidas do processo", lista.length, "A etapa atual do financiamento passou do prazo. O processo está parado e precisa andar na esteira.")}
+          ${lista.length ? `<div class="fin-al-lista">${linhas}</div>` : `<p class="fin-al-vazio">Nenhuma etapa da esteira está vencida.</p>`}
+        </section>`;
+      const blocoParcelas = `<section class="fin-al-sec fin-al-sec--parcela">
+          ${cab("parcela", "Parcelas dos clientes em financiamento", parcelas.length, "Parcelas do contrato (não são etapas): vencidas, que vencem neste mês ou no mês seguinte.")}
+          ${parcelas.length ? `<div class="fin-al-lista">${cards}</div>`
+            : `<p class="fin-al-vazio">${parcelasErro ? "A consulta das parcelas não terminou. O batimento das 7h traz essa lista." : "Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte."}</p>`}
+        </section>`;
       const overlay = document.createElement("div");
       overlay.id = "fin-alerta";
       overlay.setAttribute("role", "dialog");
@@ -1268,7 +1264,7 @@ const FinanciamentoApp = {
       overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
       overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
-          <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Etapas vencidas na esteira</h2>
+          <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Financiamentos: etapas e parcelas</h2>
           <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
         </div>
         <div style="padding:12px 18px 18px;overflow:auto;">
@@ -1278,7 +1274,25 @@ const FinanciamentoApp = {
       </div>`;
       document.body.appendChild(overlay);
       const estilo = document.createElement("style");
-      estilo.textContent = "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}#fin-alerta .fin-alerta-item--aviso{border-color:#fde68a;border-left-color:#d97706;}#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}";
+      estilo.textContent = "#fin-alerta .fin-al-sec{border-radius:12px;padding:12px;margin-bottom:14px;}"
+        + "#fin-alerta .fin-al-sec--etapa{background:#fef2f2;border:1px solid #fecaca;}"
+        + "#fin-alerta .fin-al-sec--parcela{background:#eff6ff;border:1px solid #bfdbfe;}"
+        + "#fin-alerta .fin-al-cab{display:flex;align-items:center;gap:8px;}"
+        + "#fin-alerta .fin-al-cab strong{font-size:0.95rem;flex:1;}"
+        + "#fin-alerta .fin-al-cab--etapa strong{color:#991b1b;}#fin-alerta .fin-al-cab--parcela strong{color:#1e3a8a;}"
+        + "#fin-alerta .fin-al-tipo{font-size:0.62rem;font-weight:800;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;color:#fff;}"
+        + "#fin-alerta .fin-al-cab--etapa .fin-al-tipo{background:#b91c1c;}#fin-alerta .fin-al-cab--parcela .fin-al-tipo{background:#1d4ed8;}"
+        + "#fin-alerta .fin-al-qtd{min-width:26px;text-align:center;padding:2px 8px;border-radius:999px;background:#fff;font-size:0.8rem;}"
+        + "#fin-alerta .fin-al-cab--etapa .fin-al-qtd{color:#991b1b;border:1px solid #fecaca;}#fin-alerta .fin-al-cab--parcela .fin-al-qtd{color:#1e3a8a;border:1px solid #bfdbfe;}"
+        + "#fin-alerta .fin-al-explica{margin:6px 0 10px;color:#475569;font-size:0.8rem;line-height:1.4;}"
+        + "#fin-alerta .fin-al-vazio{margin:0;color:#64748b;font-size:0.85rem;}"
+        + "#fin-alerta .fin-al-lista{display:flex;flex-direction:column;gap:8px;}"
+        + "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}"
+        + "#fin-alerta .fin-alerta-item--parcela{border-color:#bfdbfe;border-left-color:#1d4ed8;}"
+        + "#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}"
+        + "#fin-alerta .fin-al-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}"
+        + "#fin-alerta .fin-al-chip{font-style:normal;font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:999px;}"
+        + "#fin-alerta .fin-al-chip.is-venc{background:#fee2e2;color:#991b1b;}#fin-alerta .fin-al-chip.is-mes{background:#fef3c7;color:#92400e;}#fin-alerta .fin-al-chip.is-seg{background:#f1f5f9;color:#475569;}";
       overlay.appendChild(estilo);
       overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave));
     } finally {
