@@ -1412,6 +1412,9 @@
       const arch = document.getElementById("suporte-archive");
       if (arch) arch.onclick = () => archiveFromDetail(id, !t.arquivadoAt);
       if (window.lucide) lucide.createIcons();
+      // Rodapé sempre começa no topo, com o campo de resposta à vista.
+      const foot = box.querySelector(".suporte-reply-foot");
+      if (foot) foot.scrollTop = 0;
     };
     if (cached) paint(cached);
     try {
