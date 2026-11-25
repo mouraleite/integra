@@ -3992,16 +3992,22 @@ circle.donut-segment {
   gap: 10px;
   flex: 0 0 auto;
 }
+/* O rodapé (resposta, anexos e botões) não encolhe: quem rola é a conversa acima. Antes ele encolhia com
+   rolagem própria e, em chamado longo, o campo de texto ficava escondido no topo do rodapé. */
 .suporte-reply-foot {
   flex-direction: column;
   align-items: stretch;
   gap: 10px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
-  max-height: min(52vh, calc(100vh - 220px));
-  overflow: auto;
+}
+/* Tela muito baixa: aí sim o rodapé rola, mas o campo de texto fica preso no topo dele. */
+@media (max-height: 640px) {
+  .suporte-reply-foot { max-height: 60vh; overflow: auto; }
+  .suporte-reply-foot #suporte-reply { position: sticky; top: 0; z-index: 1; background: #fff; }
 }
 #suporte-reply {
+  flex: 0 0 auto;
   display: block;
   width: 100%;
   max-width: 100%;
