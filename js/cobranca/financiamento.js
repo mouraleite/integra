@@ -3,6 +3,7 @@ const FinanciamentoState = {
   painel: "dashboard",
   dashboardPeriodo: "",
   dashboardDetalhe: null,
+  dashboardMostrarVazias: false,
   customer: null,
   contracts: [],
   selected: null,
@@ -158,26 +159,51 @@ const FinanciamentoApp = {
     return Number.isFinite(valor) && valor >= 0 ? valor : null;
   },
 
+  calcularValorComercialPorMetragem(proc) {
+    if (!proc) return null;
+    const metragem = Number(proc.metragemLote);
+    if (!(Number.isFinite(metragem) && metragem > 0)) return null;
+    const obra = this.obraDoProc(proc);
+    const m2 = this.obterValorM2Comercial(
+      proc.costCenterId || proc.empId,
+      obra.empreendimento || proc.enterpriseName || ""
+    );
+    if (m2 == null) return null;
+    return {
+      metragem: metragem,
+      valorM2: m2,
+      valorComercial: Math.round(metragem * m2 * 100) / 100,
+      fonte: "metragem-x-m2-2026"
+    };
+  },
+
+  sincronizarValorComercialCalculado(proc) {
+    const calc = this.calcularValorComercialPorMetragem(proc);
+    if (!calc || !proc) return null;
+    const atual = Number(proc.valorComercial);
+    const m2Atual = Number(proc.valorM2Comercial);
+    if (atual === calc.valorComercial
+      && m2Atual === calc.valorM2
+      && proc.valorComercialFonte === calc.fonte) {
+      return calc.valorComercial;
+    }
+    proc.valorComercial = calc.valorComercial;
+    proc.valorM2Comercial = calc.valorM2;
+    proc.valorComercialFonte = calc.fonte;
+    proc.valorComercialEm = this.hojeIso();
+    this.saveProcess(proc);
+    return calc.valorComercial;
+  },
+
   valorComercialFicha(proc) {
     if (!proc) return null;
-    const direto = proc.valorComercial != null && String(proc.valorComercial).trim() !== ""
-      ? Number(proc.valorComercial) : NaN;
-    if (Number.isFinite(direto) && direto > 0) return direto;
-    const termos = proc.termos || {};
-    let melhor = null;
-    let quando = 0;
-    Object.keys(termos).forEach((sid) => {
-      (Array.isArray(termos[sid]) ? termos[sid] : []).forEach((termo) => {
-        const valor = Number(termo && termo.valorComercial);
-        if (!(Number.isFinite(valor) && valor > 0)) return;
-        const em = Date.parse(termo.generatedAt || 0) || 0;
-        if (em >= quando) {
-          quando = em;
-          melhor = valor;
-        }
-      });
-    });
-    return melhor;
+    const calc = this.calcularValorComercialPorMetragem(proc);
+    if (calc) return calc.valorComercial;
+    if (proc.valorComercialFonte === "metragem-x-m2-2026" || proc.valorComercialFonte === "boituva-manual") {
+      const direto = Number(proc.valorComercial);
+      if (Number.isFinite(direto) && direto > 0) return direto;
+    }
+    return null;
   },
 
   cidadeDoProc(proc) {
@@ -208,6 +234,41 @@ const FinanciamentoApp = {
       || String(a.nome).localeCompare(String(b.nome), "pt-BR"));
   },
 
+  nomeCurtoEtapaDash(nome) {
+    let s = String(nome || "").replace(/^\d+(\.\d+)*\.?\s*/, "").trim();
+    if (/aguardando defini/i.test(s)) return "Aguardando definição";
+    if (/declara/i.test(s) && /saldo/i.test(s)) return "Declaração de saldo devedor";
+    if (/aguardando minuta/i.test(s)) return "Aguardando minuta";
+    if (/assinatura/i.test(s)) return "Assinatura do contrato";
+    if (/desbloqueio/i.test(s)) return "Desbloqueio do crédito";
+    if (/termo de quita/i.test(s)) return "Termo de quitação bancária";
+    if (/termo de simula/i.test(s)) return "Termo de simulação";
+    if (/carta siopi/i.test(s)) return "Carta SIOPI";
+    if (/interveniente/i.test(s)) return "Interveniente quitante";
+    if (s.length > 44) s = s.slice(0, 42) + "…";
+    return s || "Etapa";
+  },
+
+  opcoesPeriodoDashboard(periodoAtual) {
+    const opcoes = [];
+    const base = new Date();
+    for (let i = 0; i < 18; i++) {
+      const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
+      const valor = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+      const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+      const texto = label.charAt(0).toUpperCase() + label.slice(1);
+      opcoes.push(`<option value="${this.esc(valor)}"${valor === periodoAtual ? " selected" : ""}>${this.esc(texto)}</option>`);
+    }
+    if (periodoAtual && !opcoes.some((o) => o.indexOf('value="' + periodoAtual + '"') >= 0)) {
+      const [y, m] = String(periodoAtual).split("-");
+      const d = new Date(Number(y), Number(m) - 1, 1);
+      const label = d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+      const texto = label.charAt(0).toUpperCase() + label.slice(1);
+      opcoes.unshift(`<option value="${this.esc(periodoAtual)}" selected>${this.esc(texto)}</option>`);
+    }
+    return opcoes.join("");
+  },
+
   dadosDashboard(periodo) {
     const abertosRows = this.listOpenProcesses().filter(({ proc }) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
     const concluidosRows = this.listCompletedProcesses().filter(({ proc }) => this.dataInicioDashboard(proc).slice(0, 7) === periodo);
@@ -220,6 +281,7 @@ const FinanciamentoApp = {
       return {
         id: String(etapa.id),
         nome: etapa.label || etapa.nome || String(etapa.id),
+        nomeCurto: this.nomeCurtoEtapaDash(etapa.label || etapa.nome || String(etapa.id)),
         quantidade: itens.length,
         itens: itens
       };
@@ -230,46 +292,88 @@ const FinanciamentoApp = {
       etapasComContagem.unshift({
         id: "",
         nome: "Aguardando definição da etapa",
+        nomeCurto: "Aguardando definição",
         quantidade: semEtapaItens.length,
         itens: semEtapaItens
       });
     }
-    const saldos = processos.map((proc) => ({ proc: proc, saldo: this.saldoDeclaradoDashboard(proc) }))
-      .filter((item) => item.saldo != null);
-    const valorTotal = saldos.reduce((total, item) => total + item.saldo, 0);
-    const porCidade = this.agruparDashboard(abertosRows, (proc) => this.cidadeDoProc(proc));
+    const valores = processos.map((proc) => this.valorComercialFicha(proc))
+      .filter((v) => v != null && Number.isFinite(v) && v > 0);
+    const valorTotal = valores.reduce((total, item) => total + item, 0);
+    const porCidade = this.agruparDashboard(abertosRows, (proc) => {
+      const cidade = String(this.cidadeDoProc(proc) || "").trim();
+      if (!cidade || /^sem cidade$/i.test(cidade) || cidade === "—") return "Sem cidade";
+      return cidade;
+    });
     const porEmpreendimento = this.agruparDashboard(abertosRows, (proc) => this.obraDoProc(proc).empreendimento);
+    const semCidade = porCidade.find((item) => this.foldTextoFin(item.nome) === "SEM CIDADE");
+    const cidadesComNome = porCidade.filter((item) => this.foldTextoFin(item.nome) !== "SEM CIDADE");
     const ano = Number(String(periodo || "").slice(0, 4));
     const mes = Number(String(periodo || "").slice(5, 7));
     const periodoLabel = Number.isInteger(ano) && Number.isInteger(mes) && mes >= 1 && mes <= 12
       ? new Date(ano, mes - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })
       : "Período inválido";
     return {
-      periodoLabel: periodoLabel,
+      periodoLabel: periodoLabel.charAt(0).toUpperCase() + periodoLabel.slice(1),
       processos: processos,
       abertos: abertos,
       concluidos: concluidos,
       etapas: etapasComContagem,
-      saldosDeclarados: saldos.length,
-      saldosPendentes: processos.length - saldos.length,
+      valoresInformados: valores.length,
+      valoresPendentes: processos.length - valores.length,
       valorTotal: valorTotal,
       porCidade: porCidade,
+      cidadesComNome: cidadesComNome,
+      semCidadeQtd: semCidade ? semCidade.quantidade : 0,
       porEmpreendimento: porEmpreendimento
     };
   },
 
-  barraDashboardHtml(itens, tipo, totalAbertos) {
+  barraDashboardHtml(itens, tipo, totalAbertos, opcoes) {
+    const opt = opcoes || {};
     const detalhe = FinanciamentoState.dashboardDetalhe;
+    const maxQtd = Math.max.apply(null, [1].concat((itens || []).map((item) => Number(item.quantidade) || 0)));
+    const maior = opt.marcarMaior
+      ? (itens || []).reduce((acc, item) => ((item.quantidade || 0) > (acc && acc.quantidade || 0) ? item : acc), null)
+      : null;
     return (itens || []).map((item) => {
       const id = item.id != null ? String(item.id) : String(item.nome || "");
       const ativo = detalhe && detalhe.tipo === tipo && String(detalhe.id) === id;
-      const percentual = totalAbertos ? Math.round((item.quantidade || 0) / totalAbertos * 100) : 0;
+      const qtd = item.quantidade || 0;
+      const percentual = totalAbertos ? Math.round(qtd / totalAbertos * 1000) / 10 : 0;
+      const largura = Math.max(qtd ? 8 : 0, Math.round((qtd / maxQtd) * 100));
       const enc = encodeURIComponent(id);
-      return `<button type="button" class="fin-dash-etapa${ativo ? " is-aberto" : ""}" onclick="FinanciamentoApp.abrirDetalheDashboard('${tipo}','${enc}')" aria-pressed="${ativo ? "true" : "false"}" title="Ver clientes">
-        <div><strong>${this.esc(item.nome)}</strong><span>${item.quantidade || 0}</span></div>
-        <div class="fin-dash-barra"><i style="width:${percentual}%;"></i></div>
+      const rotulo = opt.usarCurto ? (item.nomeCurto || this.nomeCurtoEtapaDash(item.nome)) : item.nome;
+      const meta = opt.mostrarPercentual
+        ? (`${qtd} · ${percentual.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`)
+        : String(qtd);
+      const badge = (maior && String(maior.id != null ? maior.id : maior.nome) === id && qtd > 0)
+        ? '<em class="fin-dash-badge">Maior volume</em>'
+        : "";
+      return `<button type="button" class="fin-dash-barra-item${ativo ? " is-aberto" : ""}${badge ? " is-destaque" : ""}" onclick="FinanciamentoApp.abrirDetalheDashboard('${tipo}','${enc}')" aria-pressed="${ativo ? "true" : "false"}" title="Ver clientes">
+        <div class="fin-dash-barra-topo">
+          <strong>${this.esc(rotulo)}</strong>
+          <span>${this.esc(meta)}</span>
+        </div>
+        ${badge}
+        <div class="fin-dash-barra"><i style="width:${largura}%;"></i></div>
       </button>`;
     }).join("");
+  },
+
+  listaEmpreendimentosDashHtml(itens) {
+    const detalhe = FinanciamentoState.dashboardDetalhe;
+    const lista = (itens || []).slice(0, 8);
+    if (!lista.length) return '<p class="fin-dash-vazio">Nenhum empreendimento no período.</p>';
+    return `<div class="fin-dash-emp-lista">${lista.map((item) => {
+      const id = String(item.nome || "");
+      const ativo = detalhe && detalhe.tipo === "empreendimento" && String(detalhe.id) === id;
+      const enc = encodeURIComponent(id);
+      return `<button type="button" class="fin-dash-emp-item${ativo ? " is-aberto" : ""}" onclick="FinanciamentoApp.abrirDetalheDashboard('empreendimento','${enc}')" title="Ver clientes">
+        <span>${this.esc(item.nome)}</span>
+        <b>${item.quantidade || 0}</b>
+      </button>`;
+    }).join("")}</div>`;
   },
 
   detalheDashboardHtml(dados) {
@@ -287,7 +391,7 @@ const FinanciamentoApp = {
       grupo = (dados.porEmpreendimento || []).find((item) => String(item.nome) === String(detalhe.id));
       rotuloTipo = "empreendimento";
     }
-    const titulo = grupo ? grupo.nome : detalhe.id;
+    const titulo = grupo ? (grupo.nomeCurto || grupo.nome) : detalhe.id;
     const itens = (grupo && grupo.itens) || [];
     const linhas = itens.length ? itens.map(({ key, proc }) => {
       const obra = this.obraDoProc(proc);
@@ -318,78 +422,138 @@ const FinanciamentoApp = {
     FinanciamentoState.dashboardPeriodo = periodo;
     const dados = this.dadosDashboard(periodo);
     const totalAbertos = dados.abertos.length;
-    const estagios = this.barraDashboardHtml(dados.etapas, "etapa", totalAbertos);
-    const cidades = this.barraDashboardHtml(dados.porCidade, "cidade", totalAbertos);
-    const empreendimentos = this.barraDashboardHtml(dados.porEmpreendimento, "empreendimento", totalAbertos);
+    const mostrarVazias = !!FinanciamentoState.dashboardMostrarVazias;
+    const etapasVisiveis = mostrarVazias
+      ? dados.etapas
+      : (dados.etapas || []).filter((item) => (item.quantidade || 0) > 0);
+    const estagios = this.barraDashboardHtml(etapasVisiveis, "etapa", totalAbertos, {
+      usarCurto: true,
+      marcarMaior: true
+    });
+    const cidades = this.barraDashboardHtml(dados.porCidade, "cidade", totalAbertos, {
+      mostrarPercentual: true
+    });
+    const empreendimentos = this.listaEmpreendimentosDashHtml(dados.porEmpreendimento);
+    const valorTxt = dados.valoresInformados > 0 ? this.fmtMoney(dados.valorTotal) : "Não informado";
+    const valorSub = dados.valoresInformados > 0
+      ? (dados.valoresInformados + " com valor comercial · " + dados.valoresPendentes + " pendente" + (dados.valoresPendentes === 1 ? "" : "s"))
+      : (dados.processos.length + " contrato" + (dados.processos.length === 1 ? "" : "s") + " sem valor comercial registrado");
+    const avisoCidade = dados.semCidadeQtd > 0
+      ? `<p class="fin-dash-aviso">${dados.semCidadeQtd} contrato${dados.semCidadeQtd === 1 ? "" : "s"} precisam de cidade cadastrada.</p>`
+      : "";
     return `<section class="fin-dashboard">
       <div id="fin-dashboard-conteudo" class="fin-dash-conteudo">
         <header class="fin-dash-cabecalho">
           <div>
-            <span class="fin-dash-marca">INTEGR.A · FINANCIAMENTO</span>
             <h2>Dashboard de financiamentos</h2>
-            <p>Período: ${this.esc(dados.periodoLabel)} · contratos iniciados no período</p>
+            <p>Acompanhe a carteira e a evolução dos contratos.</p>
           </div>
           <div class="fin-dash-acoes">
-            <label for="fin-dashboard-periodo">Mês e ano de início do processo
-              <input id="fin-dashboard-periodo" type="month" value="${this.esc(periodo)}" onchange="FinanciamentoApp.atualizarDashboard(this.value)">
+            <label class="fin-dash-periodo" for="fin-dashboard-periodo">
+              <span class="fin-dash-sr">Período</span>
+              <select id="fin-dashboard-periodo" onchange="FinanciamentoApp.atualizarDashboard(this.value)">${this.opcoesPeriodoDashboard(periodo)}</select>
             </label>
             <button type="button" class="btn btn-primary" id="fin-dashboard-botao-pdf" onclick="FinanciamentoApp.exportarDashboardPdf()"><i data-lucide="file-down" style="width:16px;height:16px;"></i> Exportar PDF</button>
             <span id="fin-dashboard-pdf-status" role="status"></span>
           </div>
         </header>
         <div class="fin-dash-indicadores">
-          <article class="fin-dash-kpi fin-dash-kpi-verde"><span>Contratos em andamento</span><strong>${totalAbertos}</strong><small>Na etapa atual</small></article>
-          <article class="fin-dash-kpi fin-dash-kpi-laranja"><span>Concluídos</span><strong>${dados.concluidos.length}</strong><small>Finalizados no processo</small></article>
-          <article class="fin-dash-kpi"><span>Valor de financiamento</span><strong>${this.esc(this.fmtMoney(dados.valorTotal))}</strong><small>${dados.saldosDeclarados} com saldo declarado · ${dados.saldosPendentes} pendentes</small></article>
+          <article class="fin-dash-kpi">
+            <span>Em andamento</span>
+            <strong>${totalAbertos}</strong>
+            <small>Contratos ativos</small>
+          </article>
+          <article class="fin-dash-kpi">
+            <span>Concluídos</span>
+            <strong>${dados.concluidos.length}</strong>
+            <small>No período selecionado</small>
+          </article>
+          <article class="fin-dash-kpi">
+            <span>Cidades atendidas</span>
+            <strong>${dados.cidadesComNome.length}</strong>
+            <small>${dados.semCidadeQtd ? (dados.semCidadeQtd + " contrato" + (dados.semCidadeQtd === 1 ? "" : "s") + " sem cidade") : "Com cidade identificada"}</small>
+          </article>
+          <article class="fin-dash-kpi">
+            <span>Valor de financiamento</span>
+            <strong>${this.esc(valorTxt)}</strong>
+            <small>${this.esc(valorSub)}</small>
+          </article>
         </div>
-        <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Contratos por etapa</h3><span>${totalAbertos} em andamento · clique para ver os clientes</span></div>
-          <div class="fin-dash-etapas">${estagios || '<p class="fin-dash-vazio">Etapas de financiamento não cadastradas.</p>'}</div>
-        </section>
-        <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Em andamento por cidade</h3><span>${dados.porCidade.length} cidade${dados.porCidade.length === 1 ? "" : "s"} · clique para ver os clientes</span></div>
-          <div class="fin-dash-etapas">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
-        </section>
-        <section class="fin-dash-bloco">
-          <div class="fin-dash-titulo"><h3>Em andamento por empreendimento</h3><span>${dados.porEmpreendimento.length} empreendimento${dados.porEmpreendimento.length === 1 ? "" : "s"} · clique para ver os clientes</span></div>
-          <div class="fin-dash-etapas">${empreendimentos || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
-        </section>
+        <div class="fin-dash-grade">
+          <section class="fin-dash-bloco fin-dash-bloco-etapas">
+            <div class="fin-dash-titulo">
+              <h3>Por etapa</h3>
+              <button type="button" class="fin-dash-link" onclick="FinanciamentoApp.setPainel('esteira')">Ver todos os contratos →</button>
+            </div>
+            <div class="fin-dash-barras fin-dash-barras-etapa">${estagios || '<p class="fin-dash-vazio">Nenhuma etapa com contratos no período.</p>'}</div>
+            <label class="fin-dash-toggle">
+              <input type="checkbox" ${mostrarVazias ? "checked" : ""} onchange="FinanciamentoApp.alternarEtapasVaziasDashboard(this.checked)">
+              <span>Mostrar etapas sem contratos</span>
+            </label>
+          </section>
+          <div class="fin-dash-coluna-direita">
+            <section class="fin-dash-bloco">
+              <div class="fin-dash-titulo"><h3>Por cidade</h3></div>
+              <div class="fin-dash-barras">${cidades || '<p class="fin-dash-vazio">Nenhum financiamento em andamento neste período.</p>'}</div>
+              ${avisoCidade}
+            </section>
+            <section class="fin-dash-bloco">
+              <div class="fin-dash-titulo"><h3>Empreendimentos</h3></div>
+              ${empreendimentos}
+            </section>
+          </div>
+        </div>
         ${this.detalheDashboardHtml(dados)}
+        <p class="fin-dash-rodape">Clique em uma etapa, cidade ou empreendimento para visualizar os contratos.</p>
       </div>
       <style>
-        #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-laranja:#f37021; }
-        #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; }
-        #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; padding:18px 20px; border-radius:12px; color:#fff; background:linear-gradient(115deg,#0b3f2a,#1b8253); }
-        #financiamento-root .fin-dash-marca { font-size:0.7rem; font-weight:800; letter-spacing:0.08em; opacity:.85; }
-        #financiamento-root .fin-dash-cabecalho h2 { margin:4px 0 0; font-size:1.35rem; }
-        #financiamento-root .fin-dash-cabecalho > div > p { margin:6px 0 0; font-size:0.82rem; font-weight:700; }
-        #financiamento-root .fin-dash-acoes { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
-        #financiamento-root .fin-dash-acoes label { display:flex; flex-direction:column; gap:5px; color:rgba(255,255,255,.92); font-size:0.72rem; font-weight:700; }
-        #financiamento-root .fin-dash-acoes input { width:190px; height:40px; box-sizing:border-box; border:1px solid rgba(255,255,255,.35); border-radius:6px; padding:0 10px; font:inherit; color:#0f172a; background:#fff; }
+        #financiamento-root .fin-dashboard { --fin-dash-verde:#105436; --fin-dash-verde-2:#1b8253; --fin-dash-fundo:#f4f7f5; }
+        #financiamento-root .fin-dash-conteudo { display:flex; flex-direction:column; gap:16px; padding:4px 2px 8px; }
+        #financiamento-root .fin-dash-cabecalho { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+        #financiamento-root .fin-dash-cabecalho h2 { margin:0; color:#0f172a; font-size:1.45rem; letter-spacing:-0.02em; }
+        #financiamento-root .fin-dash-cabecalho > div > p { margin:6px 0 0; color:#64748b; font-size:0.88rem; }
+        #financiamento-root .fin-dash-acoes { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+        #financiamento-root .fin-dash-periodo select { min-width:190px; height:40px; box-sizing:border-box; border:1px solid #cbd5e1; border-radius:8px; padding:0 12px; font:inherit; color:#0f172a; background:#fff; }
+        #financiamento-root .fin-dash-sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
         #financiamento-root .fin-dash-acoes .btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:40px; box-sizing:border-box; padding:0 14px; margin:0; line-height:1; white-space:nowrap; }
-        #financiamento-root #fin-dashboard-pdf-status { color:#dcfce7; font-size:0.78rem; font-weight:700; max-width:220px; }
-        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
-        #financiamento-root .fin-dash-kpi { min-width:0; display:flex; flex-direction:column; gap:6px; padding:14px; border:1px solid #e2e8f0; border-top:4px solid #105436; border-radius:10px; background:#fff; box-shadow:0 2px 6px rgba(15,23,42,.04); }
-        #financiamento-root .fin-dash-kpi-verde { border-top-color:#105436; }
-        #financiamento-root .fin-dash-kpi-laranja { border-top-color:#f37021; }
-        #financiamento-root .fin-dash-kpi > span { color:#64748b; font-size:0.76rem; font-weight:800; }
-        #financiamento-root .fin-dash-kpi > strong { color:#0f3d27; font-size:1.35rem; line-height:1.2; overflow-wrap:anywhere; }
-        #financiamento-root .fin-dash-kpi > small { color:#64748b; font-size:0.7rem; line-height:1.35; }
-        #financiamento-root .fin-dash-bloco { padding:14px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; }
-        #financiamento-root .fin-dash-titulo { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:10px; }
-        #financiamento-root .fin-dash-titulo h3 { margin:0; color:#105436; font-size:0.95rem; }
-        #financiamento-root .fin-dash-titulo span { color:#64748b; font-size:0.72rem; }
-        #financiamento-root .fin-dash-etapas { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; }
-        #financiamento-root .fin-dash-etapa { min-width:0; padding:8px 10px; border:1px solid #eef2f7; border-radius:8px; background:#f8fafc; text-align:left; font:inherit; cursor:pointer; transition:border-color .15s, box-shadow .15s, background .15s; }
-        #financiamento-root .fin-dash-etapa:hover { border-color:#86efac; background:#f0fdf4; }
-        #financiamento-root .fin-dash-etapa.is-aberto { border-color:#16a34a; background:#ecfdf5; box-shadow:inset 3px 0 0 #16a34a; }
-        #financiamento-root .fin-dash-etapa > div:first-child { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; color:#334155; font-size:0.76rem; }
-        #financiamento-root .fin-dash-etapa strong { font-weight:700; line-height:1.35; }
-        #financiamento-root .fin-dash-etapa span { flex:0 0 auto; color:#105436; font-weight:800; font-variant-numeric:tabular-nums; }
-        #financiamento-root .fin-dash-barra { height:6px; margin-top:7px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
-        #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
-        #financiamento-root .fin-dash-vazio { grid-column:1/-1; margin:6px 0; color:#64748b; font-size:0.8rem; }
-        #financiamento-root .fin-dash-detalhe { padding:14px; border:1px solid #bbf7d0; border-radius:10px; background:#f0fdf4; }
+        #financiamento-root #fin-dashboard-pdf-status { color:#64748b; font-size:0.78rem; font-weight:700; max-width:220px; }
+        #financiamento-root .fin-dash-indicadores { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+        #financiamento-root .fin-dash-kpi { min-width:0; display:flex; flex-direction:column; gap:6px; padding:16px; border:1px solid #e2e8f0; border-radius:14px; background:#fff; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+        #financiamento-root .fin-dash-kpi > span { color:#64748b; font-size:0.74rem; font-weight:700; }
+        #financiamento-root .fin-dash-kpi > strong { color:#0f172a; font-size:1.55rem; line-height:1.15; overflow-wrap:anywhere; }
+        #financiamento-root .fin-dash-kpi > small { color:#94a3b8; font-size:0.7rem; line-height:1.35; }
+        #financiamento-root .fin-dash-grade { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr); gap:14px; align-items:start; }
+        #financiamento-root .fin-dash-coluna-direita { display:flex; flex-direction:column; gap:14px; min-width:0; }
+        #financiamento-root .fin-dash-bloco { padding:16px; border:1px solid #e2e8f0; border-radius:14px; background:#fff; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+        #financiamento-root .fin-dash-titulo { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px; }
+        #financiamento-root .fin-dash-titulo h3 { margin:0; color:#0f172a; font-size:0.98rem; }
+        #financiamento-root .fin-dash-link { border:0; background:transparent; color:var(--fin-dash-verde); font:inherit; font-size:0.76rem; font-weight:700; cursor:pointer; padding:0; }
+        #financiamento-root .fin-dash-link:hover { text-decoration:underline; }
+        #financiamento-root .fin-dash-barras { display:flex; flex-direction:column; gap:10px; }
+        #financiamento-root .fin-dash-barra-item { position:relative; width:100%; min-width:0; padding:10px 12px; border:1px solid transparent; border-radius:10px; background:#f8fafc; text-align:left; font:inherit; cursor:pointer; transition:border-color .15s, background .15s, box-shadow .15s; }
+        #financiamento-root .fin-dash-barra-item:hover { border-color:#bbf7d0; background:#f0fdf4; }
+        #financiamento-root .fin-dash-barra-item.is-aberto { border-color:#86efac; background:#ecfdf5; box-shadow:inset 3px 0 0 #16a34a; }
+        #financiamento-root .fin-dash-barra-item.is-destaque { background:#fff7ed; border-color:#fed7aa; }
+        #financiamento-root .fin-dash-barra-item.is-destaque.is-aberto { background:#ffedd5; }
+        #financiamento-root .fin-dash-barra-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; color:#334155; font-size:0.8rem; }
+        #financiamento-root .fin-dash-barra-topo strong { font-weight:700; line-height:1.35; }
+        #financiamento-root .fin-dash-barra-topo span { flex:0 0 auto; color:#0f172a; font-weight:800; font-variant-numeric:tabular-nums; }
+        #financiamento-root .fin-dash-badge { display:inline-block; margin:6px 0 0; padding:2px 8px; border-radius:999px; background:#fff7ed; color:#c2410c; font-size:0.65rem; font-style:normal; font-weight:800; }
+        #financiamento-root .fin-dash-barra { height:8px; margin-top:8px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
+        #financiamento-root .fin-dash-barra i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--fin-dash-verde),var(--fin-dash-verde-2)); }
+        #financiamento-root .fin-dash-barra-item.is-destaque .fin-dash-barra i { background:linear-gradient(90deg,#ea580c,#f59e0b); }
+        #financiamento-root .fin-dash-toggle { display:inline-flex; align-items:center; gap:8px; margin-top:14px; color:#64748b; font-size:0.76rem; cursor:pointer; user-select:none; }
+        #financiamento-root .fin-dash-toggle input { accent-color:var(--fin-dash-verde); }
+        #financiamento-root .fin-dash-aviso { margin:12px 0 0; padding:10px 12px; border:1px solid #fde68a; border-radius:10px; background:#fffbeb; color:#92400e; font-size:0.74rem; line-height:1.4; }
+        #financiamento-root .fin-dash-emp-lista { display:flex; flex-direction:column; gap:2px; }
+        #financiamento-root .fin-dash-emp-item { display:flex; justify-content:space-between; align-items:center; gap:12px; width:100%; padding:10px 4px; border:0; border-bottom:1px solid #f1f5f9; background:transparent; text-align:left; font:inherit; cursor:pointer; }
+        #financiamento-root .fin-dash-emp-item:last-child { border-bottom:0; }
+        #financiamento-root .fin-dash-emp-item:hover, #financiamento-root .fin-dash-emp-item.is-aberto { background:#f8fafc; }
+        #financiamento-root .fin-dash-emp-item span { color:#334155; font-size:0.8rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #financiamento-root .fin-dash-emp-item b { color:#0f172a; font-size:0.82rem; font-variant-numeric:tabular-nums; }
+        #financiamento-root .fin-dash-vazio { margin:6px 0; color:#64748b; font-size:0.8rem; }
+        #financiamento-root .fin-dash-rodape { margin:0; color:#94a3b8; font-size:0.74rem; }
+        #financiamento-root .fin-dash-detalhe { padding:14px; border:1px solid #bbf7d0; border-radius:14px; background:#f0fdf4; }
         #financiamento-root .fin-dash-detalhe-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px; }
         #financiamento-root .fin-dash-detalhe-topo h3 { margin:0; color:#14532d; font-size:0.95rem; }
         #financiamento-root .fin-dash-detalhe-topo p { margin:4px 0 0; color:#166534; font-size:0.75rem; }
@@ -398,12 +562,14 @@ const FinanciamentoApp = {
         #financiamento-root .fin-dash-cliente:hover { border-color:#86efac; background:#f8fafc; }
         #financiamento-root .fin-dash-cliente strong { color:#0f172a; font-size:0.82rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
         #financiamento-root .fin-dash-cliente span { color:#64748b; font-size:0.72rem; line-height:1.35; overflow-wrap:anywhere; }
-        @media (max-width:900px) { #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-clientes { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-        @media (max-width:600px) {
-          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-etapas, #financiamento-root .fin-dash-clientes { grid-template-columns:1fr; }
+        @media (max-width:1100px) {
+          #financiamento-root .fin-dash-indicadores { grid-template-columns:repeat(2,minmax(0,1fr)); }
+          #financiamento-root .fin-dash-grade { grid-template-columns:1fr; }
+        }
+        @media (max-width:700px) {
+          #financiamento-root .fin-dash-indicadores, #financiamento-root .fin-dash-clientes { grid-template-columns:1fr; }
           #financiamento-root .fin-dash-cabecalho { align-items:stretch; flex-direction:column; }
           #financiamento-root .fin-dash-acoes { justify-content:flex-start; }
-          #financiamento-root .fin-dash-titulo { align-items:flex-start; flex-direction:column; }
         }
       </style>
     </section>`;
@@ -413,6 +579,11 @@ const FinanciamentoApp = {
     if (periodo && !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(periodo))) return;
     FinanciamentoState.dashboardPeriodo = String(periodo || "");
     FinanciamentoState.dashboardDetalhe = null;
+    this.render();
+  },
+
+  alternarEtapasVaziasDashboard(mostrar) {
+    FinanciamentoState.dashboardMostrarVazias = !!mostrar;
     this.render();
   },
 
@@ -1034,6 +1205,17 @@ const FinanciamentoApp = {
     return !tem(proc.done) && !tem(proc.concluidas) && !tem(proc.anexos) && !tem(proc.notas);
   },
 
+  ehProcessoIncompletoObra(proc) {
+    if (!proc) return true;
+    const obra = this.obraDoProc(proc);
+    const emp = String(obra.empreendimento || proc.enterpriseName || "").trim();
+    const cidade = String(this.cidadeDoProc(proc) || "").trim();
+    const semEmp = !emp || emp === "—" || emp === "N/D" || emp === "-";
+    const semCc = !String(proc.empId || proc.costCenterId || "").trim();
+    const semCidade = !cidade || cidade === "—" || /^sem cidade$/i.test(cidade);
+    return (semEmp && semCc) || (semCidade && semEmp);
+  },
+
   processosMesmoTitulo(a, b) {
     if (!a || !b) return false;
     const ta = this.digitosProc(a.titulo);
@@ -1111,15 +1293,18 @@ const FinanciamentoApp = {
       else if (this.isProcessoAberto(proc)) abertos.push({ key: key, proc: proc });
     });
     const descartar = new Set();
+    const motivos = {};
     abertos.forEach((row) => {
       if (concluidos.some((c) => this.processosMesmoTitulo(row.proc, c.proc))) {
         descartar.add(row.key);
+        motivos[row.key] = "duplicata-mesmo-titulo-concluido";
         return;
       }
       if (this.ehCascaAberta(row.proc)
         && concluidos.some((c) => this.processosMesmoTitulo(row.proc, c.proc)
           || String(c.proc.customerId || "") === String(row.proc.customerId || ""))) {
         descartar.add(row.key);
+        motivos[row.key] = "casca-com-concluido";
       }
     });
     const porTitulo = new Map();
@@ -1136,11 +1321,47 @@ const FinanciamentoApp = {
       const pior = melhor.key === atual.key ? row : atual;
       porTitulo.set(sig, melhor);
       descartar.add(pior.key);
+      motivos[pior.key] = "duplicata-mesmo-titulo";
+    });
+    /* Fichas sem cidade/empreendimento quando existe outra do mesmo título mais completa. */
+    const vivos = abertos.concat(concluidos);
+    abertos.forEach((row) => {
+      if (descartar.has(row.key) || !this.ehProcessoIncompletoObra(row.proc)) return;
+      const titulo = this.digitosProc(row.proc.titulo);
+      const nome = this.nomeClienteProc(row.proc);
+      const temMelhor = vivos.some((outro) => {
+        if (outro.key === row.key || descartar.has(outro.key)) return false;
+        if (this.ehProcessoIncompletoObra(outro.proc)) return false;
+        if (this.processosMesmoTitulo(row.proc, outro.proc)) return true;
+        if (titulo && this.digitosProc(outro.proc.titulo) === titulo) {
+          const outroNome = this.nomeClienteProc(outro.proc);
+          if (nome && outroNome && (nome === outroNome || nome.indexOf(outroNome) >= 0 || outroNome.indexOf(nome) >= 0)) {
+            return true;
+          }
+        }
+        return false;
+      });
+      if (temMelhor) {
+        descartar.add(row.key);
+        motivos[row.key] = "duplicata-sem-cidade";
+      }
+    });
+    /* Títulos incompletos em destaque (Rodolpho 13048 e Pedro 11333). */
+    abertos.forEach((row) => {
+      if (descartar.has(row.key) || !this.ehProcessoIncompletoObra(row.proc)) return;
+      const titulo = this.digitosProc(row.proc.titulo);
+      const nome = this.nomeClienteProc(row.proc);
+      const alvo = (titulo === "13048" && (!nome || nome.indexOf("rodolpho") >= 0))
+        || (titulo === "11333" && (!nome || nome.indexOf("pedro") >= 0));
+      if (alvo) {
+        descartar.add(row.key);
+        motivos[row.key] = "ficha-incompleta-duplicata";
+      }
     });
     if (!descartar.size) return false;
     descartar.forEach((key) => {
       if (!all[key]) return;
-      this.marcarProcessoDescartado(all[key], "duplicata-mesmo-titulo");
+      this.marcarProcessoDescartado(all[key], motivos[key] || "duplicata-mesmo-titulo");
     });
     this.persistirMapaProcessos(all);
     if (FinanciamentoState.process) {
@@ -2516,15 +2737,18 @@ const FinanciamentoApp = {
     if (!hit) {
       const emp = this.foldTextoFin(empreendimento);
       if (emp) {
-        hit = linhas.find((l) => {
+        const candidatos = linhas.map((l) => {
           const nome = this.foldTextoFin(l.empreendimento);
-          return nome && (emp.indexOf(nome) >= 0 || nome.indexOf(emp) >= 0);
-        }) || null;
+          if (!nome) return null;
+          const bate = emp.indexOf(nome) >= 0 || nome.indexOf(emp) >= 0;
+          return bate ? { linha: l, len: nome.length } : null;
+        }).filter(Boolean).sort((a, b) => b.len - a.len);
+        hit = candidatos[0] ? candidatos[0].linha : null;
       }
     }
     if (!hit || !hit.valores) return null;
-    const ano = String(new Date().getFullYear());
-    const candidatos = [hit.valores[ano], hit.valores["2026"], hit.valores["2025"]];
+    // Financiamento usa o m² de 2026 da tabela vigente do Comercial.
+    const candidatos = [hit.valores["2026"], hit.valores[String(new Date().getFullYear())], hit.valores["2025"]];
     const anos = Object.keys(hit.valores).sort();
     if (anos.length) candidatos.push(hit.valores[anos[anos.length - 1]]);
     for (let i = 0; i < candidatos.length; i++) {
@@ -3082,6 +3306,7 @@ const FinanciamentoApp = {
       dados.valorComercial = resolucao.valorComercial;
       dados.metragemLote = resolucao.metragem;
       dados.valorM2 = resolucao.valorM2;
+      dados.fonteValorComercial = resolucao.fonte || "metragem-x-m2-2026";
       let periodo = { inicio: "", fim: "", quantidade: 0, parcelas: [] };
       let avisoParcelas = "";
       try {
@@ -3871,6 +4096,7 @@ const FinanciamentoApp = {
     if (!forcar && proc.metragemLote != null && String(proc.metragemLote).trim() !== ""
       && Number.isFinite(Number(proc.metragemLote))
       && atualizado && Date.now() - atualizado < 30 * 60 * 1000) {
+      this.sincronizarValorComercialCalculado(proc);
       return Promise.resolve(Number(proc.metragemLote));
     }
     if (!forcar && tentado && Date.now() - tentado < 60 * 1000) return Promise.resolve(null);
@@ -3883,6 +4109,7 @@ const FinanciamentoApp = {
         salvo.metragemLoteAtualizadoEm = new Date().toISOString();
         salvo.metragemLoteTentadoEm = Date.now();
         salvo.metragemLoteErro = "";
+        this.sincronizarValorComercialCalculado(salvo);
         salvo.updatedAt = new Date().toISOString();
         this.saveProcess(salvo);
         if (FinanciamentoState.process && this.procKey(FinanciamentoState.process.customerId, FinanciamentoState.process.contractId) === key) {
@@ -4057,6 +4284,8 @@ const FinanciamentoApp = {
       if (Number.isFinite(Number(dados.valorComercial)) && Number(dados.valorComercial) > 0) {
         proc.valorComercial = Number(dados.valorComercial);
         proc.valorComercialEm = dados.emissao || termo.generatedAt;
+        proc.valorComercialFonte = dados.fonteValorComercial
+          || (dados.valorM2 != null ? "metragem-x-m2-2026" : "documento");
         if (dados.metragemLote != null && Number.isFinite(Number(dados.metragemLote))) {
           proc.metragemLote = Number(dados.metragemLote);
         }
@@ -4103,6 +4332,7 @@ const FinanciamentoApp = {
       dados.valorComercial = valorComercial;
       dados.metragemLote = resolucao.metragem;
       dados.valorM2 = resolucao.valorM2;
+      dados.fonteValorComercial = resolucao.fonte || "metragem-x-m2-2026";
       dados.valorComercialTexto = Number(valorComercial).toLocaleString("pt-BR", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
@@ -4110,7 +4340,7 @@ const FinanciamentoApp = {
       if (status) {
         status.textContent = "Valor comercial: metragem " + this.fmtMetragemFin(resolucao.metragem)
           + " m² × R$ " + Number(resolucao.valorM2).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-          + "/m². Preenchendo o modelo Word…";
+          + "/m² (tabela 2026). Preenchendo o modelo Word…";
       }
       const docxBuffer = await this.montarDocxTermoSaldo(dados);
       if (status) status.textContent = "Gerando o PDF…";
@@ -4323,9 +4553,18 @@ const FinanciamentoApp = {
       ? Number(proc.saldoQuitacaoSistema) : null;
     const credito = proc.valorLiberadoCaixa != null && String(proc.valorLiberadoCaixa).trim() !== "" && Number.isFinite(Number(proc.valorLiberadoCaixa))
       ? Number(proc.valorLiberadoCaixa) : null;
+    this.sincronizarValorComercialCalculado(proc);
+    const calcComercial = this.calcularValorComercialPorMetragem(proc);
     const valorComercial = this.valorComercialFicha(proc);
     const metragem = proc.metragemLote != null && String(proc.metragemLote).trim() !== "" && Number.isFinite(Number(proc.metragemLote))
       ? Number(proc.metragemLote) : null;
+    const detalheValorComercial = calcComercial
+      ? ("Metragem " + this.fmtMetragemFin(calcComercial.metragem) + " m² × R$ "
+        + Number(calcComercial.valorM2).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        + "/m² (tabela 2026)")
+      : (valorComercial != null
+        ? "Informado no termo de simulação / declaração"
+        : "Será calculado com a metragem × m² 2026 da tabela Comercial");
     const metragemTexto = metragem != null
       ? (this.fmtMetragemFin(metragem) + " m²")
       : (proc.metragemLoteCarregando ? "Consultando…" : "—");
@@ -4377,9 +4616,7 @@ const FinanciamentoApp = {
           <article class="fin-visao-kpi">
             <span>Valor comercial</span>
             <strong>${valorComercial == null ? "—" : this.esc(this.fmtMoney(valorComercial))}</strong>
-            <small>${valorComercial != null
-              ? "Informado no termo de simulação / declaração"
-              : "Será preenchido ao gerar o termo ou a declaração"}</small>
+            <small>${this.esc(detalheValorComercial)}</small>
           </article>
           <article class="fin-visao-kpi">
             <span>Crédito liberado pela CAIXA</span>
