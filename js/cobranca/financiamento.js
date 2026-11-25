@@ -187,8 +187,8 @@ const FinanciamentoApp = {
           <span id="fin-abertos-count" style="font-size:0.75rem;color:#64748b;font-weight:700;"></span>
         </div>
         <div class="crm-card-content" style="padding:0;">
-          <div class="cc-scroll" style="max-height:300px;border:0;border-radius:0 0 8px 8px;">
-            <table class="cc-table fin-abertos-table">
+          <div class="cc-scroll" style="max-height:420px;border:0;border-radius:0 0 8px 8px;">
+            <table class="cc-table is-confortavel fin-abertos-table">
               <colgroup><col style="width:24%"><col style="width:12%"><col style="width:70px"><col style="width:90px"><col><col style="width:96px"></colgroup>
               <thead>
                 <tr><th>Cliente</th><th>Contrato</th><th class="is-center">Título</th><th>Unidade</th><th>Etapa</th><th class="is-center">Atualizado</th></tr>
