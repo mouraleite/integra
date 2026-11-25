@@ -48,6 +48,8 @@ Toda tabela do Integra segue o layout da tabela de **Centros de Custo** (`js/fin
 | Linha que abre algo ao clicar | `<tr class="is-clicavel" tabindex="0" role="button" onclick="..." onkeydown="Enter/Espaço">` |
 | Linha em alerta (vencida, atrasada, erro) | acrescente `is-alerta` no `tr`: fundo `#fef2f2`, texto `#991b1b`, barra vermelha à esquerda; hover `#fee2e2` |
 | Selo dentro da célula ("VENCIDA", "ATRASADO") | `<span class="cc-selo-alerta">VENCIDA</span>` |
+| Lista de leitura (filas, processos, templates), linhas mais altas | `<table class="cc-table is-confortavel ...">`: fonte `0.78rem`, padding `9px 10px`. O padrão compacto fica para planilhas com muitas colunas e números |
+| Sem rolagem horizontal | ajuste o `colgroup` (larguras em % e colunas curtas em px) e, se preciso, `overflow-x: hidden` no `.cc-scroll` da tela; e-mails/textos longos quebram com `overflow-wrap: anywhere` |
 | Linha de grupo/subtotal | fundo `#e7f6ee`, texto `#105436`, negrito (mesmo padrão de `tr.docs-obra`) |
 | Total geral | fundo `#105436`, texto branco, negrito |
 
