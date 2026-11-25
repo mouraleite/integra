@@ -10915,6 +10915,10 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .cc-table tbody tr.is-alerta td:first-child { box-shadow: inset 4px 0 0 #b91c1c; }
 .cc-table tbody tr.is-alerta:hover td { background: #fee2e2; color: #7f1d1d; }
 .cc-table .cc-selo-alerta { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #fee2e2; color: #991b1b; font-size: 0.65rem; font-weight: 800; }
+/* Variação confortável: linhas mais altas para listas de leitura (filas, listas de processos, templates). */
+.cc-table.is-confortavel { font-size: 0.78rem; }
+.cc-table.is-confortavel thead th { padding: 9px 10px; }
+.cc-table.is-confortavel td { padding: 9px 10px; }
 .cc-table .cc-vgv { font-weight: 600; color: #1b8253; }
 .cc-table .cc-conta { color: #105436; font-weight: 600; }
 .cc-table .cc-sem-conta { color: #b91c1c; font-weight: 700; }
@@ -12367,9 +12371,9 @@ tr.pr-liberado td { background: #f7faf8; }
 .cem-tabs { margin-bottom: 16px; }
 .cem-topo { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 /* Tabelas da Central de e-mail seguem o padrão .cc-table (Centros de Custo); aqui só os ajustes da tela. */
-.cem-painel .cc-scroll { margin-bottom: 16px; }
-.cem-tabela td.cem-para { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3; }
-.cem-tabela td.cem-acoes { overflow: visible; text-overflow: clip; }
+.cem-painel .cc-scroll { margin-bottom: 16px; overflow-x: hidden; }
+.cem-tabela td.cem-para { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; overflow-wrap: anywhere; }
+.cem-tabela td.cem-acoes { overflow: hidden; text-overflow: clip; white-space: nowrap; }
 .cem-vazio { margin: 8px 0 0; color: #64748b; font-size: 0.85rem; }
 .cem-bloco h4 { margin: 8px 0 4px; color: #105436; font-size: 0.95rem; }
 .cem-bloco p { margin: 0 0 8px; color: #64748b; font-size: 0.8rem; }

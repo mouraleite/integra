@@ -401,8 +401,8 @@ const CentralEmailApp = {
         <button type="button" class="tvig-ico is-danger" title="Excluir" onclick="CentralEmailApp.excluir('${this.esc(t.id)}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>` : ""}
       </td>
     </tr>`).join("");
-    return `<div class="cc-scroll"><table class="cc-table cem-tabela">
-      <colgroup><col style="width:22%"><col style="width:26%"><col style="width:90px"><col><col style="width:96px"><col style="width:132px"></colgroup>
+    return `<div class="cc-scroll"><table class="cc-table is-confortavel cem-tabela">
+      <colgroup><col style="width:20%"><col style="width:24%"><col style="width:96px"><col><col style="width:100px"><col style="width:156px"></colgroup>
       <thead><tr><th>Template</th><th>Tag</th><th class="is-center">Dias vencido</th><th>Para</th><th class="is-center">Régua</th><th class="is-right">Ações</th></tr></thead>
       <tbody>${linhas || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum template. Crie o texto, escolha a tag e quantos dias depois do vencimento.</td></tr>`}</tbody>
     </table></div>`;
@@ -426,7 +426,7 @@ const CentralEmailApp = {
       return `<section class="cem-bloco">
         <h4>${this.esc(t.nome)}</h4>
         <p>${this.esc(this.rotuloTag(t.tag))} · ${this.esc(t.diasVencido)} dia(s) depois de vencido · ${gente.length} cliente(s) hoje${t.cc ? " · Cópia: " + this.esc(t.cc) : ""}</p>
-        <div class="cc-scroll"><table class="cc-table cem-tabela">
+        <div class="cc-scroll"><table class="cc-table is-confortavel cem-tabela">
           <colgroup><col style="width:28%"><col style="width:110px"><col><col style="width:120px"><col style="width:70px"></colgroup>
           <thead><tr><th>Cliente</th><th>Unidade</th><th>E-mail</th><th>Envio de hoje</th><th class="is-right">Ações</th></tr></thead>
           <tbody>${linhas || `<tr><td colspan="5" style="text-align:center;padding:30px;">Ninguém completa esse atraso hoje.</td></tr>`}</tbody>

@@ -257,7 +257,8 @@ module.exports = async function handler(req, res) {
       }
     } catch (e) {
       r.status = "erro";
-      r.erro = String((e && e.message) || e).slice(0, 200);
+      r.erro = String((e && e.message) || e).slice(0, 240);
+      console.warn("[central-email-enviar] " + JSON.stringify({ templateId, titulo, erro: r.erro }));
       try {
         if (templateId && customerId && titulo) {
           await gravarEnvio(idEnvio(dia, templateId, customerId, titulo), {

@@ -11,6 +11,8 @@ A regra completa, com exemplos, está em `.claude/skills/tabela-padrao/SKILL.md`
 - Use `<div class="cc-scroll"><table class="cc-table minha-tela-table">` com `<colgroup>`. O CSS é global em `css/style.css` (`.cc-scroll`, `.cc-table`).
 - Não crie cores de cabeçalho, zebra, hover nem `style` inline de cor/padding nas `td`. Não use `onmouseover` para pintar linha.
 - Linha clicável: `tr.is-clicavel` (com `tabindex="0"` e `role="button"`). Linha vencida/atrasada: `tr.is-alerta`. Selo: `<span class="cc-selo-alerta">VENCIDA</span>`.
+- Lista de leitura (filas, processos, templates): `table.cc-table.is-confortavel` (linhas mais altas). Planilha com muitas colunas: padrão compacto.
+- Evite rolagem horizontal: larguras no `colgroup` e quebra de texto longo (`overflow-wrap: anywhere`).
 - Alinhamento com `is-right` (valores) e `is-center` (colunas curtas). Texto cortado vai também em `title`.
 - Tabela vazia: `<td colspan="N" style="text-align:center;padding:30px;white-space:normal;">Nenhum … para exibir.</td>`.
 - Ao mudar CSS ou JS, troque o `?v=` do arquivo no `index.html`.
