@@ -5501,6 +5501,9 @@ async function processSuccessfulLogin(loggedUser) {
       if (typeof window.avisarRepactuacaoUltimoDia === "function") {
         window.avisarRepactuacaoUltimoDia();
       }
+      if (typeof window.avisarTitulosMonitorados === "function") {
+        window.avisarTitulosMonitorados().catch(function() {});
+      }
     }, 2500);
   } catch (err) {
     console.error("Erro no login:", err);
@@ -41436,6 +41439,78 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
   });
 };
 
+// Títulos fora da carteira de lotes que o back office acompanha de perto. Continuam na inadimplência;
+// quando têm parcela vencida, o back office recebe um aviso no login (uma vez por dia, até pagar).
+window.TITULOS_MONITORADOS_BACK_OFFICE = [
+  { titulo: "16955", motivo: "Casa SPA (centro de custo 16300), fora do relatório de inadimplência dos empreendimentos no Sienge." }
+];
+
+window.avisarTitulosMonitorados = async function() {
+  const u = window.AppState && window.AppState.currentUser;
+  if (!u || typeof window.crmProfileKind !== "function") return;
+  const rec = typeof window.findCrmRegisteredUser === "function" ? window.findCrmRegisteredUser(u) : null;
+  const perfil = (rec && rec.profile_name) || u.profile_name || "";
+  if (window.crmProfileKind(perfil) !== "back_office") return;
+  const lista = window.TITULOS_MONITORADOS_BACK_OFFICE || [];
+  if (!lista.length || !window.SiengeApiService || typeof SiengeApiService.getDefaulters !== "function") return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  const hoje = window.crmIsoLocal(new Date());
+  const chave = "crm_titulos_monitorados_" + String(u.email || u.name || "op").toLowerCase() + "_" + hoje;
+  try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+  let bills = [];
+  try { bills = await SiengeApiService.getDefaulters(); } catch (e) { return; }
+  if (!Array.isArray(bills)) return;
+  const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const brl = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const dataBr = (iso) => { const p = String(iso || "").slice(0, 10).split("-"); return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : ""; };
+  const vencidos = [];
+  for (const item of lista) {
+    const bill = bills.find((b) => String(b && (b.id || b.saleId)) === String(item.titulo));
+    if (!bill) continue;
+    const parcelas = (bill.defaulterInstallments || []).filter((p) => p && String(p.dueDate || "").slice(0, 10) < hoje);
+    if (!parcelas.length) continue;
+    vencidos.push({ item, bill, parcelas });
+  }
+  if (!vencidos.length) return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  const blocos = vencidos.map(({ item, bill, parcelas }) => {
+    const total = parcelas.reduce((s, p) => s + (Number(p.correctedValueWithAdditions) || 0), 0);
+    const linhas = parcelas.map((p) => `<div class="apa-item"><strong>Parcela ${esc(p.installmentNumber || p.installmentId)} · venceu em ${esc(dataBr(p.dueDate))}</strong><span>${esc(p.daysOfDelay)} dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">${esc(brl(p.correctedValueWithAdditions))}</span></div>`).join("");
+    return `<div style="margin-bottom:12px;">
+      <p style="margin:0 0 4px 0;"><strong>Título ${esc(item.titulo)}</strong> · ${esc(bill.clientName || "")}${bill.units ? " · " + esc(bill.units) : ""}</p>
+      <p style="margin:0 0 6px 0;color:#475569;font-size:0.82rem;">${esc(item.motivo)}</p>
+      ${linhas}
+      <p style="margin:6px 0 0 0;">Total vencido: <strong style="color:#b91c1c;">${esc(brl(total))}</strong></p>
+      <button type="button" class="btn btn-primary" data-tm-cliente="${esc(bill.customerId)}" data-tm-venda="${esc(bill.saleId || bill.id)}" data-tm-titulo="${esc(item.titulo)}" style="margin-top:8px;">Abrir ficha do cliente</button>
+    </div>`;
+  }).join("");
+  const overlay = document.createElement("div");
+  overlay.id = "titulos-monitorados-aviso";
+  overlay.className = "repac-dia";
+  overlay.setAttribute("role", "alertdialog");
+  overlay.setAttribute("aria-labelledby", "titulos-monitorados-titulo");
+  overlay.innerHTML = `<div class="repac-dia-box">
+    <div class="repac-dia-head">
+      <h3 id="titulos-monitorados-titulo">Título acompanhado está vencido</h3>
+      <button type="button" class="btn btn-fechar" id="titulos-monitorados-fechar">Fechar</button>
+    </div>
+    <p>Este título está na inadimplência e precisa de contato do back office.</p>
+    ${blocos}
+  </div>`;
+  document.body.appendChild(overlay);
+  const fechar = () => {
+    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    overlay.remove();
+  };
+  overlay.querySelector("#titulos-monitorados-fechar").addEventListener("click", fechar);
+  overlay.querySelectorAll("[data-tm-cliente]").forEach((btn) => btn.addEventListener("click", function() {
+    fechar();
+    if (typeof window.openCustomerFromRelacionamento === "function") {
+      window.openCustomerFromRelacionamento(this.getAttribute("data-tm-cliente"), this.getAttribute("data-tm-venda"), this.getAttribute("data-tm-titulo"));
+    }
+  }));
+};
+
 window.checkDistratoPrazoMes = function() {
   const quem = window.usuarioVeAvisoDistratoPrazo();
   const modal = document.getElementById("modal-distrato-prazo");
@@ -60808,25 +60883,29 @@ window.gerarMapaZeropaidPDF = async function() {
         if (typeof window.clientHasPagamentoEntradaWebro === "function" && window.clientHasPagamentoEntradaWebro(c)) return "pagamento";
         return "";
     };
-    const chave = (c) => `${c.customerId}-${c.saleId}`;
+    // Um título por linha (cliente + título): o mesmo título não conta duas vezes.
+    const chave = (c) => `${c.customerId}-${String(c.saleId || "").replace(/^B-/i, "").split("-")[0]}`;
+    const unicos = (lista) => {
+        const vistos = new Set();
+        return lista.filter(c => {
+            if (!c || vistos.has(chave(c))) return false;
+            vistos.add(chave(c));
+            return true;
+        });
+    };
     const zeroBase = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
-    const zeroList = zeroBase.filter(c => c && !tagEntrada(c));
-    const vistosEntrada = new Set();
-    const webroList = zeroBase.concat(window.rawClientList || []).filter(c => {
-        if (!c || vistosEntrada.has(chave(c))) return false;
+    // Aguardando Webro e Pendente Repasse Webro ficam fora do mapa (o cliente já pagou na Webro).
+    const zeroList = unicos(zeroBase.filter(c => c && !tagEntrada(c)));
+    const webroList = unicos(zeroBase.concat(window.rawClientList || []).filter(c => {
+        if (!c) return false;
         const subj = typeof window.clientIsSubjudice === "function"
             ? window.clientIsSubjudice(c)
             : (c.subjudice === "S" || c.subjudice === true);
         if (subj) return false;
-        const tag = tagEntrada(c);
-        if (!tag) return false;
+        if (tagEntrada(c) !== "pagamento") return false;
         if (opFilter && opFilter !== "TODOS" && normOp(c.assignedOperator) !== normOp(opFilter)) return false;
-        vistosEntrada.add(chave(c));
-        c._tagEntrada = tag;
         return true;
-    });
-    const porTag = { pagamento: 0, aguardando: 0, pendente: 0 };
-    webroList.forEach(c => { porTag[c._tagEntrada] = (porTag[c._tagEntrada] || 0) + 1; });
+    }));
     if (!zeroList.length && !webroList.length) {
         alert("Não há clientes 0% pago nem pagando entrada Webro para gerar o mapa.");
         return;
@@ -60916,7 +60995,8 @@ window.gerarMapaZeropaidPDF = async function() {
         }[ch]));
         const fmtInt = (val) => Math.round(Number(val) || 0).toLocaleString("pt-BR");
         const clientValue = (c) => (c.overdueValue || 0) + (c.overdueCharges || 0);
-        const titleCount = (c) => (c.billIds && c.billIds.length) ? c.billIds.length : 1;
+        // Cada linha já é um título (sem repetição); billIds pode repetir o mesmo título e não entra na conta.
+        const titleCount = () => 1;
         const empLabel = (ccId) => {
             const id = typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(ccId) : String(ccId || "N/D");
             const rawName = (typeof getCostCenterName === "function" ? getCostCenterName(ccId) : "") || "";
@@ -60937,18 +61017,24 @@ window.gerarMapaZeropaidPDF = async function() {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             monthKeys.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`);
         }
-        const recencyDefs = [
-            { label: "Até 30 dias", max: 30 },
-            { label: "31 a 90 dias", max: 90 },
+        // Aging: títulos por dias de atraso (maior atraso do título).
+        const agingDefs = [
+            { label: "1 a 15 dias", max: 15 },
+            { label: "16 a 30 dias", max: 30 },
+            { label: "31 a 60 dias", max: 60 },
+            { label: "61 a 90 dias", max: 90 },
             { label: "91 a 180 dias", max: 180 },
-            { label: "6 a 12 meses", max: 365 },
-            { label: "Mais de 1 ano", max: Infinity },
-            { label: "Sem data de venda", max: null }
+            { label: "Mais de 180 dias", max: Infinity }
         ];
+        const agingIdx = (c) => {
+            const d = Math.max(0, Number(c && c.maxDaysDelay) || 0);
+            const i = agingDefs.findIndex(a => d <= a.max);
+            return i >= 0 ? i : agingDefs.length - 1;
+        };
 
         const stats = (list) => {
             const s = { value: 0, titles: 0, clients: new Set(), delaySum: 0, delayN: 0, ageSum: 0, ageN: 0,
-                months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, recency: recencyDefs.map(() => 0) };
+                months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, aging: agingDefs.map(() => 0), agingValor: agingDefs.map(() => 0) };
             // Tudo em número de títulos.
             list.forEach(c => {
                 const t = titleCount(c);
@@ -60956,14 +61042,15 @@ window.gerarMapaZeropaidPDF = async function() {
                 s.titles += t;
                 s.clients.add(String(c.customerId));
                 if (c.maxDaysDelay > 0) { s.delaySum += c.maxDaysDelay; s.delayN++; }
+                const ai = agingIdx(c);
+                s.aging[ai] += t;
+                s.agingValor[ai] += clientValue(c);
                 const d = parseSale(c);
-                if (!d) { s.noDate += t; s.recency[5] += t; return; }
+                if (!d) { s.noDate += t; return; }
                 const days = Math.max(0, Math.round((now - d) / 86400000));
                 s.ageSum += days; s.ageN++;
                 const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
                 if (s.months[key] != null) s.months[key] += t; else s.older += t;
-                const idx = recencyDefs.findIndex(r => r.max != null && days <= r.max);
-                s.recency[idx >= 0 ? idx : 4] += t;
             });
             const avgAge = s.ageN ? Math.round(s.ageSum / s.ageN) : 0;
             s.clientsN = s.clients.size;
@@ -60974,12 +61061,12 @@ window.gerarMapaZeropaidPDF = async function() {
         const sz = stats(zeroList);
         const sw = stats(webroList);
 
-        // Cores do mapa: verde da marca nos cabeçalhos, vermelho para 0% pago e laranja para entrada Webro.
+        // Cores do mapa: verde da marca nos cabeçalhos, vermelho para 0% pago e azul para entrada Webro.
         const C_ZERO = "#dc2626";
-        const C_WEB = "#ea580c";
+        const C_WEB = "#1d4ed8";
         const C_HEAD = "#105436";
         const BG_ZERO = "#fef2f2";
-        const BG_WEB = "#fff7ed";
+        const BG_WEB = "#eff6ff";
         const zebra = (i) => i % 2 === 0 ? "#fff" : "#f3f8f5";
         const ellipsisTd = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
         const dot = (color) => `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
@@ -60990,9 +61077,9 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const groupedBarChart = (slots) => {
             const maxVal = Math.max(1, ...slots.map(s => Math.max(s.z, s.w)));
-            const W = 640, H = 150, padTop = 16, padBot = 20, padSide = 10;
+            const W = 600, H = 168, padTop = 18, padBot = 22, padSide = 10;
             const stepX = (W - padSide * 2) / Math.max(slots.length, 1);
-            const barW = Math.min(14, Math.max(6, stepX * 0.32));
+            const barW = Math.min(18, Math.max(8, stepX * 0.36));
             let out = "";
             slots.forEach((s, i) => {
                 const cx = padSide + stepX * i + stepX / 2;
@@ -61017,14 +61104,14 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const recencyTable = `
             <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
-                <colgroup><col style="width:43%"><col style="width:19%"><col style="width:19%"><col style="width:19%"></colgroup>
-                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th(`${dot("#fca5a5")}0% pago`, "center")}${th(`${dot("#fdba74")}Entrada`, "center")}${th("Total", "center")}</tr></thead>
+                <colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>
+                <thead><tr style="background:${C_HEAD};">${th("Dias em atraso")}${th(`${dot("#fca5a5")}0% pago`, "center")}${th(`${dot("#93c5fd")}Entrada`, "center")}${th("Total", "center")}</tr></thead>
                 <tbody>
-                    ${recencyDefs.map((r, i) => `<tr style="background:${zebra(i)};">
+                    ${agingDefs.map((r, i) => `<tr style="background:${zebra(i)};">
                         <td style="padding:5px 7px;font-weight:700;color:#1e293b;">${esc(r.label)}</td>
-                        ${celZero(sz.recency[i])}
-                        ${celWeb(sw.recency[i])}
-                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.recency[i] + sw.recency[i] || "-"}</td>
+                        ${celZero(sz.aging[i])}
+                        ${celWeb(sw.aging[i])}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.aging[i] + sw.aging[i] || "-"}</td>
                     </tr>`).join("")}
                     <tr style="background:#e7f6ee;">${totalTd("Total de títulos", "left")}${totalTd(sz.titles, "center", `color:${C_ZERO};`)}${totalTd(sw.titles, "center", `color:${C_WEB};`)}${totalTd(sz.titles + sw.titles)}</tr>
                 </tbody>
@@ -61050,7 +61137,7 @@ window.gerarMapaZeropaidPDF = async function() {
             return rows.slice(0, max - 1).concat([{ id: "", name: `${otherLabel} (${rest.length})`, isOther: true, zc: sum("zc"), zt: sum("zt"), wc: sum("wc"), wt: sum("wt") }]);
         };
         const ccIdOf = (c) => (typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(c.costCenterId) : c.costCenterId) || "N/D";
-        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 13, "OUTROS EMPREENDIMENTOS");
+        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 10, "OUTROS EMPREENDIMENTOS");
         const brokerRows = capRows(combine(
             c => c.brokerId ? `id:${c.brokerId}` : (c.brokerName ? `n:${String(c.brokerName).trim().toUpperCase()}` : "sem"),
             c => ({
@@ -61058,7 +61145,7 @@ window.gerarMapaZeropaidPDF = async function() {
                 name: c.brokerName ? String(c.brokerName).trim().toUpperCase() : (c.brokerId ? `CREDOR ${c.brokerId}` : "SEM CORRETOR NO CONTRATO"),
                 isOther: !c.brokerId && !c.brokerName
             })
-        ), 13, "OUTROS CORRETORES");
+        ), 10, "OUTROS CORRETORES");
 
         const zt = sz.titles, wt = sw.titles;
         // Só títulos: 0% pago, entrada e total.
@@ -61068,7 +61155,7 @@ window.gerarMapaZeropaidPDF = async function() {
                 <thead>
                     <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1])).join("")}
                         ${th(`${dot("#fca5a5")}0% pago`, "center")}
-                        ${th(`${dot("#fdba74")}Entrada`, "center")}
+                        ${th(`${dot("#93c5fd")}Entrada`, "center")}
                         ${th("Total", "center")}</tr>
                 </thead>
                 <tbody>
@@ -61118,24 +61205,26 @@ window.gerarMapaZeropaidPDF = async function() {
                 ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
                 ${kpi("Desde a venda", s.avgSaleLabel)}
             </div>`;
-        const chip = (txt, n, color) => `<span style="display:inline-block;margin:3px 4px 0 0;padding:1px 6px;border-radius:10px;background:#fff;border:1px solid ${color}55;color:${color};font-size:8.5px;font-weight:800;white-space:nowrap;">${txt}: ${n}</span>`;
-        const chipsEntrada = `<div>${chip("Entrada Webro", porTag.pagamento || 0, C_WEB)}${chip("Aguardando", porTag.aguardando || 0, C_WEB)}${chip("Pendente repasse", porTag.pendente || 0, C_WEB)}</div>`;
         const quadro = (title, body, extra) => `
             <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
                 <div style="background:${C_HEAD};color:#fff;padding:7px 12px;font-weight:800;font-size:11px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
-                <div style="flex:1;min-height:0;padding:8px 10px;overflow:hidden;">${body}</div>
+                <div style="flex:1;min-height:0;padding:10px 12px;overflow:hidden;">${body}</div>
             </div>`;
 
-        const legend = `<div style="display:flex;gap:16px;justify-content:center;font-size:9.5px;font-weight:800;color:#334155;margin-bottom:2px;">
-            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Entrada Webro (pagamento, aguardando e pendente repasse)</span></div>`;
+        const legChip = (color, txt) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;background:#fff;border:1.5px solid ${color};color:${color};font-size:10px;font-weight:800;"><span style="width:12px;height:12px;border-radius:3px;background:${color};display:inline-block;"></span>${txt}</span>`;
         const saleBand = `
-            <div style="display:flex;gap:12px;height:100%;align-items:stretch;">
-                <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;">
-                    <div style="font-size:9.5px;font-weight:800;color:${C_HEAD};text-transform:uppercase;text-align:center;">Títulos por mês da venda (últimos 12 meses)</div>
-                    ${legend}
-                    ${groupedBarChart(chartSlots)}
+            <div style="display:flex;gap:16px;height:100%;align-items:stretch;">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;">Títulos por mês da venda</div>
+                        <div style="display:flex;gap:8px;">${legChip(C_ZERO, "0% pago")}${legChip(C_WEB, "Entrada Webro")}</div>
+                    </div>
+                    <div style="flex:1;display:flex;align-items:flex-end;">${groupedBarChart(chartSlots)}</div>
                 </div>
-                <div style="width:330px;flex-shrink:0;">${recencyTable}</div>
+                <div style="width:340px;flex-shrink:0;">
+                    <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;margin-bottom:8px;">Aging · títulos por dias em atraso</div>
+                    ${recencyTable}
+                </div>
             </div>`;
 
         const nowLabel = `${now.toLocaleDateString("pt-BR")} às ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
@@ -61158,52 +61247,119 @@ window.gerarMapaZeropaidPDF = async function() {
                     <div style="font-size:24px;font-weight:800;line-height:1;">${sz.titles + sw.titles}</div>
                 </div>
             </div>
-            <div style="display:flex;gap:8px;margin-bottom:8px;flex-shrink:0;">
+            <div style="display:flex;gap:10px;margin-bottom:10px;flex-shrink:0;">
                 ${kpiGroup(C_ZERO, BG_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz, "")}
-                ${kpiGroup(C_WEB, BG_WEB, "Entrada Webro", "Entrada paga ou em boleto Webro", sw, chipsEntrada)}
+                ${kpiGroup(C_WEB, BG_WEB, "Entrada Webro", "Entrada em boleto Webro em aberto", sw, "")}
             </div>
-            ${quadro("Quando o cliente comprou o lote", saleBand, "flex-shrink:0;height:196px;margin-bottom:8px;")}
-            <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            ${quadro("Venda e atraso dos títulos", saleBand, "flex-shrink:0;height:250px;margin-bottom:10px;")}
+            <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                 ${quadro("Por empreendimento", empTable)}
                 ${quadro("Corretor que fez a venda", brokerTable)}
             </div>
         `;
 
-        document.body.appendChild(container);
-        await yieldUI();
-        let liberouFonte = false;
-        const fonts = document.fonts;
-        if (fonts && fonts.ready) {
-            const fontePronta = await Promise.race([
-                fonts.ready.then(() => true).catch(() => true),
-                new Promise(r => setTimeout(() => r(false), 2000))
-            ]);
-            if (!fontePronta) {
-                try {
-                    Object.defineProperty(fonts, "ready", { configurable: true, get() { return Promise.resolve(); } });
-                    liberouFonte = true;
-                } catch (e) {}
-            }
-        }
-        let canvas;
-        try {
-            canvas = await comPrazo(html2canvas(container, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
-        } finally {
-            if (liberouFonte) {
-                try { delete fonts.ready; } catch (e) {}
-            }
-        }
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF("l", "mm", "a4");
-        const imgData = canvas.toDataURL("image/jpeg", 0.92);
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
-        const props = pdf.getImageProperties(imgData);
-        const ratio = props.width / props.height;
-        let w = pdfWidth;
-        let h = pdfWidth / ratio;
-        if (h > pdfHeight) { h = pdfHeight; w = pdfHeight * ratio; }
-        pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
+        const fotografar = async (el, novaPagina) => {
+            document.body.appendChild(el);
+            await yieldUI();
+            // Fonte que não termina de carregar travava o html2canvas: espera 2 s e segue sem ela.
+            let liberouFonte = false;
+            const fonts = document.fonts;
+            if (fonts && fonts.ready) {
+                const fontePronta = await Promise.race([
+                    fonts.ready.then(() => true).catch(() => true),
+                    new Promise(r => setTimeout(() => r(false), 2000))
+                ]);
+                if (!fontePronta) {
+                    try {
+                        Object.defineProperty(fonts, "ready", { configurable: true, get() { return Promise.resolve(); } });
+                        liberouFonte = true;
+                    } catch (e) {}
+                }
+            }
+            let canvas;
+            try {
+                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
+            } finally {
+                if (liberouFonte) {
+                    try { delete fonts.ready; } catch (e) {}
+                }
+                if (el.parentNode) document.body.removeChild(el);
+            }
+            const imgData = canvas.toDataURL("image/jpeg", 0.92);
+            const props = pdf.getImageProperties(imgData);
+            const ratio = props.width / props.height;
+            let w = pdfWidth;
+            let h = pdfWidth / ratio;
+            if (h > pdfHeight) { h = pdfHeight; w = pdfHeight * ratio; }
+            if (novaPagina) pdf.addPage("a4", "l");
+            pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
+        };
+        await fotografar(container, false);
+
+        // Páginas seguintes: lista dos títulos (empresa, centro de custo, título, cliente, atraso, valor e última ocorrência).
+        const empresaDe = (c) => {
+            const id = String(c.companyId || "").trim();
+            const nome = (typeof getCompanyName === "function" && id) ? getCompanyName(id, true) : "";
+            return id ? (nome && nome !== id && !/^EMPRESA #/i.test(nome) ? id + " - " + nome : id) : "—";
+        };
+        const ccDe = (c) => {
+            const id = ccIdOf(c);
+            return id && id !== "N/D" ? id + " - " + empLabel(c.costCenterId) : "—";
+        };
+        const ultimaOcorrencia = (c) => {
+            const n = typeof window.getLatestCustomerContact === "function" ? window.getLatestCustomerContact(c.customerId) : null;
+            if (!n || !n.date) return { data: "Sem ocorrência", texto: "" };
+            const d = new Date(n.date);
+            const data = isNaN(d.getTime()) ? "" : d.toLocaleDateString("pt-BR");
+            const canal = n.canal || n.fase || "";
+            const texto = String(n.text || "").replace(/\s+/g, " ").trim();
+            return { data: data + (canal ? " · " + canal : ""), texto: texto.length > 150 ? texto.slice(0, 147) + "…" : texto };
+        };
+        const linhasLista = zeroList.map(c => ({ c, tipo: "0% pago" })).concat(webroList.map(c => ({ c, tipo: "Entrada Webro" })))
+            .sort((a, b) => (a.tipo === b.tipo ? 0 : (a.tipo === "0% pago" ? -1 : 1)) || (Number(b.c.maxDaysDelay) || 0) - (Number(a.c.maxDaysDelay) || 0));
+        const POR_PAGINA = 16;
+        const totalPaginas = Math.ceil(linhasLista.length / POR_PAGINA);
+        for (let p = 0; p < totalPaginas; p++) {
+            const fatia = linhasLista.slice(p * POR_PAGINA, (p + 1) * POR_PAGINA);
+            const pag = document.createElement("div");
+            pag.style.cssText = container.style.cssText;
+            pag.innerHTML = `
+                <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg, #105436 0%, #1b8253 100%);border-radius:10px;padding:8px 14px;margin-bottom:10px;flex-shrink:0;">
+                    <div>
+                        <h1 style="margin:0;color:#fff;font-size:15px;font-weight:800;">Títulos 0% pago e entrada Webro</h1>
+                        <p style="margin:2px 0 0 0;color:#d1fae5;font-size:10px;">Posição em ${nowLabel} · do maior para o menor atraso · página ${p + 2} de ${totalPaginas + 1}</p>
+                    </div>
+                    <div style="display:flex;gap:8px;">${legChip(C_ZERO, "0% pago: " + sz.titles)}${legChip(C_WEB, "Entrada Webro: " + sw.titles)}</div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:9.5px;">
+                    <colgroup><col style="width:7%"><col style="width:12%"><col style="width:15%"><col style="width:6%"><col style="width:17%"><col style="width:6%"><col style="width:9%"><col style="width:28%"></colgroup>
+                    <thead><tr style="background:${C_HEAD};">${th("Situação")}${th("Empresa")}${th("Centro de custo")}${th("Título", "center")}${th("Cliente")}${th("Atraso", "center")}${th("Valor atualizado", "right")}${th("Última ocorrência")}</tr></thead>
+                    <tbody>
+                        ${fatia.map((l, i) => {
+                            const c = l.c;
+                            const zero = l.tipo === "0% pago";
+                            const cor = zero ? C_ZERO : C_WEB;
+                            const oc = ultimaOcorrencia(c);
+                            const titulo = String(c.saleId || "").replace(/^B-/i, "").split("-")[0];
+                            return `<tr style="background:${zebra(i)};border-bottom:1px solid #e2e8f0;">
+                                <td style="padding:6px 7px;"><span style="display:inline-block;padding:2px 6px;border-radius:8px;background:${zero ? BG_ZERO : BG_WEB};color:${cor};font-weight:800;font-size:8.5px;white-space:nowrap;">${esc(l.tipo)}</span></td>
+                                <td style="padding:6px 7px;${ellipsisTd}color:#334155;" title="${esc(empresaDe(c))}">${esc(empresaDe(c))}</td>
+                                <td style="padding:6px 7px;${ellipsisTd}color:#334155;" title="${esc(ccDe(c))}">${esc(ccDe(c))}</td>
+                                <td style="padding:6px 7px;text-align:center;font-weight:800;color:#0f172a;">${esc(titulo)}</td>
+                                <td style="padding:6px 7px;${ellipsisTd}font-weight:700;color:#0f172a;" title="${esc(c.customerName)}">${esc(c.customerName || "Cliente " + c.customerId)}</td>
+                                <td style="padding:6px 7px;text-align:center;font-weight:800;color:${cor};">${Number(c.maxDaysDelay) || 0}</td>
+                                <td style="padding:6px 7px;text-align:right;font-weight:700;color:#0f172a;white-space:nowrap;">R$ ${clientValue(c).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                <td style="padding:6px 7px;color:#334155;line-height:1.3;"><div style="font-weight:800;color:#105436;font-size:8.5px;">${esc(oc.data)}</div><div style="overflow:hidden;max-height:22px;">${esc(oc.texto)}</div></td>
+                            </tr>`;
+                        }).join("")}
+                    </tbody>
+                </table>`;
+            await fotografar(pag, true);
+        }
         pdf.save("Mapa_Clientes_0_Pago.pdf");
     } catch (e) {
         console.error("Erro ao gerar mapa 0% pago:", e);

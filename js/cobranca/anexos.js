@@ -4774,6 +4774,12 @@ const AnexosApp = {
     const type = typeEl ? typeEl.value : 'Unidade';
 
     if (!nome || !motivo) return alert("Preencha todos os campos.");
+    // Motivo tipo "." não ajuda quem aprova a decidir: pede uma frase curta.
+    if (motivo.replace(/[^0-9A-Za-zÀ-ÿ]/g, '').length < 10) {
+      const campo = document.getElementById('req-tag-reason');
+      if (campo) campo.focus();
+      return alert("Explique em uma frase para que serve a TAG (pelo menos 10 letras). Isso ajuda quem aprova a decidir.");
+    }
     if (!window.DadosEngenharia) return alert("Sistema ainda carregando. Tente de novo em alguns segundos.");
 
     const u = (window.AppState && AppState.currentUser) || {};
