@@ -16,6 +16,10 @@ const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
 // Mesmo número de FILA_QUEUE_GROUPS.REENVIAR_JURIDICO. Depois deste envio a fila troca a tag.
 const TAG_REENVIAR_JURIDICO = 8.5;
+// Depois de enviado, o mesmo template não volta para o mesmo cliente/título por este número de dias, mesmo que a
+// tela peça de novo (ex.: navegador aberto na virada do dia com a carteira do dia anterior). A régua dispara só no
+// dia em que o atraso bate com os dias do template; nos dias seguintes (X+1, X+2...) não manda de novo.
+const DIAS_SEM_REPETIR = 30;
 const EMAIL_OK = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 
 function responder(res, status, obj) {
@@ -129,6 +133,28 @@ async function enviosDoPeriodo(de, ate, limite) {
   return JSON.parse(r.buffer.toString("utf8"))
     .filter((x) => x && x.document)
     .map((x) => Object.assign({ id: x.document.name.split("/").pop() }, deFs({ mapValue: { fields: x.document.fields || {} } })));
+}
+
+// Último envio feito deste template para o cliente/título antes de hoje, dentro da janela (null se não houver).
+// Só filtros de igualdade: o Firestore atende com os índices simples, sem índice composto.
+async function enviadoAntes(templateId, customerId, titulo, hoje) {
+  const igual = (campo, valor) => ({ fieldFilter: { field: { fieldPath: campo }, op: "EQUAL", value: { stringValue: String(valor) } } });
+  const corpo = JSON.stringify({
+    structuredQuery: {
+      from: [{ collectionId: "central_email_envios" }],
+      where: { compositeFilter: { op: "AND", filters: [igual("templateId", templateId), igual("customerId", customerId), igual("titulo", titulo)] } },
+      limit: 200
+    }
+  });
+  const r = await http(FS + ":runQuery", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
+  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao conferir envios anteriores.");
+  const limite = new Date(Date.parse(hoje + "T12:00:00Z") - DIAS_SEM_REPETIR * 86400000).toISOString().slice(0, 10);
+  const antes = JSON.parse(r.buffer.toString("utf8"))
+    .filter((x) => x && x.document)
+    .map((x) => deFs({ mapValue: { fields: x.document.fields || {} } }))
+    .filter((x) => x && x.status === "enviado" && String(x.dia || "") < hoje && String(x.dia || "") >= limite)
+    .sort((a, b) => String(b.dia).localeCompare(String(a.dia)));
+  return antes[0] || null;
 }
 
 /* Rastreio de abertura: uma imagem 1x1 aponta para /api/email-aberto com o id do envio e uma assinatura
@@ -289,6 +315,13 @@ module.exports = async function handler(req, res) {
           });
         }
         r.status = "ja-enviado";
+        resultados.push(r);
+        continue;
+      }
+      const anterior = await enviadoAntes(templateId, customerId, titulo, dia);
+      if (anterior) {
+        r.status = "enviado-antes";
+        r.diaAnterior = anterior.dia;
         resultados.push(r);
         continue;
       }
