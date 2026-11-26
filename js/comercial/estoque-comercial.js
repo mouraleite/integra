@@ -1784,7 +1784,10 @@ const EstoqueComercialApp = {
   resumoFila(rows) {
     if (!this.filaCarregada()) return null;
     const idx = this.ensureDefaulterIndex();
-    if (this.filaRecorteAberto()) {
+    // Fila inteira só quando a lista é a carteira inteira. Na conferência de um empreendimento (e no batimento do
+    // servidor, sem tela e sem filtros) cada obra somava a Fila toda: 4,35 mi x 99 obras = 430 mi de "em atraso".
+    const carteiraInteira = (rows || []).length >= (this.state.units || []).length;
+    if (carteiraInteira && this.filaRecorteAberto()) {
       let total = 0;
       idx.bills.forEach((b) => { total += Number(b.val) || 0; });
       return { n: idx.bills.size, total };

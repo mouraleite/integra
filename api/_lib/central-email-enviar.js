@@ -116,6 +116,82 @@ async function gravarCampos(caminho, obj) {
   return r.status === 200;
 }
 
+// Valor do Firestore para objetos e listas (a ocorrência tem listas vazias e textos).
+function paraFsFundo(v) {
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(paraFsFundo) } };
+  if (v && typeof v === "object") {
+    const fields = {};
+    Object.keys(v).forEach((k) => { fields[k] = paraFsFundo(v[k]); });
+    return { mapValue: { fields } };
+  }
+  return paraFs(v);
+}
+
+const DIAS_RETORNO_PADRAO = 5;
+
+// Dias até o retorno: o do template; sem ele, o {{retorno:N}} do texto; sem nenhum, 5.
+function diasRetornoDo(t) {
+  const n = Number(t && t.diasRetorno);
+  if (Number.isFinite(n) && n >= 0) return Math.min(90, Math.round(n));
+  const m = /\{\{retorno:(\d+)\}\}/.exec(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
+  return m ? Math.min(90, Number(m[1])) : DIAS_RETORNO_PADRAO;
+}
+
+function isoMais(diaIso, dias) {
+  const d = new Date(diaIso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + (Number(dias) || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+// Mesmo registro da ficha (customer_notes_shards/chunk_N, campo = customerId), como em getCustomerNoteChunkId.
+function chunkDoCliente(customerId) {
+  let soma = 0;
+  const s = String(customerId);
+  for (let i = 0; i < s.length; i++) soma += s.charCodeAt(i);
+  return "chunk_" + (soma % 20);
+}
+
+/* Ocorrência do disparo automático em Ocorrências e Promessas. A data de retorno vai em promiseDate com
+   promiseStatus "Pendente": até lá a Agenda não põe o título na fila nova do operador. Sem iniciativa, não conta
+   como contato do operador. appendMissingElements só acrescenta (não regrava a lista) e não duplica o mesmo envio. */
+async function gravarOcorrenciaEnvio(o, colecaoTeste) {
+  // Hora fixa do envio: repetir a gravação do mesmo envio não cria outro item (appendMissingElements compara tudo).
+  o = Object.assign({ em: new Date().toISOString() }, o);
+  const nota = {
+    id: "central-email-" + o.envioId,
+    date: o.em,
+    author: "Central de e-mail (automático)",
+    saleId: o.titulo,
+    receivableBillId: o.titulo,
+    contractId: null,
+    text: ("E-MAIL AUTOMÁTICO DA RÉGUA \"" + o.templateNome + "\" ENVIADO PARA " + o.para + ". ASSUNTO: " + o.assunto
+      + ". RETORNO EM " + dataBr(o.retorno) + ".").slice(0, 1500),
+    promiseDate: o.retorno,
+    promiseStatus: "Pendente",
+    reminder: "",
+    canal: "E-mail automático",
+    iniciativa: null,
+    origem: "central-email",
+    centralEmailEnvioId: o.envioId,
+    promisedInstallments: [],
+    pinned: false,
+    attachments: [],
+    updatedAt: o.em
+  };
+  const base = FS.replace("https://firestore.googleapis.com/v1/", "");
+  const corpo = JSON.stringify({
+    writes: [{
+      transform: {
+        document: base + "/" + (colecaoTeste || "customer_notes_shards") + "/" + chunkDoCliente(o.customerId),
+        fieldTransforms: [{ fieldPath: "`" + String(o.customerId).replace(/[`\\]/g, "") + "`", appendMissingElements: { values: [paraFsFundo(nota)] } }]
+      }
+    }]
+  });
+  const r = await http(FS + ":commit", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
+  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao gravar a ocorrência.");
+  return nota;
+}
+
 // Envios de um período (dia de/até, AAAA-MM-DD), para o acompanhamento e para casar as confirmações.
 async function enviosDoPeriodo(de, ate, limite) {
   const corpo = JSON.stringify({
@@ -355,11 +431,23 @@ module.exports = async function handler(req, res) {
       });
       r.status = "enviado";
       r.para = para.length;
+      // O e-mail já saiu: falha ao gravar a ocorrência não muda o status do envio, só fica registrada.
+      const retorno = isoMais(dia, diasRetornoDo(t));
+      const emEnvio = new Date().toISOString();
+      let ocorrencia = "";
+      try {
+        await gravarOcorrenciaEnvio({ envioId: id, customerId, titulo, templateNome: String(t.nome || ""), para: para.join(", "), assunto, retorno, em: emEnvio });
+        ocorrencia = "ok";
+      } catch (e) {
+        ocorrencia = String((e && e.message) || e).slice(0, 200);
+        console.warn("[central-email-enviar] ocorrência " + JSON.stringify({ titulo, erro: ocorrencia }));
+      }
+      r.retorno = retorno;
       await gravarDoc("central_email_envios/" + id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
         de: de || "padrao", caixa, para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0,
         assunto, html: html.slice(0, 200000), clienteNome: String(v.nome || "").slice(0, 200), templateNome: String(t.nome || "").slice(0, 200),
-        confirmacoesPedidas: true, rastreio: !!pixel
+        confirmacoesPedidas: true, rastreio: !!pixel, retorno, ocorrencia
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
         await gravarDoc("acordo_email_tag/" + customerId + "_" + titulo, {
@@ -392,3 +480,5 @@ module.exports.enviosDoPeriodo = enviosDoPeriodo;
 module.exports.tokenAbertura = tokenAbertura;
 module.exports.montarAssunto = montarAssunto;
 module.exports.quadroHtml = quadroHtml;
+module.exports.gravarOcorrenciaEnvio = gravarOcorrenciaEnvio;
+module.exports.diasRetornoDo = diasRetornoDo;
