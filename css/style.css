@@ -7938,6 +7938,26 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
   justify-content: flex-end;
   border-top: 1px solid #e2e8f0;
 }
+/* Pop-up da aba "Por categoria" (Prestação Ellenco): largo, um único Fechar no topo, texto quebrando por palavra. */
+.part-detail-panel.part-catm { width: min(1180px, 96vw); max-height: 88vh; }
+.part-catm header .btn-fechar { height: 40px; display: inline-flex; align-items: center; flex-shrink: 0; }
+.part-catm-sub { margin-top: 4px; font-size: 0.8rem; color: #64748b; }
+.part-catm-sub strong { color: #105436; }
+.part-catm .part-detail-body { padding: 12px 16px 16px; }
+.part-catm-scroll { border: 1px solid #e2e8f0; border-radius: 8px; overflow: auto; max-height: calc(88vh - 170px); }
+.part-catm-tab { table-layout: fixed; }
+.part-catm-tab th, .part-catm-tab td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.part-catm-tab th.part-catm-spe { white-space: normal; line-height: 1.25; vertical-align: bottom; }
+.part-catm-tab td.part-catm-quebra { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: break-word; line-height: 1.35; }
+.part-catm-lanc td { vertical-align: top; }
+.part-catm-tab .part-catm-fixa { position: sticky; left: 0; z-index: 1; background: inherit; font-weight: 700; }
+.part-catm-tab thead .part-catm-fixa { z-index: 3; background: #1b8253; }
+.part-catm-tab tbody tr:nth-child(odd) .part-catm-fixa { background: #fff; }
+.part-catm-tab tbody tr:nth-child(even) .part-catm-fixa { background: #f7faf8; }
+.part-catm-tab tfoot td { position: sticky; bottom: 0; background: #105436; color: #fff; font-weight: 800; padding: 6px; }
+.part-catm-tab tfoot .part-cat-val { color: #fff; }
+.part-catm-rodape { justify-content: flex-start !important; }
+.part-catm-rodape .btn { height: 40px; display: inline-flex; align-items: center; gap: 6px; }
 
 .ccom-page { padding: 0; }
 .rweb-note { margin: 0 0 10px; font-size: 0.78rem; color: #64748b; line-height: 1.4; }

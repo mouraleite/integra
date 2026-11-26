@@ -1388,9 +1388,6 @@ const ParticipacoesApp = {
               </table>
             ` : `<div style="padding:24px;text-align:center;color:#64748b;">Nenhum lançamento neste filtro.</div>`}
           </div>
-          <footer>
-            <button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.closeMatrixDetail()">Fechar</button>
-          </footer>
         </div>
       </div>
     `;
@@ -2671,50 +2668,53 @@ const ParticipacoesApp = {
     const linhas = d.linhas.filter((x) => x.k === det.k && (!det.emp || x.emp === det.emp) && (!det.m || x.m === det.m))
       .sort((a, b) => String(a.r.iso || a.r.date).localeCompare(String(b.r.iso || b.r.date)));
     const total = linhas.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    const ci = d.credores.findIndex((c) => c.k === det.k);
+    const val = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
     let sub = "";
     let corpo = "";
     if (det.tipo === "credor") {
+      // Meses nas linhas e uma coluna por SPE; cada valor abre os lançamentos daquele mês e SPE.
       const spes = Array.from(new Set(linhas.map((x) => x.emp))).sort((a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true }));
       const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
       const soma = (m, e) => linhas.filter((x) => (!m || x.m === m) && (!e || x.emp === e)).reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
-      const ci = d.credores.findIndex((c) => c.k === det.k);
-      const val = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
       sub = "Mês a mês por SPE";
-      corpo = `<div class="cc-scroll"><table class="cc-table" style="width:max(100%, ${150 + spes.length * 190 + 130}px);table-layout:fixed;">
-        <colgroup><col style="width:150px">${spes.map(() => `<col style="width:190px">`).join("")}<col style="width:130px"></colgroup>
-        <thead><tr><th>Mês</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(this.rotuloEmpresa(e))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
-        <tbody>${meses.map((m) => `<tr><td>${this.esc(this.periodLabel(m, m))}</td>${spes.map((e) => `<td class="is-right">${val(soma(m, e), `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(e)}', '${m}')`)}</td>`).join("")}<td class="is-right"><strong>${this.fmt(soma(m, ""))}</strong></td></tr>`).join("")}
-          <tr style="font-weight:800;"><td>Total</td>${spes.map((e) => `<td class="is-right">${val(soma("", e), `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`).join("")}<td class="is-right">${this.fmt(total)}</td></tr></tbody>
+      corpo = `<div class="part-catm-scroll"><table class="cc-table part-catm-tab" style="width:max(100%, ${110 + spes.length * 170 + 130}px);">
+        <colgroup><col style="width:110px">${spes.map(() => `<col style="width:170px">`).join("")}<col style="width:130px"></colgroup>
+        <thead><tr><th class="part-catm-fixa">Mês</th>${spes.map((e) => `<th class="is-right part-catm-spe" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(this.rotuloEmpresa(e))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${meses.map((m) => `<tr><td class="part-catm-fixa" title="${this.esc(this.periodLabel(m, m))}">${this.esc(this.mesCurto(m))}</td>${spes.map((e) => `<td class="is-right">${val(soma(m, e), `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(e)}', '${m}')`)}</td>`).join("")}<td class="is-right"><strong>${this.fmt(soma(m, ""))}</strong></td></tr>`).join("")}</tbody>
+        <tfoot><tr><td class="part-catm-fixa">Total</td>${spes.map((e) => `<td class="is-right">${val(soma("", e), `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`).join("")}<td class="is-right">${this.fmt(total)}</td></tr></tfoot>
       </table></div>`;
     } else {
-      sub = [det.emp ? this.rotuloEmpresa(det.emp) : "Todas as SPEs", det.m ? this.periodLabel(det.m, det.m) : "Todos os meses"].join(" · ");
-      corpo = `<div class="cc-scroll"><table class="cc-table" style="table-layout:fixed;">
-        <colgroup><col style="width:90px"><col style="width:120px"><col style="width:220px"><col><col style="width:16%"><col style="width:120px"></colgroup>
-        <thead><tr><th>Data</th><th>Período</th><th>Empresa (SPE)</th><th>Detalhe</th><th>Categoria Ellenco</th><th class="is-right">Valor</th></tr></thead>
+      sub = [det.emp ? this.rotuloEmpresa(det.emp) : "Todas as SPEs", det.m ? this.mesCurto(det.m) : "Todos os meses"].join(" · ");
+      corpo = `<div class="part-catm-scroll"><table class="cc-table part-catm-tab part-catm-lanc">
+        <colgroup><col style="width:96px"><col style="width:86px"><col style="width:22%"><col><col style="width:17%"><col style="width:130px"></colgroup>
+        <thead><tr><th>Data</th><th>Mês</th><th>Empresa (SPE)</th><th>Detalhe</th><th>Categoria Ellenco</th><th class="is-right">Valor</th></tr></thead>
         <tbody>${linhas.map((x) => `<tr>
           <td>${this.esc(x.r.date || "")}</td>
-          <td style="text-transform:capitalize;">${this.esc(this.periodLabel(x.m, x.m))}</td>
-          <td title="${this.esc(this.rotuloEmpresa(x.emp))}">${this.esc(this.rotuloEmpresa(x.emp))}</td>
-          <td class="part-cat-quebra">${this.esc(x.r.detalhe || "—")}</td>
-          <td title="${this.esc(x.r.categoria || "")}">${this.esc(x.r.categoria || "—")}</td>
+          <td>${this.esc(this.mesCurto(x.m))}</td>
+          <td class="part-catm-quebra">${this.esc(this.rotuloEmpresa(x.emp))}</td>
+          <td class="part-catm-quebra">${this.esc(x.r.detalhe || "—")}</td>
+          <td class="part-catm-quebra">${this.esc(x.r.categoria || "—")}</td>
           <td class="is-right"><strong>${this.fmt(x.r.valor)}</strong></td>
         </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum lançamento.</td></tr>`}</tbody>
+        ${linhas.length ? `<tfoot><tr><td colspan="5">Total · ${linhas.length} lançamento(s)</td><td class="is-right">${this.fmt(total)}</td></tr></tfoot>` : ""}
       </table></div>`;
     }
+    // Um único botão Fechar (no topo). O rodapé só aparece com a ação de voltar para o mês a mês por SPE.
     const voltar = det.tipo !== "credor"
-      ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${d.credores.findIndex((c) => c.k === det.k)})">Ver mês a mês por SPE</button>` : "";
+      ? `<footer class="part-catm-rodape"><button type="button" class="btn btn-outline" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})"><i data-lucide="arrow-left" style="width:16px;height:16px;"></i> Ver mês a mês por SPE</button></footer>` : "";
     return `
-      <div class="part-detail-overlay part-cat-modal" onclick="if(event.target===this)ParticipacoesApp.fecharCatDetalhe()">
-        <div class="part-detail-panel" role="dialog" aria-modal="true" style="max-width:min(1200px, 96vw);">
+      <div class="part-detail-overlay" onclick="if(event.target===this)ParticipacoesApp.fecharCatDetalhe()">
+        <div class="part-detail-panel part-catm" role="dialog" aria-modal="true">
           <header>
             <div>
               <h3>${this.esc(det.credor)}</h3>
-              <div class="part-detail-sub">${this.esc(sub)} · ${linhas.length} lançamento(s) · <strong>${this.fmt(total)}</strong></div>
+              <div class="part-catm-sub">${this.esc(sub)} · ${linhas.length} lançamento(s) · <strong>${this.fmt(total)}</strong></div>
             </div>
             <button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.fecharCatDetalhe()">Fechar</button>
           </header>
           <div class="part-detail-body">${corpo}</div>
-          <footer>${voltar}<button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.fecharCatDetalhe()">Fechar</button></footer>
+          ${voltar}
         </div>
       </div>`;
   },
