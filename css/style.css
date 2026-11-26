@@ -12434,6 +12434,9 @@ tr.pr-liberado td { background: #f7faf8; }
 .cem-switch-txt { font-weight: 800; font-size: 0.74rem; color: #64748b; min-width: 62px; text-align: left; }
 .cem-switch.is-on .cem-switch-txt { color: #105436; }
 .cem-switch:focus-visible { outline: 2px solid #1b8253; outline-offset: 2px; border-radius: 6px; }
+/* Régua travada até o template ser aprovado (passo 1). */
+.cem-switch.is-travado { cursor: not-allowed; opacity: .55; }
+.cem-switch.is-travado .cem-switch-txt { font-weight: 700; color: #94a3b8; }
 .cem-sit { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.72rem; font-weight: 800; }
 .cem-sit.is-on { background: #dcfce7; color: #166534; }
 .cem-sit.is-off { background: #f1f5f9; color: #475569; }
