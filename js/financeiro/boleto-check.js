@@ -682,7 +682,7 @@ window.BoletoCheck = {
     const lista = (itens, cor, ic) => itens.map((t) => `<p style="margin:4px 0 0;color:${cor};">${ic} ${this.esc(t)}</p>`).join("");
     const cab = v.nivel === "ok"
       ? (v.guiaSomada
-        ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ Guia unificada conferida: o código soma os títulos desta guia.</p>`
+        ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ ${v.forma === "Boleto unificado" ? "Boleto unificado conferido: o boleto soma os títulos do mesmo credor." : "Guia unificada conferida: o código soma os títulos desta guia."}</p>`
         : `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ Código de barras conferido: dígitos, valor${v.retidoAplicado ? " líquido" : ""}${v.vencBoleto ? " e vencimento" : ""} batem com o título.</p>`)
       : "";
     return `<p><strong>Forma:</strong> ${this.esc(v.forma)}</p>
