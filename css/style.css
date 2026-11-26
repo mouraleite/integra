@@ -9753,6 +9753,18 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .docs-sit.is-feito { color: #105436; background: #ecfdf5; }
 .docs-acoes { width: auto; min-width: 76px; text-align: right; white-space: nowrap; }
 .docs-acoes .btn { margin-right: 6px; height: 32px; padding: 0 10px; }
+/* Ações da linha: botões quebram dentro da coluna (largura fixa) e os ícones ficam sempre à direita. */
+.cc-table.docs-cc-table { min-width: 1080px; table-layout: fixed; }
+.cc-table.docs-cc-table td { vertical-align: middle; }
+.cc-table.docs-cc-table td.docs-cliente { overflow: hidden; text-overflow: ellipsis; }
+.cc-table.docs-cc-table td.docs-sit-cel { white-space: normal; }
+.docs-just { display: block; margin-top: 3px; font-size: 0.66rem; line-height: 1.3; color: #92400e; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.docs-acoes-box { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.docs-acoes-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; min-width: 0; }
+.docs-acoes-btns .btn, .docs-btn { height: 28px; padding: 0 9px; font-size: 0.72rem; white-space: nowrap; margin: 0; display: inline-flex; align-items: center; }
+.docs-acoes-btns .docs-distrato { margin: 0; }
+.docs-acoes-ico { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.docs-acoes-ico .tvig-ico[disabled] { cursor: not-allowed; }
 .docs-distrato { position: relative; display: inline-flex; margin-right: 6px; vertical-align: middle; }
 .docs-distrato .btn { margin-right: 0; pointer-events: none; }
 .docs-distrato.is-off .btn { opacity: 0.45; cursor: not-allowed; }
