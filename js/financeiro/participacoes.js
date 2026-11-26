@@ -2187,7 +2187,8 @@ const ParticipacoesApp = {
     ];
     if (this.groupBy !== "matriz" && this.groupBy !== "credor" && this.groupBy !== "categoria") this.groupBy = "matriz";
     if (!this.catMl) this.carregarCatMl();
-    this._gruposVisiveis = this.groupBy === "credor" ? groups : [];
+    const gruposCred = this.groupBy === "credor" ? this.filtrarCredPorCat(groups) : groups;
+    this._gruposVisiveis = this.groupBy === "credor" ? gruposCred : [];
     const isMatriz = this.groupBy === "matriz";
     const mxInfo = temEmpresa && isMatriz ? this.matrixData() : null;
     const credCount = mxInfo ? mxInfo.creditors.length : 0;
@@ -2271,6 +2272,11 @@ const ParticipacoesApp = {
             .part-credor-acoes{display:flex;gap:8px;margin:0 0 8px;}
             .part-credor-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;}
           </style>
+          <div class="part-cat-filtros">
+            <div id="part-cred-f-cats-box"></div>
+            ${this.credFiltroCats.length ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltroCred()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtro</button>` : ""}
+          </div>
+          <p class="part-cat-info">${gruposCred.length} de ${groups.length} credor(es) · <strong>${this.fmt(gruposCred.reduce((t, g) => t + g.total, 0))}</strong>${this.credFiltroCats.length ? "" : ` · ${groups.filter((g) => !this.catMlDe(g.groupKey)).length} sem categoria`}</p>
           <div class="cc-scroll part-groups" id="part-groups-scroll">
             <table class="cc-table part-expense-table">
               <colgroup>
@@ -2282,7 +2288,8 @@ const ParticipacoesApp = {
                   <th>Data</th><th>Período</th><th>Credor</th><th>Detalhe</th><th>Categoria Ellenco</th><th>Categoria Moura Leite</th><th class="is-right">Valor</th>
                 </tr>
               </thead>
-              ${groups.map((g, gi) => {
+              ${gruposCred.length ? "" : `<tbody><tr><td colspan="7" style="text-align:center;padding:30px;">Nenhum credor com essa categoria.</td></tr></tbody>`}
+              ${gruposCred.map((g, gi) => {
                 const aberto = !!this.credorAberto[g.groupKey];
                 const cat = this.catMlDe(g.groupKey);
                 const rotCat = this.rotuloCatMl(cat);
@@ -2314,6 +2321,7 @@ const ParticipacoesApp = {
     `;
     this.paintCompany();
     if (this.groupBy === "categoria") this.pintarFiltrosCategoria();
+    if (this.groupBy === "credor") this.pintarFiltroCred(groups);
     if (window.lucide) lucide.createIcons();
     this.restoreScroll(scroll);
   },
@@ -2452,6 +2460,73 @@ const ParticipacoesApp = {
     return true;
   },
 
+  /* ---------- Aba "Por credor": filtro rápido pela Categoria Moura Leite ----------
+     Mesmo filtro da aba Por categoria, com "(Sem categoria)" para achar os credores que ainda falta classificar. */
+  credFiltroCats: [],
+  credFiltroAberto: false,
+  credFiltroBusca: "",
+
+  catIdDoGrupo(g) {
+    const cat = this.catMlDe(g && g.groupKey);
+    return cat ? cat.id : this.CAT_SEM;
+  },
+
+  filtrarCredPorCat(groups) {
+    const sel = this.credFiltroCats || [];
+    if (!sel.length) return groups;
+    return (groups || []).filter((g) => sel.indexOf(this.catIdDoGrupo(g)) >= 0);
+  },
+
+  pintarFiltroCred(groups) {
+    const box = document.getElementById("part-cred-f-cats-box");
+    if (!box || !window.MlEmpresaFilter) return;
+    const cont = {};
+    (groups || []).forEach((g) => {
+      const id = this.catIdDoGrupo(g);
+      if (!cont[id]) cont[id] = { id, n: 0, label: id === this.CAT_SEM ? "(Sem categoria)" : this.rotuloCatMl(this.catMlDe(g.groupKey)), order: id === this.CAT_SEM ? 0 : 1 };
+      cont[id].n += 1;
+    });
+    (this.credFiltroCats || []).forEach((id) => {
+      if (!cont[id]) cont[id] = { id, n: 0, label: id === this.CAT_SEM ? "(Sem categoria)" : id, order: id === this.CAT_SEM ? 0 : 1 };
+    });
+    const itens = Object.values(cont)
+      .sort((a, b) => a.order - b.order || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }))
+      .map((c) => ({ id: c.id, label: `${c.label} · ${c.n} credor(es)` }));
+    const id = "part-cred-f-cats";
+    const opts = {
+      id, label: "Categoria Moura Leite", items: itens, keepOrder: true, selectedIds: this.credFiltroCats,
+      open: this.credFiltroAberto, query: this.credFiltroBusca, emptyMeansAll: true,
+      nouns: { singular: "categoria", plural: "categorias", none: "Nenhuma categoria", noMatch: "Nenhuma categoria com esse nome." }
+    };
+    box.innerHTML = MlEmpresaFilter.html(opts);
+    MlEmpresaFilter.bind(id, {
+      toggleOpen: () => { this.credFiltroAberto = !this.credFiltroAberto; this.render(); },
+      close: () => { if (this.credFiltroAberto) { this.credFiltroAberto = false; this.render(); } },
+      setQuery: (q) => {
+        this.credFiltroBusca = q || "";
+        const list = document.getElementById(id + "-list");
+        if (list) list.innerHTML = MlEmpresaFilter.listHtml(Object.assign({}, opts, { query: this.credFiltroBusca, selectedIds: this.credFiltroCats }));
+      },
+      toggleId: (cid, on) => {
+        const atual = new Set(this.credFiltroCats);
+        if (on) atual.add(String(cid)); else atual.delete(String(cid));
+        this.credFiltroCats = Array.from(atual);
+        this.credFiltroAberto = true;
+        this.render();
+      },
+      selectAll: () => { this.credFiltroCats = itens.map((i) => String(i.id)); this.credFiltroAberto = true; this.render(); },
+      selectNone: () => { this.credFiltroCats = []; this.credFiltroAberto = true; this.render(); }
+    });
+    if (window.lucide) lucide.createIcons();
+  },
+
+  limparFiltroCred() {
+    this.credFiltroCats = [];
+    this.credFiltroBusca = "";
+    this.credFiltroAberto = false;
+    this.render();
+  },
+
   /* ---------- Aba "Por categoria" ----------
      Filtra os lançamentos pela Categoria Moura Leite do credor (várias de uma vez), por credor e por empresa (SPE).
      Linhas: o credor e, embaixo dele, uma linha por SPE onde o gasto foi feito. Colunas: um mês cada e o total.
@@ -2540,12 +2615,13 @@ const ParticipacoesApp = {
   },
 
   pintarFiltrosCategoria() {
+    // Empresa (SPE) não tem filtro próprio aqui: vale o filtro Empresas do topo da página.
+    this.catFiltro.empresas = [];
     if (!window.MlEmpresaFilter) return;
     const base = this.catLinhasBase();
     const conf = [
       { qual: "cats", id: "part-cat-f-cats", label: "Categoria Moura Leite", nouns: { singular: "categoria", plural: "categorias", none: "Nenhuma categoria", noMatch: "Nenhuma categoria com esse nome." } },
-      { qual: "credores", id: "part-cat-f-credores", label: "Credor", nouns: { singular: "credor", plural: "credores", none: "Nenhum credor", noMatch: "Nenhum credor com esse nome." } },
-      { qual: "empresas", id: "part-cat-f-empresas", label: "Empresa (SPE)", nouns: { singular: "empresa", plural: "empresas" } }
+      { qual: "credores", id: "part-cat-f-credores", label: "Credor", nouns: { singular: "credor", plural: "credores", none: "Nenhum credor", noMatch: "Nenhum credor com esse nome." } }
     ];
     conf.forEach((c) => {
       const box = document.getElementById(c.id + "-box");
@@ -2633,7 +2709,6 @@ const ParticipacoesApp = {
       <div class="part-cat-filtros">
         <div id="part-cat-f-cats-box"></div>
         <div id="part-cat-f-credores-box"></div>
-        <div id="part-cat-f-empresas-box"></div>
         ${filtrado ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltrosCategoria()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtros</button>` : ""}
       </div>
       <p class="part-cat-info">${d.credores.length} credor(es) · ${d.linhas.length} lançamento(s) · <strong>${this.fmt(d.total)}</strong>. Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela e no valor para ver só aquela célula.</p>
