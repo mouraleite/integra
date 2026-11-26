@@ -590,6 +590,9 @@ async function handler(req, res) {
       state.saldoSeen = [];
       state.saldoFalhas = {};
       state.censoFalhas = {};
+      // Forçar refaz a conferência de todos os empreendimentos com o Contas a Receber de agora (antes pulava os já vistos).
+      state.obrasVistas = [];
+      state.obraFalhas = {};
     }
     const continuacao = flag(req, "cont") === "1";
     if (!force && !continuacao && Number(state.passes) > 0) {
