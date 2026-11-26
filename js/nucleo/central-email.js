@@ -306,6 +306,9 @@ const CentralEmailApp = {
         corpo: String((t && t.corpo) || ""),
         tag: tags.has(Number(t && t.tag)) ? Number(t.tag) : "",
         diasVencido: Math.max(0, Math.round(Number(t && t.diasVencido) || 0)),
+        // Dias até o retorno: a ocorrência do envio tira o título da fila nova da Agenda até essa data.
+        diasRetorno: t && t.diasRetorno != null && t.diasRetorno !== "" && Number.isFinite(Number(t.diasRetorno))
+          ? Math.min(90, Math.max(0, Math.round(Number(t.diasRetorno)))) : this.retornoDoTexto(t),
         destino: t && t.destino === "fixo" ? "fixo" : "contrato",
         para: this.listaEmails(t && t.para).join(", "),
         cc: this.listaEmails(t && t.cc).join(", "),
@@ -318,6 +321,12 @@ const CentralEmailApp = {
         avisoCriador: !!(t && t.avisoCriador)
       };
     }).filter((t) => t.id && t.nome);
+  },
+
+  /** Template antigo sem o campo: usa o {{retorno:N}} do texto, como o servidor; sem nenhum, 5 dias. */
+  retornoDoTexto(t) {
+    const m = /\{\{retorno:(\d+)\}\}/.exec(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
+    return m ? Math.min(90, Number(m[1])) : 5;
   },
 
   lerLocal() {
@@ -783,6 +792,7 @@ const CentralEmailApp = {
     const podeLigar = !!(atual && atual.status === "aprovado" && this.souAdmin());
     const destino = atual && atual.destino === "fixo" ? "fixo" : "contrato";
     this.fecharModal();
+    this.iaReset();
     const tags = this.tags().map((t) => `<option value="${t.id}"${atual && Number(atual.tag) === t.id ? " selected" : ""}>${this.esc(t.label)}</option>`).join("");
     const grupos = [];
     this.VARIAVEIS.forEach((v) => {
@@ -830,6 +840,7 @@ const CentralEmailApp = {
               <label class="cem-dest-campo">Enviar de<select id="cem-de" class="cem-campo">${this.CAIXAS_ENVIO.map((c) => `<option value="${this.esc(c.valor)}"${this.caixaValida(atual && atual.remetente) === c.valor ? " selected" : ""}>${this.esc(c.rotulo)}</option>`).join("")}</select></label>
             </div>
             <p class="cem-legenda">${atual && atual.status === "aprovado" ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga." : "Ao salvar, a régua fica desligada até o administrador aprovar."}</p>
+            <div id="cem-ia" class="cem-ia">${this.iaHtml()}</div>
             <label class="cem-bloco-campo">Texto<textarea id="cem-corpo" class="cem-campo">${this.esc(atual ? atual.corpo : "")}</textarea></label>
             <p class="cem-legenda">Prévia com um cliente de exemplo. Na fila do dia, nome, unidade, empreendimento, cidade e vencimento saem do contrato.</p>
             <div id="cem-previa" class="cem-previa"></div>
@@ -840,8 +851,9 @@ const CentralEmailApp = {
             <section class="cem-var-grupo">
               <h4>Data de retorno</h4>
               <label class="cem-retorno">Dias depois do envio
-                <input id="cem-retorno" type="number" min="0" step="1" value="5">
+                <input id="cem-retorno" type="number" min="0" max="90" step="1" value="${atual ? atual.diasRetorno : 5}">
               </label>
+              <p class="cem-retorno-nota">No envio, a régua grava a ocorrência em Ocorrências e Promessas com esta data de retorno. Até lá o título não entra na fila nova da Agenda do operador.</p>
               <button type="button" class="cem-var" onclick="CentralEmailApp.inserirRetorno()">Inserir data de retorno</button>
             </section>
           </aside>
@@ -897,6 +909,128 @@ const CentralEmailApp = {
     this.atualizarPreview();
   },
 
+  /* ---------- Sugestões de texto com IA ----------
+     5 sugestões curtas, uma por tom de voz, a partir da tag (e do racional dela), dos dias e do rascunho.
+     Escolhido o tom, "Nova sugestão" pede outra versão naquele tom, diferente das já mostradas.
+     O texto vem com as variáveis do template; nada do cliente real vai para a IA. */
+  ia: { sugestoes: [], tom: "", historico: {}, carregando: false, erro: "" },
+
+  iaReset() {
+    this.ia = { sugestoes: [], tom: "", historico: {}, carregando: false, erro: "" };
+  },
+
+  iaTomId(nome) {
+    const n = String(nome || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    return n.split(/\s+/)[0] || n;
+  },
+
+  iaHtml() {
+    const ia = this.ia || {};
+    const lista = ia.tom ? ia.sugestoes.filter((s) => this.iaTomId(s.tom) === ia.tom).slice(-1) : ia.sugestoes;
+    const cards = lista.map((s) => {
+      const i = ia.sugestoes.indexOf(s);
+      return `<div class="cem-ia-card">
+        <div class="cem-ia-tom">${this.esc(s.tom)}</div>
+        <div class="cem-ia-assunto"><b>Título:</b> ${this.esc(s.assunto)}</div>
+        <div class="cem-ia-texto">${this.esc(s.texto)}</div>
+        <div class="cem-ia-acoes">
+          <button type="button" class="btn btn-primary" onclick="CentralEmailApp.iaUsar(${i})">Usar este texto</button>
+          <button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaNova(${i})" ${ia.carregando ? "disabled" : ""}>Nova sugestão neste tom</button>
+        </div>
+      </div>`;
+    }).join("");
+    return `<div class="cem-ia-topo">
+        <span class="cem-rotulo">Sugestões com IA</span>
+        ${ia.tom ? `<button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaVoltar()">Ver os 5 tons</button>` : ""}
+        <button type="button" class="btn btn-outline cem-ia-btn" onclick="CentralEmailApp.iaPedir('tons')" ${ia.carregando ? "disabled" : ""}>
+          <i data-lucide="sparkles" style="width:14px;height:14px;"></i> ${ia.sugestoes.length ? "Gerar 5 tons de novo" : "Sugerir textos com IA"}
+        </button>
+      </div>
+      ${ia.carregando ? `<p class="cem-legenda">Escrevendo as sugestões…</p>` : ""}
+      ${ia.erro ? `<p class="cem-ia-erro">${this.esc(ia.erro)}</p>` : ""}
+      ${!ia.sugestoes.length && !ia.carregando && !ia.erro ? `<p class="cem-legenda">A IA usa a tag, o racional dela, os dias e o rascunho para propor textos curtos em 5 tons de voz, já com as variáveis.</p>` : ""}
+      ${cards ? `<div class="cem-ia-lista${ia.tom ? " is-um" : ""}">${cards}</div>` : ""}`;
+  },
+
+  iaPintar() {
+    const el = document.getElementById("cem-ia");
+    if (!el) return;
+    el.innerHTML = this.iaHtml();
+    if (window.lucide && lucide.createIcons) lucide.createIcons();
+  },
+
+  async iaPedir(modo, tomId) {
+    if (this.ia.carregando) return;
+    const val = (id) => String((document.getElementById(id) || {}).value || "");
+    const tag = Number(val("cem-tag"));
+    const pedido = {
+      modo: modo === "nova" ? "nova" : "tons",
+      tag: Number.isFinite(tag) ? tag : "",
+      tagNome: Number.isFinite(tag) ? this.rotuloTag(tag) : "",
+      diasVencido: Math.max(0, Math.round(Number(val("cem-dias")) || 0)),
+      diasRetorno: Math.max(0, Math.round(Number(val("cem-retorno")) || 0)),
+      assunto: val("cem-assunto").trim(),
+      texto: val("cem-corpo").trim(),
+      tom: tomId || "",
+      anteriores: tomId ? (this.ia.historico[tomId] || []) : []
+    };
+    this.ia.carregando = true;
+    this.ia.erro = "";
+    this.iaPintar();
+    try {
+      const auth = window.MouraAuth;
+      const token = auth && typeof auth.getIntegraToken === "function" ? await auth.getIntegraToken() : "";
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers["X-Integra-Token"] = token;
+      const res = await fetch("/api/central-email-ia", { method: "POST", headers, body: JSON.stringify(pedido) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+      const novas = (body.sugestoes || []).filter((s) => s && s.texto);
+      if (pedido.modo === "tons") {
+        this.ia.sugestoes = novas;
+        this.ia.tom = "";
+        this.ia.historico = {};
+      } else {
+        this.ia.sugestoes = this.ia.sugestoes.concat(novas.map((s) => Object.assign({}, s, { tom: s.tom || tomId })));
+        this.ia.tom = tomId;
+      }
+      novas.forEach((s) => {
+        const id = this.iaTomId(s.tom || tomId);
+        (this.ia.historico[id] = this.ia.historico[id] || []).push(s.texto);
+      });
+    } catch (e) {
+      this.ia.erro = "Não consegui gerar as sugestões: " + ((e && e.message) || e);
+    }
+    this.ia.carregando = false;
+    this.iaPintar();
+  },
+
+  iaNova(i) {
+    const s = this.ia.sugestoes[i];
+    if (!s) return;
+    this.iaPedir("nova", this.iaTomId(s.tom));
+  },
+
+  iaVoltar() {
+    // Volta a mostrar uma sugestão de cada tom (a mais recente de cada um).
+    const ultima = {};
+    this.ia.sugestoes.forEach((s) => { ultima[this.iaTomId(s.tom)] = s; });
+    this.ia.sugestoes = Object.values(ultima);
+    this.ia.tom = "";
+    this.iaPintar();
+  },
+
+  iaUsar(i) {
+    const s = this.ia.sugestoes[i];
+    if (!s) return;
+    const assunto = document.getElementById("cem-assunto");
+    const corpo = document.getElementById("cem-corpo");
+    if (assunto && s.assunto) assunto.value = s.assunto;
+    if (corpo) corpo.value = s.texto;
+    this.atualizarPreview();
+    if (corpo) corpo.focus();
+  },
+
   inserirRetorno() {
     const n = document.getElementById("cem-retorno");
     const dias = Math.max(0, Math.round(Number(n && n.value) || 0));
@@ -941,9 +1075,11 @@ const CentralEmailApp = {
     }
     const anterior = id ? this.achar(id) : null;
     const quem = this.eu();
+    const retornoN = Math.round(Number((document.getElementById("cem-retorno") || {}).value));
     const item = {
       id: id || ("cem_" + Date.now().toString(36)),
       nome, assunto, corpo, tag, diasVencido: dias,
+      diasRetorno: Number.isFinite(retornoN) ? Math.min(90, Math.max(0, retornoN)) : 5,
       destino,
       para: destino === "fixo" ? this.listaEmails(paraTxt).join(", ") : "",
       cc: this.listaEmails(ccTxt).join(", "),

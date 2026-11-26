@@ -12486,6 +12486,19 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .cem-aprova-linha { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
 .cem-retorno input { width: 100%; }
 .cem-legenda { margin: 8px 0; color: #64748b; font-size: 0.75rem; }
+.cem-retorno-nota { margin: 4px 0 6px; color: #64748b; font-size: 0.7rem; line-height: 1.35; }
+.cem-ia { border: 1px solid #c9e8d6; background: #f4fbf7; border-radius: 10px; padding: 10px 12px; margin: 0 0 10px; }
+.cem-ia-topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cem-ia-topo .cem-rotulo { flex: 1 1 auto; }
+.cem-ia-topo .btn, .cem-ia-acoes .btn { height: 34px; display: inline-flex; align-items: center; gap: 6px; font-size: 0.78rem; white-space: nowrap; }
+.cem-ia-erro { margin: 8px 0 0; color: #b91c1c; font-size: 0.78rem; font-weight: 600; }
+.cem-ia-lista { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; max-height: 420px; overflow: auto; }
+.cem-ia-lista.is-um { grid-template-columns: 1fr; }
+.cem-ia-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.cem-ia-tom { align-self: flex-start; font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #105436; background: #e7f6ee; border-radius: 999px; padding: 2px 10px; }
+.cem-ia-assunto { font-size: 0.78rem; color: #0f172a; }
+.cem-ia-texto { font-size: 0.8rem; color: #1c2e24; white-space: pre-wrap; line-height: 1.45; }
+.cem-ia-acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
 .cem-previa { margin: 0; white-space: pre-wrap; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; color: #1e293b; font-family: inherit; font-size: 0.85rem; line-height: 1.45; }
 .cem-aviso { margin: 0 0 10px; color: #b45309; font-size: 0.8rem; }
 .cem-env { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.72rem; font-weight: 700; background: #f1f5f9; color: #475569; white-space: nowrap; }
