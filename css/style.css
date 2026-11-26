@@ -7453,6 +7453,25 @@ body.fc-nome-dragging * {
 .cessao-pop-pessoa label, label.cessao-pop-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.68rem; font-weight: 700; color: #64748b; text-transform: uppercase; min-width: 0; }
 label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100%; min-width: 0; box-sizing: border-box; }
 .cessao-pop-nota { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; font-size: 0.82rem; }
+/* Conferência das condições da compra com o contrato em PDF */
+.cessao-conf { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid #e2e8f0; background: #f8fafc; color: #1c2e24; font-size: 0.8rem; }
+.cessao-conf.is-wait { display: flex; align-items: center; gap: 8px; color: #475569; }
+.cessao-conf.is-erro { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.cessao-conf.is-alerta { background: #fff7ed; border-color: #fed7aa; }
+.cessao-conf.is-ok { background: #f0fdf4; border-color: #86efac; }
+.cessao-conf p { margin: 6px 0; }
+.cessao-conf-cab { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.cessao-conf-cab a { color: #105436; font-weight: 700; }
+.cessao-conf-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; white-space: nowrap; cursor: pointer; flex-shrink: 0; }
+.cessao-conf-tab { width: 100%; border-collapse: collapse; font-size: 0.75rem; background: #fff; }
+.cessao-conf-tab th { background: #1b8253; color: #fff; text-align: left; padding: 4px 8px; }
+.cessao-conf-tab td { padding: 4px 8px; border-bottom: 1px solid #e8eee9; }
+.cessao-conf-tab .is-right { text-align: right; }
+.cessao-conf-tab .is-center { text-align: center; }
+.cessao-conf-tab tr.is-dif td { background: #fff1f2; }
+.cessao-conf-ok { color: #166534; font-weight: 700; }
+.cessao-conf-dif { color: #b91c1c; font-weight: 700; }
+.cessao-conf-marca { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-weight: 700; cursor: pointer; }
 .cessao-pop-nota.is-ok { background: #f0fdf4; border-color: #86efac; color: #166534; }
 .cessao-pop-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
 .cessao-ces-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin: 0; background: #fff; }
