@@ -1088,7 +1088,7 @@ const CessaoPopup = {
         return "Preencha quantidade, valor e vencimento de cada condição.";
       }
       if (!Number.isFinite(Number(st.juros)) || Number(st.juros) < 0) return "Informe os juros do contrato. Use 0 quando não houver.";
-      return "";
+      return this.pendenciaContrato();
     }
     if (tab === "cessionario") {
       if (!(st.cessionarios || []).length) return "Escolha o cessionário.";
@@ -1158,8 +1158,10 @@ const CessaoPopup = {
       taxaTitulo: "",
       taxaStatus: "",
       taxaMsg: "",
-      cesAberto: -1
+      cesAberto: -1,
+      contratoPdf: null
     });
+    this._contratoGen = (this._contratoGen || 0) + 1;
     this.montar();
     this.pintar();
     try {
@@ -1172,6 +1174,215 @@ const CessaoPopup = {
     }
     CessaoPopupState.loading = false;
     this.pintar();
+    this.buscarContratoPdf();
+  },
+
+  /* ---------- Conferência com o contrato em PDF ----------
+     As condições da compra vêm da API do Sienge. Antes de seguir, o Integra lê o contrato em PDF e confere se
+     quantidade, valor e 1º vencimento de cada condição, juros e indexador aparecem no texto do contrato.
+     O PDF vem do que foi enviado pelo Assistente de Anexos (cópia do Integra ou anexo do contrato no Sienge).
+     Se não achar, a pessoa baixa o contrato no Sienge e envia aqui. */
+  CONTRATOS_ENVIADOS: {}, // contrato -> { nome, texto, url } enviados nesta sessão (não precisa enviar de novo)
+
+  async buscarContratoPdf() {
+    const st = CessaoPopupState;
+    const gen = this._contratoGen;
+    const cid = String((st.contract && st.contract.id) || "");
+    const daSessao = cid && this.CONTRATOS_ENVIADOS[cid];
+    if (daSessao) {
+      st.contratoPdf = Object.assign({ status: "ok", origem: "upload" }, daSessao);
+      this.pintarConferencia();
+      return;
+    }
+    st.contratoPdf = { status: "buscando" };
+    this.pintarConferencia();
+    let arquivo = null;
+    try {
+      if (typeof window.anexosFetchTermoBlobForContract === "function") {
+        arquivo = await window.anexosFetchTermoBlobForContract(Object.assign({}, st.contract, {
+          _operationType: "Venda",
+          _unitName: (st.unit && st.unit.name) || ""
+        }));
+      }
+    } catch (e) {
+      console.warn("[Cessão] contrato em PDF nos anexos", e);
+    }
+    if (gen !== this._contratoGen) return;
+    if (!arquivo) {
+      st.contratoPdf = { status: "faltando" };
+      this.pintarConferencia();
+      return;
+    }
+    await this.lerContratoPdf(arquivo, "anexos", gen);
+  },
+
+  async lerContratoPdf(arquivo, origem, gen) {
+    const st = CessaoPopupState;
+    st.contratoPdf = { status: "lendo", origem, nome: arquivo.name || "contrato.pdf" };
+    this.pintarConferencia();
+    let texto = "";
+    try {
+      texto = await this.textoDoPdf(arquivo);
+    } catch (e) {
+      console.warn("[Cessão] leitura do PDF do contrato", e);
+      if (gen !== this._contratoGen) return;
+      st.contratoPdf = { status: origem === "upload" ? "erro" : "faltando", erro: "Não consegui ler este PDF." };
+      this.pintarConferencia();
+      return;
+    }
+    if (gen !== this._contratoGen) return;
+    const url = URL.createObjectURL(arquivo);
+    st.contratoPdf = { status: "ok", origem, nome: arquivo.name || "contrato.pdf", texto, url, semTexto: texto.replace(/\s+/g, "").length < 200, conferido: false };
+    if (origem === "upload") {
+      const cid = String((st.contract && st.contract.id) || "");
+      if (cid) this.CONTRATOS_ENVIADOS[cid] = { nome: st.contratoPdf.nome, texto, url, semTexto: st.contratoPdf.semTexto };
+    }
+    this.pintarConferencia();
+  },
+
+  async textoDoPdf(arquivo) {
+    const pdfjsLib = window["pdfjs-dist/build/pdf"];
+    if (!pdfjsLib) throw new Error("leitor de PDF indisponível");
+    const buf = await arquivo.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    try {
+      let texto = "";
+      const total = Math.min(pdf.numPages || 1, 40);
+      for (let p = 1; p <= total; p++) {
+        const page = await pdf.getPage(p);
+        const content = await page.getTextContent();
+        texto += (content.items || []).map((it) => it.str || "").join(" ") + "\n";
+      }
+      return texto;
+    } finally {
+      try { pdf.destroy(); } catch (e) {}
+    }
+  },
+
+  enviarContratoPdf(input) {
+    const arquivo = input && input.files && input.files[0];
+    if (!arquivo) return;
+    if (!/pdf$/i.test(arquivo.type || "") && !/\.pdf$/i.test(arquivo.name || "")) {
+      alert("Envie o contrato em PDF.");
+      return;
+    }
+    this.lerContratoPdf(arquivo, "upload", this._contratoGen);
+  },
+
+  marcarContratoConferido(on) {
+    const c = CessaoPopupState.contratoPdf;
+    if (!c) return;
+    c.conferido = !!on;
+    this.pintarConferencia();
+  },
+
+  /** Texto para comparar: sem acento, minúsculo, espaços simples (o PDF às vezes quebra "R$ 399,00" em pedaços). */
+  textoComparavel(t) {
+    return " " + String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ /g, " ").replace(/\s+/g, " ").toLowerCase() + " ";
+  },
+
+  /** O número aparece no texto sem fazer parte de outro número (180 não casa com 1.180 nem 1800). */
+  temNoTexto(texto, alvo) {
+    const a = String(alvo || "").trim().toLowerCase();
+    if (!a) return false;
+    const esc = a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp("(^|[^\\d.,])" + esc + "(?![\\d]|[.,]\\d)").test(texto);
+  },
+
+  /** Itens da tela conferidos no PDF: { rotulo, tela, ok } (ok null = não dá para conferir). */
+  conferenciaContrato() {
+    const st = CessaoPopupState;
+    const c = st.contratoPdf;
+    if (!c || c.status !== "ok" || c.semTexto) return [];
+    const t = this.textoComparavel(c.texto);
+    const fmt2 = (n) => (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const itens = [];
+    (st.condicoes || []).forEach((row, i) => {
+      const nome = (row.tipo || "Condição") + ((st.condicoes || []).length > 1 ? " (" + (i + 1) + ")" : "");
+      const qtde = Number(row.qtde) || 0;
+      const valor = this.parseValor(row.valor);
+      if (qtde > 0) itens.push({ rotulo: nome + " · quantidade de parcelas", tela: String(qtde), ok: this.temNoTexto(t, String(qtde)) });
+      if (valor > 0) itens.push({ rotulo: nome + " · valor da parcela", tela: "R$ " + fmt2(valor), ok: this.temNoTexto(t, fmt2(valor)) });
+      if (qtde > 0 && valor > 0) itens.push({ rotulo: nome + " · total", tela: "R$ " + fmt2(qtde * valor), ok: this.temNoTexto(t, fmt2(qtde * valor)) });
+      const m = String(row.vencimento || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) {
+        const br = m[3] + "/" + m[2] + "/" + m[1];
+        const extenso = Number(m[3]) + " de " + MESES[Number(m[2]) - 1] + " de " + m[1];
+        itens.push({ rotulo: nome + " · 1º vencimento", tela: br, ok: t.indexOf(br) >= 0 || t.indexOf(extenso) >= 0 });
+      }
+    });
+    const juros = Number(st.juros) || 0;
+    if (juros > 0) {
+      const quatro = this.fmtJuros(juros);
+      const curto = juros.toLocaleString("pt-BR", { maximumFractionDigits: 4 });
+      itens.push({ rotulo: "Juros ao mês", tela: quatro + "%", ok: this.temNoTexto(t, quatro) || this.temNoTexto(t, curto) || this.temNoTexto(t, curto.replace(",", ".")) });
+    }
+    const idx = String(st.indexador || "").replace(/^\s*\d+\s*-\s*/, "").trim();
+    if (idx && !/^real$/i.test(idx)) {
+      const so = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      itens.push({ rotulo: "Indexador", tela: idx, ok: so(t).indexOf(so(this.textoComparavel(idx))) >= 0 });
+    }
+    return itens;
+  },
+
+  pendenciaContrato() {
+    const c = CessaoPopupState.contratoPdf;
+    if (!c || c.status === "buscando") return "Procurando o contrato em PDF nos anexos para conferir as condições…";
+    if (c.status === "lendo") return "Lendo o contrato em PDF…";
+    if (c.status !== "ok") return "Não achei o contrato em PDF nos anexos. Baixe o contrato no Sienge e envie o PDF nesta tela para conferir as condições.";
+    if (c.conferido) return "";
+    if (c.semTexto) return "O PDF do contrato é uma imagem, sem texto para comparar. Confira as condições com o PDF e marque \"Conferi com o contrato\".";
+    const dif = this.conferenciaContrato().filter((x) => x.ok === false);
+    if (dif.length) return dif.length + " item(ns) não bate(m) com o contrato em PDF. Corrija as condições ou, se conferiu e está certo, marque \"Conferi com o contrato\".";
+    return "";
+  },
+
+  conferenciaHtml() {
+    const c = CessaoPopupState.contratoPdf;
+    const envio = (rotulo) => `<label class="btn btn-outline cessao-conf-btn"><i data-lucide="upload" style="width:16px;height:16px;"></i> ${rotulo}
+        <input type="file" accept="application/pdf,.pdf" style="display:none" onchange="CessaoPopup.enviarContratoPdf(this)"></label>`;
+    if (!c || c.status === "buscando" || c.status === "lendo") {
+      return `<div class="cessao-conf is-wait"><span class="btn-spin"></span> ${!c || c.status === "buscando" ? "Procurando o contrato em PDF nos anexos do Assistente…" : "Lendo o contrato em PDF…"}</div>`;
+    }
+    if (c.status !== "ok") {
+      return `<div class="cessao-conf is-erro">
+          <div><strong>Contrato em PDF não encontrado.</strong> ${c.erro ? this.esc(c.erro) + " " : ""}Não há contrato deste título enviado pelo Assistente de Anexos.
+          Baixe o contrato no Sienge e envie aqui: as condições abaixo só seguem depois de conferidas com ele.</div>
+          ${envio("Enviar contrato (PDF)")}
+        </div>`;
+    }
+    const itens = this.conferenciaContrato();
+    const dif = itens.filter((x) => x.ok === false).length;
+    const origem = c.origem === "upload" ? "enviado nesta tela" : "dos anexos do contrato";
+    const cab = `<div class="cessao-conf-cab">
+        <div><strong>Conferência com o contrato em PDF</strong> · <a href="${this.esc(c.url || "#")}" target="_blank" rel="noopener">${this.esc(c.nome || "contrato.pdf")}</a> (${origem})</div>
+        ${envio("Trocar PDF")}
+      </div>`;
+    const marcar = `<label class="cessao-conf-marca"><input type="checkbox" ${c.conferido ? "checked" : ""} onchange="CessaoPopup.marcarContratoConferido(this.checked)"> Conferi com o contrato</label>`;
+    if (c.semTexto) {
+      return `<div class="cessao-conf ${c.conferido ? "is-ok" : "is-alerta"}">${cab}
+          <p>Este PDF é uma imagem (contrato escaneado): não há texto para comparar automaticamente. Abra o PDF, confira as condições abaixo e marque.</p>
+          ${marcar}</div>`;
+    }
+    const linhas = itens.map((x) => `<tr class="${x.ok ? "" : "is-dif"}"><td>${this.esc(x.rotulo)}</td><td class="is-right">${this.esc(x.tela)}</td>
+        <td class="is-center">${x.ok ? `<span class="cessao-conf-ok">Confere</span>` : `<span class="cessao-conf-dif">Não achei no contrato</span>`}</td></tr>`).join("");
+    return `<div class="cessao-conf ${dif && !c.conferido ? "is-alerta" : "is-ok"}">${cab}
+        <table class="cessao-conf-tab"><thead><tr><th>Item da tela (API do Sienge)</th><th class="is-right">Valor</th><th class="is-center">No contrato</th></tr></thead><tbody>${linhas}</tbody></table>
+        ${dif ? marcar : ""}
+      </div>`;
+  },
+
+  /** Repinta só a caixa da conferência e o aviso (sem refazer a aba inteira enquanto a pessoa digita). */
+  pintarConferencia() {
+    const st = CessaoPopupState;
+    if (st.loading) return;
+    const box = document.getElementById("cessao-conf-box");
+    if (box && st.tab === "condicoes") {
+      box.innerHTML = this.conferenciaHtml();
+      if (window.lucide) lucide.createIcons();
+    }
+    this.atualizarAviso();
   },
 
   montar() {
@@ -1910,6 +2121,7 @@ const CessaoPopup = {
       </tr>`;
     }).join("");
     return `${nota}
+      <div id="cessao-conf-box">${this.conferenciaHtml()}</div>
       <div class="cessao-cond-box">
         <div class="cessao-cond-head">CONDIÇÕES DE PAGAMENTO DA COMPRA</div>
         <div class="cessao-cond-scroll">
@@ -2154,7 +2366,7 @@ const CessaoPopup = {
       const el = document.getElementById("cessao-cond-total-" + id);
       if (el) el.textContent = this.money((Number(row.qtde) || 0) * this.parseValor(row.valor));
     }
-    this.atualizarAviso();
+    this.pintarConferencia();
   },
 
   addCond() {

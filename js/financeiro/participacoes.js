@@ -2185,9 +2185,10 @@ const ParticipacoesApp = {
 
     const views = [
       { id: "matriz", label: "Matriz", icon: "table" },
-      { id: "credor", label: "Por credor", icon: "building-2" }
+      { id: "credor", label: "Por credor", icon: "building-2" },
+      { id: "categoria", label: "Por categoria", icon: "tags" }
     ];
-    if (this.groupBy !== "matriz" && this.groupBy !== "credor") this.groupBy = "matriz";
+    if (this.groupBy !== "matriz" && this.groupBy !== "credor" && this.groupBy !== "categoria") this.groupBy = "matriz";
     if (!this.catMl) this.carregarCatMl();
     this._gruposVisiveis = this.groupBy === "credor" ? groups : [];
     const isMatriz = this.groupBy === "matriz";
@@ -2255,7 +2256,7 @@ const ParticipacoesApp = {
           <div class="ml-tabs part-tabs" role="tablist">
             ${views.map((v) => `
               <button type="button" role="tab" aria-selected="${this.groupBy === v.id}" class="ml-tab ${this.groupBy === v.id ? "is-active" : ""}"
-                onclick="ParticipacoesApp.groupBy='${v.id}';ParticipacoesApp.detail=null;ParticipacoesApp.render()"><i data-lucide="${v.icon}"></i> ${v.label}</button>
+                onclick="ParticipacoesApp.groupBy='${v.id}';ParticipacoesApp.detail=null;ParticipacoesApp.catDetalhe=null;ParticipacoesApp.render()"><i data-lucide="${v.icon}"></i> ${v.label}</button>
             `).join("")}
           </div>
           ${!ocupado && !this.files.length ? `<div class="part-empty">Nenhum PDF ainda. Use <strong>Enviar PDFs</strong>.</div>` : ""}
@@ -2308,11 +2309,14 @@ const ParticipacoesApp = {
               }).join("")}
             </table>
           </div>` : ""}
-        ${!ocupado && temEmpresa && this.files.length && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
+        ${!ocupado && temEmpresa && this.groupBy === "categoria" && this.files.length ? this.categoriaHtml() : ""}
+        ${!ocupado && temEmpresa && this.files.length && this.groupBy !== "categoria" && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
         ${this.detailModalHtml()}
+        ${this.groupBy === "categoria" ? this.catDetalheHtml() : ""}
       </div>
     `;
     this.paintCompany();
+    if (this.groupBy === "categoria") this.pintarFiltrosCategoria();
     if (window.lucide) lucide.createIcons();
     this.restoreScroll(scroll);
   },
@@ -2352,7 +2356,7 @@ const ParticipacoesApp = {
       console.warn("[Prestação Ellenco] categoria Moura Leite", e);
     }
     this._catMlCarregando = false;
-    if (this.groupBy === "credor") this.render();
+    if (this.groupBy === "credor" || this.groupBy === "categoria") this.render();
   },
 
   /** Código do plano no formato 2.01.01. O Sienge devolve sem ponto (20101): 1 dígito e depois pares. */
@@ -2449,6 +2453,270 @@ const ParticipacoesApp = {
     else delete this.catMl[credorKey];
     try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
     return true;
+  },
+
+  /* ---------- Aba "Por categoria" ----------
+     Filtra os lançamentos pela Categoria Moura Leite do credor (várias de uma vez), por credor e por empresa (SPE).
+     Linhas: o credor e, embaixo dele, uma linha por SPE onde o gasto foi feito. Colunas: um mês cada e o total.
+     Clique no credor: meses x SPEs. Clique na SPE: lançamentos só daquela SPE. Clique na célula: só aquela célula. */
+  catFiltro: { cats: [], credores: [], empresas: [] },
+  catFiltroAberto: "",
+  catFiltroBusca: { cats: "", credores: "", empresas: "" },
+  catDetalhe: null, // { tipo: "credor" | "spe" | "celula", k, emp, m }
+  CAT_SEM: "__sem",
+
+  /** Lançamentos com mês válido, já com a chave do credor e a categoria Moura Leite. */
+  catLinhasBase() {
+    return this.filtered().map((r) => {
+      const m = this.expensePeriodKey(r);
+      if (!m || !/^\d{4}-\d{2}$/.test(m)) return null;
+      const k = this.credorGroupKey(r.credor) || r.credor || "(sem credor)";
+      const cat = this.catMlDe(k);
+      return { r, m, k, emp: String(r.companyId || ""), catId: cat ? cat.id : this.CAT_SEM, catRot: cat ? this.rotuloCatMl(cat) : "" };
+    }).filter(Boolean);
+  },
+
+  catPassa(x, ignorar) {
+    const f = this.catFiltro;
+    if (ignorar !== "cats" && f.cats.length && f.cats.indexOf(x.catId) < 0) return false;
+    if (ignorar !== "credores" && f.credores.length && f.credores.indexOf(x.k) < 0) return false;
+    if (ignorar !== "empresas" && f.empresas.length && f.empresas.indexOf(x.emp) < 0) return false;
+    return true;
+  },
+
+  catDados() {
+    const base = this.catLinhasBase();
+    const linhas = base.filter((x) => this.catPassa(x));
+    const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
+    const mapa = {};
+    linhas.forEach((x) => {
+      const v = Number(x.r.valor) || 0;
+      if (!mapa[x.k]) mapa[x.k] = { k: x.k, nomes: [], catRot: x.catRot, cells: {}, total: 0, spes: {} };
+      const c = mapa[x.k];
+      c.nomes.push(x.r.credor);
+      c.cells[x.m] = (c.cells[x.m] || 0) + v;
+      c.total += v;
+      if (!c.spes[x.emp]) c.spes[x.emp] = { emp: x.emp, cells: {}, total: 0 };
+      c.spes[x.emp].cells[x.m] = (c.spes[x.emp].cells[x.m] || 0) + v;
+      c.spes[x.emp].total += v;
+    });
+    const credores = Object.values(mapa).map((c) => Object.assign(c, {
+      credor: this.pickCredorLabel(c.nomes) || c.k,
+      spes: Object.values(c.spes).sort((a, b) => b.total - a.total)
+    })).sort((a, b) => b.total - a.total || a.credor.localeCompare(b.credor, "pt-BR"));
+    const totMes = {};
+    meses.forEach((m) => { totMes[m] = credores.reduce((s, c) => s + (c.cells[m] || 0), 0); });
+    return { base, linhas, meses, credores, totMes, total: credores.reduce((s, c) => s + c.total, 0) };
+  },
+
+  mesCurto(ym) {
+    const p = String(this.periodLabel(ym, ym)).split(" ");
+    return p.length >= 3 ? p[0].slice(0, 3) + "/" + p[2] : ym;
+  },
+
+  rotuloEmpresa(id) {
+    return String(id || "—") + " - " + String(this.companyLabel(id) || "").toUpperCase();
+  },
+
+  /** Itens de cada filtro: os que existem nos lançamentos que passam nos outros dois filtros. */
+  catItensFiltro(qual, base) {
+    const vistos = {};
+    base.filter((x) => this.catPassa(x, qual)).forEach((x) => {
+      if (qual === "cats") {
+        if (!vistos[x.catId]) vistos[x.catId] = { id: x.catId, label: x.catId === this.CAT_SEM ? "(Sem categoria)" : x.catRot, order: x.catId === this.CAT_SEM ? 0 : 1 };
+      } else if (qual === "credores") {
+        if (!vistos[x.k]) vistos[x.k] = { id: x.k, nomes: [], total: 0 };
+        vistos[x.k].nomes.push(x.r.credor);
+        vistos[x.k].total += Number(x.r.valor) || 0;
+      } else if (!vistos[x.emp]) {
+        vistos[x.emp] = { id: x.emp, label: this.rotuloEmpresa(x.emp) };
+      }
+    });
+    let itens = Object.values(vistos);
+    if (qual === "cats") itens.sort((a, b) => a.order - b.order || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
+    if (qual === "credores") itens = itens.sort((a, b) => b.total - a.total).map((c) => ({ id: c.id, label: this.pickCredorLabel(c.nomes) || c.id }));
+    // Mantém marcado o que já está no filtro, mesmo que não apareça mais com os outros filtros.
+    (this.catFiltro[qual] || []).forEach((id) => {
+      if (!itens.some((i) => i.id === id)) itens.push({ id, label: qual === "empresas" ? this.rotuloEmpresa(id) : (id === this.CAT_SEM ? "(Sem categoria)" : id) });
+    });
+    return itens;
+  },
+
+  pintarFiltrosCategoria() {
+    if (!window.MlEmpresaFilter) return;
+    const base = this.catLinhasBase();
+    const conf = [
+      { qual: "cats", id: "part-cat-f-cats", label: "Categoria Moura Leite", nouns: { singular: "categoria", plural: "categorias", none: "Nenhuma categoria", noMatch: "Nenhuma categoria com esse nome." } },
+      { qual: "credores", id: "part-cat-f-credores", label: "Credor", nouns: { singular: "credor", plural: "credores", none: "Nenhum credor", noMatch: "Nenhum credor com esse nome." } },
+      { qual: "empresas", id: "part-cat-f-empresas", label: "Empresa (SPE)", nouns: { singular: "empresa", plural: "empresas" } }
+    ];
+    conf.forEach((c) => {
+      const box = document.getElementById(c.id + "-box");
+      if (!box) return;
+      const itens = this.catItensFiltro(c.qual, base);
+      const opts = {
+        id: c.id, label: c.label, items: itens, keepOrder: true, selectedIds: this.catFiltro[c.qual],
+        open: this.catFiltroAberto === c.qual, query: this.catFiltroBusca[c.qual], emptyMeansAll: true, nouns: c.nouns
+      };
+      box.innerHTML = MlEmpresaFilter.html(opts);
+      MlEmpresaFilter.bind(c.id, {
+        toggleOpen: () => { this.catFiltroAberto = this.catFiltroAberto === c.qual ? "" : c.qual; this.render(); },
+        close: () => { if (this.catFiltroAberto === c.qual) { this.catFiltroAberto = ""; this.render(); } },
+        setQuery: (q) => {
+          this.catFiltroBusca[c.qual] = q || "";
+          const list = document.getElementById(c.id + "-list");
+          if (list) list.innerHTML = MlEmpresaFilter.listHtml(Object.assign({}, opts, { query: this.catFiltroBusca[c.qual], selectedIds: this.catFiltro[c.qual] }));
+        },
+        toggleId: (id, on) => {
+          const atual = new Set(this.catFiltro[c.qual]);
+          if (on) atual.add(String(id)); else atual.delete(String(id));
+          this.catFiltro[c.qual] = Array.from(atual);
+          this.catFiltroAberto = c.qual;
+          this.render();
+        },
+        selectAll: () => { this.catFiltro[c.qual] = itens.map((i) => String(i.id)); this.catFiltroAberto = c.qual; this.render(); },
+        selectNone: () => { this.catFiltro[c.qual] = []; this.catFiltroAberto = c.qual; this.render(); }
+      });
+    });
+    if (window.lucide) lucide.createIcons();
+  },
+
+  limparFiltrosCategoria() {
+    this.catFiltro = { cats: [], credores: [], empresas: [] };
+    this.catFiltroBusca = { cats: "", credores: "", empresas: "" };
+    this.catFiltroAberto = "";
+    this.render();
+  },
+
+  categoriaHtml() {
+    const d = this.catDados();
+    this._catDados = d;
+    const filtrado = this.catFiltro.cats.length || this.catFiltro.credores.length || this.catFiltro.empresas.length;
+    const cel = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
+    const larg = 320 + d.meses.length * 112 + 130;
+    const corpo = d.credores.map((c, ci) => {
+      const linhaCredor = `<tr class="part-cat-credor">
+          <td class="part-cat-fixa"><button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+            <small>${this.esc(c.catRot || "Sem categoria")}</small></td>
+          ${d.meses.map((m) => `<td class="is-right">${cel(c.cells[m], `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '', '${m}')`)}</td>`).join("")}
+          <td class="is-right part-cat-tot">${cel(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
+        </tr>`;
+      const linhasSpe = c.spes.map((s) => `<tr class="part-cat-spe">
+          <td class="part-cat-fixa"><button type="button" class="part-cat-nome-spe" title="Ver os lançamentos de ${this.esc(c.credor)} nesta SPE" onclick="ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(s.emp)}')">${this.esc(this.rotuloEmpresa(s.emp))}</button></td>
+          ${d.meses.map((m) => `<td class="is-right">${cel(s.cells[m], `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(s.emp)}', '${m}')`)}</td>`).join("")}
+          <td class="is-right part-cat-tot">${cel(s.total, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(s.emp)}')`)}</td>
+        </tr>`).join("");
+      return linhaCredor + linhasSpe;
+    }).join("");
+    return `
+      <style>
+        .part-cat-filtros{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 10px;}
+        .part-cat-filtros > div{min-width:240px;}
+        .part-cat-filtros .btn{height:40px;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;}
+        .part-cat-info{font-size:.75rem;color:#64748b;margin:0 0 8px;}
+        .part-cat-tabela{table-layout:fixed;}
+        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;}
+        .part-cat-tabela .part-cat-fixa{position:sticky;left:0;z-index:1;background:inherit;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-tabela thead .part-cat-fixa{z-index:3;background:#1b8253;}
+        .part-cat-tabela tbody tr.part-cat-credor td{background:#e7f6ee;color:#105436;font-weight:700;border-top:2px solid #c9e8d6;}
+        .part-cat-tabela tbody tr.part-cat-spe td{background:#fff;}
+        .part-cat-tabela tbody tr.part-cat-spe:hover td{background:#f7faf8;}
+        .part-cat-tabela tfoot td{position:sticky;bottom:0;background:#105436;color:#fff;font-weight:700;padding:6px;}
+        .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .part-cat-nome{font-weight:800;display:block;}
+        .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
+        .part-cat-credor small{display:block;font-size:.62rem;font-weight:600;color:#3f7a5a;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-nome-spe{padding-left:18px;color:#334155;}
+        .part-cat-val{font-variant-numeric:tabular-nums;}
+        .part-cat-tot{font-weight:800;}
+        .part-cat-vazio{color:#cbd5e1;}
+        .part-cat-modal table td,.part-cat-modal table th{white-space:nowrap;}
+        .part-cat-modal td.part-cat-quebra{white-space:normal;}
+      </style>
+      <div class="part-cat-filtros">
+        <div id="part-cat-f-cats-box"></div>
+        <div id="part-cat-f-credores-box"></div>
+        <div id="part-cat-f-empresas-box"></div>
+        ${filtrado ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltrosCategoria()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtros</button>` : ""}
+      </div>
+      <p class="part-cat-info">${d.credores.length} credor(es) · ${d.linhas.length} lançamento(s) · <strong>${this.fmt(d.total)}</strong>. Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela e no valor para ver só aquela célula.</p>
+      ${d.credores.length ? `
+      <div class="cc-scroll" id="part-cat-scroll" style="max-height:calc(100vh - 330px);">
+        <table class="cc-table part-cat-tabela" style="width:max(100%, ${larg}px);">
+          <colgroup><col style="width:320px">${d.meses.map(() => `<col style="width:112px">`).join("")}<col style="width:130px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor / SPE</th>${d.meses.map((m) => `<th class="is-right" title="${this.esc(this.periodLabel(m, m))}">${this.esc(this.mesCurto(m))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+          <tbody>${corpo}</tbody>
+          <tfoot><tr><td class="part-cat-fixa">Total</td>${d.meses.map((m) => `<td class="is-right">${d.totMes[m] ? this.fmt(d.totMes[m]) : "—"}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td></tr></tfoot>
+        </table>
+      </div>` : `<div class="part-empty">Nenhum lançamento com esses filtros.${!this.catMl ? " Carregando as categorias…" : ""}</div>`}
+    `;
+  },
+
+  abrirCatDetalhe(tipo, ci, emp, m) {
+    const c = this._catDados && this._catDados.credores[ci];
+    if (!c) return;
+    this.catDetalhe = { tipo, k: c.k, credor: c.credor, emp: emp ? String(emp) : "", m: m || "" };
+    this.render();
+  },
+
+  fecharCatDetalhe() {
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  catDetalheHtml() {
+    const det = this.catDetalhe;
+    if (!det) return "";
+    const d = this._catDados || this.catDados();
+    const linhas = d.linhas.filter((x) => x.k === det.k && (!det.emp || x.emp === det.emp) && (!det.m || x.m === det.m))
+      .sort((a, b) => String(a.r.iso || a.r.date).localeCompare(String(b.r.iso || b.r.date)));
+    const total = linhas.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    let sub = "";
+    let corpo = "";
+    if (det.tipo === "credor") {
+      const spes = Array.from(new Set(linhas.map((x) => x.emp))).sort((a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true }));
+      const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
+      const soma = (m, e) => linhas.filter((x) => (!m || x.m === m) && (!e || x.emp === e)).reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+      const ci = d.credores.findIndex((c) => c.k === det.k);
+      const val = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
+      sub = "Mês a mês por SPE";
+      corpo = `<div class="cc-scroll"><table class="cc-table" style="width:max(100%, ${150 + spes.length * 190 + 130}px);table-layout:fixed;">
+        <colgroup><col style="width:150px">${spes.map(() => `<col style="width:190px">`).join("")}<col style="width:130px"></colgroup>
+        <thead><tr><th>Mês</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(this.rotuloEmpresa(e))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${meses.map((m) => `<tr><td>${this.esc(this.periodLabel(m, m))}</td>${spes.map((e) => `<td class="is-right">${val(soma(m, e), `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(e)}', '${m}')`)}</td>`).join("")}<td class="is-right"><strong>${this.fmt(soma(m, ""))}</strong></td></tr>`).join("")}
+          <tr style="font-weight:800;"><td>Total</td>${spes.map((e) => `<td class="is-right">${val(soma("", e), `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`).join("")}<td class="is-right">${this.fmt(total)}</td></tr></tbody>
+      </table></div>`;
+    } else {
+      sub = [det.emp ? this.rotuloEmpresa(det.emp) : "Todas as SPEs", det.m ? this.periodLabel(det.m, det.m) : "Todos os meses"].join(" · ");
+      corpo = `<div class="cc-scroll"><table class="cc-table" style="table-layout:fixed;">
+        <colgroup><col style="width:90px"><col style="width:120px"><col style="width:220px"><col><col style="width:16%"><col style="width:120px"></colgroup>
+        <thead><tr><th>Data</th><th>Período</th><th>Empresa (SPE)</th><th>Detalhe</th><th>Categoria Ellenco</th><th class="is-right">Valor</th></tr></thead>
+        <tbody>${linhas.map((x) => `<tr>
+          <td>${this.esc(x.r.date || "")}</td>
+          <td style="text-transform:capitalize;">${this.esc(this.periodLabel(x.m, x.m))}</td>
+          <td title="${this.esc(this.rotuloEmpresa(x.emp))}">${this.esc(this.rotuloEmpresa(x.emp))}</td>
+          <td class="part-cat-quebra">${this.esc(x.r.detalhe || "—")}</td>
+          <td title="${this.esc(x.r.categoria || "")}">${this.esc(x.r.categoria || "—")}</td>
+          <td class="is-right"><strong>${this.fmt(x.r.valor)}</strong></td>
+        </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum lançamento.</td></tr>`}</tbody>
+      </table></div>`;
+    }
+    const voltar = det.tipo !== "credor"
+      ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${d.credores.findIndex((c) => c.k === det.k)})">Ver mês a mês por SPE</button>` : "";
+    return `
+      <div class="part-detail-overlay part-cat-modal" onclick="if(event.target===this)ParticipacoesApp.fecharCatDetalhe()">
+        <div class="part-detail-panel" role="dialog" aria-modal="true" style="max-width:min(1200px, 96vw);">
+          <header>
+            <div>
+              <h3>${this.esc(det.credor)}</h3>
+              <div class="part-detail-sub">${this.esc(sub)} · ${linhas.length} lançamento(s) · <strong>${this.fmt(total)}</strong></div>
+            </div>
+            <button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.fecharCatDetalhe()">Fechar</button>
+          </header>
+          <div class="part-detail-body">${corpo}</div>
+          <footer>${voltar}<button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.fecharCatDetalhe()">Fechar</button></footer>
+        </div>
+      </div>`;
   },
 
   alternarCredor(i) {

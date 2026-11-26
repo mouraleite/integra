@@ -1925,7 +1925,22 @@ const DashboardInadimplencia = (function() {
     }
   }
 
-  function filaCargaIncompleta(fila) {
+  /** Empresas que responderam na carga da fila de hoje (as que falharam ficam de fora). null se não souber. */
+  async function empresasQueResponderam() {
+    if (Array.isArray(window._filaEmpresasRespondidas) && window._filaEmpresasRespondidas.length) return window._filaEmpresasRespondidas;
+    try {
+      // Supabase: ficha do dia na sienge_defaulters_history (companyIds = empresas que responderam na carga).
+      if (!window.DadosCobranca || typeof window.DadosCobranca.lerCacheDia !== "function") return null;
+      const hoje = typeof window.localDateStr === "function" ? window.localDateStr(new Date()) : new Date().toISOString().slice(0, 10);
+      const ficha = await window.DadosCobranca.lerCacheDia(hoje);
+      const ids = ficha ? ficha.companyIds : null;
+      return Array.isArray(ids) && ids.length ? ids.map(Number) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function filaCargaIncompleta(fila, respondidas) {
     const contagem = {};
     const valor = {};
     (fila || []).forEach((b) => {
@@ -1942,7 +1957,10 @@ const DashboardInadimplencia = (function() {
     if ((contagem[1] || 0) < 50 || (valor[1] || 0) < 100000) {
       return "A fila não carregou a empresa 1. Atualize a fila e espere todas as empresas entrarem antes de gerar o sprint.";
     }
+    // Empresa que respondeu na carga sem título vencido está certa (ex.: 4 e 14 nunca têm título vencido).
+    const ok = new Set((respondidas || []).map(Number));
     const faltando = esperadas.filter((id) => {
+      if (ok.has(Number(id))) return false;
       const n = contagem[id] || 0;
       const v = valor[id] || 0;
       return n < 1 || (n < 5 && v < 1000);
@@ -1974,7 +1992,7 @@ const DashboardInadimplencia = (function() {
       alert("A fila de cobrança de hoje ainda não está carregada. Abra a Fila de cobrança e espere ela terminar de montar.");
       return;
     }
-    const avisoFila = filaCargaIncompleta(fila);
+    const avisoFila = filaCargaIncompleta(fila, await empresasQueResponderam());
     if (avisoFila) {
       alert(avisoFila);
       return;
