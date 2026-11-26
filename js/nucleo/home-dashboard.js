@@ -2081,6 +2081,8 @@ window.buildSprintOperatorSummaries = function() {
   const users = hd.getOperatorUsers();
   const all = window.rawClientList || [];
   const lines = [];
+  // Cada operadora em um bloco, separado por uma linha em branco (no Teams os blocos ficavam colados).
+  const novoBloco = (titulo) => { if (lines.length) lines.push(''); lines.push(titulo); };
   const seen = new Set();
   users.filter(u => hd.isInternoCobrancaUser(u)).forEach(u => {
     const id = String(u.id || u.email || u.sienge_user || u.name);
@@ -2094,7 +2096,7 @@ window.buildSprintOperatorSummaries = function() {
       return n > 0;
     });
     if (!groups.length) return;
-    lines.push('*' + hd.sprintOperatorLabel(u) + '*');
+    novoBloco('👤 *' + hd.sprintOperatorLabel(u) + '*');
     groups.forEach(g => lines.push('• ' + g.label));
   });
   const boUsers = users.filter(u => hd.isBackOfficeUser(u));
@@ -2130,7 +2132,7 @@ window.buildSprintOperatorSummaries = function() {
     const enviarSj = Number(counts.enviarSubjudice) || 0;
     const validarSj = Number(counts.validarSubjudice) || 0;
     if (!enviar && !validar && !enviarSj && !validarSj && !nexCumprida && !alterarSj && !finEtapaVencida) return;
-    lines.push('*' + hd.sprintOperatorLabel(u) + '*');
+    novoBloco('👤 *' + hd.sprintOperatorLabel(u) + '*');
     if (finEtapaVencida > 0) {
       lines.push('• Há ' + finEtapaVencida + (finEtapaVencida === 1 ? ' financiamento com etapa vencida' : ' financiamentos com etapa vencida'));
     }
@@ -2155,7 +2157,7 @@ window.buildSprintOperatorSummaries = function() {
   });
   // Distrato e TCD em aberto há mais de 7 dias, por quem gerou (Documentos para assinar).
   if (window.DocAssinaturaApp && typeof window.DocAssinaturaApp.linhasSprintParados === 'function') {
-    try { window.DocAssinaturaApp.linhasSprintParados().forEach(l => lines.push(l)); } catch (e) {}
+    try { const docs = window.DocAssinaturaApp.linhasSprintParados(); if (docs.length) { novoBloco(docs[0]); docs.slice(1).forEach(l => lines.push(l)); } } catch (e) {}
   }
   return lines.join('\n');
 };

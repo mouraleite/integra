@@ -2559,23 +2559,63 @@ tr.tot td{background:#fff7ed!important;font-weight:800;color:#c2410c;border-top:
 .op-card td:last-child{text-align:right;font-weight:800;color:#1e293b}
 </style>
 <script>
-    function sendToTeams() {
-        const txt = \`${teamsText.replace(/`/g, "\\`").replace(/\\/g, "\\\\")}\`;
-        navigator.clipboard.writeText(txt).then(() => {
-            alert("O texto padrão foi copiado para a área de transferência (Ctrl+C)!\\n\\nSalve o PDF na próxima tela e cole-o na janela do Teams que será aberta a seguir.");
-            window.print();
-            setTimeout(() => { window.open('${teamsLink}', '_blank'); }, 1000);
-        }).catch(e => {
-            console.error("Erro ao copiar", e);
-            window.print();
-            setTimeout(() => { window.open('${teamsLink}', '_blank'); }, 1000);
+    // Gera o PDF desta página e baixa direto na pasta de downloads do navegador (sem a janela de imprimir),
+    // copia o texto padrão e abre o chat do Teams.
+    function carregarScript(src) {
+        return new Promise(function (ok, erro) {
+            const s = document.createElement('script');
+            s.src = src; s.onload = ok; s.onerror = erro;
+            document.head.appendChild(s);
         });
+    }
+    async function baixarPdfSprint() {
+        if (!window.html2canvas) await carregarScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+        if (!window.jspdf) await carregarScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+        const barra = document.querySelector('.no-print');
+        if (barra) barra.style.display = 'none';
+        let canvas;
+        try {
+            canvas = await window.html2canvas(document.body, { scale: 2, useCORS: true, backgroundColor: '#f1f5f9', windowWidth: document.body.scrollWidth });
+        } finally {
+            if (barra) barra.style.display = '';
+        }
+        const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+        const margem = 5, largura = 210 - 2 * margem, alturaPagina = 297 - 2 * margem;
+        const pxPorMm = canvas.width / largura;
+        const fatiaPx = Math.floor(alturaPagina * pxPorMm);
+        for (let y = 0, pagina = 0; y < canvas.height; y += fatiaPx, pagina++) {
+            const h = Math.min(fatiaPx, canvas.height - y);
+            const parte = document.createElement('canvas');
+            parte.width = canvas.width; parte.height = h;
+            parte.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+            if (pagina > 0) pdf.addPage();
+            pdf.addImage(parte.toDataURL('image/jpeg', 0.92), 'JPEG', margem, margem, largura, h / pxPorMm);
+        }
+        pdf.save('Sprint Diário - ${dateStr.split("/").join("-")}.pdf');
+    }
+    async function sendToTeams() {
+        const txt = \`${teamsText.replace(/`/g, "\\`").replace(/\\/g, "\\\\")}\`;
+        try { await navigator.clipboard.writeText(txt); } catch (e) { console.error("Erro ao copiar", e); }
+        // Abre a aba do Teams já no clique (aberta depois de gerar o PDF, o navegador bloquearia).
+        const teams = window.open('about:blank', '_blank');
+        const botao = document.getElementById('btn-sprint-teams');
+        if (botao) { botao.disabled = true; botao.textContent = 'Gerando PDF...'; }
+        try {
+            await baixarPdfSprint();
+        } catch (e) {
+            console.error("Erro ao gerar o PDF", e);
+            alert("Não consegui gerar o PDF. Use Imprimir e salve como PDF.");
+        } finally {
+            if (botao) { botao.disabled = false; botao.textContent = '💬 Enviar por Teams'; }
+        }
+        if (teams) teams.location.href = '${teamsLink}';
+        else window.open('${teamsLink}', '_blank');
     }
 </script>
 </head><body>
 <div class="no-print">
     <button onclick="window.print()">🖨️ Imprimir</button>
-    <button onclick="sendToTeams()" style="background:#464eb8;">💬 Enviar por Teams</button>
+    <button id="btn-sprint-teams" onclick="sendToTeams()" style="background:#464eb8;">💬 Enviar por Teams</button>
 </div>
 <h1>Sprint Diário — Inadimplência &nbsp;·&nbsp; ${dateStr}</h1>
 <div class="kpi-strip">

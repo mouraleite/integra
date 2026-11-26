@@ -119,18 +119,32 @@ const DocAssinaturaApp = {
     return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : 0;
   },
 
-  /** Linhas do sprint: por quem gerou, "x distratos e y TCD com mais de 7 dias". */
+  /** O documento foi gerado por um operador de cobrança (inclui o back office)? Procura quem gerou no cadastro de usuários. */
+  geradoPorOperadorCobranca(r) {
+    let users = [];
+    try { users = JSON.parse(localStorage.getItem("crm_users") || "[]"); } catch (e) { users = []; }
+    if ((!users || !users.length) && window.ConfigUsersApp && Array.isArray(ConfigUsersApp.users)) users = ConfigUsersApp.users;
+    const email = String((r && r.userEmail) || "").toLowerCase();
+    const nome = this.normNome(r && r.userName);
+    const u = (users || []).find((x) => x && ((email && String(x.email || "").toLowerCase() === email)
+      || (nome && nome.length > 3 && this.normNome(x.name) === nome)));
+    if (!u) return false;
+    if (typeof window.isOperadorCobrancaProfile === "function") return window.isOperadorCobrancaProfile(u.profile_name);
+    return String(u.profile_name || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").includes("OPERADOR COBRANCA");
+  },
+
+  /** Linhas do sprint: por quem gerou, "x distratos e y TCD com mais de 7 dias". Só operadores de cobrança e back office. */
   linhasSprintParados() {
     const tudo = this.parados(null);
     const porPessoa = new Map();
-    tudo.distrato.concat(tudo.cessao).forEach((r) => {
+    tudo.distrato.concat(tudo.cessao).filter((r) => this.geradoPorOperadorCobranca(r)).forEach((r) => {
       const k = String(r.userEmail || r.userName || "—").toLowerCase();
       if (!porPessoa.has(k)) porPessoa.set(k, { nome: r.userName || "—", distrato: 0, cessao: 0 });
       porPessoa.get(k)[r.tipo === "distrato" ? "distrato" : "cessao"] += 1;
     });
     if (!porPessoa.size) return [];
     const plural = (n, s, p) => n + " " + (n === 1 ? s : p);
-    const linhas = ["*Documentos para assinar parados há mais de " + this.DIAS_PARADO + " dias*"];
+    const linhas = ["📝 *Documentos para assinar parados há mais de " + this.DIAS_PARADO + " dias*"];
     [...porPessoa.values()].sort((a, b) => (b.distrato + b.cessao) - (a.distrato + a.cessao)).forEach((p) => {
       const partes = [];
       if (p.distrato) partes.push(plural(p.distrato, "distrato", "distratos"));
