@@ -1307,8 +1307,8 @@ const FluxoCaixaDiarioApp = {
     const n = Object.keys(mud).length;
     if (!n) { alert("Nenhuma conta foi ligada ou desligada desde o último padrão gravado."); return; }
     const pergunta = "Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.";
-    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
-    if (!ok) return;
+    const segue = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!segue) return;
     const user = (window.AppState && AppState.currentUser) || {};
     const ok = await this.saveConfig({
       contas: mud,
