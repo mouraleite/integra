@@ -12518,6 +12518,7 @@ div.cem-previa { white-space: normal; }
 .apa-overlay { position: fixed; inset: 0; z-index: 10050; background: rgba(12, 41, 29, 0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .apa-preview-wrap { width: min(820px, 100%); max-height: 90vh; overflow: auto; }
 .apa-preview-nota { margin: 0 0 8px; color: #fff; font-size: 0.82rem; }
+.apa-previa-faixa { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 2147483600; max-width: min(92vw, 760px); padding: 8px 16px; border-radius: 999px; background: #105436; color: #fff; font-size: 0.8rem; font-weight: 700; box-shadow: 0 6px 18px rgba(0,0,0,.25); pointer-events: none; text-align: center; }
 .apa-card { background: #fff; border-radius: 12px; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22); border: 1px solid rgba(16, 84, 54, 0.12); }
 .apa-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; }
 .apa-card-head h3 { margin: 0; font-size: 1.02rem; color: #105436; }

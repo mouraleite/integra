@@ -1222,7 +1222,8 @@ const DocAssinaturaApp = {
     return "O documento " + doc + doCliente + doTitulo + " foi emitido em " + quando + " e não foi concluído no Sienge ainda.";
   },
 
-  abrirAlertaPendentes(lista) {
+  /* previa = true: aberto pela tela de gestão de pop-ups. Fechar só fecha, sem marcar o marco como visto. */
+  abrirAlertaPendentes(lista, previa) {
     if (!lista.length || document.getElementById("docs-pend-alerta")) return;
     const linhas = lista.map((item) => `<p class="docs-pend-item">${this.esc(this.fraseAlerta(item))}</p>`).join("");
     const overlay = document.createElement("div");
@@ -1243,7 +1244,30 @@ const DocAssinaturaApp = {
     estilo.textContent = "#docs-pend-alerta .docs-pend-item{margin:0;padding:10px 12px;border:1px solid #fde68a;border-left:4px solid #d97706;background:#fffbeb;border-radius:10px;color:#1e293b;font-size:0.9rem;line-height:1.45;}";
     overlay.appendChild(estilo);
     document.body.appendChild(overlay);
-    overlay.querySelector("#docs-pend-fechar").addEventListener("click", () => this.fecharAlertaPendentes(lista));
+    overlay.querySelector("#docs-pend-fechar").addEventListener("click", () => {
+      if (previa) overlay.remove();
+      else this.fecharAlertaPendentes(lista);
+    });
+  },
+
+  /* Prévia: documentos em aberto já carregados na memória que estão num marco de aviso (sem olhar quem recebe
+     nem o "já visto"); sem nenhum, um exemplo emitido há 5 dias úteis. Não lê nem grava nada. */
+  previaAlertaPendentes() {
+    let lista = (this.itens || []).filter((row) => row && this.emAberto(row) && this.marcoAlerta(this.diasUteisDesde(row.createdAt)))
+      .map((row) => ({ row: row, dias: this.diasUteisDesde(row.createdAt) }));
+    if (!lista.length) {
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      const isoDe = (x) => x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0");
+      for (let guarda = 0; guarda < 30; guarda++) {
+        d.setDate(d.getDate() - 1);
+        if (this.diasUteisDesde(isoDe(d)) >= 5) break;
+      }
+      const iso = isoDe(d);
+      const row = { id: "previa", tipo: "cessao", cedenteNome: "ELISABETE FALCI", cliente: "ELISABETE FALCI", titulo: "6526", createdAt: iso + "T10:00:00-03:00", status: "emitido" };
+      lista = [{ row: row, dias: this.diasUteisDesde(row.createdAt) }];
+    }
+    this.abrirAlertaPendentes(lista, true);
   },
 
   fecharAlertaPendentes(lista) {
@@ -1373,6 +1397,9 @@ const DocAssinaturaApp = {
 };
 
 window.DocAssinaturaApp = DocAssinaturaApp;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["documentos"] = function () { DocAssinaturaApp.previaAlertaPendentes(); };
 
 document.addEventListener("tabChanged", (e) => {
   if (e.detail === "relacionamento_assinaturas") DocAssinaturaApp.abrir();

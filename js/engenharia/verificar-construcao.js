@@ -2562,9 +2562,9 @@ window.scheduleVistoriaAlertSnoozeWake = function() {
     }, delay);
 };
 
-window.toggleVistoriaSnoozeMenu = function(ev) {
+window.toggleVistoriaSnoozeMenu = function(ev, idMenu) {
     if (ev) ev.stopPropagation();
-    const menu = document.getElementById("vistoria-snooze-menu");
+    const menu = document.getElementById(idMenu || "vistoria-snooze-menu");
     if (!menu) return;
     const open = menu.style.display === "flex";
     menu.style.display = open ? "none" : "flex";
@@ -2652,34 +2652,64 @@ window.ensureVistoriaValidationAlertModal = function() {
         modal = null;
     }
     if (modal) return modal;
-    modal = document.createElement("div");
-    modal.id = "modal-vistoria-validation-alerts";
+    return _vcCriarModalValidacaoVistoria({
+        idModal: "modal-vistoria-validation-alerts",
+        idLista: "vistoria-validation-alerts-list",
+        idMenu: "vistoria-snooze-menu",
+        adiar: (escolha) => `window.snoozeVistoriaValidationAlert(${escolha})`,
+        ciente: "window.markVistoriaValidationAlertsSeen()",
+        ir: "window.goToVistoriaValidationFromAlert()"
+    });
+};
+
+/** Cria o modal "Vistorias aguardando validação". O alerta real e a prévia passam ids e ações próprios. */
+function _vcCriarModalValidacaoVistoria(o) {
+    const modal = document.createElement("div");
+    modal.id = o.idModal;
     modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
+    const itemMenu = (escolha, rotulo, extra) => `<button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;${extra || ""}" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="${o.adiar(escolha)}">${rotulo}</button>`;
     modal.innerHTML = `
         <div style="background: white; width: 620px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
             <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Vistorias aguardando validação</h2>
             <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">O vistoriador respondeu o link. Há vistorias com fotos prontas para validação:</p>
-            <div id="vistoria-validation-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
+            <div id="${o.idLista}" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
                 <div style="position: relative;">
-                    <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleVistoriaSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
-                    <div id="vistoria-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(15)">15 min</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(30)">30 min</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(60)">1 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(120)">2 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(180)">3 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert('amanha')">Amanhã</button>
+                    <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleVistoriaSnoozeMenu(event, '${o.idMenu}')">Lembrar Mais Tarde ▾</button>
+                    <div id="${o.idMenu}" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
+                        ${itemMenu("15", "15 min")}
+                        ${itemMenu("30", "30 min")}
+                        ${itemMenu("60", "1 h")}
+                        ${itemMenu("120", "2 h")}
+                        ${itemMenu("180", "3 h")}
+                        ${itemMenu("'amanha'", "Amanhã", "border-top:1px solid #e2e8f0;")}
                     </div>
                 </div>
-                <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #fff; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markVistoriaValidationAlertsSeen()">Ciente</button>
-                <button type="button" class="btn btn-primary" style="background: #105436; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.goToVistoriaValidationFromAlert()">Ir para Validar Vistoria</button>
+                <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #fff; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="${o.ciente}">Ciente</button>
+                <button type="button" class="btn btn-primary" style="background: #105436; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="${o.ir}">Ir para Validar Vistoria</button>
             </div>
         </div>
     `;
     document.body.appendChild(modal);
     return modal;
-};
+}
+
+/** Linhas da lista de vistorias aguardando validação (alerta real e prévia). */
+function _vcHtmlListaValidacaoVistoria(pending) {
+    return pending.map(v => {
+        const esc = (s) => String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const cidade = esc(String(v.cidade || "-").toUpperCase());
+        const emp = esc(v.empreendimento || "-");
+        const unidade = esc(v.unidade || v.contractId || "-");
+        const titulo = esc(v.titulo || v.tituloKey || v.contractId || "-");
+        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;background:#f8fafc;">
+            <div style="font-weight:700;color:#0f172a;font-size:0.92rem;">${unidade} · ${titulo}</div>
+            <div style="font-size:0.8rem;color:#64748b;margin-top:4px;">${cidade} — ${emp}</div>
+            <div style="margin-top:6px;font-size:0.75rem;font-weight:700;color:#7c3aed;">Aguardando Validação</div>
+        </div>`;
+    }).join("");
+}
 
 window.checkVistoriasValidationAlerts = async function(isTest = false) {
     const gate = window.userIsCobrancaBackOffice();
@@ -2721,20 +2751,32 @@ window.checkVistoriasValidationAlerts = async function(isTest = false) {
     const listEl = document.getElementById("vistoria-validation-alerts-list");
     if (!listEl) return;
 
-    listEl.innerHTML = pending.map(v => {
-        const esc = (s) => String(s == null ? "" : s)
-            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-        const cidade = esc(String(v.cidade || "-").toUpperCase());
-        const emp = esc(v.empreendimento || "-");
-        const unidade = esc(v.unidade || v.contractId || "-");
-        const titulo = esc(v.titulo || v.tituloKey || v.contractId || "-");
-        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;background:#f8fafc;">
-            <div style="font-weight:700;color:#0f172a;font-size:0.92rem;">${unidade} · ${titulo}</div>
-            <div style="font-size:0.8rem;color:#64748b;margin-top:4px;">${cidade} — ${emp}</div>
-            <div style="margin-top:6px;font-size:0.75rem;font-weight:700;color:#7c3aed;">Aguardando Validação</div>
-        </div>`;
-    }).join("");
+    listEl.innerHTML = _vcHtmlListaValidacaoVistoria(pending);
 
+    modal.style.display = "flex";
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+
+/** Prévia (gestão de pop-ups): mesmo modal com dados de exemplo; todos os botões só fecham, nada é gravado nem agendado. */
+window.PopupPrevias["vistoria"] = function() {
+    const idModal = "modal-vistoria-validation-previa";
+    const antigo = document.getElementById(idModal);
+    if (antigo) antigo.remove();
+    const fechar = `document.getElementById('${idModal}').remove()`;
+    const modal = _vcCriarModalValidacaoVistoria({
+        idModal: idModal,
+        idLista: "vistoria-validation-previa-list",
+        idMenu: "vistoria-snooze-menu-previa",
+        adiar: () => fechar,
+        ciente: fechar,
+        ir: fechar
+    });
+    const exemplo = [
+        { cidade: "Cidade exemplo", empreendimento: "Residencial Exemplo", unidade: "Quadra 12 Lote 08", titulo: "12345" },
+        { cidade: "Cidade exemplo", empreendimento: "Loteamento Modelo", unidade: "Quadra 3 Lote 21", titulo: "67890" }
+    ];
+    document.getElementById("vistoria-validation-previa-list").innerHTML = _vcHtmlListaValidacaoVistoria(exemplo);
     modal.style.display = "flex";
 };
 
@@ -3279,11 +3321,15 @@ window.abrirAvisoVistoriaSolicitante = function(itens) {
     const chave = lista.map((item) => item.id).sort().join(",");
     if (window._avisoVistoriaAberto === chave) return;
     window._avisoVistoriaAberto = chave;
+    _vcMontarAvisoVistoriaSolicitante(lista, "modal-vistoria-resultado-solicitante", "window.fecharAvisoVistoriaSolicitante()");
+};
 
-    let modal = document.getElementById("modal-vistoria-resultado-solicitante");
+/** Monta e mostra o pop-up "Vistoria finalizada". Usado pelo aviso real e pela prévia (que usa outro id e só fecha). */
+function _vcMontarAvisoVistoriaSolicitante(lista, idModal, acaoFechar) {
+    let modal = document.getElementById(idModal);
     if (!modal) {
         modal = document.createElement("div");
-        modal.id = "modal-vistoria-resultado-solicitante";
+        modal.id = idModal;
         modal.style.cssText = "display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:100000; align-items:flex-start; justify-content:center; overflow:auto; padding:28px 16px;";
         document.body.appendChild(modal);
     }
@@ -3318,11 +3364,52 @@ window.abrirAvisoVistoriaSolicitante = function(itens) {
                     <h2 style="margin:0; color:#105436; font-size:1.15rem;">Vistoria finalizada</h2>
                     <p style="margin:6px 0 0; color:#64748b; font-size:0.9rem;">O back office aceitou a vistoria que você pediu pela ficha do cliente.</p>
                 </div>
-                <button type="button" class="btn btn-fechar" onclick="window.fecharAvisoVistoriaSolicitante()">Fechar</button>
+                <button type="button" class="btn btn-fechar" onclick="${acaoFechar}">Fechar</button>
             </div>
             <div style="max-height:70vh; overflow:auto; padding-right:4px;">${blocos}</div>
         </div>`;
     modal.style.display = "flex";
+}
+
+/* ─── Prévias para a gestão de pop-ups (alertas-popup.js): abrem o pop-up real com dados de exemplo, sem gravar ─── */
+
+function _vcDataIsoRelativa(dias) {
+    const d = new Date();
+    d.setDate(d.getDate() + dias);
+    return d.toISOString();
+}
+
+function _vcFotoExemplo(texto, cor) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270"><rect width="100%" height="100%" fill="${cor}"/><text x="50%" y="50%" font-family="Arial" font-size="28" fill="#ffffff" text-anchor="middle" dominant-baseline="middle">${texto}</text></svg>`;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+window.PopupPrevias = window.PopupPrevias || {};
+
+window.PopupPrevias["vistoria-resultado"] = function() {
+    const exemplo = [{
+        id: "previa-1",
+        visto: false,
+        clienteName: "Cliente exemplo",
+        unidade: "Quadra 12 Lote 08",
+        cidade: "Cidade exemplo",
+        empreendimento: "Residencial Exemplo",
+        titulo: "12345",
+        respostasFormulario: {
+            possuiAgua: "Sim",
+            possuiEnergia: "Sim",
+            possuiEntulho: "Não",
+            permiteAcesso: "Sim",
+            estagioObra: "Alvenaria",
+            observacoes: "Obra em andamento, muro levantado na frente do lote."
+        },
+        fotoFrente: _vcFotoExemplo("Frente (exemplo)", "#105436"),
+        fotoMeioFundo: _vcFotoExemplo("Meio / Fundo (exemplo)", "#0f766e"),
+        fotoFundoFrente: _vcFotoExemplo("Fundo / Frente (exemplo)", "#475569")
+    }];
+    // Id próprio: não mexe no aviso real (nem em _avisoVistoriaAberto) e o Fechar só esconde, sem marcar "visto" no Firestore.
+    _vcMontarAvisoVistoriaSolicitante(exemplo, "modal-vistoria-resultado-previa",
+        "document.getElementById('modal-vistoria-resultado-previa').style.display='none'");
 };
 
 function perfilCobrancaBackOffice(u) {

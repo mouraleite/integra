@@ -668,7 +668,26 @@ const EscalaHomeOffice = {
     try { if (localStorage.getItem(chave) === "1") return; } catch (e) {}
     this.abrirAviso(dia, eu);
     try { localStorage.setItem(chave, "1"); } catch (e) {}
+  },
+
+  /* Prévia pela tela de gestão de pop-ups: o mesmo aviso, com o próximo dia de home office da escala.
+     Não marca "já visto" nem grava cache; se a escala não estiver carregada, só lê. */
+  async previa() {
+    if (!this.state.pronto) {
+      const fonte = (await this.lerRemoto()) || this.lerLocal();
+      this.state.ferias = fonte.ferias;
+      this.state.ajustes = fonte.ajustes;
+      this.state.pronto = true;
+    }
+    const eu = this.eu();
+    const de = this.proximoDiaUtil(this.hoje());
+    const dias = this.escala(de, this.addDias(de, 28)).filter((d) => d.ho && !d.semHome);
+    const dia = dias.find((d) => d.ho === eu) || dias[0] || { data: de, ho: "leticia", cedo: "", tarde: "", ausencias: [], semHome: false };
+    this.abrirAviso(dia, dia.ho);
   }
 };
 
 window.EscalaHomeOffice = EscalaHomeOffice;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["home-office"] = function () { return EscalaHomeOffice.previa(); };

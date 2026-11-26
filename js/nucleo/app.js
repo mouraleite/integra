@@ -41105,6 +41105,7 @@ window.scheduleNexDueAlertWake = function() {
 };
 
 window.snoozeNexDueAlertNextBusinessDay = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const today = window.nexTodayIso();
   const cycles = window.nexDueActiveCycles(today);
   if (!cycles.length) return;
@@ -41124,6 +41125,7 @@ window.snoozeNexDueAlertNextBusinessDay = function() {
 };
 
 window.markNexDueAlertsSeen = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const today = window.nexTodayIso();
   const pending = window.nexDueActiveCycles(today);
   const ack = new Set(window.getNexDueAckCycles());
@@ -41140,6 +41142,7 @@ window.markNexDueAlertsSeen = function() {
 };
 
 window.goToNexFromDueAlert = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const modal = document.getElementById("modal-nex-due-alerts");
   if (modal) modal.style.display = "none";
   sessionStorage.setItem("wesendActivePanel", "elegiveis-zero");
@@ -41203,7 +41206,16 @@ window.checkNexDueAlerts = function(isTest) {
     if (existing) existing.style.display = "none";
     return;
   }
+  window.renderNexDueAlertModal(pending, today, { previa: false });
+  if (isTest && !pending.length) alert("Nenhum vencimento no prazo.");
+};
+
+// Monta e mostra o pop-up "Gerar NEX" com os ciclos recebidos. Usado pelo alerta real e pela prévia
+// da gestão de pop-ups (opts.previa = true: os botões só fecham, nada é gravado).
+window.renderNexDueAlertModal = function(pending, today, opts) {
+  const previa = !!(opts && opts.previa);
   const modal = window.ensureNexDueAlertModal();
+  modal.dataset.previa = previa ? "1" : "";
   const listEl = document.getElementById("nex-due-alerts-list");
   const intro = document.getElementById("nex-due-alert-intro");
   const snoozeBtn = document.getElementById("btn-nex-due-snooze");
@@ -41228,7 +41240,34 @@ window.checkNexDueAlerts = function(isTest) {
     snoozeBtn.disabled = !canSnooze;
   }
   modal.style.display = "flex";
-  if (isTest && !pending.length) alert("Nenhum vencimento no prazo.");
+  return modal;
+};
+
+// Em prévia, os botões do pop-up de NEX só fecham (sem gravar ciente/adiamento nem navegar).
+window.nexDueAlertFecharSePrevia = function() {
+  const modal = document.getElementById("modal-nex-due-alerts");
+  if (!modal || modal.dataset.previa !== "1") return false;
+  modal.style.display = "none";
+  modal.dataset.previa = "";
+  return true;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["nex"] = function() {
+  const today = typeof window.nexTodayIso === "function" ? window.nexTodayIso() : window.crmIsoLocal(new Date());
+  const cfg = typeof window.readNexDueConfig === "function" ? window.readNexDueConfig() : null;
+  const openOffset = (cfg && cfg.openOffset) || 1;
+  const maxOffset = Math.max((cfg && cfg.maxOffset) || 3, openOffset);
+  const dueIso = window.addDaysIso(today, -1);
+  const exemplo = [{
+    dueDay: Number(String(dueIso).slice(8, 10)),
+    dueIso: dueIso,
+    openIso: today,
+    maxIso: window.addBusinessDaysIso(today, Math.max(maxOffset - openOffset, 1)),
+    openOffset: openOffset,
+    maxOffset: maxOffset
+  }];
+  window.renderNexDueAlertModal(exemplo, today, { previa: true });
 };
 
 window.DISTRATO_PRAZO_ACK_KEY = "crm_distrato_prazo_ack_v2";
@@ -41457,6 +41496,14 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
   const chave = "crm_repac_" + modo + "_dia_" + String(u.email || u.name || "op").toLowerCase() + "_" + hoje;
   try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
   if (document.getElementById("repac-ultimo-dia")) return;
+  window.montarAvisoRepactuacaoDia(modo, hoje, { chave: chave });
+};
+
+// Monta o pop-up do último/primeiro dia útil (repactuação). Usado pelo aviso real e pela prévia
+// da gestão de pop-ups (opts.previa = true: Fechar e "Abrir repactuação" só fecham, sem gravar ciente).
+window.montarAvisoRepactuacaoDia = function(modo, hoje, opts) {
+  const previa = !!(opts && opts.previa);
+  const chave = (opts && opts.chave) || "";
   const agora = new Date(hoje + "T12:00:00");
   const comp = new Date(agora.getFullYear(), agora.getMonth() + 1, 1);
   const fimDia = new Date(comp.getFullYear(), comp.getMonth() + 1, 0).getDate();
@@ -41493,15 +41540,28 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
   </div>`;
   document.body.appendChild(overlay);
   const fechar = () => {
-    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    if (!previa && chave) {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
     overlay.remove();
   };
   overlay.querySelector("#repac-dia-fechar").addEventListener("click", fechar);
   const abrir = overlay.querySelector("#repac-dia-repac");
   if (abrir) abrir.addEventListener("click", function() {
     fechar();
+    if (previa) return;
     if (typeof window.switchTab === "function") window.switchTab("repactuacao-lote", "Repactuação");
   });
+  return overlay;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["repactuacao"] = function() {
+  const antigo = document.getElementById("repac-ultimo-dia");
+  if (antigo) antigo.remove();
+  const hoje = window.crmIsoLocal(new Date());
+  const ultimo = window.crmUltimoDiaUtilDoMes(hoje) || hoje;
+  window.montarAvisoRepactuacaoDia("ultimo", ultimo, { previa: true });
 };
 
 // Títulos fora da carteira de lotes que o back office acompanha de perto. Continuam na inadimplência;
@@ -41525,9 +41585,6 @@ window.avisarTitulosMonitorados = async function() {
   let bills = [];
   try { bills = await SiengeApiService.getDefaulters(); } catch (e) { return; }
   if (!Array.isArray(bills)) return;
-  const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const brl = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  const dataBr = (iso) => { const p = String(iso || "").slice(0, 10).split("-"); return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : ""; };
   const vencidos = [];
   for (const item of lista) {
     const bill = bills.find((b) => String(b && (b.id || b.saleId)) === String(item.titulo));
@@ -41538,6 +41595,17 @@ window.avisarTitulosMonitorados = async function() {
   }
   if (!vencidos.length) return;
   if (document.getElementById("titulos-monitorados-aviso")) return;
+  window.montarAvisoTitulosMonitorados(vencidos, { chave: chave });
+};
+
+// Monta o pop-up "Título acompanhado está vencido" com a lista { item, bill, parcelas }.
+// Usado pelo aviso real e pela prévia da gestão de pop-ups (opts.previa = true: os botões só fecham).
+window.montarAvisoTitulosMonitorados = function(vencidos, opts) {
+  const previa = !!(opts && opts.previa);
+  const chave = (opts && opts.chave) || "";
+  const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const brl = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const dataBr = (iso) => { const p = String(iso || "").slice(0, 10).split("-"); return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : ""; };
   const blocos = vencidos.map(({ item, bill, parcelas }) => {
     const total = parcelas.reduce((s, p) => s + (Number(p.correctedValueWithAdditions) || 0), 0);
     const linhas = parcelas.map((p) => `<div class="apa-item"><strong>Parcela ${esc(p.installmentNumber || p.installmentId)} · venceu em ${esc(dataBr(p.dueDate))}</strong><span>${esc(p.daysOfDelay)} dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">${esc(brl(p.correctedValueWithAdditions))}</span></div>`).join("");
@@ -41564,16 +41632,40 @@ window.avisarTitulosMonitorados = async function() {
   </div>`;
   document.body.appendChild(overlay);
   const fechar = () => {
-    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    if (!previa && chave) {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
     overlay.remove();
   };
   overlay.querySelector("#titulos-monitorados-fechar").addEventListener("click", fechar);
   overlay.querySelectorAll("[data-tm-cliente]").forEach((btn) => btn.addEventListener("click", function() {
     fechar();
+    if (previa) return;
     if (typeof window.openCustomerFromRelacionamento === "function") {
       window.openCustomerFromRelacionamento(this.getAttribute("data-tm-cliente"), this.getAttribute("data-tm-venda"), this.getAttribute("data-tm-titulo"));
     }
   }));
+  return overlay;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["titulos-monitorados"] = function() {
+  const antigo = document.getElementById("titulos-monitorados-aviso");
+  if (antigo) antigo.remove();
+  const hoje = window.crmIsoLocal(new Date());
+  const base = (window.TITULOS_MONITORADOS_BACK_OFFICE || [])[0];
+  const item = { titulo: (base && base.titulo) || "10001", motivo: (base && base.motivo) || "Título fora da carteira de lotes, acompanhado de perto pelo back office." };
+  const v1 = window.addDaysIso(hoje, -35);
+  const v2 = window.addDaysIso(hoje, -5);
+  const vencidos = [{
+    item: item,
+    bill: { id: item.titulo, saleId: item.titulo, customerId: "0", clientName: "Cliente exemplo", units: "Unidade exemplo" },
+    parcelas: [
+      { installmentNumber: "11", dueDate: v1, daysOfDelay: 35, correctedValueWithAdditions: 1873.42 },
+      { installmentNumber: "12", dueDate: v2, daysOfDelay: 5, correctedValueWithAdditions: 1812.9 }
+    ]
+  }];
+  window.montarAvisoTitulosMonitorados(vencidos, { previa: true });
 };
 
 window.checkDistratoPrazoMes = function() {
@@ -58696,6 +58788,7 @@ window.toggleWhatsappSnoozeMenu = function(ev) {
 };
 
 window.snoozeWhatsappBilletAlert = function(choice) {
+    if (typeof window.whatsappAlertFecharSePrevia === "function" && window.whatsappAlertFecharSePrevia()) return;
     const now = new Date();
     let until = new Date(now);
     if (choice === "amanha") {
@@ -58754,43 +58847,13 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
         return;
     }
     
-    let modal = document.getElementById("modal-whatsapp-alerts");
-    if (modal && !document.getElementById("whatsapp-snooze-menu")) {
-        modal.remove();
-        modal = null;
-    }
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'modal-whatsapp-alerts';
-        modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
-        modal.innerHTML = `
-            <div style="background: white; width: 600px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
-                <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Lembrete de Envio de Boletos (WhatsApp)</h2>
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">Os seguintes clientes estão com o alerta ativado para envio manual da remessa mensal via WhatsApp:</p>
-                <div id="whatsapp-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
-                <div id="whatsapp-alerts-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end;">
-                    <div style="position: relative;">
-                        <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleWhatsappSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
-                        <div id="whatsapp-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(15)">15 min</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(30)">30 min</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(60)">1 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(120)">2 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(180)">3 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert('amanha')">Amanhã</button>
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" style="background: #0f766e; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markWhatsappAlertsAsDone()">Marcar como Concluído neste Mês</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-    }
+    const modal = window.ensureWhatsappAlertModal();
+    modal.dataset.previa = "";
     const listEl = document.getElementById("whatsapp-alerts-list");
     if (!listEl) return;
     listEl.innerHTML = `<div style="padding:16px;color:#64748b;font-size:0.9rem;">Localizando títulos no Sienge…</div>`;
     if (modal) modal.style.display = "flex";
-    
+
     let clientDataMap = {};
     let clientTitlesMap = {};
     if (window.rawClientList) {
@@ -58801,7 +58864,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             } else {
                 clientDataMap[cid] = { ...clientDataMap[cid], ...c };
             }
-            
+
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
             if (c.saleId && !clientTitlesMap[cid].includes(c.saleId)) {
                 clientTitlesMap[cid].push(c.saleId);
@@ -58820,7 +58883,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                 if (c.name) clientDataMap[cid].name = c.name;
                 if (c.customerName) clientDataMap[cid].customerName = c.customerName;
             }
-            
+
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
             if (c.saleId && !clientTitlesMap[cid].includes(String(c.saleId))) {
                 clientTitlesMap[cid].push(String(c.saleId));
@@ -58847,7 +58910,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                 if (c.customerName) clientDataMap[cid].customerName = c.customerName;
             }
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
-            
+
             if (c.receivableBills && Array.isArray(c.receivableBills)) {
                 c.receivableBills.forEach(rb => {
                     if ((rb.documentId || "").trim() === "CT") {
@@ -58868,11 +58931,11 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             }
         });
     }
-    
+
     const monthKey = window.currentMonthStr || new Date().toISOString().slice(0, 7);
     let checkedState = {};
     try { checkedState = JSON.parse(localStorage.getItem('whatsappAlertsIndividual_' + monthKey) || '{}'); } catch(e){}
-    
+
     if (typeof window.toggleWhatsappIndividual === 'undefined') {
         window.toggleWhatsappIndividual = function(cid, el) {
             const mKey = window.currentMonthStr || new Date().toISOString().slice(0, 7);
@@ -58905,8 +58968,58 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
               } catch (e) {}
             }
 
+            cards.push(window.montarCardWhatsappAlerta(id, name, email, phone, titleObjs, !!checkedState[id], false));
+    }
+    listEl.innerHTML = "";
+    cards.forEach(card => listEl.appendChild(card));
+
+    // Se a prévia abriu durante a busca no Sienge, o aviso real volta a gravar.
+    if (modal) modal.dataset.previa = "";
+    if (modal) modal.style.display = "flex";
+    if (window.lucide) lucide.createIcons();
+};
+
+// Cria (uma vez) o pop-up "Lembrete de Envio de Boletos (WhatsApp)". Usado pelo lembrete real e pela prévia.
+window.ensureWhatsappAlertModal = function() {
+    let modal = document.getElementById("modal-whatsapp-alerts");
+    if (modal && !document.getElementById("whatsapp-snooze-menu")) {
+        modal.remove();
+        modal = null;
+    }
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'modal-whatsapp-alerts';
+        modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
+        modal.innerHTML = `
+            <div style="background: white; width: 600px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
+                <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Lembrete de Envio de Boletos (WhatsApp)</h2>
+                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">Os seguintes clientes estão com o alerta ativado para envio manual da remessa mensal via WhatsApp:</p>
+                <div id="whatsapp-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
+                <div id="whatsapp-alerts-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end;">
+                    <div style="position: relative;">
+                        <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleWhatsappSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
+                        <div id="whatsapp-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(15)">15 min</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(30)">30 min</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(60)">1 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(120)">2 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(180)">3 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert('amanha')">Amanhã</button>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" style="background: #0f766e; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markWhatsappAlertsAsDone()">Marcar como Concluído neste Mês</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    return modal;
+};
+
+// Monta o cartão de um cliente no lembrete de WhatsApp. Em prévia, o checkbox fica desabilitado (não grava nada).
+window.montarCardWhatsappAlerta = function(id, name, email, phone, titleObjs, checked, previa) {
             let titlesHtml = "";
-            if (titleObjs.length) {
+            if (titleObjs && titleObjs.length) {
                 const parts = titleObjs.map(t => {
                   const extra = t.contractNumber && String(t.contractNumber) !== String(t.id)
                     ? ` (contrato ${t.contractNumber})`
@@ -58919,15 +59032,16 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             } else {
                 titlesHtml = `<div style="margin-top: 8px; font-size: 0.85rem; color: #b91c1c; padding-top: 6px; border-top: 1px dashed #e2e8f0;"><strong>Título:</strong> Não identificado (Sienge sem contrato CT para este cliente)</div>`;
             }
-            
-            const isChecked = checkedState[id] ? "checked" : "";
-            
+
+            const isChecked = checked ? "checked" : "";
+            const onChange = previa ? "disabled" : `onchange="window.toggleWhatsappIndividual('${id}', this)"`;
+
             const card = document.createElement("div");
             card.style.cssText = "padding: 12px 15px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;";
             card.innerHTML = `
                 <div style="font-weight: 600; color: #0f172a; margin-bottom: 4px;">
                     <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" onchange="window.toggleWhatsappIndividual('${id}', this)" ${isChecked} style="width: 16px; height: 16px; accent-color: #0f766e; cursor: pointer;">
+                        <input type="checkbox" ${onChange} ${isChecked} style="width: 16px; height: 16px; accent-color: #0f766e; cursor: pointer;">
                         ${id} - ${name}
                     </label>
                 </div>
@@ -58939,16 +59053,40 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                     ${titlesHtml}
                 </div>
             `;
-            cards.push(card);
-    }
+            return card;
+};
+
+// Em prévia, os botões do lembrete de WhatsApp só fecham (sem gravar concluído/adiamento nem agendar timer).
+window.whatsappAlertFecharSePrevia = function() {
+    const modal = document.getElementById("modal-whatsapp-alerts");
+    if (!modal || modal.dataset.previa !== "1") return false;
+    const menu = document.getElementById("whatsapp-snooze-menu");
+    if (menu) menu.style.display = "none";
+    modal.style.display = "none";
+    modal.dataset.previa = "";
+    return true;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["boletos-whatsapp"] = function() {
+    const modal = window.ensureWhatsappAlertModal();
+    modal.dataset.previa = "1";
+    const listEl = document.getElementById("whatsapp-alerts-list");
+    if (!listEl) return;
+    const exemplos = [
+        { id: "1001", name: "Cliente exemplo", email: "cliente.exemplo@email.com", phone: "(41) 99999-0001",
+          titles: [{ id: "20001", contractNumber: "CT-20001", unit: "Quadra 1 · Lote 10" }], checked: true },
+        { id: "1002", name: "Cliente exemplo 2", email: "cliente2.exemplo@email.com", phone: "(41) 99999-0002",
+          titles: [{ id: "20002", unit: "Quadra 3 · Lote 7" }, { id: "20003", unit: "Quadra 3 · Lote 8" }], checked: false }
+    ];
     listEl.innerHTML = "";
-    cards.forEach(card => listEl.appendChild(card));
-        
-    if (modal) modal.style.display = "flex";
+    exemplos.forEach(e => listEl.appendChild(window.montarCardWhatsappAlerta(e.id, e.name, e.email, e.phone, e.titles, e.checked, true)));
+    modal.style.display = "flex";
     if (window.lucide) lucide.createIcons();
 };
 
 window.markWhatsappAlertsAsDone = async function() {
+    if (typeof window.whatsappAlertFecharSePrevia === "function" && window.whatsappAlertFecharSePrevia()) return;
     const today = new Date();
     const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
     window.whatsappAlertsData.lastCompletedMonth = currentMonthStr;

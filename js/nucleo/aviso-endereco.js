@@ -12,6 +12,10 @@
   var DIA_VIRADA = "segunda-feira, 30/11/2026";
   var BLOQUEAR = false;
 
+  /* Prévia pela tela de gestão de pop-ups: mesmo aviso, em qualquer endereço, sem marcar "já vi hoje". */
+  window.PopupPrevias = window.PopupPrevias || {};
+  window.PopupPrevias["mudanca-endereco"] = function () { montarAviso(); };
+
   var host = String(location.hostname || "").toLowerCase();
   if (ANTIGOS.indexOf(host) < 0) return;
 
@@ -69,12 +73,16 @@
 
   function avisar() {
     if (jaViuHoje()) return;
+    montarAviso();
+    marcarVisto();
+  }
+
+  function montarAviso() {
     caixa('<h3 id="aviso-endereco-titulo" style="margin:0 0 10px;color:#105436;font-size:1.15rem;">O Integra vai mudar de endereço</h3>'
       + '<p style="margin:0 0 8px;color:#1c2e24;font-size:0.92rem;line-height:1.45;">A partir de <strong>' + DIA_VIRADA + "</strong>, o Integra passa a funcionar neste endereço:</p>"
       + endereco()
       + '<p style="margin:0 0 6px;color:#1c2e24;font-size:0.9rem;line-height:1.45;"><strong>Até lá, continue usando este endereço normalmente.</strong> Salve o endereço novo nos favoritos para usar a partir de segunda-feira, 30/11.</p>'
       + '<p style="margin:0;color:#64748b;font-size:0.82rem;line-height:1.4;">O login continua o mesmo (conta Microsoft da empresa).</p>', true);
-    marcarVisto();
   }
 
   function bloquear() {

@@ -4068,3 +4068,70 @@ const PrestacaoContasApp = {
 };
 
 window.PrestacaoContasApp = PrestacaoContasApp;
+
+/* Prévia do aviso "Prazo de distrato no Sienge" (montado em js/nucleo/app.js) para a tela de alertas.
+   Usa uma cópia do modal real, para não mexer no aviso de verdade: não grava ciência, não carrega
+   nem reconcilia o follow-up de documentos e não depende do perfil de quem abre. */
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["distrato-mes"] = function () {
+  if (typeof window.ensureDistratoPrazoModal !== "function" || typeof window.distratoPrazoCorpoHtml !== "function") return;
+  if (document.getElementById("modal-distrato-prazo-previa")) return;
+  let info = typeof window.distratoPrazoDoMes === "function" ? window.distratoPrazoDoMes() : { hoje: "", ultimo: "", penultimo: "", fase: "" };
+  if (!info.fase) info = Object.assign({}, info, { hoje: info.penultimo || info.hoje, fase: "penultimo" });
+
+  const jaExistia = !!document.getElementById("modal-distrato-prazo");
+  const real = window.ensureDistratoPrazoModal();
+  const caixa = real.cloneNode(true);
+  if (!jaExistia) real.remove();
+  caixa.id = "modal-distrato-prazo-previa";
+  const corpo = caixa.querySelector("#distrato-prazo-corpo");
+  const follow = caixa.querySelector("#distrato-prazo-follow");
+  if (corpo) corpo.removeAttribute("id");
+  if (follow) follow.removeAttribute("id");
+
+  // Corpo: com a fila em memória, a função real lista os clientes; sem ela, entra um exemplo no mesmo formato.
+  if (corpo) {
+    if (Array.isArray(window.rawClientList)) {
+      corpo.innerHTML = window.distratoPrazoCorpoHtml(info, true);
+    } else {
+      const lista = typeof window.distratoPrazoListaHtml === "function" ? window.distratoPrazoListaHtml : function () { return ""; };
+      corpo.innerHTML = window.distratoPrazoCorpoHtml(info, false)
+        + "<div style=\"display:flex;flex-direction:column;gap:8px;margin-top:14px;\">"
+        + lista("NEX cumprida com distrato aplicável", [{ customerName: "Cliente exemplo", saleId: "9044" }], "")
+        + lista("Cláusula suspensiva com prazo vencido", [], "Nenhum cliente com cláusula suspensiva pendente de suspensão.")
+        + "</div>";
+    }
+  }
+
+  // Follow-up: itens já carregados do Doc. Assinatura (sem recarregar nem reconciliar) ou um exemplo.
+  if (follow && typeof window.distratoPrazoListaHtml === "function") {
+    const app = window.DocAssinaturaApp;
+    let itens = [];
+    if (app && Array.isArray(app.itens) && app.itens.length) {
+      itens = app.itens.filter(function (r) {
+        return r && r.tipo === "distrato" && r.status !== "lancado" && (typeof app.mesmoUsuario !== "function" || app.mesmoUsuario(r));
+      });
+    } else {
+      itens = [{ cliente: "Cliente exemplo", titulo: "9044" }];
+    }
+    const n = itens.length;
+    const frase = n
+      ? "Você tem " + n + " distrato" + (n === 1 ? "" : "s") + " no follow-up que ainda não " + (n === 1 ? "foi finalizado" : "foram finalizados") + ". O que já está como distrato no Sienge ou no Integra saiu desta lista."
+      : "Você não tem distrato aguardando finalização no follow-up. O que já está como distrato no Sienge ou no Integra não entra nesta lista.";
+    const gente = itens.map(function (r) {
+      return { customerName: r.cliente, saleId: r.titulo && r.titulo !== "—" ? r.titulo : "" };
+    });
+    follow.innerHTML = "<p style=\"margin:12px 0 8px;color:" + (n ? "#9a3412" : "#64748b") + ";font-size:0.88rem;line-height:1.45;\">" + frase + "</p>"
+      + (n ? window.distratoPrazoListaHtml("Ainda no follow-up", gente, "") : "");
+  }
+
+  // Ciência só fecha a prévia.
+  caixa.querySelectorAll("button[onclick]").forEach(function (btn) {
+    btn.removeAttribute("onclick");
+    btn.addEventListener("click", function () { caixa.remove(); });
+  });
+  caixa.style.display = "flex";
+  document.body.appendChild(caixa);
+  if (window.lucide && typeof window.crmCriarIcones === "function") window.crmCriarIcones(caixa);
+  else if (window.lucide && window.lucide.createIcons) window.lucide.createIcons();
+};
