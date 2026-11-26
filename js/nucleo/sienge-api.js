@@ -132,9 +132,10 @@ function defaultersCacheLooksIncomplete(data, meta, expectedIds) {
   if (expected.indexOf(1) >= 0 && (contagem[1] || 0) < 50 && (Array.isArray(data) ? data.length : 0) > 0) return true;
 
   if (metaIds && metaIds.length) {
+    // companyIds são as empresas que responderam na carga (as que falharam ficam de fora). Empresa que respondeu
+    // sem título vencido (ex.: 4 e 14, sempre zeradas) não é carga incompleta; antes isso recusava todo cache do dia.
     const have = new Set(metaIds);
-    if (expected.some((id) => !have.has(id))) return true;
-    return expected.some((id) => (contagem[id] || 0) < 1);
+    return expected.some((id) => !have.has(id));
   }
 
   const found = new Set();
@@ -2525,6 +2526,7 @@ const SiengeApiService = {
                    };
                    if (typeof window.updateFilaCacheStatusIndicator === "function") window.updateFilaCacheStatusIndicator();
                    if (isFilaNonBusinessDay(todayStr)) markFilaFullRefreshDone(todayStr);
+                   if (Array.isArray(localCache.companyIds)) window._filaEmpresasRespondidas = localCache.companyIds.map(Number);
                    return localCache.data;
                    }
                }
@@ -2590,6 +2592,7 @@ const SiengeApiService = {
                    }).catch(() => {});
 
                    if (isFilaNonBusinessDay(todayStr)) markFilaFullRefreshDone(todayStr);
+                   if (Array.isArray(meta.companyIds)) window._filaEmpresasRespondidas = meta.companyIds.map(Number);
                    return result;
                    }
                  } else {
@@ -2631,6 +2634,7 @@ const SiengeApiService = {
             ? result._fetchedCompanyIds
             : expectedCompanyIds;
           const filaIncompleta = !!(result && result._filaIncompleta);
+          window._filaEmpresasRespondidas = (fetchedCompanyIds || []).map(Number);
           if (result && result._fetchedCompanyIds) delete result._fetchedCompanyIds;
           if (result && result._empresasFalhas) delete result._empresasFalhas;
           if (result) delete result._filaIncompleta;
