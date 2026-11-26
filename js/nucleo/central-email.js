@@ -690,12 +690,20 @@ const CentralEmailApp = {
   tabelaHtml() {
     const pode = this.podeEditar();
     const admin = this.souAdmin();
-    // Régua: interruptor (verde Ligada / cinza Desligada) para o administrador; os demais veem a etiqueta.
+    // Dois passos, em colunas separadas: 1) Aprovação do texto; 2) Régua (o interruptor só libera depois de aprovado).
+    const aprovacao = (t) => {
+      if (t.status === "aprovado") {
+        const quando = t.aprovadoEm ? new Date(t.aprovadoEm).toLocaleDateString("pt-BR") : "";
+        return `<span class="cem-sit is-on" title="${quando ? "Aprovado em " + this.esc(quando) : "Aprovado"}">✓ Aprovado</span>`;
+      }
+      return admin
+        ? `<button type="button" class="cem-aprovar" onclick="CentralEmailApp.abrirAprovacao('${this.esc(t.id)}')"><i data-lucide="check" style="width:14px;height:14px;"></i> Aprovar</button>`
+        : `<span class="cem-sit is-pendente">Aguardando aprovação</span>`;
+    };
     const regua = (t) => {
       if (t.status !== "aprovado") {
-        return admin
-          ? `<button type="button" class="cem-aprovar" onclick="CentralEmailApp.abrirAprovacao('${this.esc(t.id)}')"><i data-lucide="check" style="width:14px;height:14px;"></i> Aprovar</button>`
-          : `<span class="cem-sit is-pendente">Aguardando aprovação</span>`;
+        return `<span class="cem-switch is-travado" title="Aprove o template primeiro. Depois o interruptor libera para ligar a régua.">
+          <span class="cem-switch-trilho"><span class="cem-switch-bola"></span></span><span class="cem-switch-txt">Aprove primeiro</span></span>`;
       }
       if (!admin) return `<span class="cem-sit ${t.ativo ? "is-on" : "is-off"}">${t.ativo ? "Ligada" : "Desligada"}</span>`;
       return `<button type="button" role="switch" aria-checked="${t.ativo ? "true" : "false"}" class="cem-switch${t.ativo ? " is-on" : ""}"
@@ -707,6 +715,7 @@ const CentralEmailApp = {
       <td title="${this.esc(this.rotuloTag(t.tag))}" class="cem-quebra">${this.esc(this.rotuloTag(t.tag))}</td>
       <td class="is-center"><span class="cem-dias">${this.esc(t.diasVencido)}</span></td>
       <td class="cem-para">${this.esc(t.destino === "fixo" ? (t.para || "—") : "E-mails do contrato")}${t.cc ? `<br><small class="cem-cc">Cópia: ${this.esc(t.cc)}</small>` : ""}<br><small class="cem-cc">De: ${this.esc(this.rotuloCaixa(t.remetente))}</small></td>
+      <td class="is-center cem-regua">${aprovacao(t)}</td>
       <td class="is-center cem-regua">${regua(t)}</td>
       <td class="is-right cem-acoes">
         <button type="button" class="tvig-ico" title="Ver" onclick="CentralEmailApp.verTemplate('${this.esc(t.id)}')"><i data-lucide="eye" style="width:15px;height:15px;"></i></button>
@@ -715,9 +724,9 @@ const CentralEmailApp = {
       </td>
     </tr>`).join("");
     return `<div class="cc-scroll"><table class="cc-table is-confortavel cem-tabela">
-      <colgroup><col style="width:22%"><col style="width:22%"><col style="width:82px"><col><col style="width:150px"><col style="width:110px"></colgroup>
-      <thead><tr><th>Template</th><th>Tag</th><th class="is-center">Dias vencido</th><th>Para</th><th class="is-center">Régua</th><th class="is-right">Ações</th></tr></thead>
-      <tbody>${linhas || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum template. Crie o texto, escolha a tag e quantos dias depois do vencimento.</td></tr>`}</tbody>
+      <colgroup><col style="width:21%"><col style="width:20%"><col style="width:82px"><col><col style="width:130px"><col style="width:150px"><col style="width:110px"></colgroup>
+      <thead><tr><th>Template</th><th>Tag</th><th class="is-center">Dias vencido</th><th>Para</th><th class="is-center">1. Aprovação</th><th class="is-center">2. Régua</th><th class="is-right">Ações</th></tr></thead>
+      <tbody>${linhas || `<tr><td colspan="7" style="text-align:center;padding:30px;">Nenhum template. Crie o texto, escolha a tag e quantos dias depois do vencimento.</td></tr>`}</tbody>
     </table></div>`;
   },
 
@@ -1204,12 +1213,7 @@ const CentralEmailApp = {
       <p>${this.esc(this.rotuloTag(t.tag))} · ${this.esc(t.diasVencido)} dia(s) depois de vencido${t.criadoPorNome ? " · " + this.esc(t.criadoPorNome) : ""}</p>
       <p>${this.esc(t.assunto)}</p>
       <div class="cem-aprova-linha">
-        <label class="moura-switch">
-          <input type="checkbox" id="cem-ligar-${this.esc(t.id)}">
-          <span class="moura-switch-track" aria-hidden="true"></span>
-          <span class="moura-switch-text">Ligar a régua</span>
-        </label>
-        <button type="button" class="btn btn-primary btn-sm" onclick="CentralEmailApp.aprovar('${this.esc(t.id)}')">Aprovar</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="CentralEmailApp.aprovar('${this.esc(t.id)}')"><i data-lucide="check" style="width:14px;height:14px;"></i> Aprovar texto</button>
       </div>
     </section>`).join("");
     const pop = document.createElement("div");
@@ -1221,7 +1225,7 @@ const CentralEmailApp = {
         <button type="button" class="btn btn-fechar" id="cem-aprov-fechar">Fechar</button>
       </div>
       <div class="cem-body">
-        <p class="cem-legenda">A régua só liga se o interruptor estiver ligado na hora de aprovar. Sem isso, o template fica aprovado e a régua continua desligada.</p>
+        <p class="cem-legenda"><strong>Passo 1 de 2: aprovar o texto.</strong> Depois de aprovado, o template aparece com "✓ Aprovado" e o interruptor da coluna <strong>2. Régua</strong> libera: é nele que você liga a régua para os e-mails começarem a sair.</p>
         ${blocos}
       </div>
     </div>`;
@@ -1236,9 +1240,9 @@ const CentralEmailApp = {
     if (!this.souAdmin()) return;
     const t = this.achar(id);
     if (!t) return;
-    const liga = document.getElementById("cem-ligar-" + id);
     t.status = "aprovado";
-    t.ativo = !!(liga && liga.checked);
+    // Aprovar não liga a régua: o passo 2 é o interruptor da coluna Régua.
+    t.ativo = false;
     t.aprovadoEm = new Date().toISOString();
     t.avisoCriador = !t.ativo;
     await this.gravar();

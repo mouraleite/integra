@@ -1584,9 +1584,11 @@ const GerarPagamentoApp = {
       const BC = window.BoletoCheck;
       const lista = (res) => (Array.isArray(res) ? res : ((res && (res.results || res.data)) || []));
       cache[id] = (async () => {
+        // Com o Sienge cheio (429), uma tentativa só deixava o PIX em "atenção" e travava o título.
+        // 4 tentativas: o siengeFetchWithRetry espera entre elas quando o Sienge pede para aguardar.
         const [cad, pix] = await Promise.all([
-          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}`, 1),
-          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}/pix-informations`, 1).catch(() => null)
+          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}`, 4),
+          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}/pix-informations`, 4).catch(() => null)
         ]);
         if (!cad || typeof cad !== "object") return { erro: "credor não encontrado" };
         const telefones = []
@@ -1610,7 +1612,11 @@ const GerarPagamentoApp = {
           };
         }).filter((c) => c.tipo && c.chave);
         return { id, nome: cad.name || "", doc: BC.digits(cad.cnpj || cad.cpf), telefones, emails, chaves };
-      })().catch((e) => ({ erro: (e && e.message) || "falha na consulta" }));
+      })().catch((e) => {
+        // Falha não fica guardada: a próxima conferência (ou reabrir o título) consulta de novo.
+        delete cache[id];
+        return { erro: (e && e.message) || "falha na consulta" };
+      });
     }
     return cache[id];
   },
