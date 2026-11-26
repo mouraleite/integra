@@ -54,6 +54,8 @@ const CONCURRENCY = 3;
 /** Só pausa se BATIMENTO_PAUSED=1. O censo/diário já evita varredura cega. */
 const BATIMENTO_PAUSED = process.env.BATIMENTO_PAUSED === "1";
 const DELTA_DAYS = 5;
+/** Antes desta hora (Brasília) o batimento automático não começa. */
+const HORA_INICIO_BATIMENTO = 7;
 
 function flag(req, key) {
   const from = req.query && req.query[key];
@@ -527,6 +529,18 @@ async function handler(req, res) {
       message: "Batimento automático pausado (BATIMENTO_PAUSED=1)."
     });
   }
+  // O batimento do dia só começa às 7h (Brasília): antes disso o Sienge ainda não recebeu as baixas do retorno
+  // bancário. Em 26/11/2026 um navegador aberto na virada do dia gravou a fila à 01:01, pediu o batimento e ele fechou
+  // às 03:01; o agendamento das 7h encontrou o dia concluído e não refez. Só o "forçar" passa antes da hora.
+  const horaSP = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Sao_Paulo", hour: "2-digit", hour12: false }).format(new Date())) % 24;
+  if (!force && horaSP < HORA_INICIO_BATIMENTO) {
+    return res.status(200).json({
+      skipped: true,
+      waiting: "horario",
+      date: todayIsoSP(),
+      message: `O batimento do dia começa às ${HORA_INICIO_BATIMENTO}h, depois das baixas do retorno bancário.`
+    });
+  }
   const today = todayIsoSP();
   let started = Date.now();
   const log = [];
@@ -576,6 +590,9 @@ async function handler(req, res) {
       state.saldoSeen = [];
       state.saldoFalhas = {};
       state.censoFalhas = {};
+      // Forçar refaz a conferência de todos os empreendimentos com o Contas a Receber de agora (antes pulava os já vistos).
+      state.obrasVistas = [];
+      state.obraFalhas = {};
     }
     const continuacao = flag(req, "cont") === "1";
     if (!force && !continuacao && Number(state.passes) > 0) {
