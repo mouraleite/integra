@@ -149,6 +149,13 @@ const GerarPagamentoApp = {
     const chave = "crm_pagadoria_fechamento_" + String(u.email || u.name || "op") + "_" + hoje;
     try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
     if (document.getElementById("gp-fechamento-aviso")) return;
+    this.montarAvisoFechamento(janela, () => {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    });
+  },
+
+  /** Monta o pop-up do fechamento. aoCiente roda antes de fechar (na prévia, não é passado). */
+  montarAvisoFechamento(janela, aoCiente) {
     const ini = this.dataBr(janela.start);
     const fim = this.dataBr(janela.end);
     const pagar = Number(String(janela.start).slice(8, 10));
@@ -165,10 +172,11 @@ const GerarPagamentoApp = {
     </div>`;
     document.body.appendChild(overlay);
     const fechar = () => {
-      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+      if (typeof aoCiente === "function") aoCiente();
       overlay.remove();
     };
     overlay.querySelector("#gp-fechamento-ciente").addEventListener("click", fechar);
+    return overlay;
   },
 
   perfilFold(name) {
@@ -265,6 +273,15 @@ const GerarPagamentoApp = {
     const hoje = this.iso(new Date());
     if (this.conferenciaJaVista(hoje)) return;
     if (document.getElementById("gp-conf-lotes")) return;
+    this.montarConferenciaLotes({
+      aoFechar: () => this.marcarConferenciaVista(hoje),
+      aoBuscar: () => this.buscarAtualizacaoLotes()
+    });
+  },
+
+  /** Monta o pop-up da situação dos lotes. Sem aoBuscar, o Buscar atualizações fica desabilitado (prévia). */
+  montarConferenciaLotes(opcoes) {
+    const op = opcoes || {};
     const overlay = document.createElement("div");
     overlay.id = "gp-conf-lotes";
     overlay.setAttribute("role", "dialog");
@@ -291,10 +308,13 @@ const GerarPagamentoApp = {
     </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector("#gp-conf-fechar").addEventListener("click", () => {
-      this.marcarConferenciaVista(hoje);
+      if (typeof op.aoFechar === "function") op.aoFechar();
       overlay.remove();
     });
-    overlay.querySelector("#gp-conf-buscar").addEventListener("click", () => this.buscarAtualizacaoLotes());
+    const buscar = overlay.querySelector("#gp-conf-buscar");
+    if (typeof op.aoBuscar === "function") buscar.addEventListener("click", op.aoBuscar);
+    else buscar.disabled = true;
+    return overlay;
   },
 
   async lerLotesGravados() {
@@ -5016,3 +5036,30 @@ document.addEventListener("DOMContentLoaded", function () {
   };
   setTimeout(tentar, 2000);
 });
+
+/* Prévias para a tela de alertas: os mesmos pop-ups, sem gravar ciência, sem timer e sem consultar o Sienge. */
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["fechamento-pagadoria"] = function () {
+  const app = GerarPagamentoApp;
+  if (document.getElementById("gp-fechamento-aviso")) return;
+  const agora = new Date();
+  // Último dia do mês como base: a janela do fechamento do mês corrente sempre existe.
+  const janela = app.janelaFechamento(new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 12));
+  if (!janela) return;
+  app.montarAvisoFechamento(janela);
+};
+window.PopupPrevias["lotes"] = function () {
+  const app = GerarPagamentoApp;
+  if (document.getElementById("gp-conf-lotes")) return;
+  app.montarConferenciaLotes({});
+  const hoje = app.iso(new Date());
+  app.pintarConferencia("gp-conf-abertos", [
+    { titulo: "111200", parcela: "1", credor: "Fornecedor exemplo", valor: 3480.5, vencimento: hoje, baixa: hoje, lote: "", nota: "Ainda sem processamento no banco." },
+    { titulo: "110954", parcela: "2", credor: "Prestador exemplo", valor: 1250, vencimento: app.shiftIso(hoje, -2), baixa: app.shiftIso(hoje, -2), lote: "8812", nota: "Arquivo já enviado ao banco. A parcela continua em aberto." }
+  ], "Nenhum título do dia ou vencido sem processamento.");
+  app.pintarConferencia("gp-conf-recusa", [
+    { titulo: "110880", parcela: "1", credor: "Parceiro exemplo", valor: 9870, vencimento: app.shiftIso(hoje, 6), baixa: "", lote: "8790", nota: "Saiu do lote nº 8790. O banco recusou e o título ainda está para vencer." }
+  ], "Nenhum título a vencer saiu de lote por recusa do banco.");
+  const status = document.getElementById("gp-conf-status");
+  if (status) status.textContent = "Prévia com dados de exemplo. 2 sem processamento · 1 fora do lote por recusa.";
+};

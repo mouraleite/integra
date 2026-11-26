@@ -1786,11 +1786,10 @@ const EstoqueComercialApp = {
       if (!open || open.skip) return 0;
       return Number(open.value) || 0;
     }
-    const interest = Number(b.interest || b.interestValue || 0);
-    const fine = Number(b.fine || b.fineValue || 0);
-    const principal = Number(b.overdueValue != null ? b.overdueValue : b.value) || 0;
-    if (interest + fine > 0.009) return principal + interest + fine;
-    const insts = b.defaulterInstallments || [];
+    // Sem a função da tela (batimento no servidor): soma as parcelas vencidas com juros e multa, como a Fila.
+    // O value do título no cache não é o vencido: somado com interest e fine dava ~4,76 mi contra 4,35 mi.
+    const hojeIso = this.todayStr();
+    const insts = (b.defaulterInstallments || []).filter((inst) => !inst.dueDate || String(inst.dueDate).slice(0, 10) <= hojeIso);
     if (insts.length) {
       return insts.reduce((s, inst) => {
         if (inst.correctedValueWithAdditions != null) return s + Number(inst.correctedValueWithAdditions || 0);
@@ -1798,7 +1797,10 @@ const EstoqueComercialApp = {
           + Number(inst.interest || 0) + Number(inst.fine || 0);
       }, 0);
     }
-    return principal;
+    const interest = Number(b.interest || b.interestValue || 0);
+    const fine = Number(b.fine || b.fineValue || 0);
+    const principal = Number(b.overdueValue != null ? b.overdueValue : b.value) || 0;
+    return principal + interest + fine;
   },
 
   overdueValue(u) {
@@ -1973,7 +1975,10 @@ const EstoqueComercialApp = {
       aVencer += noPrazo;
       const vencSaldo = slot.saldo - noPrazo;
       vencido += vencSaldo;
-      if (vencSaldo > 0.009) emAtraso += Math.max(vencSaldo, slot.kpiVencidas != null ? slot.kpiVencidas : ov);
+      // Com a Fila carregada, o atraso com juros e multa é o da Fila (mesma conta do relatório do Sienge).
+      // O currentBalanceWithAddition da ficha soma acréscimo diferente e deixava o total ~124 mil acima.
+      const comAcrescimo = this.filaCarregada() ? ov : (slot.kpiVencidas != null ? slot.kpiVencidas : ov);
+      if (vencSaldo > 0.009) emAtraso += Math.max(vencSaldo, comAcrescimo);
     });
     const fila = this.resumoFila(rows);
     const filaAtraso = fila ? fila.total : null;
@@ -3670,8 +3675,31 @@ const EstoqueComercialApp = {
         }));
       });
       abertas.sort((x, y) => x.due.localeCompare(y.due));
+      // Juros e multa como no relatório Contas a Receber: o valor do título na Fila do dia (multa 2% + juros 1% a.m.
+      // pro rata desde o vencimento). Fora da Fila, a mesma regra calculada aqui. O currentBalanceWithAddition
+      // do Sienge soma outro acréscimo e não fecha com o relatório.
+      if (vencido > 0.009) {
+        const naFila = this.filaCarregada() ? Number(this.ensureDefaulterIndex().byRb.get(String(b.id))) || 0 : 0;
+        vencidoComAcrescimo = naFila > 0.009 ? Math.max(naFila, vencido) : this.vencidoComRegraRelatorio(b.parcelas, hoje);
+      }
       return { ...b, aberto, vencido, vencidoComAcrescimo, recebido, ultimaBaixa, porDia, nParcelas: Object.keys(b.parcelas).length, abertas: abertas.slice(0, 24) };
     });
+  },
+
+  /** Vencido com acréscimo pela regra do relatório Contas a Receber: multa 2% + juros 1% a.m. pro rata dia. */
+  vencidoComRegraRelatorio(parcelas, hoje) {
+    const dia = (iso) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10));
+    const ate = dia(String(hoje).slice(0, 10));
+    let total = 0;
+    Object.values(parcelas || {}).forEach((partes) => {
+      const ps = Object.values(partes);
+      const saldo = ps.reduce((t, p) => t + (Number(p.currentBalance) || 0), 0);
+      const due = String((ps[0] && ps[0].dueDate) || "").slice(0, 10);
+      if (!(saldo > 0.009) || !due || due >= hoje) return;
+      const dias = Math.max(0, Math.round((ate - dia(due)) / 86400000));
+      total += saldo + Math.round(saldo * 2) / 100 + Math.round(saldo * dias / 30) / 100;
+    });
+    return total;
   },
 
   /**

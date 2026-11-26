@@ -563,23 +563,36 @@
       const pos = meus.findIndex((x) => x.id === p.id);
       const podeResponder = p.status === "aguardando" && !this.souAdmin() && this.operadorEh(p.operador, user);
       this.popupAtual = p.id;
-      this.modal("fg-popup", 1000, `
+      this.montarPopup(p, { total: meus.length, pos: pos, podeResponder: podeResponder });
+      if (podeResponder && !p.vistoEm) this.marcarVisto(p);
+    },
+    /** Monta o pop-up do operador. O caminho real usa o modal "fg-popup"; a prévia (o.previa) usa "fg-popup-previa",
+        com os mesmos textos e campos, mas os botões só fecham ou ficam desabilitados (nada é gravado). */
+    montarPopup(p, o) {
+      const previa = !!o.previa;
+      const idModal = previa ? "fg-popup-previa" : "fg-popup";
+      const idBase = previa ? "fg-prev" : "fg-pop";
+      const podeResponder = o.podeResponder;
+      const id = this.esc(p.id);
+      const acaoDepois = previa ? "FollowupGestor.fecharModal('fg-popup-previa')" : `FollowupGestor.depois('${id}')`;
+      const desab = previa ? ` disabled title="Prévia: nada é gravado"` : "";
+      this.modal(idModal, 1000, `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
           <div>
-            <div style="display:inline-flex;align-items:center;gap:6px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:999px;padding:3px 10px;font-size:0.75rem;font-weight:800;"><i data-lucide="bell-ring" style="width:13px;height:13px;"></i> Follow-up do gestor${meus.length > 1 && pos >= 0 ? " · " + (pos + 1) + " de " + meus.length : ""}</div>
+            <div style="display:inline-flex;align-items:center;gap:6px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:999px;padding:3px 10px;font-size:0.75rem;font-weight:800;"><i data-lucide="bell-ring" style="width:13px;height:13px;"></i> Follow-up do gestor${o.total > 1 && o.pos >= 0 ? " · " + (o.pos + 1) + " de " + o.total : ""}</div>
             <h2 style="margin:8px 0 0;color:#105436;font-size:1.15rem;">O gestor gostaria de uma atualização detalhada deste caso</h2>
             <div style="margin-top:6px;">${this.cabecalhoCliente(p)}</div>
           </div>
-          <button type="button" class="btn btn-fechar" onclick="FollowupGestor.depois('${this.esc(p.id)}')">${podeResponder ? "Responder depois" : "Fechar"}</button>
+          <button type="button" class="btn btn-fechar" onclick="${acaoDepois}">${podeResponder ? "Responder depois" : "Fechar"}</button>
         </div>
         <div style="margin:12px 0;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px 12px;">
           <div style="font-size:0.72rem;font-weight:800;color:#166534;text-transform:uppercase;">${this.esc(p.pedidoPor || "Gestor")} · ${this.esc(this.dataHora(p.criadoEm))}</div>
           <div style="margin-top:4px;font-size:0.9rem;color:#0f172a;white-space:pre-wrap;">${this.esc(p.mensagem)}</div>
         </div>
-        ${this.resumoHtml(p, "fg-pop")}
+        ${this.resumoHtml(p, idBase)}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-          <button type="button" class="btn btn-outline btn-sm" onclick="FollowupGestor.verExtrato('${this.esc(p.id)}', this)"><i data-lucide="file-text" style="width:14px;height:14px;"></i> Visualizar Extrato</button>
-          <button type="button" class="btn btn-outline btn-sm" onclick="FollowupGestor.abrirFicha('${this.esc(p.id)}')"><i data-lucide="user-round" style="width:14px;height:14px;"></i> Abrir ficha</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="FollowupGestor.verExtrato('${id}', this)"${desab}><i data-lucide="file-text" style="width:14px;height:14px;"></i> Visualizar Extrato</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="FollowupGestor.abrirFicha('${id}')"${desab}><i data-lucide="user-round" style="width:14px;height:14px;"></i> Abrir ficha</button>
         </div>
         ${p.status === "respondido" ? `
           <div style="margin-top:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:10px 12px;">
@@ -588,15 +601,52 @@
           </div>` : ""}
         ${podeResponder ? `
           <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px;">
-            <label for="fg-resposta" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Sua resposta ao gestor</label>
-            <textarea id="fg-resposta" rows="5" maxlength="${MAX_TEXTO}" style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Conte como está o caso: contatos feitos, o que o cliente disse e o próximo passo."></textarea>
+            <label for="${previa ? "fg-resposta-previa" : "fg-resposta"}" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Sua resposta ao gestor</label>
+            <textarea id="${previa ? "fg-resposta-previa" : "fg-resposta"}" rows="5" maxlength="${MAX_TEXTO}" style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Conte como está o caso: contatos feitos, o que o cliente disse e o próximo passo."></textarea>
             <div style="display:flex;justify-content:flex-end;gap:8px;">
-              <button type="button" class="btn btn-cancel" onclick="FollowupGestor.depois('${this.esc(p.id)}')">Responder depois</button>
-              <button type="button" class="btn btn-primary" id="fg-responder" onclick="FollowupGestor.responder('${this.esc(p.id)}')"><i data-lucide="send" style="width:14px;height:14px;"></i> Enviar resposta</button>
+              <button type="button" class="btn btn-cancel" onclick="${acaoDepois}">Responder depois</button>
+              <button type="button" class="btn btn-primary" id="${previa ? "fg-responder-previa" : "fg-responder"}" onclick="${previa ? "" : `FollowupGestor.responder('${id}')`}"${desab}><i data-lucide="send" style="width:14px;height:14px;"></i> Enviar resposta</button>
             </div>
           </div>` : ""}`);
-      this.desenharGauge("fg-pop");
-      if (podeResponder && !p.vistoEm) this.marcarVisto(p);
+      this.desenharGauge(idBase);
+    },
+    /** Prévia para a gestão de pop-ups: usa um pedido já em memória (cópia) ou um exemplo; nada é gravado. */
+    previa() {
+      const agora = new Date();
+      const diasAtras = (n) => { const d = new Date(agora); d.setDate(d.getDate() - n); return d.toISOString(); };
+      const real = (this.pendentes || []).find((p) => p && p.status === "aguardando");
+      const p = real ? Object.assign({}, real, { id: "previa", status: "aguardando" }) : {
+        id: "previa",
+        customerId: "0000",
+        saleId: "12345",
+        titulo: "12345",
+        cliente: "Cliente exemplo",
+        unidade: "Quadra 12 Lote 08",
+        empreendimento: "Residencial Exemplo",
+        operador: "Operador exemplo",
+        pedidoPor: "Gestor exemplo",
+        mensagem: "Preciso entender a situação deste contrato: houve contato recente? O cliente sinalizou acordo?",
+        status: "aguardando",
+        criadoEm: diasAtras(0),
+        vistoEm: null,
+        resumo: {
+          geradoEm: diasAtras(0),
+          valores: { pagosQtd: 38, pagos: 41250.4, vencidosQtd: 4, vencidos: 4820.75, aVencerQtd: 78, aVencer: 96310.2, totalQtd: 120, total: 142381.35 },
+          pctPago: 0.29,
+          pmp: 12,
+          renegociacoes: 1,
+          pctEmDia: 64,
+          perfil: "Paga com atraso eventual",
+          diasAtraso: 95,
+          acordoQuebrado: false,
+          construcao: { tem: true, incerta: false, texto: "Lote com construção (vistoria de " + this.dia(diasAtras(40)) + ")." },
+          lote: null,
+          nex: { tem: true, texto: "Nex enviada em " + this.dia(diasAtras(20)) + " · situação entregue." },
+          ultimoContato: { data: diasAtras(6), canal: "WhatsApp", autor: "Operador exemplo", texto: "CLIENTE INFORMOU QUE VAI PAGAR DUAS PARCELAS ATÉ O FIM DO MÊS." }
+        }
+      };
+      if (p.resumo) p.resumo = Object.assign({}, p.resumo, { lote: null });
+      this.montarPopup(p, { previa: true, total: 1, pos: 0, podeResponder: true });
     },
     async marcarVisto(p) {
       const fb = this.fb();
@@ -807,4 +857,8 @@
   };
 
   window.FollowupGestor = FG;
+
+  // Prévia na gestão de pop-ups (alertas-popup.js): o pop-up real, sem gravar nada.
+  window.PopupPrevias = window.PopupPrevias || {};
+  window.PopupPrevias["followup-gestor"] = function() { FG.previa(); };
 })();

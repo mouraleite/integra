@@ -683,7 +683,8 @@ async function handler(req, res) {
       } catch (e) {
         log.push(`centros de custo indisponíveis: ${(e && e.message) || e}`);
       }
-      conferencia = criarConferencia({ units, enterprises: centros, siengeFetch: siengeFetchPath });
+      // A Fila do dia leva os juros e a multa no cálculo do relatório Contas a Receber do Sienge.
+      conferencia = criarConferencia({ units, enterprises: centros, siengeFetch: siengeFetchPath, filaBills });
     } catch (e) {
       log.push(`conferência completa indisponível, usando a simples: ${(e && e.message) || e}`);
     }

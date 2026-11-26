@@ -233,7 +233,8 @@ const AlertaPonto = {
     this._timer = setTimeout(() => this.verificar(), Math.max(1000, prox.getTime() - Date.now()));
   },
 
-  abrir(avisos) {
+  /* previa = true: abre o mesmo pop-up pela tela de gestão de pop-ups, sem gravar o ciente. */
+  abrir(avisos, previa) {
     const partes = [];
     if (avisos.sexta) partes.push("Cheque as pendências no cartão de ponto do time.");
     if (avisos.mes) {
@@ -258,14 +259,42 @@ const AlertaPonto = {
     </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector("#alerta-ponto-ciente").addEventListener("click", () => {
-      if (avisos.sexta) this.marcar("sexta", avisos.sexta);
-      if (avisos.mes) this.marcar("mes", avisos.mes);
+      if (!previa) {
+        if (avisos.sexta) this.marcar("sexta", avisos.sexta);
+        if (avisos.mes) this.marcar("mes", avisos.mes);
+      }
       overlay.remove();
     });
+  },
+
+  /* Prévia: a sexta desta semana (ou a próxima) e o dia de fechamento deste mês (ou do próximo). */
+  previaSexta() {
+    const hoje = this.hoje();
+    let sexta = this.sextaDaSemana(hoje);
+    if (sexta < hoje) sexta = this.addDias(sexta, 7);
+    this.abrir({ sexta: sexta, mes: "" }, true);
+  },
+
+  previaFechamento() {
+    const hoje = this.hoje();
+    const p = hoje.split("-");
+    let ano = Number(p[0]);
+    let mes = Number(p[1]);
+    let dia = this.diaFechamento(ano, mes);
+    if (dia < hoje) {
+      mes += 1;
+      if (mes > 12) { mes = 1; ano += 1; }
+      dia = this.diaFechamento(ano, mes);
+    }
+    this.abrir({ sexta: "", mes: dia }, true);
   }
 };
 
 window.AlertaPonto = AlertaPonto;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["ponto-sexta"] = function () { AlertaPonto.previaSexta(); };
+window.PopupPrevias["ponto-fechamento"] = function () { AlertaPonto.previaFechamento(); };
 
 document.addEventListener("DOMContentLoaded", function () {
   let tentativas = 0;
