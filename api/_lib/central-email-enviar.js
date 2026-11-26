@@ -16,10 +16,10 @@ const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
 // Mesmo número de FILA_QUEUE_GROUPS.REENVIAR_JURIDICO. Depois deste envio a fila troca a tag.
 const TAG_REENVIAR_JURIDICO = 8.5;
-// Depois de enviado, o mesmo template não volta para o mesmo cliente/título por este número de dias, mesmo que a
-// tela peça de novo (ex.: navegador aberto na virada do dia com a carteira do dia anterior). A régua dispara só no
-// dia em que o atraso bate com os dias do template; nos dias seguintes (X+1, X+2...) não manda de novo.
-const DIAS_SEM_REPETIR = 30;
+// A régua dispara uma vez, no dia em que o atraso bate com os dias do template. Se o mesmo template já foi para o
+// mesmo cliente/título ONTEM, não manda de novo hoje: é a carteira do dia anterior (navegador aberto na virada do dia),
+// e no dia seguinte o atraso já seria X+1. Se o título voltar a cumprir a regra depois, o e-mail sai normalmente.
+const DIAS_SEM_REPETIR = 1;
 const EMAIL_OK = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 
 function responder(res, status, obj) {
