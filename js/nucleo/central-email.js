@@ -909,14 +909,14 @@ const CentralEmailApp = {
     this.atualizarPreview();
   },
 
-  /* ---------- Sugestões de texto com IA ----------
-     5 sugestões curtas, uma por tom de voz, a partir da tag (e do racional dela), dos dias e do rascunho.
-     Escolhido o tom, "Nova sugestão" pede outra versão naquele tom, diferente das já mostradas.
-     O texto vem com as variáveis do template; nada do cliente real vai para a IA. */
-  ia: { sugestoes: [], tom: "", historico: {}, carregando: false, erro: "" },
+  /* ---------- Sugestões de texto (biblioteca, sem IA e sem custo) ----------
+     5 sugestões curtas, uma por tom de voz, montadas pela situação da tag (central-email-sugestoes.js).
+     Escolhido o tom, "Nova sugestão" traz outra combinação naquele tom, sem repetir as já mostradas.
+     O texto vem com as variáveis do template e a data de retorno do campo "Dias depois do envio". */
+  ia: { sugestoes: [], tom: "", vistos: new Set(), carregando: false, erro: "" },
 
   iaReset() {
-    this.ia = { sugestoes: [], tom: "", historico: {}, carregando: false, erro: "" };
+    this.ia = { sugestoes: [], tom: "", vistos: new Set(), carregando: false, erro: "" };
   },
 
   iaTomId(nome) {
@@ -940,15 +940,14 @@ const CentralEmailApp = {
       </div>`;
     }).join("");
     return `<div class="cem-ia-topo">
-        <span class="cem-rotulo">Sugestões com IA</span>
+        <span class="cem-rotulo">Sugestões de texto</span>
         ${ia.tom ? `<button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaVoltar()">Ver os 5 tons</button>` : ""}
-        <button type="button" class="btn btn-outline cem-ia-btn" onclick="CentralEmailApp.iaPedir('tons')" ${ia.carregando ? "disabled" : ""}>
-          <i data-lucide="sparkles" style="width:14px;height:14px;"></i> ${ia.sugestoes.length ? "Gerar 5 tons de novo" : "Sugerir textos com IA"}
+        <button type="button" class="btn btn-outline cem-ia-btn" onclick="CentralEmailApp.iaPedir('tons')">
+          <i data-lucide="sparkles" style="width:14px;height:14px;"></i> ${ia.sugestoes.length ? "Outras 5 sugestões" : "Sugerir textos"}
         </button>
       </div>
-      ${ia.carregando ? `<p class="cem-legenda">Escrevendo as sugestões…</p>` : ""}
       ${ia.erro ? `<p class="cem-ia-erro">${this.esc(ia.erro)}</p>` : ""}
-      ${!ia.sugestoes.length && !ia.carregando && !ia.erro ? `<p class="cem-legenda">A IA usa a tag, o racional dela, os dias e o rascunho para propor textos curtos em 5 tons de voz, já com as variáveis.</p>` : ""}
+      ${!ia.sugestoes.length && !ia.erro ? `<p class="cem-legenda">Textos curtos em 5 tons de voz (Cordial, Direto, Empático, Formal, Firme), montados pela situação da tag escolhida e já com as variáveis. Escolha a tag antes de sugerir.</p>` : ""}
       ${cards ? `<div class="cem-ia-lista${ia.tom ? " is-um" : ""}">${cards}</div>` : ""}`;
   },
 
@@ -959,56 +958,44 @@ const CentralEmailApp = {
     if (window.lucide && lucide.createIcons) lucide.createIcons();
   },
 
-  async iaPedir(modo, tomId) {
-    if (this.ia.carregando) return;
+  iaPedir(modo, tomId) {
+    const S = window.CentralEmailSugestoes;
+    this.ia.erro = "";
+    if (!S) {
+      this.ia.erro = "A biblioteca de sugestões não carregou. Atualize a página (Ctrl+F5).";
+      this.iaPintar();
+      return;
+    }
     const val = (id) => String((document.getElementById(id) || {}).value || "");
     const tag = Number(val("cem-tag"));
-    const pedido = {
-      modo: modo === "nova" ? "nova" : "tons",
-      tag: Number.isFinite(tag) ? tag : "",
-      tagNome: Number.isFinite(tag) ? this.rotuloTag(tag) : "",
-      diasVencido: Math.max(0, Math.round(Number(val("cem-dias")) || 0)),
-      diasRetorno: Math.max(0, Math.round(Number(val("cem-retorno")) || 0)),
-      assunto: val("cem-assunto").trim(),
-      texto: val("cem-corpo").trim(),
-      tom: tomId || "",
-      anteriores: tomId ? (this.ia.historico[tomId] || []) : []
-    };
-    this.ia.carregando = true;
-    this.ia.erro = "";
-    this.iaPintar();
-    try {
-      const auth = window.MouraAuth;
-      const token = auth && typeof auth.getIntegraToken === "function" ? await auth.getIntegraToken() : "";
-      const headers = { "Content-Type": "application/json" };
-      if (token) headers["X-Integra-Token"] = token;
-      const res = await fetch("/api/central-email-ia", { method: "POST", headers, body: JSON.stringify(pedido) });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
-      const novas = (body.sugestoes || []).filter((s) => s && s.texto);
-      if (pedido.modo === "tons") {
-        this.ia.sugestoes = novas;
-        this.ia.tom = "";
-        this.ia.historico = {};
-      } else {
-        this.ia.sugestoes = this.ia.sugestoes.concat(novas.map((s) => Object.assign({}, s, { tom: s.tom || tomId })));
-        this.ia.tom = tomId;
-      }
-      novas.forEach((s) => {
-        const id = this.iaTomId(s.tom || tomId);
-        (this.ia.historico[id] = this.ia.historico[id] || []).push(s.texto);
-      });
-    } catch (e) {
-      this.ia.erro = "Não consegui gerar as sugestões: " + ((e && e.message) || e);
+    const tagId = Number.isFinite(tag) && val("cem-tag") !== "" ? String(tag) : "10";
+    const retorno = Math.max(0, Math.round(Number(val("cem-retorno")) || 0));
+    if (!(this.ia.vistos instanceof Set)) this.ia.vistos = new Set();
+    // Trocou a tag desde a última sugestão: recomeça a lista.
+    if (this.ia.tag !== tagId) {
+      this.ia.sugestoes = [];
+      this.ia.vistos = new Set();
+      this.ia.tag = tagId;
     }
-    this.ia.carregando = false;
+    const gerar = (tom) => {
+      const s = S.proxima(tagId, tom, retorno, this.ia.vistos);
+      this.ia.vistos.add(s.chave);
+      return s;
+    };
+    if (modo === "nova" && tomId) {
+      this.ia.sugestoes = this.ia.sugestoes.concat([gerar(tomId)]);
+      this.ia.tom = tomId;
+    } else {
+      this.ia.sugestoes = S.TONS.map((t) => gerar(t.id));
+      this.ia.tom = "";
+    }
     this.iaPintar();
   },
 
   iaNova(i) {
     const s = this.ia.sugestoes[i];
     if (!s) return;
-    this.iaPedir("nova", this.iaTomId(s.tom));
+    this.iaPedir("nova", s.tomId || this.iaTomId(s.tom));
   },
 
   iaVoltar() {

@@ -1,6 +1,5 @@
 {
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.14.0",
     "better-sqlite3": "^12.10.0",
     "dotenv": "^17.4.2",
     "firebase": "^12.17.1",
