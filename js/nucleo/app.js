@@ -61386,8 +61386,15 @@ window.gerarMapaZeropaidPDF = async function() {
                 }
             }
             let canvas;
+            // O html2canvas copia o documento inteiro antes de desenhar. Com a fila, as abas e as tabelas do Integra
+            // abertas, cada página demorava muito (e passava do prazo). Copia só o quadro do PDF e o <head> (estilos).
+            const soOQuadro = (n) => {
+                if (!n || n === el || el.contains(n) || (n.contains && n.contains(el))) return false;
+                if (document.head && document.head.contains(n)) return false;
+                return true;
+            };
             try {
-                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
+                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000, ignoreElements: soOQuadro }), 20000);
             } finally {
                 if (liberouFonte) {
                     try { delete fonts.ready; } catch (e) {}
@@ -61429,6 +61436,7 @@ window.gerarMapaZeropaidPDF = async function() {
         const POR_PAGINA = 16;
         const totalPaginas = Math.ceil(linhasLista.length / POR_PAGINA);
         for (let p = 0; p < totalPaginas; p++) {
+            if (btn) btn.textContent = `Página ${p + 2} de ${totalPaginas + 1}…`;
             const fatia = linhasLista.slice(p * POR_PAGINA, (p + 1) * POR_PAGINA);
             const pag = document.createElement("div");
             pag.style.cssText = container.style.cssText;
