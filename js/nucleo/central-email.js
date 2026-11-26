@@ -1078,6 +1078,13 @@ const CentralEmailApp = {
   async dispararDoDia() {
     if (this._disparando || !this.naProducao()) return;
     if (!(window.rawClientList || []).length) return;
+    // A carteira na memória tem o atraso do dia em que foi carregada. Com o navegador aberto na virada do dia, ela
+    // ainda é a de ontem (cliente com X dias ontem continua com X): não dispara até a carteira ser carregada de novo.
+    if (this._carteiraRef !== window.rawClientList) {
+      this._carteiraRef = window.rawClientList;
+      this._carteiraDia = this.hojeIso();
+    }
+    if (this._carteiraDia !== this.hojeIso()) return;
     const chave = "crm_cem_disparo_" + this.hojeIso();
     const chave41 = "crm_cem_41_" + this.hojeIso();
     const forcar41 = this.excecao41Hoje();

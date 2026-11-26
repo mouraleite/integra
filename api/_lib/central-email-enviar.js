@@ -16,6 +16,10 @@ const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
 // Mesmo número de FILA_QUEUE_GROUPS.REENVIAR_JURIDICO. Depois deste envio a fila troca a tag.
 const TAG_REENVIAR_JURIDICO = 8.5;
+// Depois de enviado, o mesmo template não volta para o mesmo cliente/título por este número de dias, mesmo que a
+// tela peça de novo (ex.: navegador aberto na virada do dia com a carteira do dia anterior). A régua dispara só no
+// dia em que o atraso bate com os dias do template; nos dias seguintes (X+1, X+2...) não manda de novo.
+const DIAS_SEM_REPETIR = 30;
 const EMAIL_OK = /^[^\s@,;<>"]+@[^\s@,;<>"]+\.[^\s@,;<>"]+$/;
 
 function responder(res, status, obj) {
@@ -103,6 +107,18 @@ function enviosDoPeriodo(de, ate, limite) {
     filtros: [["dia", "gte", de], ["dia", "lte", ate]],
     limite: Math.min(Number(limite) || 3000, 5000)
   });
+}
+
+// Último envio feito deste template para o cliente/título antes de hoje, dentro da janela (null se não houver).
+async function enviadoAntes(templateId, customerId, titulo, hoje) {
+  const limite = new Date(Date.parse(hoje + "T12:00:00Z") - DIAS_SEM_REPETIR * 86400000).toISOString().slice(0, 10);
+  const lista = await tabela("central_email_envios").listar({
+    filtros: [["template_id", "eq", String(templateId)], ["customer_id", "eq", String(customerId)], ["titulo", "eq", String(titulo)],
+      ["dia", "gte", limite], ["dia", "lt", hoje]],
+    limite: 200
+  });
+  const antes = lista.filter((x) => x && x.status === "enviado").sort((a, b) => String(b.dia).localeCompare(String(a.dia)));
+  return antes[0] || null;
 }
 
 /* Rastreio de abertura: uma imagem 1x1 aponta para /api/email-aberto com o id do envio e uma assinatura
@@ -261,6 +277,13 @@ module.exports = async function handler(req, res) {
           await gravarAcordoTag(customerId, titulo, ja.em);
         }
         r.status = "ja-enviado";
+        resultados.push(r);
+        continue;
+      }
+      const anterior = await enviadoAntes(templateId, customerId, titulo, dia);
+      if (anterior) {
+        r.status = "enviado-antes";
+        r.diaAnterior = anterior.dia;
         resultados.push(r);
         continue;
       }
