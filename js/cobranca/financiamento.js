@@ -2794,8 +2794,7 @@ const FinanciamentoApp = {
     }
     if (holders.length >= 3) campos.push(["[INCLUIR TODOS OS TITULARES DO CONTRATO]", extras]);
     campos.forEach(([campo, valor]) => this.substituirTextoTermo(xmlDoc, campo, valor));
-    const destaques = Array.from(xmlDoc.getElementsByTagNameNS(ns, "highlight"));
-    destaques.forEach((no) => { if (no.parentNode) no.parentNode.removeChild(no); });
+    this.tirarTarjaAmarelaTermo(xmlDoc);
     const textoFinal = Array.from(xmlDoc.getElementsByTagNameNS(ns, "t")).map((no) => no.textContent || "").join("");
     const pendentes = [
       "[Preambulo]", "[NOME DO EMPREENDIMENTO]", "QUADRA/LOTE", "1º TITULAR", "Nº CPF TITULAR",
@@ -2877,6 +2876,7 @@ const FinanciamentoApp = {
       "[data inicial]", "[data final]", "[quantidade]", "XXXXXXXX"
     ].filter((campo) => textoFinal.indexOf(campo) >= 0);
     if (pendentes.length) throw new Error("Há campos sem preenchimento no modelo da declaração: " + pendentes.join(", "));
+    this.tirarTarjaAmarelaTermo(xmlDoc);
     this.justificarParagrafosTermo(xmlDoc);
     zip.file("word/document.xml", new XMLSerializer().serializeToString(xmlDoc));
     return zip.generateAsync({
@@ -2884,6 +2884,44 @@ const FinanciamentoApp = {
       compression: "DEFLATE",
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     });
+  },
+
+  tirarTarjaAmarelaTermo(xmlDoc) {
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    Array.from(xmlDoc.getElementsByTagNameNS(ns, "highlight")).forEach((no) => {
+      if (no.parentNode) no.parentNode.removeChild(no);
+    });
+  },
+
+  tirarTarjaAmarelaNaTela(raiz) {
+    if (!raiz) return;
+    raiz.querySelectorAll("span, mark").forEach((el) => {
+      const fundo = getComputedStyle(el).backgroundColor.replace(/\s/g, "");
+      if (fundo === "rgb(255,255,0)" || fundo === "rgba(255,255,0,1)") {
+        el.style.backgroundColor = "transparent";
+        el.style.background = "transparent";
+      }
+    });
+  },
+
+  canvasTemConteudo(canvas) {
+    if (!canvas || canvas.width < 2 || canvas.height < 2) return false;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+    const w = canvas.width;
+    const h = canvas.height;
+    const passo = Math.max(4, Math.floor(Math.min(w, h) / 50));
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let tinta = 0;
+    let amostras = 0;
+    for (let y = 0; y < h; y += passo) {
+      for (let x = 0; x < w; x += passo) {
+        const i = (y * w + x) * 4;
+        amostras += 1;
+        if (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 240) tinta += 1;
+      }
+    }
+    return amostras > 0 && tinta / amostras > 0.008;
   },
 
   async converterDocxTermoParaPdf(buffer) {
@@ -2896,7 +2934,8 @@ const FinanciamentoApp = {
       throw new Error("O gerador de PDF não está disponível. Atualize a página e tente novamente.");
     }
     const container = document.createElement("div");
-    container.style.cssText = "position:fixed;left:-12000px;top:0;z-index:-1;background:#fff;";
+    // Fora da tela o navegador devolve a página em branco. Fica atrás da interface, mas dentro da área visível.
+    container.style.cssText = "position:fixed;left:0;top:0;z-index:-1;background:#fff;pointer-events:none;";
     document.body.appendChild(container);
     try {
       await window.docx.renderAsync(buffer, container, document.head, {
@@ -2910,6 +2949,7 @@ const FinanciamentoApp = {
         renderFooters: true
       });
       if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      this.tirarTarjaAmarelaNaTela(container);
       const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
       if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
       const { jsPDF } = window.jspdf;
@@ -2918,14 +2958,27 @@ const FinanciamentoApp = {
         const pagina = paginas[i];
         const rect = pagina.getBoundingClientRect();
         if (!(rect.width > 0 && rect.height > 0)) throw new Error("Uma página do termo ficou sem dimensões.");
-        const canvas = await window.html2canvas(pagina, {
+        const opcoesCanvas = {
           backgroundColor: "#ffffff",
           scale: 2,
           useCORS: true,
           logging: false,
           width: Math.ceil(rect.width),
           height: Math.ceil(rect.height)
-        });
+        };
+        let canvas = await window.html2canvas(pagina, opcoesCanvas);
+        if (!this.canvasTemConteudo(canvas)) {
+          const estilo = container.style.cssText;
+          container.style.cssText = "position:fixed;left:0;top:0;z-index:2147483646;background:#fff;";
+          try {
+            canvas = await window.html2canvas(pagina, opcoesCanvas);
+          } finally {
+            container.style.cssText = estilo;
+          }
+        }
+        if (!this.canvasTemConteudo(canvas)) {
+          throw new Error("A página " + (i + 1) + " da declaração saiu em branco. Atualize a página e gere de novo.");
+        }
         const larguraMm = rect.width * 25.4 / 96;
         const alturaMm = rect.height * 25.4 / 96;
         if (!pdf) {
