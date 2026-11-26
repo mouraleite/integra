@@ -1219,95 +1219,138 @@ const FinanciamentoApp = {
       if (this.jaCienteHoje(chave)) return;
       if (!lista.length && !parcelas.length && !parcelasErro) return;
       if (!lista.length && parcelasErro) return;
-      const linhas = lista.map((item) => {
-        const proc = item.row.proc || {};
-        const n = Math.abs(item.prazo.restantes || 0);
-        const safe = String(item.row.key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        return `<button type="button" class="fin-alerta-item" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
-          <strong>${this.esc(proc.customerName || "—")}</strong>
-          <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
-          <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))}</span>
-          <div class="fin-al-chips"><em class="fin-al-chip is-alerta">${this.textoEmAlerta(n)}</em></div>
-        </button>`;
-      }).join("");
-      // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
-      const cards = parcelas.map((p) => {
-        const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const chips = [];
-        const emAlerta = this.diasAlertaParcela(p, hoje);
-        if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">${this.textoEmAlerta(emAlerta)}</em>`);
-        if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
-        if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
-        if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
-        return `<button type="button" class="fin-alerta-item fin-alerta-item--parcela" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
-          <strong>${this.esc(p.cliente || "—")}</strong>
-          <span>Título ${this.esc(p.titulo || "—")}</span>
-          <div class="fin-al-chips">${chips.join("")}</div>
-        </button>`;
-      }).join("");
-      const cab = (tipo, titulo, qtd, explica) => `<div class="fin-al-cab fin-al-cab--${tipo}">
-          <span class="fin-al-tipo">${tipo === "etapa" ? "ESTEIRA" : "COBRANÇA"}</span>
-          <strong>${titulo}</strong>
-          <b class="fin-al-qtd">${qtd}</b>
-        </div>
-        <p class="fin-al-explica">${explica}</p>`;
-      const blocoEtapas = `<section class="fin-al-sec fin-al-sec--etapa">
-          ${cab("etapa", "Etapas vencidas do processo", lista.length, "A etapa atual do financiamento passou do prazo. O processo está parado e precisa andar na esteira.")}
-          ${lista.length ? `<div class="fin-al-lista">${linhas}</div>` : `<p class="fin-al-vazio">Nenhuma etapa da esteira está vencida.</p>`}
-        </section>`;
-      const blocoParcelas = `<section class="fin-al-sec fin-al-sec--parcela">
-          ${cab("parcela", "Parcelas dos clientes em financiamento", parcelas.length, "Parcelas do contrato (não são etapas): vencidas, que vencem neste mês ou no mês seguinte.")}
-          ${parcelas.length ? `<div class="fin-al-lista">${cards}</div>`
-            : `<p class="fin-al-vazio">${parcelasErro ? "A consulta das parcelas não terminou. O batimento das 7h traz essa lista." : "Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte."}</p>`}
-        </section>`;
-      const overlay = document.createElement("div");
-      overlay.id = "fin-alerta";
-      overlay.setAttribute("role", "dialog");
-      overlay.setAttribute("aria-labelledby", "fin-alerta-titulo");
-      overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
-      overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
-          <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Financiamentos: etapas e parcelas</h2>
-          <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
-        </div>
-        <div style="padding:12px 18px 12px;overflow:auto;">
-          ${blocoEtapas}
-          ${blocoParcelas}
-        </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px 16px;border-top:1px solid #e2e8f0;">
-          <span style="color:#64748b;font-size:0.8rem;">Ao dar ciente, este aviso só volta amanhã.</span>
-          <button type="button" class="btn btn-primary" id="fin-alerta-ciente">Ciente</button>
-        </div>
-      </div>`;
-      document.body.appendChild(overlay);
-      const estilo = document.createElement("style");
-      estilo.textContent = "#fin-alerta .fin-al-sec{border-radius:12px;padding:12px;margin-bottom:14px;}"
-        + "#fin-alerta .fin-al-sec--etapa{background:#fef2f2;border:1px solid #fecaca;}"
-        + "#fin-alerta .fin-al-sec--parcela{background:#eff6ff;border:1px solid #bfdbfe;}"
-        + "#fin-alerta .fin-al-cab{display:flex;align-items:center;gap:8px;}"
-        + "#fin-alerta .fin-al-cab strong{font-size:0.95rem;flex:1;}"
-        + "#fin-alerta .fin-al-cab--etapa strong{color:#991b1b;}#fin-alerta .fin-al-cab--parcela strong{color:#1e3a8a;}"
-        + "#fin-alerta .fin-al-tipo{font-size:0.62rem;font-weight:800;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;color:#fff;}"
-        + "#fin-alerta .fin-al-cab--etapa .fin-al-tipo{background:#b91c1c;}#fin-alerta .fin-al-cab--parcela .fin-al-tipo{background:#1d4ed8;}"
-        + "#fin-alerta .fin-al-qtd{min-width:26px;text-align:center;padding:2px 8px;border-radius:999px;background:#fff;font-size:0.8rem;}"
-        + "#fin-alerta .fin-al-cab--etapa .fin-al-qtd{color:#991b1b;border:1px solid #fecaca;}#fin-alerta .fin-al-cab--parcela .fin-al-qtd{color:#1e3a8a;border:1px solid #bfdbfe;}"
-        + "#fin-alerta .fin-al-explica{margin:6px 0 10px;color:#475569;font-size:0.8rem;line-height:1.4;}"
-        + "#fin-alerta .fin-al-vazio{margin:0;color:#64748b;font-size:0.85rem;}"
-        + "#fin-alerta .fin-al-lista{display:flex;flex-direction:column;gap:8px;}"
-        + "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}"
-        + "#fin-alerta .fin-alerta-item--parcela{border-color:#bfdbfe;border-left-color:#1d4ed8;}"
-        + "#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}"
-        + "#fin-alerta .fin-al-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}"
-        + "#fin-alerta .fin-al-chip{font-style:normal;font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:999px;}"
-        + "#fin-alerta .fin-al-chip.is-alerta{background:#1e293b;color:#fff;}"
-        + "#fin-alerta .fin-al-chip.is-venc{background:#fee2e2;color:#991b1b;}#fin-alerta .fin-al-chip.is-mes{background:#fef3c7;color:#92400e;}#fin-alerta .fin-al-chip.is-seg{background:#f1f5f9;color:#475569;}";
-      overlay.appendChild(estilo);
+      const overlay = this.montarAlertaEsteira(lista, parcelas, parcelasErro, hoje, false);
       // Fechar só fecha agora (volta ao recarregar); Ciente esconde até amanhã.
       overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave, false));
       overlay.querySelector("#fin-alerta-ciente").addEventListener("click", () => this.fecharAlertaEsteira(chave, true));
     } finally {
       this._alertaAbrindo = false;
     }
+  },
+
+  /* Monta o aviso (mesmo HTML e CSS) e devolve o overlay. Quem chama liga Fechar e Ciente.
+     previa = true: aberto pela tela de gestão de pop-ups; os itens não abrem o financiamento. */
+  montarAlertaEsteira(lista, parcelas, parcelasErro, hoje, previa) {
+    const linhas = lista.map((item) => {
+      const proc = item.row.proc || {};
+      const n = Math.abs(item.prazo.restantes || 0);
+      const safe = String(item.row.key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return `<button type="button" class="fin-alerta-item" ${previa ? "" : `onclick="FinanciamentoApp.abrirDoAlerta('${safe}')"`}>
+        <strong>${this.esc(proc.customerName || "—")}</strong>
+        <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
+        <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))}</span>
+        <div class="fin-al-chips"><em class="fin-al-chip is-alerta">${this.textoEmAlerta(n)}</em></div>
+      </button>`;
+    }).join("");
+    // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
+    const cards = parcelas.map((p) => {
+      const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const chips = [];
+      const emAlerta = this.diasAlertaParcela(p, hoje);
+      if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">${this.textoEmAlerta(emAlerta)}</em>`);
+      if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
+      if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
+      if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
+      return `<button type="button" class="fin-alerta-item fin-alerta-item--parcela" ${previa ? "" : `onclick="FinanciamentoApp.abrirDoAlerta('${safe}')"`}>
+        <strong>${this.esc(p.cliente || "—")}</strong>
+        <span>Título ${this.esc(p.titulo || "—")}</span>
+        <div class="fin-al-chips">${chips.join("")}</div>
+      </button>`;
+    }).join("");
+    const cab = (tipo, titulo, qtd, explica) => `<div class="fin-al-cab fin-al-cab--${tipo}">
+        <span class="fin-al-tipo">${tipo === "etapa" ? "ESTEIRA" : "COBRANÇA"}</span>
+        <strong>${titulo}</strong>
+        <b class="fin-al-qtd">${qtd}</b>
+      </div>
+      <p class="fin-al-explica">${explica}</p>`;
+    const blocoEtapas = `<section class="fin-al-sec fin-al-sec--etapa">
+        ${cab("etapa", "Etapas vencidas do processo", lista.length, "A etapa atual do financiamento passou do prazo. O processo está parado e precisa andar na esteira.")}
+        ${lista.length ? `<div class="fin-al-lista">${linhas}</div>` : `<p class="fin-al-vazio">Nenhuma etapa da esteira está vencida.</p>`}
+      </section>`;
+    const blocoParcelas = `<section class="fin-al-sec fin-al-sec--parcela">
+        ${cab("parcela", "Parcelas dos clientes em financiamento", parcelas.length, "Parcelas do contrato (não são etapas): vencidas, que vencem neste mês ou no mês seguinte.")}
+        ${parcelas.length ? `<div class="fin-al-lista">${cards}</div>`
+          : `<p class="fin-al-vazio">${parcelasErro ? "A consulta das parcelas não terminou. O batimento das 7h traz essa lista." : "Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte."}</p>`}
+      </section>`;
+    const overlay = document.createElement("div");
+    overlay.id = "fin-alerta";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-labelledby", "fin-alerta-titulo");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
+    overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
+        <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Financiamentos: etapas e parcelas</h2>
+        <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
+      </div>
+      <div style="padding:12px 18px 12px;overflow:auto;">
+        ${blocoEtapas}
+        ${blocoParcelas}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px 16px;border-top:1px solid #e2e8f0;">
+        <span style="color:#64748b;font-size:0.8rem;">Ao dar ciente, este aviso só volta amanhã.</span>
+        <button type="button" class="btn btn-primary" id="fin-alerta-ciente">Ciente</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const estilo = document.createElement("style");
+    estilo.textContent = "#fin-alerta .fin-al-sec{border-radius:12px;padding:12px;margin-bottom:14px;}"
+      + "#fin-alerta .fin-al-sec--etapa{background:#fef2f2;border:1px solid #fecaca;}"
+      + "#fin-alerta .fin-al-sec--parcela{background:#eff6ff;border:1px solid #bfdbfe;}"
+      + "#fin-alerta .fin-al-cab{display:flex;align-items:center;gap:8px;}"
+      + "#fin-alerta .fin-al-cab strong{font-size:0.95rem;flex:1;}"
+      + "#fin-alerta .fin-al-cab--etapa strong{color:#991b1b;}#fin-alerta .fin-al-cab--parcela strong{color:#1e3a8a;}"
+      + "#fin-alerta .fin-al-tipo{font-size:0.62rem;font-weight:800;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;color:#fff;}"
+      + "#fin-alerta .fin-al-cab--etapa .fin-al-tipo{background:#b91c1c;}#fin-alerta .fin-al-cab--parcela .fin-al-tipo{background:#1d4ed8;}"
+      + "#fin-alerta .fin-al-qtd{min-width:26px;text-align:center;padding:2px 8px;border-radius:999px;background:#fff;font-size:0.8rem;}"
+      + "#fin-alerta .fin-al-cab--etapa .fin-al-qtd{color:#991b1b;border:1px solid #fecaca;}#fin-alerta .fin-al-cab--parcela .fin-al-qtd{color:#1e3a8a;border:1px solid #bfdbfe;}"
+      + "#fin-alerta .fin-al-explica{margin:6px 0 10px;color:#475569;font-size:0.8rem;line-height:1.4;}"
+      + "#fin-alerta .fin-al-vazio{margin:0;color:#64748b;font-size:0.85rem;}"
+      + "#fin-alerta .fin-al-lista{display:flex;flex-direction:column;gap:8px;}"
+      + "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}"
+      + "#fin-alerta .fin-alerta-item--parcela{border-color:#bfdbfe;border-left-color:#1d4ed8;}"
+      + "#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}"
+      + "#fin-alerta .fin-al-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}"
+      + "#fin-alerta .fin-al-chip{font-style:normal;font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:999px;}"
+      + "#fin-alerta .fin-al-chip.is-alerta{background:#1e293b;color:#fff;}"
+      + "#fin-alerta .fin-al-chip.is-venc{background:#fee2e2;color:#991b1b;}#fin-alerta .fin-al-chip.is-mes{background:#fef3c7;color:#92400e;}#fin-alerta .fin-al-chip.is-seg{background:#f1f5f9;color:#475569;}";
+    overlay.appendChild(estilo);
+    return overlay;
+  },
+
+  /* Prévia pela tela de gestão de pop-ups: etapas vencidas da lista já carregada e parcelas do batimento de hoje
+     (só leitura); o que faltar vira exemplo. Fechar e Ciente só fecham, sem gravar. */
+  async previaAlertaEsteira() {
+    const hoje = this.hojeIso();
+    let lista = [];
+    try { lista = this.atrasadosEsteira(); } catch (e) { lista = []; }
+    if (!lista.length) {
+      const limite = this.somarDias(hoje, -4);
+      const entrada = this.somarDias(limite, -10);
+      lista = [{
+        row: { key: "previa", proc: { customerName: "BRUNA ALVES", contractNumber: "6526", unit: "QD 12 LT 08" } },
+        etapa: { label: "4. Validar minuta" },
+        prazo: { entrada: entrada, limite: limite, dias: 10, status: "atrasado", restantes: -4 }
+      }];
+    }
+    let parcelas = [];
+    try {
+      const salvo = await Promise.race([
+        this.lerBatimentoRemessa(),
+        new Promise((r) => setTimeout(() => r(null), 3000))
+      ]);
+      if (salvo && salvo.date === hoje && salvo.done && Array.isArray(salvo.parcelas)) parcelas = salvo.parcelas;
+    } catch (e) { parcelas = []; }
+    if (!parcelas.length) {
+      const fimMes = this.fimDoMes(hoje);
+      const fimSeg = this.fimDoMesSeguinte(hoje);
+      parcelas = [{
+        key: "previa", cliente: "ERICK HENRIQUE", titulo: "9336", vencidas: 8, mes: 1, seguinte: 1,
+        maisAntiga: this.somarDias(hoje, -240), primeiraMes: fimMes > hoje ? fimMes : "", primeiraSeguinte: fimSeg
+      }];
+    }
+    const overlay = this.montarAlertaEsteira(lista, parcelas, false, hoje, true);
+    overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#fin-alerta-ciente").addEventListener("click", () => overlay.remove());
   },
 
   textoEmAlerta(n) {
@@ -2122,6 +2165,9 @@ const FinanciamentoApp = {
 };
 
 window.FinanciamentoApp = FinanciamentoApp;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["esteira"] = function () { return FinanciamentoApp.previaAlertaEsteira(); };
 
 /* Junta os financiamentos deste navegador com os da nuvem. Fica o registro mais novo de cada contrato, sem apagar o outro. */
 window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {

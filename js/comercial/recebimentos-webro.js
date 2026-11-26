@@ -1267,7 +1267,8 @@ const WebroRepasseAviso = {
     this.abrir(itens, u);
   },
 
-  abrir(itens, u) {
+  /* previa = true: aberto pela tela de gestão de pop-ups. Ciente e Checar repasse só fecham, sem gravar. */
+  abrir(itens, u, previa) {
     const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const br = (iso) => { const s = String(iso || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4) : "—"; };
     const pop = document.createElement("div");
@@ -1290,19 +1291,61 @@ const WebroRepasseAviso = {
     </div>`;
     document.body.appendChild(pop);
     const fechar = () => {
-      try { localStorage.setItem(this.chaveCiente(u), "1"); } catch (e) {}
+      if (!previa) {
+        try { localStorage.setItem(this.chaveCiente(u), "1"); } catch (e) {}
+      }
       pop.remove();
     };
     pop.querySelector("#webro-repasse-ciente").addEventListener("click", fechar);
     pop.querySelector("#webro-repasse-checar").addEventListener("click", () => {
       fechar();
+      if (previa) return;
       if (typeof window.switchTab === "function") window.switchTab("recebimentos-webro", "Recebimentos Webro");
       setTimeout(() => { if (window.RecebimentosWebroApp) RecebimentosWebroApp.trocarAba("repasse"); }, 300);
     });
+  },
+
+  /* Prévia: títulos com repasse pendente da fila já carregada na memória; sem fila, um exemplo. */
+  previa() {
+    const itens = [];
+    const fila = window.rawClientList || [];
+    if (fila.length && typeof window.getWebroBaixaStatus === "function") {
+      const vistos = new Set();
+      for (const c of fila) {
+        if (!c || !c.saleId || vistos.has(String(c.saleId))) continue;
+        vistos.add(String(c.saleId));
+        let status = "";
+        try { status = window.getWebroBaixaStatus(c); } catch (e) { status = ""; }
+        if (status !== "PENDENTE") continue;
+        const occ = typeof window.getActiveWebroBaixaOccurrence === "function" ? window.getActiveWebroBaixaOccurrence(c) : null;
+        itens.push({
+          titulo: String(c.saleId),
+          cliente: String(c.customerName || ""),
+          unidade: (c.costCenterId ? c.costCenterId + " - " : "") + String(c.unitName || ""),
+          operador: String(c.assignedOperator || ""),
+          baixa: occ ? String(occ.promiseDate || "").slice(0, 10) : ""
+        });
+      }
+    }
+    if (!itens.length) {
+      let baixa = this.hoje();
+      if (typeof window.addDaysIso === "function") {
+        for (let n = 0; n < 5;) {
+          baixa = window.addDaysIso(baixa, -1);
+          if (typeof window.isBusinessDayIso !== "function" || window.isBusinessDayIso(baixa)) n += 1;
+        }
+      }
+      itens.push({ titulo: "16752", cliente: "CLIENTE EXEMPLO", unidade: "14704 - P-06", operador: "", baixa });
+    }
+    itens.sort((a, b) => String(a.baixa || "").localeCompare(String(b.baixa || "")));
+    this.abrir(itens, null, true);
   }
 };
 
 window.WebroRepasseAviso = WebroRepasseAviso;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["webro-repasse"] = function () { WebroRepasseAviso.previa(); };
 
 document.addEventListener("DOMContentLoaded", function () {
   // Quem tem a fila carregada mantém a lista atualizada; confere a cada 2 minutos.

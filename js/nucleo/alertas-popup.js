@@ -245,9 +245,36 @@ const AlertasPopupApp = {
     if (window.lucide && lucide.createIcons) lucide.createIcons();
   },
 
-  visualizar(id) {
+  /** Faixa no topo da tela enquanto a prévia real está aberta: diz para quem é e que nada é gravado. */
+  faixaPrevia(item) {
+    const antiga = document.getElementById("apa-previa-faixa");
+    if (antiga) antiga.remove();
+    const faixa = document.createElement("div");
+    faixa.id = "apa-previa-faixa";
+    faixa.className = "apa-previa-faixa";
+    faixa.textContent = "Prévia (nada é gravado) · Para: " + item.quem;
+    document.body.appendChild(faixa);
+    setTimeout(() => { if (faixa.parentNode) faixa.remove(); }, 8000);
+  },
+
+  async visualizar(id) {
     const item = this.itens.find((row) => row.id === id);
     if (!item) return;
+    // Prévia real: o próprio módulo do pop-up registra em window.PopupPrevias a função que abre o aviso
+    // de verdade, com dados de exemplo e sem gravar. Módulo sob demanda é carregado antes.
+    if (item.grupo && typeof window.crmCarregarGrupoSobDemanda === "function") {
+      try { await window.crmCarregarGrupoSobDemanda(item.grupo); } catch (e) {}
+    }
+    const previa = window.PopupPrevias && window.PopupPrevias[id];
+    if (typeof previa === "function") {
+      try {
+        await previa();
+        this.faixaPrevia(item);
+        return;
+      } catch (e) {
+        console.warn("[Alertas pop-up] prévia real falhou, mostrando o resumo:", e);
+      }
+    }
     const antigo = document.getElementById("apa-preview");
     if (antigo) antigo.remove();
     const pop = document.createElement("div");

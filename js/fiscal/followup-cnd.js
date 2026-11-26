@@ -553,7 +553,7 @@ const FollowupCndApp = {
     this.abrirPopup(pend.map(function(it) { return it.id; }), true);
   },
 
-  linhaPopup(it) {
+  linhaPopup(it, previa) {
     const cidade = it.cidade || "Cidade não identificada";
     const matricula = it.matricula || "não localizada no cadastro";
     return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;">
@@ -565,7 +565,7 @@ const FollowupCndApp = {
         <span>Matrícula</span><strong>${this.esc(matricula)}</strong>
       </div>
       <label style="display:block;font-size:0.82rem;font-weight:700;margin-bottom:4px;">CND do lote</label>
-      <input type="file" class="fcnd-arq" data-id="${this.esc(it.id)}" accept=".pdf,application/pdf" style="width:100%;box-sizing:border-box;padding:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;">
+      <input type="file" class="fcnd-arq" data-id="${this.esc(it.id)}" accept=".pdf,application/pdf"${previa ? " disabled" : ""} style="width:100%;box-sizing:border-box;padding:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;">
       <p class="fcnd-arq-msg" data-id="${this.esc(it.id)}" style="margin:6px 0 0;font-size:0.78rem;color:#64748b;"></p>
     </div>`;
   },
@@ -574,27 +574,62 @@ const FollowupCndApp = {
     const listaIds = Array.isArray(ids) ? ids : [ids];
     const itens = listaIds.map((id) => this.itens.find(function(it) { return it.id === id; })).filter(Boolean);
     if (!itens.length) return;
-    let pop = document.getElementById("followup-cnd-pop");
+    this.montarPopup(itens, { automatico: !!automatico });
+  },
+
+  /** Monta o pop-up "Providenciar a CND". Real: id "followup-cnd-pop". Prévia (o.previa): id próprio,
+      Fechar/Cancelar só removem, anexo e "Enviar CND" desabilitados — nada é gravado. */
+  montarPopup(itens, o) {
+    const previa = !!(o && o.previa);
+    const idPop = previa ? "followup-cnd-pop-previa" : "followup-cnd-pop";
+    const fechar = previa
+      ? "document.getElementById('followup-cnd-pop-previa').remove()"
+      : "FollowupCndApp.fecharPopup(" + (o && o.automatico ? "true" : "false") + ")";
+    let pop = document.getElementById(idPop);
     if (pop) pop.remove();
     pop = document.createElement("div");
-    pop.id = "followup-cnd-pop";
+    pop.id = idPop;
     pop.style.cssText = "position:fixed;inset:0;background:rgba(12,41,29,0.55);display:flex;align-items:center;justify-content:center;z-index:10000;padding:16px;";
-    const blocos = itens.map((it) => this.linhaPopup(it)).join("");
+    const blocos = itens.map((it) => this.linhaPopup(it, previa)).join("");
     pop.innerHTML = `<div style="background:#fff;border-radius:12px;width:min(640px,100%);max-height:min(88vh,760px);overflow:auto;box-shadow:0 18px 40px rgba(0,0,0,0.22);">
       <div style="background:#105436;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div style="color:#fff;font-size:0.95rem;font-weight:800;">Providenciar a CND</div>
-        <button type="button" class="btn btn-fechar" onclick="FollowupCndApp.fecharPopup(${automatico ? "true" : "false"})">Fechar</button>
+        <button type="button" class="btn btn-fechar" onclick="${fechar}">Fechar</button>
       </div>
       <div style="padding:18px;">
         <p style="margin:0 0 12px;font-size:0.86rem;color:#334155;line-height:1.45;">Passaram 10 dias corridos do distrato. Providencie a CND do lote. Cidade, empreendimento, unidade e matrícula estão abaixo para a pesquisa na prefeitura. A certidão sobe no anexo da unidade.</p>
         ${blocos}
         <div style="display:flex;justify-content:flex-end;gap:8px;">
-          <button type="button" class="btn btn-cancel" onclick="FollowupCndApp.fecharPopup(${automatico ? "true" : "false"})">Cancelar</button>
-          <button type="button" class="btn btn-primary" id="fcnd-enviar" onclick="FollowupCndApp.enviarCnd()">Enviar CND</button>
+          <button type="button" class="btn btn-cancel" onclick="${fechar}">Cancelar</button>
+          ${previa
+            ? `<button type="button" class="btn btn-primary" disabled title="Prévia: nada é enviado">Enviar CND</button>`
+            : `<button type="button" class="btn btn-primary" id="fcnd-enviar" onclick="FollowupCndApp.enviarCnd()">Enviar CND</button>`}
         </div>
       </div>
     </div>`;
     document.body.appendChild(pop);
+  },
+
+  /** Prévia para a gestão de pop-ups: itens pendentes já em memória (cópia) ou um exemplo. Sem carregar nem gravar. */
+  previa() {
+    const hoje = this.hoje();
+    const reais = (this.itens || []).filter(function(it) { return it && !it.cndEntregue; }).slice(0, 2)
+      .map(function(it) { return Object.assign({}, it, { id: "previa-" + it.id }); });
+    const itens = reais.length ? reais : [{
+      id: "previa-1",
+      customerId: "0000",
+      customerName: "Cliente exemplo",
+      saleId: "12345",
+      empreendimento: "0001 - Residencial Exemplo",
+      unidade: "Quadra 12 Lote 08",
+      cidade: "Cidade exemplo",
+      matricula: "45.678",
+      dataDistrato: this.somaDias(hoje, -10),
+      prazo: hoje,
+      documento: "extrato de IPTU",
+      cndEntregue: false
+    }];
+    this.montarPopup(itens, { previa: true });
   },
 
   fecharPopup(lembrar) {
@@ -663,3 +698,7 @@ const FollowupCndApp = {
 };
 
 window.FollowupCndApp = FollowupCndApp;
+
+// Prévia na gestão de pop-ups (alertas-popup.js): o pop-up real, sem gravar nada.
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["cnd"] = function() { FollowupCndApp.previa(); };
