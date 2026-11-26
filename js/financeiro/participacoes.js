@@ -2666,7 +2666,23 @@ const ParticipacoesApp = {
     this._catDados = d;
     const filtrado = this.catFiltro.cats.length || this.catFiltro.credores.length || this.catFiltro.empresas.length;
     const cel = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
-    const larg = 320 + d.meses.length * 112 + 130;
+    // Colunas condensadas: cada mês fica com a largura do maior valor dele (7px por caractere + folga).
+    const px = (txt) => Math.max(48, String(txt || "").length * 7 + 12);
+    const largMes = {};
+    d.meses.forEach((m) => {
+      let maior = this.fmt(d.totMes[m] || 0);
+      d.credores.forEach((c) => {
+        [c.cells[m]].concat(c.spes.map((s) => s.cells[m])).forEach((v) => {
+          const t = v ? this.fmt(v) : "";
+          if (t.length > maior.length) maior = t;
+        });
+      });
+      largMes[m] = px(maior);
+    });
+    const largTot = px(this.fmt(d.total)) + 4;
+    const largNome = 250;
+    const larg = largNome + d.meses.reduce((s, m) => s + largMes[m], 0) + largTot;
+    const mesCab = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
     const corpo = d.credores.map((c, ci) => {
       const linhaCredor = `<tr class="part-cat-credor">
           <td class="part-cat-fixa"><button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
@@ -2688,13 +2704,15 @@ const ParticipacoesApp = {
         .part-cat-filtros .btn{height:40px;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;}
         .part-cat-info{font-size:.75rem;color:#64748b;margin:0 0 8px;}
         .part-cat-tabela{table-layout:fixed;}
-        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;}
+        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;padding:4px 5px;}
+        .part-cat-tabela th:not(.part-cat-fixa), .part-cat-tabela td:not(.part-cat-fixa){overflow:visible;text-overflow:clip;}
         .part-cat-tabela .part-cat-fixa{position:sticky;left:0;z-index:1;background:inherit;overflow:hidden;text-overflow:ellipsis;}
         .part-cat-tabela thead .part-cat-fixa{z-index:3;background:#1b8253;}
         .part-cat-tabela tbody tr.part-cat-credor td{background:#e7f6ee;color:#105436;font-weight:700;border-top:2px solid #c9e8d6;}
         .part-cat-tabela tbody tr.part-cat-spe td{background:#fff;}
         .part-cat-tabela tbody tr.part-cat-spe:hover td{background:#f7faf8;}
-        .part-cat-tabela tfoot td{position:sticky;bottom:0;background:#105436;color:#fff;font-weight:700;padding:6px;}
+        .part-cat-tabela tfoot td{position:sticky;bottom:0;z-index:2;background:#105436;color:#fff;font-weight:700;padding:6px 5px;}
+        .part-cat-tabela tfoot td.part-cat-fixa{z-index:4;background:#105436;}
         .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
         .part-cat-nome{font-weight:800;display:block;}
         .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
@@ -2715,8 +2733,8 @@ const ParticipacoesApp = {
       ${d.credores.length ? `
       <div class="cc-scroll" id="part-cat-scroll" style="max-height:calc(100vh - 330px);">
         <table class="cc-table part-cat-tabela" style="width:max(100%, ${larg}px);">
-          <colgroup><col style="width:320px">${d.meses.map(() => `<col style="width:112px">`).join("")}<col style="width:130px"></colgroup>
-          <thead><tr><th class="part-cat-fixa">Credor / SPE</th>${d.meses.map((m) => `<th class="is-right" title="${this.esc(this.periodLabel(m, m))}">${this.esc(this.mesCurto(m))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+          <colgroup><col style="width:${largNome}px">${d.meses.map((m) => `<col style="width:${largMes[m]}px">`).join("")}<col style="width:${largTot}px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor / SPE</th>${d.meses.map((m) => `<th class="is-right" title="${this.esc(this.periodLabel(m, m))}">${this.esc(mesCab(m))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
           <tbody>${corpo}</tbody>
           <tfoot><tr><td class="part-cat-fixa">Total</td>${d.meses.map((m) => `<td class="is-right">${d.totMes[m] ? this.fmt(d.totMes[m]) : "—"}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td></tr></tfoot>
         </table>

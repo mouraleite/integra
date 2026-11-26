@@ -2286,6 +2286,21 @@ const GerarPagamentoApp = {
     return this.state.lotes.find((l) => !this.loteNoSienge(l) && this.temTitulo(l, chave)) || null;
   },
 
+  /** O robô tentou o lote e o Sienge não deixou selecionar este título (X vermelho na tela do lote do Sienge). */
+  recusaSiengeDe(chave) {
+    const l = this.lotePendenteDe(chave);
+    const hist = (l && l.sienge && l.sienge.historico) || [];
+    const ultimo = hist[hist.length - 1];
+    const msg = String((ultimo && ultimo.msg) || "");
+    const pos = msg.indexOf("não deixa selecionar:");
+    if (!ultimo || ultimo.ok !== false || pos < 0) return "";
+    const it = (l.itens || []).find((i) => this.chaveTitulo(i.titulo, i.parcela) === chave);
+    if (!it) return "";
+    const lista = msg.slice(pos);
+    const ref = String(it.titulo) + "/" + String(it.parcela || 1);
+    return new RegExp("(^|[\\s;:])" + ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=\\s|;|$)").test(lista) ? (ultimo.em || "sim") : "";
+  },
+
   /** Tira os títulos de lotes que não chegaram ao Sienge; lote que fica vazio é apagado. */
   async limparPendentes(chaves) {
     const s = this.state;
@@ -3904,12 +3919,14 @@ const GerarPagamentoApp = {
         const tag = it.loteIntegra
           ? `<span class="gp-pill gp-ok">No lote ${this.esc(it.loteIntegra.id)}</span>`
           : (it.loteSienge ? `<span class="gp-pill gp-warn">Já em lote no Sienge${it.loteSienge !== "sim" ? " nº " + this.esc(it.loteSienge) : ""}</span>`
-            : (this.lotePendenteDe(it.chave)
+            : (this.recusaSiengeDe(it.chave)
+              ? `<span class="gp-pill gp-bad" title="Na tela do lote do Sienge este título aparece com um X vermelho e não pode ser selecionado. Passe o mouse no X (ou no código ao lado dele) no Sienge para ver o motivo, corrija o título lá e gere o lote de novo.">Sienge recusou</span><small>Ver o X vermelho no lote do Sienge</small>`
+              : (this.lotePendenteDe(it.chave)
               ? `<span class="gp-pill gp-wait" title="Está no lote ${this.esc(this.lotePendenteDe(it.chave).id)}, que não foi gerado no Sienge. Ao gerar de novo, ele sai daquele lote.">Em aberto</span><small>Lote não gerado no Sienge</small>`
-              : `<span class="gp-pill gp-wait">Em aberto</span>`));
+              : `<span class="gp-pill gp-wait">Em aberto</span>`)));
         const pagSelo = this.pagSeloDe(it);
         const retido = this.retidoDe(it);
-        return `<tr class="gp-click${it.emLote ? " gp-em-lote" : ""}${this.bloqueioVisivel(it) ? " gp-row-bad" : ""}" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Clique para ver o resumo do título">
+        return `<tr class="gp-click${it.emLote ? " gp-em-lote" : ""}${this.bloqueioVisivel(it) || (!it.emLote && this.recusaSiengeDe(it.chave)) ? " gp-row-bad" : ""}" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Clique para ver o resumo do título">
           <td style="text-align:center;" onclick="event.stopPropagation()"><input type="checkbox" ${it.marcado ? "checked" : ""} ${sem || it.emLote || it.bloqueio || gerando ? "disabled" : ""}
             title="${this.esc(it.emLote ? "Já está em lote; não pode entrar em outro." : (it.bloqueio ? "Bloqueado: " + it.bloqueio : ""))}"
             onchange="GerarPagamentoApp.toggleItem('${this.esc(it.selKey)}')"></td>

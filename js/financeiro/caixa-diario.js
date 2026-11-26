@@ -1023,7 +1023,10 @@ const FluxoCaixaDiarioApp = {
     if (!D) return;
     try {
       const data = (await D.lerConfigCaixa()) || {};
-      this.flags = Object.assign({}, data.contas || {}, this._flagsPendentes || {});
+      // Contas ligadas: o que está gravado é o padrão de todos; o liga/desliga sem gravar vale só nesta tela.
+      this.flags = Object.assign({}, data.contas || {}, this._flagsTeste || {});
+      this._padraoContas = data.contas || {};
+      this._padraoInfo = { por: data.contasGravadoPor || data.updatedBy || "", em: data.contasGravadoEm || data.updatedAt || "" };
       this.tipos = Object.assign({}, data.tipos || {}, this._tiposPendentes || {});
       this.ccExcl = Object.assign({}, data.empreendimentosExcluidos || {}, this._ccPendentes || {});
       this._flagsLoaded = true;
@@ -1248,11 +1251,71 @@ const FluxoCaixaDiarioApp = {
       .reduce((s, a) => s + this.saldoBase(a), 0);
   },
 
-  async setFlag(key, on) {
+  /** Liga/desliga sem gravar: vale só nesta tela até clicar em "Gravar disponível". */
+  setFlag(key, on) {
+    this._flagsTeste = this._flagsTeste || {};
+    const gravado = (this._padraoContas || {})[key] !== false;
+    if (!!on === gravado) delete this._flagsTeste[key];
+    else this._flagsTeste[key] = !!on;
     this.flags[key] = !!on;
     this.rebuild();
     this.render();
-    await this._salvarPendente("_flagsPendentes", key, !!on, { contas: { [key]: !!on } }, "Não consegui gravar a marcação da conta na nuvem.");
+  },
+
+  qtdeDisponivelAlterado() {
+    return Object.keys(this._flagsTeste || {}).length;
+  },
+
+  /** Grava as contas ligadas como o padrão do disponível para todos. */
+  async gravarDisponivel() {
+    const mud = Object.assign({}, this._flagsTeste || {});
+    const n = Object.keys(mud).length;
+    if (!n) { alert("Nenhuma conta foi ligada ou desligada desde o último padrão gravado."); return; }
+    const pergunta = "Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.";
+    const segue = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!segue) return;
+    const user = (window.AppState && AppState.currentUser) || {};
+    const ok = await this.saveConfig({
+      contas: mud,
+      contasGravadoPor: user.name || user.email || "",
+      contasGravadoEm: new Date().toISOString()
+    }, "Não consegui gravar as contas do disponível no Firebase.");
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.rebuild();
+    this.render();
+  },
+
+  /** Desfaz o liga/desliga não gravado e volta às contas do padrão gravado. */
+  async restaurarDisponivel() {
+    const n = this.qtdeDisponivelAlterado();
+    if (!n) { alert("As contas já estão no padrão gravado."); return; }
+    const pergunta = "Desfazer " + n + " alteração(ões) e voltar às contas do padrão gravado?";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.flags = Object.assign({}, this._padraoContas || {});
+    this.rebuild();
+    this.render();
+  },
+
+  disponivelBarHtml() {
+    const n = this.qtdeDisponivelAlterado();
+    const info = this._padraoInfo || {};
+    const quando = info.em ? caixaFmtDate(String(info.em).slice(0, 10)) : "";
+    const padrao = info.por || quando ? `Padrão gravado${info.por ? " por " + caixaEsc(info.por) : ""}${quando ? " em " + caixaEsc(quando) : ""}` : "";
+    return `<div class="cxd-disp-bar">
+      <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
+      ${n ? `<span class="cxd-disp-aviso" title="O liga/desliga vale só nesta tela até gravar">${n} alteração(ões) não gravada(s)</span>` : (padrao ? `<span class="cxd-disp-info">${padrao}</span>` : "")}
+      <button type="button" class="btn btn-secondary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.restaurarDisponivel()" title="Volta às contas do padrão gravado">
+        <i data-lucide="rotate-ccw" style="width:14px;height:14px;"></i> Restaurar padrão
+      </button>
+      <button type="button" class="btn btn-primary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.gravarDisponivel()" title="Grava as contas ligadas como padrão para todos">
+        <i data-lucide="save" style="width:14px;height:14px;"></i> Gravar disponível
+      </button>
+    </div>`;
   },
 
   async setTipo(key, tipo) {
@@ -3527,6 +3590,11 @@ const FluxoCaixaDiarioApp = {
         #fluxo-caixa-diario-root .cxd-wrap { border:1px solid #e2e8f0; border-radius:8px; overflow-x:auto; overflow-y:hidden; background:#fff; margin-bottom:14px; }
         #fluxo-caixa-diario-root .cxd-title { margin:0 0 6px; font-size:.78rem; font-weight:700; color:#105436; letter-spacing:.03em; }
         #fluxo-caixa-diario-root .cxd-title span { font-weight:500; color:#64748b; letter-spacing:0; }
+        #fluxo-caixa-diario-root .cxd-disp-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px; }
+        #fluxo-caixa-diario-root .cxd-disp-bar .cxd-title { margin:0; flex:1 1 auto; }
+        #fluxo-caixa-diario-root .cxd-disp-aviso { font-size:.76rem; font-weight:700; color:#9a3412; background:#fff7ed; border:1px solid #fed7aa; border-radius:999px; padding:3px 10px; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-info { font-size:.74rem; color:#64748b; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-btn { height:40px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
         #fluxo-caixa-diario-root .cxd-vazio { padding:16px; color:#64748b; background:#fff; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:10px; font-size:.84rem; }
         #fluxo-caixa-diario-root .cxd-contas-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(520px, 1fr)); gap:12px; margin-bottom:10px; align-items:start; }
         #fluxo-caixa-diario-root .cxd-gbox { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
@@ -3713,7 +3781,7 @@ const FluxoCaixaDiarioApp = {
           ${this.error ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(this.error)}</div>` : ""}
           ${this.aba === "receber" ? this.valorAReceberHtml() : ""}
           <div class="cxd-miolo-mov" ${this.aba === "receber" ? "hidden" : ""}>
-          <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
+          ${this.disponivelBarHtml()}
           ${this.contasHtml()}
           <div class="cxd-saldo-ini"><span>${iniLabel}</span><span>${caixaMoney(saldoInicial)}</span></div>
           ${avisoAplicacao}
