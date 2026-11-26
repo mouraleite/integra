@@ -1306,7 +1306,9 @@ const FluxoCaixaDiarioApp = {
     const mud = Object.assign({}, this._flagsTeste || {});
     const n = Object.keys(mud).length;
     if (!n) { alert("Nenhuma conta foi ligada ou desligada desde o último padrão gravado."); return; }
-    if (!confirm("Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.")) return;
+    const pergunta = "Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
     const user = (window.AppState && AppState.currentUser) || {};
     const ok = await this.saveConfig({
       contas: mud,
@@ -1324,7 +1326,9 @@ const FluxoCaixaDiarioApp = {
   async restaurarDisponivel() {
     const n = this.qtdeDisponivelAlterado();
     if (!n) { alert("As contas já estão no padrão gravado."); return; }
-    if (!confirm("Desfazer " + n + " alteração(ões) e voltar às contas do padrão gravado?")) return;
+    const pergunta = "Desfazer " + n + " alteração(ões) e voltar às contas do padrão gravado?";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
     this._flagsTeste = {};
     await this.loadFlags();
     this.flags = Object.assign({}, this._padraoContas || {});
