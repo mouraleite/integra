@@ -2035,36 +2035,53 @@ const GerarPagamentoApp = {
     return saida;
   },
 
+  /** "Boleto unificado" do Sienge (um boleto do fornecedor para vários títulos) ou guia unificada de impostos. */
+  nomeUnificado(item) {
+    const info = item && item.info;
+    const notas = (info && info.payment && info.payment.data && info.payment.data.notes) || "";
+    const blob = [info && info.tipoSienge, notas, info && info.check && info.check.forma].join(" ");
+    return /boleto\s*unificad/i.test(blob) ? "Boleto unificado" : "Guia unificada";
+  },
+
+  /** Boleto unificado só vale para títulos do mesmo credor. */
+  mesmoCredor(membros) {
+    const ids = new Set(membros.map((m) => String((m.r && m.r.credorId) || "")).filter(Boolean));
+    return ids.size <= 1;
+  },
+
   aplicarGuiaSomada(membros, valorGuia, fonte) {
     const s = this.state;
     const BC = window.BoletoCheck;
+    const nomeU = this.nomeUnificado(fonte);
     const partes = membros.map((m) => {
       const imposto = this.tipoImpostoGuia(m.r);
       const nome = imposto ? imposto + ", " : "";
       return `${m.r.titulo} (${nome}${BC.money(m.t.aPagar)})`;
     });
-    const info = `Guia unificada de ${BC.money(valorGuia)}. Os títulos ${partes.join(" e ")} somam o valor da guia.`;
+    const info = nomeU === "Boleto unificado"
+      ? `Boleto unificado de ${BC.money(valorGuia)} do mesmo credor. Os títulos ${partes.join(" e ")} somam o valor do boleto.`
+      : `Guia unificada de ${BC.money(valorGuia)}. Os títulos ${partes.join(" e ")} somam o valor da guia.`;
     membros.forEach((m) => {
       const atual = s.pagInfo[m.chave];
       const base = (atual && atual.check) || {
-        nivel: "ok", forma: "Guia unificada", resumo: "", erros: [], avisos: [], infos: [], desconto: false, linhaFmt: "", valorBoleto: valorGuia, vencBoleto: "", codigo: (fonte && fonte.check && fonte.check.codigo) || ""
+        nivel: "ok", forma: nomeU, resumo: "", erros: [], avisos: [], infos: [], desconto: false, linhaFmt: "", valorBoleto: valorGuia, vencBoleto: "", codigo: (fonte && fonte.check && fonte.check.codigo) || ""
       };
       base.erros = (base.erros || []).filter((e) => !/^Valor do boleto\b/.test(e));
-      base.infos = (base.infos || []).filter((e) => !/somam o valor da guia/.test(e));
+      base.infos = (base.infos || []).filter((e) => !/somam o valor d[ao] (guia|boleto)/.test(e));
       base.infos.push(info);
-      base.forma = "Guia unificada";
+      base.forma = nomeU;
       base.guiaSomada = true;
       base.valorBoleto = valorGuia;
       if (fonte && fonte.check && fonte.check.linhaFmt && !base.linhaFmt) base.linhaFmt = fonte.check.linhaFmt;
       if (base.erros.length) base.nivel = "erro";
       else if ((base.avisos || []).length) base.nivel = "aviso";
       else base.nivel = "ok";
-      base.resumo = base.erros[0] || (base.avisos || [])[0] || "Guia unificada conferida";
+      base.resumo = base.erros[0] || (base.avisos || [])[0] || nomeU + " conferido" + (nomeU === "Guia unificada" ? "a" : "");
       s.pagInfo[m.chave] = {
         payment: (atual && atual.payment) || (fonte && fonte.info && fonte.info.payment) || null,
         check: base,
         fiscal: atual ? atual.fiscal : null,
-        tipoSienge: (atual && atual.tipoSienge) || (fonte && fonte.info && fonte.info.tipoSienge) || "Guia unificada",
+        tipoSienge: (atual && atual.tipoSienge) || (fonte && fonte.info && fonte.info.tipoSienge) || nomeU,
         falha: !!(atual && atual.falha)
       };
       if (base.nivel === "ok" || base.nivel === "info") {
@@ -2086,7 +2103,8 @@ const GerarPagamentoApp = {
       if (!info || !info.check || !t) return;
       const r = t.rows[0];
       const notas = (info.payment && info.payment.data && info.payment.data.notes) || "";
-      const guiaNome = /guia\s*unificada/i.test(info.tipoSienge || "") || /guia\s*unificada/i.test(String(notas)) || /guia\s*unificada/i.test(info.check.forma || "");
+      const UNIF = /(guia|boleto)\s*unificad[ao]/i;
+      const guiaNome = UNIF.test(info.tipoSienge || "") || UNIF.test(String(notas)) || UNIF.test(info.check.forma || "");
       const imposto = this.tipoImpostoGuia(r);
       if (guiaNome && info.check.forma === "Boleto de concessionária") {
         info.check.forma = "Guia unificada";
@@ -2116,6 +2134,7 @@ const GerarPagamentoApp = {
         });
       });
       if (membros.length < 2) return;
+      if (this.nomeUnificado(c) === "Boleto unificado" && !this.mesmoCredor(membros)) return;
       const soma = somaDe(membros);
       if (!bate(soma, c.check.valorBoleto)) return;
       this.aplicarGuiaSomada(membros, c.check.valorBoleto, c);
@@ -2135,6 +2154,7 @@ const GerarPagamentoApp = {
       if (!guia && !par) return;
       if (!guia && grupo.some((c) => !c.imposto)) return;
       const membros = grupo.map((c) => ({ chave: c.chave, t: c.t, r: c.r }));
+      if (grupo.some((c) => this.nomeUnificado(c) === "Boleto unificado") && !this.mesmoCredor(membros)) return;
       const soma = somaDe(membros);
       if (!bate(soma, grupo[0].check.valorBoleto)) return;
       this.aplicarGuiaSomada(membros, grupo[0].check.valorBoleto, grupo[0]);
@@ -2168,6 +2188,7 @@ const GerarPagamentoApp = {
       const soma = Math.round(grupo.reduce((t, c) => t + valorDe(c), 0) * 100) / 100;
       if (Math.abs(soma - alvo) > 0.01) return;
       const membros = grupo.map((c) => ({ chave: c.chave, t: c.t, r: c.r }));
+      if (this.nomeUnificado(anchor) === "Boleto unificado" && !this.mesmoCredor(membros)) return;
       this.aplicarGuiaSomada(membros, alvo, anchor);
       membros.forEach((m) => usados.add(m.chave));
     });
