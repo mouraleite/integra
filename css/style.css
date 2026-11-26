@@ -7817,6 +7817,12 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .part-groups .cc-table { min-width: 760px; }
 .part-groups tbody tr.part-group-row td { background: #e7f6ee; color: #105436; font-weight: 800; border-top: 1px solid #b7e0c8; }
 .part-groups tbody tr.part-group-row span { font-weight: 600; color: #64748b; margin-left: 6px; }
+/* Linha de credor sob o mouse: o fundo da linha já é o verde do hover padrão, então destaca mais forte e com barra à esquerda. */
+.part-groups tbody tr.part-group-row:hover td { background: #c6ead5; color: #0f3d27; }
+.part-groups tbody tr.part-group-row:hover td:first-child { box-shadow: inset 4px 0 0 #1b8253; }
+.part-cat-tabela tbody tr.part-cat-credor:hover td { background: #c6ead5 !important; }
+.part-cat-tabela tbody tr.part-cat-credor:hover td:first-child { box-shadow: inset 4px 0 0 #1b8253; }
+.part-cat-tabela tbody tr.part-cat-spe:hover td { background: #eef7f1 !important; }
 .part-groups .part-valor { font-weight: 700; }
 .part-matrix-empty { color: #cbd5e1; }
 .part-matrix-total {
