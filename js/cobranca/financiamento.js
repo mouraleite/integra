@@ -3105,6 +3105,25 @@ const FinanciamentoApp = {
     });
   },
 
+  logoSemFundoTransparente(dataUrl) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth || img.width || 1;
+        c.height = img.naturalHeight || img.height || 1;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        try { resolve(c.toDataURL("image/jpeg", 0.92)); }
+        catch (e) { resolve(""); }
+      };
+      img.onerror = () => resolve("");
+      img.src = dataUrl;
+    });
+  },
+
   async converterDocxTermoParaPdf(buffer) {
     await this.carregarScriptTermo(
       "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
@@ -3186,7 +3205,10 @@ const FinanciamentoApp = {
     };
     let logo = "";
     const imagem = zip.file("word/media/image1.png");
-    if (imagem) logo = "data:image/png;base64," + await imagem.async("base64");
+    if (imagem) {
+      const png = "data:image/png;base64," + await imagem.async("base64");
+      logo = await this.logoSemFundoTransparente(png);
+    }
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF({ unit: "mm", format: "a4" });
     const margem = 18;
@@ -3195,7 +3217,7 @@ const FinanciamentoApp = {
     let y = 14;
     if (logo) {
       try {
-        pdf.addImage(logo, "PNG", 88, y, 34, 16);
+        pdf.addImage(logo, "JPEG", 88, y, 34, 16);
         y += 20;
       } catch (e) {}
     }
