@@ -1464,6 +1464,11 @@ const CessaoPopup = {
       // (título 7629: dava 405,39 em vez de 399,00). Quando a parcela existe, vale ela.
       const daParcela = this.valorOriginalNoVencimento(installments, String(c.firstPayment || c.firstDueDate || c.dueDate || "").slice(0, 10));
       if (daParcela > 0) valor = daParcela;
+      // As parcelas do título no Sienge não trazem o valor original (só o saldo), então o daParcela quase nunca acha.
+      // A condição traz totalValueInterest: a soma das parcelas com juros, que é o total do contrato
+      // (título 7629: 71.820,00 em 180 = 399,00, como no contrato). Dividido pela quantidade, dá a parcela.
+      const comJuros = Number(c.totalValueInterest);
+      if (!(daParcela > 0) && comJuros > 0.009 && qtde > 0) valor = Math.round((comJuros / qtde) * 100) / 100;
       const tipo = c.conditionTypeName || c.description || c.conditionType || "Mensal";
       if (!(qtde > 0) || !(valor > 0)) return null;
       return {
