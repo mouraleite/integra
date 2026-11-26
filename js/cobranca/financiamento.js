@@ -3107,48 +3107,124 @@ const FinanciamentoApp = {
 
   async converterDocxTermoParaPdf(buffer) {
     await this.carregarScriptTermo(
-      "https://cdn.jsdelivr.net/npm/docx-preview@0.3.6/dist/docx-preview.min.js",
-      () => !!(window.docx && typeof window.docx.renderAsync === "function"),
-      "visualizador do Word"
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+      () => typeof window.JSZip === "function",
+      "leitor do Word"
     );
     if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
       throw new Error("O gerador de PDF não está disponível. Atualize a página e tente novamente.");
     }
-    const container = document.createElement("div");
-    const cobertura = document.createElement("div");
-    container.style.cssText = "position:fixed;left:0;top:0;z-index:2147483000;background:#fff;";
-    cobertura.style.cssText = "position:fixed;inset:0;z-index:2147483001;background:#fff;";
-    document.body.appendChild(container);
-    document.body.appendChild(cobertura);
-    try {
-      await window.docx.renderAsync(buffer, container, document.head, {
-        className: "docx",
-        inWrapper: true,
-        ignoreWidth: false,
-        ignoreHeight: false,
-        breakPages: true,
-        ignoreLastRenderedPageBreak: false,
-        renderHeaders: true,
-        renderFooters: true
+    const ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const attr = (no, nome) => no ? (no.getAttributeNS(ns, nome) || no.getAttribute("w:" + nome) || "") : "";
+    const zip = await window.JSZip.loadAsync(buffer);
+    const xml = await zip.file("word/document.xml").async("string");
+    const xmlDoc = new DOMParser().parseFromString(xml, "application/xml");
+    if (xmlDoc.getElementsByTagName("parsererror").length) throw new Error("Não consegui ler o modelo da declaração.");
+    const formatos = {};
+    const numFile = zip.file("word/numbering.xml");
+    if (numFile) {
+      const numDoc = new DOMParser().parseFromString(await numFile.async("string"), "application/xml");
+      const abstracts = {};
+      Array.from(numDoc.getElementsByTagNameNS(ns, "abstractNum")).forEach((ab) => {
+        const niveis = {};
+        Array.from(ab.getElementsByTagNameNS(ns, "lvl")).forEach((lvl) => {
+          niveis[attr(lvl, "ilvl") || "0"] = {
+            fmt: attr(lvl.getElementsByTagNameNS(ns, "numFmt")[0], "val"),
+            texto: attr(lvl.getElementsByTagNameNS(ns, "lvlText")[0], "val")
+          };
+        });
+        abstracts[attr(ab, "abstractNumId")] = niveis;
       });
-      if (document.fonts && document.fonts.ready) await document.fonts.ready;
-      this.tirarTarjaAmarelaNaTela(container);
-      const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
-      if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
-      const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF({ unit: "mm", format: "a4", compress: false });
-      paginas.forEach((pagina, i) => {
-        if (i > 0) pdf.addPage();
-        this.pintarPaginaDocxNoPdf(pdf, pagina);
+      Array.from(numDoc.getElementsByTagNameNS(ns, "num")).forEach((num) => {
+        const abs = attr(num.getElementsByTagNameNS(ns, "abstractNumId")[0], "val");
+        formatos[attr(num, "numId")] = abstracts[abs] || {};
       });
-      const cru = pdf.output("arraybuffer");
-      const blob = new Blob([cru], { type: "application/pdf" });
-      if (!blob.size) throw new Error("O PDF gerado está vazio.");
-      return { pdf: pdf, blob: blob };
-    } finally {
-      container.remove();
-      cobertura.remove();
     }
+    const paragrafos = [];
+    const body = xmlDoc.getElementsByTagNameNS(ns, "body")[0];
+    Array.from(body ? body.childNodes : []).forEach((filho) => {
+      if (!filho || filho.localName !== "p") return;
+      let texto = "";
+      let letras = 0;
+      let letrasNegrito = 0;
+      Array.from(filho.getElementsByTagNameNS(ns, "r")).forEach((run) => {
+        const parte = Array.from(run.getElementsByTagNameNS(ns, "t")).map((n) => n.textContent || "").join("");
+        if (!parte) return;
+        texto += parte;
+        const limpo = parte.replace(/\s/g, "");
+        letras += limpo.length;
+        const props = run.getElementsByTagNameNS(ns, "rPr")[0];
+        if (props && props.getElementsByTagNameNS(ns, "b").length) letrasNegrito += limpo.length;
+      });
+      texto = texto.replace(/\u00a0/g, " ").replace(/[\u2013\u2014\u2212]/g, "-");
+      texto = Array.from(texto).filter((c) => (c.codePointAt(0) || 0) <= 0x24F).join("");
+      texto = texto.replace(/[ \t]+/g, " ").trim();
+      const pPr = filho.getElementsByTagNameNS(ns, "pPr")[0];
+      const numPr = pPr ? pPr.getElementsByTagNameNS(ns, "numPr")[0] : null;
+      paragrafos.push({
+        texto: texto,
+        negrito: letras > 0 && letrasNegrito >= letras * 0.6,
+        centro: attr(pPr && pPr.getElementsByTagNameNS(ns, "jc")[0], "val") === "center",
+        numId: numPr ? attr(numPr.getElementsByTagNameNS(ns, "numId")[0], "val") : "",
+        ilvl: numPr ? (attr(numPr.getElementsByTagNameNS(ns, "ilvl")[0], "val") || "0") : ""
+      });
+    });
+    if (!paragrafos.some((p) => p.texto)) throw new Error("O modelo da declaração não tem texto.");
+    const contagens = {};
+    const rotulo = (item) => {
+      if (!item.numId) return "";
+      const nivel = formatos[item.numId] && formatos[item.numId][item.ilvl || "0"];
+      if (!nivel) return "";
+      if (!contagens[item.numId]) contagens[item.numId] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      const c = contagens[item.numId];
+      const idx = Number(item.ilvl) || 0;
+      c[idx] += 1;
+      for (let i = idx + 1; i < c.length; i++) c[i] = 0;
+      if (nivel.fmt === "bullet") return "•";
+      if (nivel.fmt === "decimal") return String(nivel.texto || "").replace(/%(\d)/g, (_, n) => String(c[Number(n) - 1] || 0));
+      return "";
+    };
+    let logo = "";
+    const imagem = zip.file("word/media/image1.png");
+    if (imagem) logo = "data:image/png;base64," + await imagem.async("base64");
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: "mm", format: "a4" });
+    const margem = 18;
+    const largura = 210 - margem * 2;
+    const limite = 282;
+    let y = 14;
+    if (logo) {
+      try {
+        pdf.addImage(logo, "PNG", 88, y, 34, 16);
+        y += 20;
+      } catch (e) {}
+    }
+    paragrafos.forEach((item) => {
+      if (!item.texto) {
+        y += 2.5;
+        return;
+      }
+      const prefixo = rotulo(item);
+      const recuo = item.numId ? (item.ilvl === "0" && !prefixo.startsWith("•") ? 0 : 6) : 0;
+      const corpo = prefixo ? (prefixo + " " + item.texto) : item.texto;
+      pdf.setFont("times", item.negrito ? "bold" : "normal");
+      pdf.setFontSize(item.centro && item.negrito && corpo.length < 90 ? 12 : 11);
+      pdf.setTextColor(0, 0, 0);
+      const linhas = pdf.splitTextToSize(corpo, largura - recuo);
+      const altura = linhas.length * 5;
+      if (y + altura > limite) {
+        pdf.addPage();
+        y = 16;
+      }
+      pdf.text(linhas, item.centro ? 105 : margem + recuo, y, { align: item.centro ? "center" : "left" });
+      y += altura + (item.negrito ? 2.2 : 1.4);
+    });
+    const cru = pdf.output("arraybuffer");
+    const visivel = new TextDecoder("latin1").decode(cru);
+    if (!/SALDO|DECLAR|MOURA|TITULAR|EMPREENDIMENTO/.test(visivel)) {
+      throw new Error("A declaração saiu sem texto. Atualize a página com Ctrl+F5 e gere de novo.");
+    }
+    return { pdf: pdf, blob: new Blob([cru], { type: "application/pdf" }) };
   },
 
   async obterTitularesTermo(sale, customerFallback) {
