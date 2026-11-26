@@ -2633,7 +2633,11 @@ const SiengeApiService = {
           const fetchedCompanyIds = (result && result._fetchedCompanyIds)
             ? result._fetchedCompanyIds
             : expectedCompanyIds;
-          const filaIncompleta = !!(result && result._filaIncompleta);
+          // Carga vazia nunca é a fila do dia (a carteira tem mais de mil títulos vencidos). Em 26/11/2026 um navegador
+          // recebeu 0 títulos às 17:14 e gravou a fila com chunks: 0 por cima da carga das 15:18; o batimento parou
+          // esperando a fila e quem abria a tela recebia a fila vazia. Vazia agora é tratada como incompleta.
+          const filaVazia = !Array.isArray(result) || result.length === 0;
+          const filaIncompleta = !!(result && result._filaIncompleta) || filaVazia;
           window._filaEmpresasRespondidas = (fetchedCompanyIds || []).map(Number);
           if (result && result._fetchedCompanyIds) delete result._fetchedCompanyIds;
           if (result && result._empresasFalhas) delete result._empresasFalhas;
