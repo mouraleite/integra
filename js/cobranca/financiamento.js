@@ -2904,24 +2904,205 @@ const FinanciamentoApp = {
     });
   },
 
-  canvasTemConteudo(canvas) {
-    if (!canvas || canvas.width < 2 || canvas.height < 2) return false;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return false;
-    const w = canvas.width;
-    const h = canvas.height;
-    const passo = Math.max(4, Math.floor(Math.min(w, h) / 50));
-    const data = ctx.getImageData(0, 0, w, h).data;
-    let tinta = 0;
-    let amostras = 0;
-    for (let y = 0; y < h; y += passo) {
-      for (let x = 0; x < w; x += passo) {
-        const i = (y * w + x) * 4;
-        amostras += 1;
-        if (data[i] < 248 || data[i + 1] < 248 || data[i + 2] < 240) tinta += 1;
-      }
+  rgbCssPdf(css) {
+    const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+    return m ? [+m[1], +m[2], +m[3]] : [17, 17, 17];
+  },
+
+  fundoCssPdf(css) {
+    const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/);
+    if (!m) return null;
+    const a = m[4] == null ? 1 : parseFloat(m[4]);
+    if (!(a > 0.04)) return null;
+    if (+m[1] > 250 && +m[2] > 250 && +m[3] > 250) return null;
+    if (+m[1] > 240 && +m[2] > 220 && +m[3] < 80) return null;
+    return [+m[1], +m[2], +m[3]];
+  },
+
+  fonteCssPdf(st) {
+    const fam = String(st.fontFamily || "").toLowerCase();
+    const serif = /times|georgia|cambria/.test(fam) || (/serif/.test(fam) && !/sans-serif/.test(fam));
+    const bold = (parseInt(st.fontWeight, 10) || 0) >= 600 || st.fontWeight === "bold";
+    const italic = /italic|oblique/.test(st.fontStyle || "");
+    let estilo = "normal";
+    if (bold && italic) estilo = "bolditalic";
+    else if (bold) estilo = "bold";
+    else if (italic) estilo = "italic";
+    return { nome: serif ? "times" : "helvetica", estilo: estilo };
+  },
+
+  imagemParaPdf(img) {
+    if (!img) return "";
+    try {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (!(w > 1) || !(h > 1)) return "";
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      return c.toDataURL("image/png");
+    } catch (e) {
+      return "";
     }
-    return amostras > 0 && tinta / amostras > 0.008;
+  },
+
+  pintarPaginaDocxNoPdf(pdf, el) {
+    const raiz = el.getBoundingClientRect();
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    if (!(raiz.width > 1) || !(raiz.height > 1)) {
+      this.escreverTextoSoltoNoPdf(pdf, el);
+      return;
+    }
+    const escala = pageW / raiz.width;
+    const localY = (rect) => rect.top - raiz.top;
+    const localX = (rect) => rect.left - raiz.left;
+    const xy = (x, y) => [x * escala, y * escala];
+    const palavras = [];
+    const guardar = (texto, rect, pai, espacoOrigem) => {
+      const t = String(texto || "");
+      if (!t || !pai || rect.width < 0.2 || rect.height < 0.2) return;
+      palavras.push({
+        t: t,
+        top: localY(rect),
+        left: localX(rect),
+        width: rect.width,
+        height: rect.height,
+        pai: pai,
+        espacoOrigem: !!espacoOrigem
+      });
+    };
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let no;
+    let espacoPendente = false;
+    while ((no = walker.nextNode())) {
+      const pai = no.parentElement;
+      if (!pai || pai.closest("script,style")) continue;
+      const st = getComputedStyle(pai);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      const bruto = no.nodeValue || "";
+      if (!bruto.trim()) {
+        if (/\s/.test(bruto)) espacoPendente = true;
+        continue;
+      }
+      let i = 0;
+      while (i < bruto.length) {
+        const antes = i;
+        while (i < bruto.length && /\s/.test(bruto.charAt(i))) i++;
+        const teveEspaco = espacoPendente || i > antes;
+        espacoPendente = false;
+        if (i >= bruto.length) {
+          espacoPendente = teveEspaco;
+          break;
+        }
+        const ini = i;
+        while (i < bruto.length && !/\s/.test(bruto.charAt(i))) i++;
+        const range = document.createRange();
+        range.setStart(no, ini);
+        range.setEnd(no, i);
+        const rects = range.getClientRects();
+        const rect = rects.length ? rects[0] : range.getBoundingClientRect();
+        guardar(bruto.slice(ini, i), rect, pai, teveEspaco);
+        range.detach();
+      }
+      if (/\s$/.test(bruto)) espacoPendente = true;
+    }
+    if (!palavras.length) {
+      this.escreverTextoSoltoNoPdf(pdf, el);
+      return;
+    }
+    el.querySelectorAll("*").forEach((node) => {
+      if (node.closest && node.closest("svg")) return;
+      const st = getComputedStyle(node);
+      if (st.display === "none" || st.visibility === "hidden") return;
+      const bg = this.fundoCssPdf(st.backgroundColor);
+      if (!bg) return;
+      const r = node.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) return;
+      pdf.setFillColor(bg[0], bg[1], bg[2]);
+      const o = xy(localX(r), localY(r));
+      pdf.rect(o[0], o[1], r.width * escala, r.height * escala, "F");
+    });
+    el.querySelectorAll("img").forEach((img) => {
+      const r = img.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
+      const data = this.imagemParaPdf(img);
+      if (!data) return;
+      const o = xy(localX(r), localY(r));
+      try { pdf.addImage(data, "PNG", o[0], o[1], r.width * escala, r.height * escala); } catch (e) {}
+    });
+    const linhas = [];
+    palavras.forEach((w) => {
+      if (w.top > raiz.height + 2 || w.top + w.height < -2) return;
+      const ultima = linhas[linhas.length - 1];
+      if (ultima && Math.abs(ultima.top - w.top) < 3) ultima.ws.push(w);
+      else linhas.push({ top: w.top, ws: [w] });
+    });
+    linhas.forEach((linha) => {
+      linha.ws.sort((a, b) => a.left - b.left);
+      const base = linha.ws[0];
+      const pxBase = parseFloat(getComputedStyle(base.pai).fontSize) || 14;
+      const y = xy(0, base.top + pxBase * 0.82)[1];
+      if (y < 2 || y > pageH + 2) return;
+      const pedacos = [];
+      linha.ws.forEach((w, indice) => {
+        const fam = String(getComputedStyle(w.pai).fontFamily || "");
+        if (/wingding|webding|symbol|fontawesome|lucide|icon/i.test(fam)) return;
+        if ([].some.call(w.t, (c) => (c.codePointAt(0) || 0) > 0x24F)) return;
+        const anterior = pedacos[pedacos.length - 1];
+        const folga = anterior ? w.left - (anterior.w.left + anterior.w.width) : 0;
+        const espacoVisual = !!(anterior && folga > Math.max(1.2, (anterior.w.width / Math.max(1, anterior.w.t.length)) * 0.45));
+        pedacos.push({ w: w, espaco: indice > 0 && (w.espacoOrigem || espacoVisual) });
+      });
+      if (!pedacos.length) return;
+      const medir = (fator) => {
+        let total = 0;
+        pedacos.forEach((p) => {
+          const st = getComputedStyle(p.w.pai);
+          const fonte = this.fonteCssPdf(st);
+          const px = parseFloat(st.fontSize) || pxBase;
+          pdf.setFont(fonte.nome, fonte.estilo);
+          pdf.setFontSize(Math.max(6, px * escala * fator * 72 / 25.4));
+          total += pdf.getTextWidth((p.espaco ? " " : "") + p.w.t);
+        });
+        return total;
+      };
+      let x = Math.max(10, xy(base.left, 0)[0]);
+      let fator = 1;
+      const largura = medir(1);
+      const limite = pageW - 10 - x;
+      if (largura > limite && largura > 0) fator = Math.max(0.72, limite / largura);
+      pedacos.forEach((p) => {
+        const st = getComputedStyle(p.w.pai);
+        const fonte = this.fonteCssPdf(st);
+        const px = parseFloat(st.fontSize) || pxBase;
+        pdf.setFont(fonte.nome, fonte.estilo);
+        pdf.setFontSize(Math.max(6, px * escala * fator * 72 / 25.4));
+        const cor = this.rgbCssPdf(st.color);
+        pdf.setTextColor(cor[0], cor[1], cor[2]);
+        const pedaco = (p.espaco ? " " : "") + p.w.t;
+        pdf.text(pedaco, x, y);
+        x += pdf.getTextWidth(pedaco);
+      });
+    });
+  },
+
+  escreverTextoSoltoNoPdf(pdf, el) {
+    const texto = String((el && (el.innerText || el.textContent)) || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (!texto) throw new Error("A página da declaração saiu sem texto.");
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    pdf.setFont("times", "normal");
+    pdf.setFontSize(11);
+    pdf.setTextColor(17, 17, 17);
+    const linhas = pdf.splitTextToSize(texto, pageW - 28);
+    let y = 16;
+    linhas.forEach((linha) => {
+      if (y > pageH - 12) return;
+      pdf.text(linha, 14, y);
+      y += 5;
+    });
   },
 
   async converterDocxTermoParaPdf(buffer) {
@@ -2930,13 +3111,15 @@ const FinanciamentoApp = {
       () => !!(window.docx && typeof window.docx.renderAsync === "function"),
       "visualizador do Word"
     );
-    if (typeof window.html2canvas !== "function" || !window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+    if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
       throw new Error("O gerador de PDF não está disponível. Atualize a página e tente novamente.");
     }
     const container = document.createElement("div");
-    // Fora da tela o navegador devolve a página em branco. Fica atrás da interface, mas dentro da área visível.
-    container.style.cssText = "position:fixed;left:0;top:0;z-index:-1;background:#fff;pointer-events:none;";
+    const cobertura = document.createElement("div");
+    container.style.cssText = "position:fixed;left:0;top:0;z-index:2147483000;background:#fff;";
+    cobertura.style.cssText = "position:fixed;inset:0;z-index:2147483001;background:#fff;";
     document.body.appendChild(container);
+    document.body.appendChild(cobertura);
     try {
       await window.docx.renderAsync(buffer, container, document.head, {
         className: "docx",
@@ -2953,51 +3136,18 @@ const FinanciamentoApp = {
       const paginas = Array.from(container.querySelectorAll(".docx-wrapper > section.docx"));
       if (!paginas.length) throw new Error("O modelo Word não gerou páginas para o PDF.");
       const { jsPDF } = window.jspdf;
-      let pdf = null;
-      for (let i = 0; i < paginas.length; i++) {
-        const pagina = paginas[i];
-        const rect = pagina.getBoundingClientRect();
-        if (!(rect.width > 0 && rect.height > 0)) throw new Error("Uma página do termo ficou sem dimensões.");
-        const opcoesCanvas = {
-          backgroundColor: "#ffffff",
-          scale: 2,
-          useCORS: true,
-          logging: false,
-          width: Math.ceil(rect.width),
-          height: Math.ceil(rect.height)
-        };
-        let canvas = await window.html2canvas(pagina, opcoesCanvas);
-        if (!this.canvasTemConteudo(canvas)) {
-          const estilo = container.style.cssText;
-          container.style.cssText = "position:fixed;left:0;top:0;z-index:2147483646;background:#fff;";
-          try {
-            canvas = await window.html2canvas(pagina, opcoesCanvas);
-          } finally {
-            container.style.cssText = estilo;
-          }
-        }
-        if (!this.canvasTemConteudo(canvas)) {
-          throw new Error("A página " + (i + 1) + " da declaração saiu em branco. Atualize a página e gere de novo.");
-        }
-        const larguraMm = rect.width * 25.4 / 96;
-        const alturaMm = rect.height * 25.4 / 96;
-        if (!pdf) {
-          pdf = new jsPDF({
-            orientation: larguraMm > alturaMm ? "landscape" : "portrait",
-            unit: "mm",
-            format: [larguraMm, alturaMm],
-            compress: true
-          });
-        } else {
-          pdf.addPage([larguraMm, alturaMm], larguraMm > alturaMm ? "landscape" : "portrait");
-        }
-        pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, larguraMm, alturaMm);
-      }
-      const blob = pdf.output("blob");
-      if (!blob || !blob.size) throw new Error("O PDF gerado está vazio.");
+      const pdf = new jsPDF({ unit: "mm", format: "a4", compress: false });
+      paginas.forEach((pagina, i) => {
+        if (i > 0) pdf.addPage();
+        this.pintarPaginaDocxNoPdf(pdf, pagina);
+      });
+      const cru = pdf.output("arraybuffer");
+      const blob = new Blob([cru], { type: "application/pdf" });
+      if (!blob.size) throw new Error("O PDF gerado está vazio.");
       return { pdf: pdf, blob: blob };
     } finally {
       container.remove();
+      cobertura.remove();
     }
   },
 
