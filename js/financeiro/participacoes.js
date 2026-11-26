@@ -2265,6 +2265,7 @@ const ParticipacoesApp = {
         ${ocupado ? this.cargaHtml() : ""}
         ${!ocupado && temEmpresa && this.groupBy === "matriz" ? this.matrixHtml() : ""}
         ${!ocupado && temEmpresa && this.groupBy === "credor" && groups.length ? `
+          ${this.catEstilosHtml()}
           <style>
             .part-credor-row{cursor:pointer;}
             .part-credor-row td:first-child{white-space:nowrap;}
@@ -2668,6 +2669,41 @@ const ParticipacoesApp = {
     this.render();
   },
 
+  /** Estilos da aba Por categoria, usados também no Painel do sócio (nomes e valores clicáveis, tabela, filtros). */
+  catEstilosHtml() {
+    return `      <style>
+        .part-cat-filtros{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 10px;}
+        .part-cat-filtros > div{min-width:240px;}
+        .part-cat-filtros .btn{height:40px;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;}
+        .part-cat-info{font-size:.75rem;color:#64748b;margin:0 0 8px;}
+        .part-cat-tabela{table-layout:fixed;}
+        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;padding:4px 5px;}
+        .part-cat-tabela th:not(.part-cat-fixa), .part-cat-tabela td:not(.part-cat-fixa){overflow:visible;text-overflow:clip;}
+        .part-cat-tabela .part-cat-fixa{position:sticky;left:0;z-index:1;background:inherit;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-tabela thead .part-cat-fixa{z-index:3;background:#1b8253;}
+        .part-cat-tabela tbody tr.part-cat-credor td{background:#e7f6ee;color:#105436;font-weight:700;border-top:2px solid #c9e8d6;}
+        .part-cat-tabela tbody tr.part-cat-spe td{background:#fff;}
+        .part-cat-tabela tbody tr.part-cat-spe:hover td{background:#f7faf8;}
+        .part-cat-tabela tfoot td{position:sticky;bottom:0;z-index:2;background:#105436;color:#fff;font-weight:700;padding:6px 5px;}
+        .part-cat-tabela tfoot td.part-cat-fixa{z-index:4;background:#105436;}
+        .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .part-cat-nome{font-weight:800;display:block;}
+        .part-cat-linha-credor{display:flex;align-items:center;gap:6px;min-width:0;}
+        .part-cat-nome-box{min-width:0;flex:1 1 auto;overflow:hidden;}
+        .part-cat-flag{flex:0 0 auto;width:15px;height:15px;margin:0;accent-color:#1b8253;cursor:pointer;}
+        .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
+        .part-cat-credor small{display:block;font-size:.62rem;font-weight:600;color:#3f7a5a;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-nome-spe{padding-left:18px;color:#334155;}
+        .part-cat-val{font-variant-numeric:tabular-nums;}
+        .part-cat-tot{font-weight:800;}
+        .part-cat-vazio{color:#cbd5e1;}
+        .part-cat-modal table td,.part-cat-modal table th{white-space:nowrap;}
+        .part-cat-modal td.part-cat-quebra{white-space:normal;}
+        #part-cat-f-cats-box .ml-emp-filter-panel,#part-cat-f-credores-box .ml-emp-filter-panel,#part-cred-f-cats-box .ml-emp-filter-panel{width:max-content;min-width:100%;max-width:min(640px,92vw);}
+        #part-cat-f-cats-box .ml-emp-filter-item,#part-cat-f-credores-box .ml-emp-filter-item,#part-cred-f-cats-box .ml-emp-filter-item{white-space:nowrap;align-items:center;}
+      </style>`;
+  },
+
   categoriaHtml() {
     const d = this.catDados();
     this._catDados = d;
@@ -2707,35 +2743,7 @@ const ParticipacoesApp = {
       return linhaCredor + linhasSpe;
     }).join("");
     return `
-      <style>
-        .part-cat-filtros{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 10px;}
-        .part-cat-filtros > div{min-width:240px;}
-        .part-cat-filtros .btn{height:40px;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;}
-        .part-cat-info{font-size:.75rem;color:#64748b;margin:0 0 8px;}
-        .part-cat-tabela{table-layout:fixed;}
-        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;padding:4px 5px;}
-        .part-cat-tabela th:not(.part-cat-fixa), .part-cat-tabela td:not(.part-cat-fixa){overflow:visible;text-overflow:clip;}
-        .part-cat-tabela .part-cat-fixa{position:sticky;left:0;z-index:1;background:inherit;overflow:hidden;text-overflow:ellipsis;}
-        .part-cat-tabela thead .part-cat-fixa{z-index:3;background:#1b8253;}
-        .part-cat-tabela tbody tr.part-cat-credor td{background:#e7f6ee;color:#105436;font-weight:700;border-top:2px solid #c9e8d6;}
-        .part-cat-tabela tbody tr.part-cat-spe td{background:#fff;}
-        .part-cat-tabela tbody tr.part-cat-spe:hover td{background:#f7faf8;}
-        .part-cat-tabela tfoot td{position:sticky;bottom:0;z-index:2;background:#105436;color:#fff;font-weight:700;padding:6px 5px;}
-        .part-cat-tabela tfoot td.part-cat-fixa{z-index:4;background:#105436;}
-        .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-        .part-cat-nome{font-weight:800;display:block;}
-        .part-cat-linha-credor{display:flex;align-items:center;gap:6px;min-width:0;}
-        .part-cat-nome-box{min-width:0;flex:1 1 auto;overflow:hidden;}
-        .part-cat-flag{flex:0 0 auto;width:15px;height:15px;margin:0;accent-color:#1b8253;cursor:pointer;}
-        .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
-        .part-cat-credor small{display:block;font-size:.62rem;font-weight:600;color:#3f7a5a;overflow:hidden;text-overflow:ellipsis;}
-        .part-cat-nome-spe{padding-left:18px;color:#334155;}
-        .part-cat-val{font-variant-numeric:tabular-nums;}
-        .part-cat-tot{font-weight:800;}
-        .part-cat-vazio{color:#cbd5e1;}
-        .part-cat-modal table td,.part-cat-modal table th{white-space:nowrap;}
-        .part-cat-modal td.part-cat-quebra{white-space:normal;}
-      </style>
+      ${this.catEstilosHtml()}
       <div class="part-cat-filtros">
         <div id="part-cat-f-cats-box"></div>
         <div id="part-cat-f-credores-box"></div>
@@ -2885,71 +2893,101 @@ const ParticipacoesApp = {
     // O detalhe (mês a mês, SPE, célula) reaproveita o da aba Por categoria, sobre os dados do painel.
     this._catDados = d;
     const marcados = this.painelQtde();
-    const cont = { sim: 0, parcial: 0, nao: 0, "": 0 };
-    d.credores.forEach((c) => { const j = (this.painel[c.k] || {}).justifica || ""; cont[j] = (cont[j] || 0) + 1; });
+    const aval = { sim: { n: 0, v: 0 }, parcial: { n: 0, v: 0 }, nao: { n: 0, v: 0 }, "": { n: 0, v: 0 } };
+    d.credores.forEach((c) => {
+      const j = (this.painel[c.k] || {}).justifica || "";
+      const a = aval[j] || aval[""];
+      a.n += 1;
+      a.v += c.total;
+    });
     const spes = this.painelEmp ? [this.painelEmp] : d.empsBase.map((e) => e.emp);
-    const valor = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
-    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')">${this.esc(rot)}<b>${this.fmt(tot)}</b></button>`;
+    const mes = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
+    const pct = (v, t) => (t > 0 ? Math.round((v / t) * 100) : 0);
+    const valor = (v, js, sub) => (v
+      ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
+      : `<span class="part-cat-vazio">—</span>`);
+    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
       const p = this.painel[c.k] || {};
-      const primeiro = Object.keys(c.cells).sort()[0];
-      const ultimo = Object.keys(c.cells).sort().pop();
+      const meses = Object.keys(c.cells).sort();
       const n = d.linhas.filter((x) => x.k === c.k).length;
-      return `<tr class="part-soc-row">
-        <td class="part-cat-fixa">
-          <button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
-          <small>${this.esc(c.catRot || "Sem categoria")} · ${n} lançamento(s) · ${this.esc(primeiro ? this.mesCurto(primeiro) : "")}${ultimo && ultimo !== primeiro ? " a " + this.esc(this.mesCurto(ultimo)) : ""}</small>
+      const periodo = meses.length ? mes(meses[0]) + (meses.length > 1 ? " a " + mes(meses[meses.length - 1]) : "") : "";
+      const just = p.justifica || "analise";
+      const celulas = spes.map((e) => {
+        const x = c.spes.find((y) => y.emp === e);
+        const v = x ? x.total : 0;
+        return `<td class="is-right">${valor(v, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`, spes.length > 1 && v ? pct(v, c.total) + "%" : "")}</td>`;
+      }).join("");
+      return `<tr class="part-soc-row is-${this.esc(just)}">
+        <td class="part-cat-fixa part-soc-credor">
+          <button type="button" class="part-cat-nome" title="Ver mês a mês por SPE" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+          <span class="part-soc-meta"><span class="part-soc-cat" title="${this.esc(c.catRot || "Sem categoria")}">${this.esc(c.catRot || "Sem categoria")}</span><span>${n} lançamento(s) · ${this.esc(periodo)}</span></span>
         </td>
-        ${spes.map((e) => { const s = c.spes.find((x) => x.emp === e); return `<td class="is-right">${valor(s ? s.total : 0, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`; }).join("")}
+        ${celulas}
         <td class="is-right part-cat-tot">${valor(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
-        <td><textarea class="part-soc-escopo" rows="2" placeholder="Escopo do serviço para esta SPE" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
-        <td><select class="part-soc-just is-${this.esc(p.justifica || "analise")}" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'justifica', this.value)">${opcoes(p.justifica)}</select>
+        <td><textarea class="part-soc-escopo" rows="2" placeholder="Qual escopo este credor atende nesta SPE?" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
+        <td><select class="part-soc-just is-${this.esc(just)}" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'justifica', this.value)">${opcoes(p.justifica)}</select>
           ${p.por ? `<small class="part-soc-quem">${this.esc(p.por)}${p.em ? " · " + this.esc(new Date(p.em).toLocaleDateString("pt-BR")) : ""}</small>` : ""}</td>
         <td class="is-center"><button type="button" class="part-soc-tirar" title="Tirar do painel (escopo e avaliação ficam guardados)" onclick="ParticipacoesApp.tirarDoPainel(${ci})"><i data-lucide="x" style="width:14px;height:14px;"></i></button></td>
       </tr>`;
     }).join("");
-    const larg = 260 + spes.length * 110 + 120 + 280 + 160 + 44;
-    return `
+    const larg = 280 + spes.length * 130 + 130 + 300 + 170 + 40;
+    const card = (cls, rot, val, sub) => `<div class="part-soc-card ${cls}"><label>${rot}</label><strong>${val}</strong><small>${sub}</small></div>`;
+    const totSpe = (e) => d.credores.reduce((t, c) => { const x = c.spes.find((y) => y.emp === e); return t + (x ? x.total : 0); }, 0);
+    return `${this.catEstilosHtml()}
       <style>
-        .part-soc-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:4px 0 12px;}
-        .part-soc-card{border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:10px 12px;}
+        .part-soc-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:4px 0 12px;}
+        .part-soc-card{border:1px solid #e2e8f0;border-left:4px solid #1b8253;border-radius:10px;background:#fff;padding:10px 14px;}
+        .part-soc-card.is-sim{border-left-color:#16a34a;}
+        .part-soc-card.is-nao{border-left-color:#dc2626;}
+        .part-soc-card.is-analise{border-left-color:#94a3b8;}
         .part-soc-card label{display:block;font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;}
-        .part-soc-card strong{display:block;margin-top:2px;font-size:1.15rem;color:#105436;font-variant-numeric:tabular-nums;}
-        .part-soc-card small{display:block;font-size:.72rem;color:#64748b;}
+        .part-soc-card strong{display:block;margin-top:2px;font-size:1.2rem;color:#105436;font-variant-numeric:tabular-nums;white-space:nowrap;}
+        .part-soc-card small{display:block;font-size:.72rem;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
         .part-soc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;}
-        .part-soc-chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font-size:.74rem;font-weight:700;cursor:pointer;white-space:nowrap;}
+        .part-soc-chip{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font-size:.74rem;font-weight:700;cursor:pointer;white-space:nowrap;}
+        .part-soc-chip:hover{border-color:#1b8253;background:#f0fdf4;}
         .part-soc-chip b{font-variant-numeric:tabular-nums;color:#105436;}
         .part-soc-chip.is-on{background:#105436;border-color:#105436;color:#fff;}
         .part-soc-chip.is-on b{color:#fff;}
-        .part-soc-tab td{vertical-align:middle;}
-        .part-soc-tab td.part-cat-fixa{white-space:normal;}
-        .part-soc-tab .part-cat-nome{white-space:normal;text-align:left;}
-        .part-soc-tab small{display:block;font-size:.64rem;color:#64748b;font-weight:600;}
-        .part-soc-escopo{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:4px 6px;font:inherit;font-size:.74rem;resize:vertical;min-height:34px;}
-        .part-soc-just{width:100%;height:30px;border:1px solid #cbd5e1;border-radius:6px;font-size:.74rem;font-weight:700;padding:0 6px;}
+        .part-soc-tab td{vertical-align:top;padding:8px 6px;}
+        .part-soc-tab thead th{white-space:normal;line-height:1.2;vertical-align:bottom;padding:6px;}
+        .part-soc-tab thead th small{display:block;font-weight:600;opacity:.85;font-size:.62rem;}
+        .part-soc-tab td.part-soc-credor{white-space:normal;}
+        .part-soc-tab .part-cat-nome{white-space:normal;text-align:left;font-size:.78rem;line-height:1.25;color:#0f3d27;}
+        .part-soc-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:4px;font-size:.64rem;color:#64748b;font-weight:600;}
+        .part-soc-cat{display:inline-block;max-width:100%;padding:1px 8px;border-radius:999px;background:#e7f6ee;color:#105436;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .part-soc-pct{display:block;font-size:.62rem;color:#94a3b8;font-weight:600;}
+        .part-soc-tab .part-cat-tot .part-cat-val{font-size:.82rem;color:#105436;}
+        .part-soc-escopo{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:6px 8px;font:inherit;font-size:.74rem;line-height:1.35;resize:vertical;min-height:44px;white-space:normal;}
+        .part-soc-escopo:focus{outline:none;border-color:#1b8253;box-shadow:0 0 0 3px rgba(27,130,83,.15);}
+        .part-soc-just{width:100%;height:34px;border:1px solid #cbd5e1;border-radius:8px;font-size:.74rem;font-weight:700;padding:0 8px;background:#f8fafc;color:#475569;}
         .part-soc-just.is-sim{background:#dcfce7;color:#166534;border-color:#86efac;}
         .part-soc-just.is-parcial{background:#fef9c3;color:#854d0e;border-color:#fde047;}
         .part-soc-just.is-nao{background:#fee2e2;color:#991b1b;border-color:#fca5a5;}
-        .part-soc-quem{margin-top:2px;}
-        .part-soc-tirar{border:0;background:transparent;color:#94a3b8;cursor:pointer;padding:4px;display:inline-flex;border-radius:6px;}
+        .part-soc-row.is-sim td.part-soc-credor{box-shadow:inset 4px 0 0 #16a34a;}
+        .part-soc-row.is-parcial td.part-soc-credor{box-shadow:inset 4px 0 0 #eab308;}
+        .part-soc-row.is-nao td.part-soc-credor{box-shadow:inset 4px 0 0 #dc2626;}
+        .part-soc-quem{display:block;margin-top:4px;font-size:.6rem;color:#94a3b8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .part-soc-tirar{border:0;background:transparent;color:#94a3b8;cursor:pointer;padding:6px;display:inline-flex;border-radius:6px;}
         .part-soc-tirar:hover{background:#fee2e2;color:#b91c1c;}
       </style>
       <div class="part-soc-cards">
-        <div class="part-soc-card"><label>Acumulado ${this.painelEmp ? "na SPE" : "dos credores"}</label><strong>${this.fmt(d.total)}</strong><small>${this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : (d.empsBase.length + " SPE(s)")}</small></div>
-        <div class="part-soc-card"><label>Credores</label><strong>${d.credores.length}</strong><small>${marcados} marcado(s) em Por categoria</small></div>
-        <div class="part-soc-card"><label>Justifica</label><strong>${cont.sim + cont.parcial}</strong><small>${cont.parcial} em parte</small></div>
-        <div class="part-soc-card"><label>Não justifica</label><strong>${cont.nao}</strong><small>${cont[""]} em análise</small></div>
+        ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)")}
+        ${card("is-sim", "Justifica", this.fmt(aval.sim.v + aval.parcial.v), (aval.sim.n + aval.parcial.n) + " credor(es)" + (aval.parcial.n ? " · " + aval.parcial.n + " em parte" : ""))}
+        ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
+        ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
       </div>
       ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
       ${d.credores.length ? `
-      <p class="part-cat-info">Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela. Escopo e avaliação ficam gravados para todos.</p>
+      <p class="part-cat-info">Clique no credor para ver mês a mês por SPE e no valor para ver os lançamentos daquela SPE. Escopo e avaliação ficam gravados para todos.</p>
       <div class="cc-scroll" style="max-height:calc(100vh - 360px);">
         <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
-          <colgroup><col style="width:260px">${spes.map(() => `<col style="width:110px">`).join("")}<col style="width:120px"><col style="width:280px"><col style="width:160px"><col style="width:44px"></colgroup>
-          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(String(e))} · ${this.esc(String(this.companyLabel(e) || "").toUpperCase().slice(0, 14))}</th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
+          <colgroup><col style="width:280px">${spes.map(() => `<col style="width:130px">`).join("")}<col style="width:130px"><col style="width:300px"><col style="width:170px"><col style="width:40px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">SPE ${this.esc(String(e))}<small>${this.esc(String(this.companyLabel(e) || "").toUpperCase())}</small></th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
           <tbody>${corpo}</tbody>
-          <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(d.credores.reduce((s, c) => { const x = c.spes.find((y) => y.emp === e); return s + (x ? x.total : 0); }, 0))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>
+          <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(totSpe(e))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>
         </table>
       </div>` : `<div class="part-empty">Nenhum credor no painel${this.painel ? "" : " (carregando…)"}. Marque a caixa ao lado do credor na aba <strong>Por categoria</strong>.</div>`}`;
   },

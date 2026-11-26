@@ -5301,10 +5301,10 @@ window.crmPedirAdvogadoAtuando = function() {
       return Promise.resolve(ainda);
     }
   }
-  return new Promise((resolve) => {
+  // Advogado já conectado em outra sessão aparece desativado: duas pessoas não entram com o mesmo nome.
+  return window.crmCadastrosOcupadosAgora(lista).then((ocupados) => new Promise((resolve) => {
     const antigo = document.getElementById("crm-advogado-atuando");
     if (antigo) antigo.remove();
-    const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let escolhido = null;
     const overlay = document.createElement("div");
     overlay.id = "crm-advogado-atuando";
@@ -5313,16 +5313,8 @@ window.crmPedirAdvogadoAtuando = function() {
     overlay.style.cssText = "position:fixed;inset:0;z-index:200000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:24px;";
     const card = document.createElement("div");
     card.style.cssText = "width:min(440px,100%);background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 24px 60px rgba(15,23,42,.28);";
-    const botoes = lista.map((p, i) => {
-      const id = "crm-adv-op-" + i;
-      return `<button type="button" id="${id}" data-idx="${i}" style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font:inherit;">
-        <span style="width:36px;height:36px;border-radius:50%;background:#105436;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
-        <span style="min-width:0;">
-          <span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
-          <span style="display:block;font-size:.75rem;color:#64748b;">${esc(p.email)}</span>
-        </span>
-      </button>`;
-    }).join("");
+    const ocupadoDe = (p) => ocupados.get(String((p && p.email) || "").toLowerCase().trim());
+    const botoes = lista.map((p, i) => window.crmBotaoQuemAcessa(p, i, ocupadoDe(p), p.email || "")).join("");
     card.innerHTML = `
       <h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f172a;">Quem está acessando?</h2>
       <p style="margin:0 0 14px;font-size:.84rem;color:#64748b;line-height:1.45;">A conta da Microsoft pode ser de outra pessoa. Escolha quem está entrando agora. Esse nome fica no registro de usuários online.</p>
@@ -5336,6 +5328,7 @@ window.crmPedirAdvogadoAtuando = function() {
     const ok = card.querySelector("#crm-adv-ok");
     const pintar = () => {
       card.querySelectorAll("[data-idx]").forEach((btn) => {
+        if (btn.disabled) return;
         const on = escolhido && String(btn.getAttribute("data-idx")) === String(lista.indexOf(escolhido));
         btn.style.borderColor = on ? "#105436" : "#e2e8f0";
         btn.style.background = on ? "#f0fdf4" : "#fff";
@@ -5343,14 +5336,27 @@ window.crmPedirAdvogadoAtuando = function() {
       ok.disabled = !escolhido;
       ok.style.opacity = escolhido ? "1" : ".45";
     };
-    card.querySelectorAll("[data-idx]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
-        pintar();
-      });
+    const ligar = (btn) => btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
+      pintar();
     });
-    ok.addEventListener("click", () => {
+    card.querySelectorAll("[data-idx]").forEach(ligar);
+    ok.addEventListener("click", async () => {
       if (!escolhido) return;
+      // Confere de novo na hora de entrar: alguém pode ter escolhido o mesmo nome enquanto a janela estava aberta.
+      ok.disabled = true;
+      const agora = await window.crmCadastrosOcupadosAgora([escolhido]);
+      const ocupado = agora.get(String(escolhido.email || "").toLowerCase().trim());
+      if (ocupado) {
+        alert(escolhido.name + " já está conectado agora em outra sessão. Escolha o seu próprio nome ou peça para a outra sessão sair.");
+        const idx = lista.indexOf(escolhido);
+        const btn = card.querySelector('[data-idx="' + idx + '"]');
+        if (btn) btn.outerHTML = window.crmBotaoQuemAcessa(escolhido, idx, ocupado, escolhido.email || "");
+        escolhido = null;
+        pintar();
+        return;
+      }
       window.crmAplicarAdvogadoAtuando(escolhido);
       overlay.remove();
       resolve(escolhido);
@@ -5359,7 +5365,7 @@ window.crmPedirAdvogadoAtuando = function() {
       overlay.remove();
       if (window.crmSair) window.crmSair();
     });
-  });
+  }));
 };
 
 window.crmSair = function() {
@@ -6270,6 +6276,50 @@ window.crmCadastrosDaConta = function(conta) {
 
 window.CRM_CADASTRO_CONTA_KEY = "crm_cadastro_da_conta";
 
+/* Quem da lista já está conectado agora em OUTRA sessão (usuarios_online, sinal dos últimos 3 minutos).
+   Na conta compartilhada, duas pessoas não podem entrar com o mesmo cadastro. Devolve Map email -> { tela }.
+   A sessão desta aba (mesmo crm_presence_sid) não conta, para o F5 não bloquear a própria pessoa. */
+window.crmCadastrosOcupadosAgora = async function(lista) {
+  const ocupados = new Map();
+  const emails = new Set((lista || []).map((p) => String((p && p.email) || "").toLowerCase().trim()).filter(Boolean));
+  if (!emails.size || !window.sb || typeof window.sb.rpc !== "function") return ocupados;
+  let sid = "";
+  try { sid = sessionStorage.getItem("crm_presence_sid") || ""; } catch (e) {}
+  let meu = "";
+  try {
+    const salvoConta = JSON.parse(sessionStorage.getItem(window.CRM_CADASTRO_CONTA_KEY) || "null");
+    const salvoAdv = JSON.parse(sessionStorage.getItem(window.CRM_ADVOGADO_ATUANDO_KEY) || "null");
+    meu = String((salvoConta && salvoConta.email) || (salvoAdv && salvoAdv.email) || "").toLowerCase();
+  } catch (e) {}
+  try {
+    // No Supabase cada um só lê a própria linha de usuarios_online: a função cadastros_conectados responde
+    // só quais destes e-mails estão conectados (últimos 3 minutos) em outra sessão, e a tela.
+    const r = await window.sb.rpc("cadastros_conectados", { p_emails: Array.from(emails), p_sid: sid });
+    if (r && r.error) throw r.error;
+    ((r && r.data) || []).forEach((row) => {
+      const email = String((row && row.email) || "").toLowerCase().trim();
+      if (!email || (meu && email === meu)) return;
+      ocupados.set(email, { tela: (row && row.tela) || "" });
+    });
+  } catch (e) {
+    console.warn("[Quem está acessando] não consegui ler os usuários online:", e);
+  }
+  return ocupados;
+};
+
+/** Botão de pessoa nos dois "Quem está acessando?": desativado se a pessoa já está conectada em outra sessão. */
+window.crmBotaoQuemAcessa = function(p, i, ocupado, detalhe) {
+  const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const bloqueio = ocupado
+    ? `<span style="display:block;margin-top:2px;font-size:.72rem;font-weight:700;color:#b45309;">Já está conectado agora${ocupado.tela ? " (" + esc(ocupado.tela) + ")" : ""}. Saia da outra sessão para entrar com este nome.</span>`
+    : "";
+  return `<button type="button" data-idx="${i}" ${ocupado ? "disabled aria-disabled=\"true\"" : ""} style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:${ocupado ? "#f8fafc" : "#fff"};cursor:${ocupado ? "not-allowed" : "pointer"};opacity:${ocupado ? ".6" : "1"};font:inherit;">
+    <span style="width:36px;height:36px;border-radius:50%;background:${ocupado ? "#94a3b8" : "#105436"};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
+    <span style="min-width:0;"><span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
+    <span style="display:block;font-size:.75rem;color:#64748b;">${esc(detalhe)}</span>${bloqueio}</span>
+  </button>`;
+};
+
 /** Quando a conta serve a mais de um cadastro, pergunta quem está entrando. Devolve o cadastro escolhido ou null. */
 window.crmEscolherCadastroDaConta = function(loggedUser) {
   window._crmCadastroEscolhido = null;
@@ -6292,7 +6342,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
       }
     } catch (e) {}
   }
-  return new Promise((resolve) => {
+  return window.crmCadastrosOcupadosAgora(lista).then((ocupados) => new Promise((resolve) => {
     const antigo = document.getElementById("crm-cadastro-conta");
     if (antigo) antigo.remove();
     const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -6307,11 +6357,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
     card.innerHTML = `
       <h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f172a;">Quem está acessando?</h2>
       <p style="margin:0 0 14px;font-size:.84rem;color:#64748b;line-height:1.45;">A conta ${esc(conta)} é usada por mais de uma pessoa. Escolha quem está entrando agora: o CRM abre com o perfil e as permissões dessa pessoa.</p>
-      <div>${lista.map((p, i) => `<button type="button" data-idx="${i}" style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font:inherit;">
-        <span style="width:36px;height:36px;border-radius:50%;background:#105436;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
-        <span style="min-width:0;"><span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
-        <span style="display:block;font-size:.75rem;color:#64748b;">${esc(p.profile_name || "")}${p.profile_name ? " · " : ""}${esc(p.email)}</span></span>
-      </button>`).join("")}</div>
+      <div>${lista.map((p, i) => window.crmBotaoQuemAcessa(p, i, ocupados.get(String(p.email || "").toLowerCase().trim()), (p.profile_name ? p.profile_name + " · " : "") + (p.email || ""))).join("")}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
         <button type="button" id="crm-cad-sair" style="height:38px;padding:0 14px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#334155;font-weight:700;cursor:pointer;">Sair</button>
         <button type="button" id="crm-cad-ok" disabled style="height:38px;padding:0 16px;border-radius:10px;border:0;background:#105436;color:#fff;font-weight:800;cursor:pointer;opacity:.45;">Continuar</button>
@@ -6321,8 +6367,10 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
     const ok = card.querySelector("#crm-cad-ok");
     card.querySelectorAll("[data-idx]").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (btn.disabled) return;
         escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
         card.querySelectorAll("[data-idx]").forEach((b) => {
+          if (b.disabled) return;
           const on = b === btn;
           b.style.borderColor = on ? "#105436" : "#e2e8f0";
           b.style.background = on ? "#f0fdf4" : "#fff";
@@ -6331,8 +6379,20 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
         ok.style.opacity = escolhido ? "1" : ".45";
       });
     });
-    ok.addEventListener("click", () => {
+    ok.addEventListener("click", async () => {
       if (!escolhido) return;
+      // Confere de novo na hora de entrar: alguém pode ter escolhido o mesmo nome enquanto a janela estava aberta.
+      ok.disabled = true;
+      const agora = await window.crmCadastrosOcupadosAgora([escolhido]);
+      if (agora.has(String(escolhido.email || "").toLowerCase().trim())) {
+        alert(escolhido.name + " já está conectado agora em outra sessão. Escolha o seu próprio nome ou peça para a outra sessão sair.");
+        const idx = lista.indexOf(escolhido);
+        const btn = card.querySelector('[data-idx="' + idx + '"]');
+        if (btn) btn.outerHTML = window.crmBotaoQuemAcessa(escolhido, idx, agora.get(String(escolhido.email || "").toLowerCase().trim()), (escolhido.profile_name ? escolhido.profile_name + " · " : "") + (escolhido.email || ""));
+        escolhido = null;
+        ok.style.opacity = ".45";
+        return;
+      }
       try { sessionStorage.setItem(window.CRM_CADASTRO_CONTA_KEY, JSON.stringify({ conta, email: escolhido.email })); } catch (e) {}
       window._crmCadastroEscolhido = escolhido;
       overlay.remove();
@@ -6342,7 +6402,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
       overlay.remove();
       if (window.crmSair) window.crmSair();
     });
-  });
+  }));
 };
 
 window.mergeComissaoNfs = function(localStr, cloudStr) {
