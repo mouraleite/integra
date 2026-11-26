@@ -20776,14 +20776,26 @@ ${reqInfoLink}`
 }
 
 window.validateOccurrenceForm = function() {
+  // Roda a cada tecla no texto da ocorrência. Só troca o HTML do rótulo/botão quando ele muda de verdade (troca de
+  // canal) e só redesenha os ícones nesse caso: antes refazia tudo e chamava lucide.createIcons() na página inteira
+  // a cada letra, e o texto demorava para aparecer na tela.
+  let vofIcones = false;
+  const vofHtml = (el) => el && {
+    set innerHTML(h) {
+      if (el.dataset.vofHtml === h) return;
+      el.dataset.vofHtml = h;
+      el.innerHTML = h;
+      if (h.indexOf("data-lucide") >= 0) vofIcones = true;
+    }
+  };
   const textEl = document.getElementById("note-text");
   const pDateEl = document.getElementById("note-promise-date");
   const canalEl = document.getElementById("note-canal");
   const reminderEl = document.getElementById("note-reminder-select");
   const saveBtn = document.getElementById("btn-save-occurrence");
   const simBtn = document.getElementById("btn-simular-promessas");
-  const labelNoteText = document.getElementById("label-note-text");
-  
+  const labelNoteText = vofHtml(document.getElementById("label-note-text"));
+
   const iniciativaGroup = document.getElementById("occurrence-iniciativa-group");
   const promiseRow = document.getElementById("occurrence-promise-row");
   const installmentsGroup = document.getElementById("occurrence-installments-group");
@@ -20807,7 +20819,7 @@ window.validateOccurrenceForm = function() {
     if (pinGroup) pinGroup.style.display = (canal === "Nota interna") ? "block" : "none";
     
     if (labelNoteText) labelNoteText.innerHTML = (canal === "Proposta de renegociação") ? 'Proposta <span style="color: var(--color-danger);">*</span>' : 'Nota interna <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = (canal === "Proposta de renegociação") ? '<i data-lucide="save" style="width: 16px;"></i> Gravar Proposta' : '<i data-lucide="save" style="width: 16px;"></i> Gravar Nota interna';
+    if (saveBtn) vofHtml(saveBtn).innerHTML =(canal === "Proposta de renegociação") ? '<i data-lucide="save" style="width: 16px;"></i> Gravar Proposta' : '<i data-lucide="save" style="width: 16px;"></i> Gravar Nota interna';
     
     isValid = text.length > 0;
   } else if (canal === "Retorno Agendado") {
@@ -20818,9 +20830,9 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
     
     if (labelNoteText) labelNoteText.innerHTML = 'Observação <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Agendamento';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Agendamento';
     
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) pDateLabel.innerHTML = 'Data de Retorno <span style="color: var(--color-danger);">*</span>';
     if (pDateEl) {
       pDateEl.min = new Date().toISOString().split("T")[0];
@@ -20838,10 +20850,10 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
 
     if (labelNoteText) labelNoteText.innerHTML = 'Observação <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Baixa Webro';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Baixa Webro';
     if (textEl) textEl.placeholder = "Observação da baixa Webro...";
 
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) {
       pDateLabel.innerHTML = 'Data da Baixa Webro <span style="color: var(--color-danger);">*</span>'
         + ' <span style="font-weight:500;text-transform:none;letter-spacing:0;color:#64748b;">(pode ser retroativa)</span>';
@@ -20864,7 +20876,7 @@ window.validateOccurrenceForm = function() {
     const prazoDias = Number(window.COLENCI_PIX_PRAZO_DIAS) || 5;
     if (labelNoteText) labelNoteText.innerHTML = 'Acordo e valor do sinal <span style="color: var(--color-danger);">*</span>'
       + ' <span style="font-weight:500;text-transform:none;letter-spacing:0;color:#64748b;">(prazo do repasse: ' + prazoDias + ' dias a partir de hoje)</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Aguardando Pix Colenci';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Aguardando Pix Colenci';
     if (textEl) textEl.placeholder = "Acordo feito, valor do sinal e data em que o cliente pagou a Colenci...";
 
     isValid = text.length > 0 && canal.length > 0;
@@ -20876,7 +20888,7 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
 
     if (labelNoteText) labelNoteText.innerHTML = 'Conversa com terceirizada <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Reunião Semanal';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Reunião Semanal';
     if (textEl) textEl.placeholder = "Registrar conversa com a terceirizada...";
 
     isValid = text.length > 0 && canal.length > 0;
@@ -20888,10 +20900,10 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "block";
     
     if (labelNoteText) labelNoteText.innerHTML = 'Conversa com o Cliente <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
     if (textEl) textEl.placeholder = "Registrar tratativa de cobrança...";
     
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) pDateLabel.innerHTML = 'Data de Promessa <span style="color: var(--color-danger);">*</span>';
     if (pDateEl) {
       pDateEl.min = new Date().toISOString().split("T")[0];
@@ -20923,8 +20935,8 @@ window.validateOccurrenceForm = function() {
     simBtn.style.opacity = isValid ? "1" : "0.5";
     simBtn.style.cursor = isValid ? "pointer" : "not-allowed";
   }
-  
-  if (window.lucide) window.lucide.createIcons();
+
+  if (vofIcones && window.lucide) window.lucide.createIcons();
 };
 
 window.errataOccurrence = function(customerId, occDate) {
@@ -61374,8 +61386,15 @@ window.gerarMapaZeropaidPDF = async function() {
                 }
             }
             let canvas;
+            // O html2canvas copia o documento inteiro antes de desenhar. Com a fila, as abas e as tabelas do Integra
+            // abertas, cada página demorava muito (e passava do prazo). Copia só o quadro do PDF e o <head> (estilos).
+            const soOQuadro = (n) => {
+                if (!n || n === el || el.contains(n) || (n.contains && n.contains(el))) return false;
+                if (document.head && document.head.contains(n)) return false;
+                return true;
+            };
             try {
-                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000 }), 20000);
+                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000, ignoreElements: soOQuadro }), 20000);
             } finally {
                 if (liberouFonte) {
                     try { delete fonts.ready; } catch (e) {}
@@ -61417,6 +61436,7 @@ window.gerarMapaZeropaidPDF = async function() {
         const POR_PAGINA = 16;
         const totalPaginas = Math.ceil(linhasLista.length / POR_PAGINA);
         for (let p = 0; p < totalPaginas; p++) {
+            if (btn) btn.textContent = `Página ${p + 2} de ${totalPaginas + 1}…`;
             const fatia = linhasLista.slice(p * POR_PAGINA, (p + 1) * POR_PAGINA);
             const pag = document.createElement("div");
             pag.style.cssText = container.style.cssText;
