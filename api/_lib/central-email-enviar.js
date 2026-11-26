@@ -11,6 +11,7 @@
 const https = require("https");
 const { graphMailConfigured, sendMail } = require("../../lib/graph-mail");
 const { dados, tabela } = require("../../lib/dados-servidor");
+const { supabaseAdmin } = require("../../lib/supabase-admin");
 
 const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
@@ -99,6 +100,51 @@ async function gravarCampos(caminho, obj) {
   if (!atual) return false;
   await tabela("central_email_envios").gravar(id, obj, { merge: true });
   return true;
+}
+
+const DIAS_RETORNO_PADRAO = 5;
+
+// Dias até o retorno: o do template; sem ele, o {{retorno:N}} do texto; sem nenhum, 5.
+function diasRetornoDo(t) {
+  const n = Number(t && t.diasRetorno);
+  if (Number.isFinite(n) && n >= 0) return Math.min(90, Math.round(n));
+  const m = /{{retorno:(d+)}}/.exec(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
+  return m ? Math.min(90, Number(m[1])) : DIAS_RETORNO_PADRAO;
+}
+
+function isoMais(diaIso, dias) {
+  const d = new Date(diaIso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + (Number(dias) || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+/* Ocorrência do disparo automático em Ocorrências e Promessas (tabela customer_notes, uma linha por nota).
+   A data de retorno vai em promise_date com promise_status "Pendente": até lá a Agenda não põe o título na fila nova
+   do operador. Sem iniciativa, não conta como contato do operador. O id fixo por envio não deixa duplicar. */
+async function gravarOcorrenciaEnvio(o) {
+  o = Object.assign({ em: new Date().toISOString() }, o);
+  const linha = {
+    id: "central-email-" + o.envioId,
+    customer_id: String(o.customerId),
+    date: o.em,
+    author: "Central de e-mail (automático)",
+    text: ("E-MAIL AUTOMÁTICO DA RÉGUA \"" + o.templateNome + "\" ENVIADO PARA " + o.para + ". ASSUNTO: " + o.assunto
+      + ". RETORNO EM " + dataBr(o.retorno) + ".").slice(0, 1500),
+    canal: "E-mail automático",
+    iniciativa: null,
+    reminder: "",
+    promise_status: "Pendente",
+    promise_date: o.retorno,
+    sale_id: String(o.titulo),
+    receivable_bill_id: String(o.titulo),
+    pinned: false,
+    origem: "central-email",
+    updated_at: o.em,
+    extra: { centralEmailEnvioId: o.envioId }
+  };
+  const r = await supabaseAdmin().from("customer_notes").upsert(linha, { onConflict: "id", ignoreDuplicates: true });
+  if (r && r.error) throw new Error("Banco não gravou a ocorrência: " + r.error.message);
+  return linha;
 }
 
 // Envios de um período (dia de/até, AAAA-MM-DD), para o acompanhamento e para casar as confirmações.
@@ -317,11 +363,23 @@ module.exports = async function handler(req, res) {
       });
       r.status = "enviado";
       r.para = para.length;
+      // O e-mail já saiu: falha ao gravar a ocorrência não muda o status do envio, só fica registrada.
+      const retorno = isoMais(dia, diasRetornoDo(t));
+      const emEnvio = new Date().toISOString();
+      let ocorrencia = "";
+      try {
+        await gravarOcorrenciaEnvio({ envioId: id, customerId, titulo, templateNome: String(t.nome || ""), para: para.join(", "), assunto, retorno, em: emEnvio });
+        ocorrencia = "ok";
+      } catch (e) {
+        ocorrencia = String((e && e.message) || e).slice(0, 200);
+        console.warn("[central-email-enviar] ocorrência " + JSON.stringify({ titulo, erro: ocorrencia }));
+      }
+      r.retorno = retorno;
       await gravarEnvio(id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
         de: de || "padrao", caixa, para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0,
         assunto, html: html.slice(0, 200000), clienteNome: String(v.nome || "").slice(0, 200), templateNome: String(t.nome || "").slice(0, 200),
-        confirmacoesPedidas: true, rastreio: !!pixel
+        confirmacoesPedidas: true, rastreio: !!pixel, retorno, ocorrencia
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
         await gravarAcordoTag(customerId, titulo);
@@ -352,3 +410,5 @@ module.exports.enviosDoPeriodo = enviosDoPeriodo;
 module.exports.tokenAbertura = tokenAbertura;
 module.exports.montarAssunto = montarAssunto;
 module.exports.quadroHtml = quadroHtml;
+module.exports.gravarOcorrenciaEnvio = gravarOcorrenciaEnvio;
+module.exports.diasRetornoDo = diasRetornoDo;

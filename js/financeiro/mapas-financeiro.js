@@ -73,6 +73,7 @@
     cc_conta_parceria: ["cc_id"],
     sienge_creditors: ["name"],
     participacoes_credores: ["credor_key"],
+    participacoes_painel: ["credor_key"],
     participacoes_periods: ["company_id", "closing"],
     participacoes_periods_expenses: ["participacoes_periods_id", "ordem"],
     dfc_orcamento_linhas: ["dfc_orcamento_id", "ordem"],
@@ -299,6 +300,14 @@
         credorKey: "credor_key", credor: "credor", "categoriaMl.id": ["categoria_ml_id", "texto"],
         "categoriaMl.siengeId": ["categoria_ml_sienge_id", "texto"], "categoriaMl.label": "categoria_ml_label",
         por: "por", em: ts("em"),
+      },
+    },
+    // Painel do sócio: credores marcados em Por categoria, com escopo e avaliação. id = encodeURIComponent(credorKey).
+    participacoes_painel: {
+      tabela: "participacoes_painel",
+      campos: {
+        credorKey: "credor_key", credor: "credor", on: ["marcado", "bool"], escopo: "escopo",
+        justifica: "justifica", por: "por", em: ts("em"),
       },
     },
     // id "<companyId>_<closing>". expenses -> _expenses. updatedAtServer (Timestamp) também vai para atualizado_em
