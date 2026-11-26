@@ -2181,9 +2181,11 @@ const ParticipacoesApp = {
     const views = [
       { id: "matriz", label: "Matriz", icon: "table" },
       { id: "credor", label: "Por credor", icon: "building-2" },
-      { id: "categoria", label: "Por categoria", icon: "tags" }
+      { id: "categoria", label: "Por categoria", icon: "tags" },
+      { id: "socio", label: "Painel do sócio", icon: "briefcase" }
     ];
-    if (this.groupBy !== "matriz" && this.groupBy !== "credor" && this.groupBy !== "categoria") this.groupBy = "matriz";
+    if (["matriz", "credor", "categoria", "socio"].indexOf(this.groupBy) < 0) this.groupBy = "matriz";
+    if (!this.painel) this.carregarPainel();
     if (!this.catMl) this.carregarCatMl();
     const gruposCred = this.groupBy === "credor" ? this.filtrarCredPorCat(groups) : groups;
     this._gruposVisiveis = this.groupBy === "credor" ? gruposCred : [];
@@ -2312,9 +2314,10 @@ const ParticipacoesApp = {
             </table>
           </div>` : ""}
         ${!ocupado && temEmpresa && this.groupBy === "categoria" && this.files.length ? this.categoriaHtml() : ""}
-        ${!ocupado && temEmpresa && this.files.length && this.groupBy !== "categoria" && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
+        ${!ocupado && temEmpresa && this.groupBy === "socio" && this.files.length ? this.painelHtml() : ""}
+        ${!ocupado && temEmpresa && this.files.length && this.groupBy !== "categoria" && this.groupBy !== "socio" && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
         ${this.detailModalHtml()}
-        ${this.groupBy === "categoria" ? this.catDetalheHtml() : ""}
+        ${this.groupBy === "categoria" || this.groupBy === "socio" ? this.catDetalheHtml() : ""}
       </div>
     `;
     this.paintCompany();
@@ -2558,7 +2561,11 @@ const ParticipacoesApp = {
 
   catDados() {
     const base = this.catLinhasBase();
-    const linhas = base.filter((x) => this.catPassa(x));
+    return this.agregarCat(base, base.filter((x) => this.catPassa(x)));
+  },
+
+  /** Soma por credor, mês e SPE (usado em Por categoria e no Painel do sócio). */
+  agregarCat(base, linhas) {
     const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
     const mapa = {};
     linhas.forEach((x) => {
@@ -2685,8 +2692,10 @@ const ParticipacoesApp = {
     const mesCab = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
     const corpo = d.credores.map((c, ci) => {
       const linhaCredor = `<tr class="part-cat-credor">
-          <td class="part-cat-fixa"><button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
-            <small>${this.esc(c.catRot || "Sem categoria")}</small></td>
+          <td class="part-cat-fixa"><div class="part-cat-linha-credor">
+            <input type="checkbox" class="part-cat-flag" ${this.painelOn(c.k) ? "checked" : ""} title="Levar para o Painel do sócio" onclick="event.stopPropagation()" onchange="ParticipacoesApp.marcarPainel(${ci}, this.checked)">
+            <div class="part-cat-nome-box"><button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+            <small>${this.esc(c.catRot || "Sem categoria")}</small></div></div></td>
           ${d.meses.map((m) => `<td class="is-right">${cel(c.cells[m], `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '', '${m}')`)}</td>`).join("")}
           <td class="is-right part-cat-tot">${cel(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
         </tr>`;
@@ -2715,6 +2724,9 @@ const ParticipacoesApp = {
         .part-cat-tabela tfoot td.part-cat-fixa{z-index:4;background:#105436;}
         .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
         .part-cat-nome{font-weight:800;display:block;}
+        .part-cat-linha-credor{display:flex;align-items:center;gap:6px;min-width:0;}
+        .part-cat-nome-box{min-width:0;flex:1 1 auto;overflow:hidden;}
+        .part-cat-flag{flex:0 0 auto;width:15px;height:15px;margin:0;accent-color:#1b8253;cursor:pointer;}
         .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
         .part-cat-credor small{display:block;font-size:.62rem;font-weight:600;color:#3f7a5a;overflow:hidden;text-overflow:ellipsis;}
         .part-cat-nome-spe{padding-left:18px;color:#334155;}
@@ -2729,7 +2741,7 @@ const ParticipacoesApp = {
         <div id="part-cat-f-credores-box"></div>
         ${filtrado ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltrosCategoria()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtros</button>` : ""}
       </div>
-      <p class="part-cat-info">${d.credores.length} credor(es) · ${d.linhas.length} lançamento(s) · <strong>${this.fmt(d.total)}</strong>. Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela e no valor para ver só aquela célula.</p>
+      <p class="part-cat-info">${d.credores.length} credor(es) · ${d.linhas.length} lançamento(s) · <strong>${this.fmt(d.total)}</strong>. Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela e no valor para ver só aquela célula. Marque a caixa do credor para levá-lo ao <strong>Painel do sócio</strong> (${this.painelQtde()} marcado(s)).</p>
       ${d.credores.length ? `
       <div class="cc-scroll" id="part-cat-scroll" style="max-height:calc(100vh - 330px);">
         <table class="cc-table part-cat-tabela" style="width:max(100%, ${larg}px);">
@@ -2752,6 +2764,195 @@ const ParticipacoesApp = {
   fecharCatDetalhe() {
     this.catDetalhe = null;
     this.render();
+  },
+
+  /* ---------- Painel do sócio ----------
+     Credores marcados na aba Por categoria, para avaliar com o sócio administrador da SPE se o escopo
+     justifica a cobrança. A marcação, o escopo e a avaliação ficam no Firebase (participacoes_painel),
+     um registro por credor, e valem para todos. */
+  PAINEL_COL: "participacoes_painel",
+  PAINEL_LOCAL: "crm_part_painel_socio_v1",
+  painel: null,
+  painelEmp: "",
+  JUSTIFICA: [
+    { id: "", label: "Em análise" },
+    { id: "sim", label: "Justifica" },
+    { id: "parcial", label: "Justifica em parte" },
+    { id: "nao", label: "Não justifica" }
+  ],
+
+  async carregarPainel() {
+    if (this.painel || this._painelCarregando) return;
+    this._painelCarregando = true;
+    let mapa = null;
+    try { mapa = JSON.parse(localStorage.getItem(this.PAINEL_LOCAL) || "null"); } catch (e) { mapa = null; }
+    this.painel = mapa && typeof mapa === "object" ? mapa : {};
+    try {
+      const fc = window.firebaseCollections;
+      if (window.firebaseDb && fc && fc.getDocs && fc.collection) {
+        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.PAINEL_COL));
+        const remoto = {};
+        snap.forEach((d) => {
+          const v = d.data() || {};
+          if (v.credorKey) remoto[v.credorKey] = v;
+        });
+        this.painel = remoto;
+        try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] painel do sócio", e);
+    }
+    this._painelCarregando = false;
+    if (this.groupBy === "categoria" || this.groupBy === "socio") this.render();
+  },
+
+  painelOn(k) {
+    if (!this.painel) this.carregarPainel();
+    const p = this.painel && this.painel[k];
+    return !!(p && p.on);
+  },
+
+  painelQtde() {
+    return Object.values(this.painel || {}).filter((p) => p && p.on).length;
+  },
+
+  async gravarPainel(k, campos) {
+    if (!this.painel) this.painel = {};
+    const user = (window.AppState && AppState.currentUser) || {};
+    const atual = Object.assign({ credorKey: k, on: false, escopo: "", justifica: "" }, this.painel[k] || {}, campos, {
+      credorKey: k,
+      por: user.name || user.email || "",
+      em: new Date().toISOString()
+    });
+    this.painel[k] = atual;
+    try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
+    const fc = window.firebaseCollections;
+    if (!window.firebaseDb || !fc || !fc.setDoc || !fc.doc) {
+      alert("O Firebase não está disponível. A marcação vale só neste navegador.");
+      return;
+    }
+    try {
+      await fc.setDoc(fc.doc(window.firebaseDb, this.PAINEL_COL, this.catMlDocId(k)), atual, { merge: true });
+    } catch (e) {
+      console.error("[Prestação Ellenco] gravar painel do sócio", e);
+      alert("Não consegui gravar no Firebase. Tente de novo.");
+    }
+  },
+
+  /** Caixa da aba Por categoria: leva o credor para o painel (ou tira, mantendo escopo e avaliação). */
+  async marcarPainel(ci, on) {
+    const c = this._catDados && this._catDados.credores[ci];
+    if (!c) return;
+    await this.gravarPainel(c.k, { on: !!on, credor: c.credor });
+    this.render();
+  },
+
+  async tirarDoPainel(ci) {
+    const c = this._painelDados && this._painelDados.credores[ci];
+    if (!c) return;
+    await this.gravarPainel(c.k, { on: false });
+    this.render();
+  },
+
+  async salvarPainelCampo(ci, campo, valor) {
+    const c = this._painelDados && this._painelDados.credores[ci];
+    if (!c || (campo !== "escopo" && campo !== "justifica")) return;
+    await this.gravarPainel(c.k, { [campo]: String(valor || "").slice(0, 2000) });
+    if (campo === "justifica") this.render();
+  },
+
+  escolherPainelEmp(emp) {
+    this.painelEmp = String(emp || "");
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  /** Lançamentos dos credores marcados (todas as categorias), no filtro de empresa e período do topo. */
+  painelDados() {
+    const base = this.catLinhasBase().filter((x) => this.painelOn(x.k));
+    const empsBase = {};
+    base.forEach((x) => { empsBase[x.emp] = (empsBase[x.emp] || 0) + (Number(x.r.valor) || 0); });
+    if (this.painelEmp && !empsBase[this.painelEmp]) this.painelEmp = "";
+    const linhas = this.painelEmp ? base.filter((x) => x.emp === this.painelEmp) : base;
+    const d = this.agregarCat(base, linhas);
+    d.empsBase = Object.keys(empsBase).sort((a, b) => empsBase[b] - empsBase[a]).map((e) => ({ emp: e, total: empsBase[e] }));
+    d.totalBase = base.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    return d;
+  },
+
+  painelHtml() {
+    const d = this.painelDados();
+    this._painelDados = d;
+    // O detalhe (mês a mês, SPE, célula) reaproveita o da aba Por categoria, sobre os dados do painel.
+    this._catDados = d;
+    const marcados = this.painelQtde();
+    const cont = { sim: 0, parcial: 0, nao: 0, "": 0 };
+    d.credores.forEach((c) => { const j = (this.painel[c.k] || {}).justifica || ""; cont[j] = (cont[j] || 0) + 1; });
+    const spes = this.painelEmp ? [this.painelEmp] : d.empsBase.map((e) => e.emp);
+    const valor = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
+    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')">${this.esc(rot)}<b>${this.fmt(tot)}</b></button>`;
+    const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
+    const corpo = d.credores.map((c, ci) => {
+      const p = this.painel[c.k] || {};
+      const primeiro = Object.keys(c.cells).sort()[0];
+      const ultimo = Object.keys(c.cells).sort().pop();
+      const n = d.linhas.filter((x) => x.k === c.k).length;
+      return `<tr class="part-soc-row">
+        <td class="part-cat-fixa">
+          <button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+          <small>${this.esc(c.catRot || "Sem categoria")} · ${n} lançamento(s) · ${this.esc(primeiro ? this.mesCurto(primeiro) : "")}${ultimo && ultimo !== primeiro ? " a " + this.esc(this.mesCurto(ultimo)) : ""}</small>
+        </td>
+        ${spes.map((e) => { const s = c.spes.find((x) => x.emp === e); return `<td class="is-right">${valor(s ? s.total : 0, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`; }).join("")}
+        <td class="is-right part-cat-tot">${valor(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
+        <td><textarea class="part-soc-escopo" rows="2" placeholder="Escopo do serviço para esta SPE" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
+        <td><select class="part-soc-just is-${this.esc(p.justifica || "analise")}" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'justifica', this.value)">${opcoes(p.justifica)}</select>
+          ${p.por ? `<small class="part-soc-quem">${this.esc(p.por)}${p.em ? " · " + this.esc(new Date(p.em).toLocaleDateString("pt-BR")) : ""}</small>` : ""}</td>
+        <td class="is-center"><button type="button" class="part-soc-tirar" title="Tirar do painel (escopo e avaliação ficam guardados)" onclick="ParticipacoesApp.tirarDoPainel(${ci})"><i data-lucide="x" style="width:14px;height:14px;"></i></button></td>
+      </tr>`;
+    }).join("");
+    const larg = 260 + spes.length * 110 + 120 + 280 + 160 + 44;
+    return `
+      <style>
+        .part-soc-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:4px 0 12px;}
+        .part-soc-card{border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:10px 12px;}
+        .part-soc-card label{display:block;font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;}
+        .part-soc-card strong{display:block;margin-top:2px;font-size:1.15rem;color:#105436;font-variant-numeric:tabular-nums;}
+        .part-soc-card small{display:block;font-size:.72rem;color:#64748b;}
+        .part-soc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;}
+        .part-soc-chip{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font-size:.74rem;font-weight:700;cursor:pointer;white-space:nowrap;}
+        .part-soc-chip b{font-variant-numeric:tabular-nums;color:#105436;}
+        .part-soc-chip.is-on{background:#105436;border-color:#105436;color:#fff;}
+        .part-soc-chip.is-on b{color:#fff;}
+        .part-soc-tab td{vertical-align:middle;}
+        .part-soc-tab td.part-cat-fixa{white-space:normal;}
+        .part-soc-tab .part-cat-nome{white-space:normal;text-align:left;}
+        .part-soc-tab small{display:block;font-size:.64rem;color:#64748b;font-weight:600;}
+        .part-soc-escopo{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;padding:4px 6px;font:inherit;font-size:.74rem;resize:vertical;min-height:34px;}
+        .part-soc-just{width:100%;height:30px;border:1px solid #cbd5e1;border-radius:6px;font-size:.74rem;font-weight:700;padding:0 6px;}
+        .part-soc-just.is-sim{background:#dcfce7;color:#166534;border-color:#86efac;}
+        .part-soc-just.is-parcial{background:#fef9c3;color:#854d0e;border-color:#fde047;}
+        .part-soc-just.is-nao{background:#fee2e2;color:#991b1b;border-color:#fca5a5;}
+        .part-soc-quem{margin-top:2px;}
+        .part-soc-tirar{border:0;background:transparent;color:#94a3b8;cursor:pointer;padding:4px;display:inline-flex;border-radius:6px;}
+        .part-soc-tirar:hover{background:#fee2e2;color:#b91c1c;}
+      </style>
+      <div class="part-soc-cards">
+        <div class="part-soc-card"><label>Acumulado ${this.painelEmp ? "na SPE" : "dos credores"}</label><strong>${this.fmt(d.total)}</strong><small>${this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : (d.empsBase.length + " SPE(s)")}</small></div>
+        <div class="part-soc-card"><label>Credores</label><strong>${d.credores.length}</strong><small>${marcados} marcado(s) em Por categoria</small></div>
+        <div class="part-soc-card"><label>Justifica</label><strong>${cont.sim + cont.parcial}</strong><small>${cont.parcial} em parte</small></div>
+        <div class="part-soc-card"><label>Não justifica</label><strong>${cont.nao}</strong><small>${cont[""]} em análise</small></div>
+      </div>
+      ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
+      ${d.credores.length ? `
+      <p class="part-cat-info">Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela. Escopo e avaliação ficam gravados para todos.</p>
+      <div class="cc-scroll" style="max-height:calc(100vh - 360px);">
+        <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
+          <colgroup><col style="width:260px">${spes.map(() => `<col style="width:110px">`).join("")}<col style="width:120px"><col style="width:280px"><col style="width:160px"><col style="width:44px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(String(e))} · ${this.esc(String(this.companyLabel(e) || "").toUpperCase().slice(0, 14))}</th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
+          <tbody>${corpo}</tbody>
+          <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(d.credores.reduce((s, c) => { const x = c.spes.find((y) => y.emp === e); return s + (x ? x.total : 0); }, 0))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>
+        </table>
+      </div>` : `<div class="part-empty">Nenhum credor no painel${this.painel ? "" : " (carregando…)"}. Marque a caixa ao lado do credor na aba <strong>Por categoria</strong>.</div>`}`;
   },
 
   catDetalheHtml() {
