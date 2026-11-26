@@ -1933,7 +1933,9 @@ const EstoqueComercialApp = {
         quitados += 1;
         return;
       }
-      const key = (this.filaCarregada() && this.filaBillKey(u)) || this.contractKey(u);
+      // Agrupa pelo título da unidade (o mesmo do batimento no servidor). A chave da fila casava o número do contrato
+      // (1, 2, 3…) com títulos de outros empreendimentos e juntava contratos diferentes: o card ficava ~22 mi abaixo.
+      const key = this.contractKey(u);
       const bal = this.unitBalance(u);
       const saldo = bal == null || Number.isNaN(Number(bal)) ? null : Number(bal) || 0;
       const at = String(u.siengeConferidoEm || u.finAt || "");
@@ -1950,7 +1952,10 @@ const EstoqueComercialApp = {
       slot.at = at;
       slot.ov = ov;
       slot.kpiAVencer = u.kpiAVencer != null && Number.isFinite(Number(u.kpiAVencer)) ? Number(u.kpiAVencer) : null;
+      // Vencido com juros e multa do Contas a Receber (currentBalanceWithAddition), gravado pela conferência.
+      slot.kpiVencidas = u.kpiVencidas != null && Number.isFinite(Number(u.kpiVencidas)) ? Number(u.kpiVencidas) : null;
     });
+    let emAtraso = 0;
     seen.forEach((slot) => {
       ativos += 1;
       if (slot.saldo == null) {
@@ -1966,14 +1971,19 @@ const EstoqueComercialApp = {
       // "Em atraso" traz juros e multa; o a vencer e o vencido saem do principal (saldo − parcelas ainda no prazo).
       const noPrazo = slot.kpiAVencer != null ? Math.min(slot.saldo, Math.max(0, slot.kpiAVencer)) : Math.max(0, slot.saldo - ov);
       aVencer += noPrazo;
-      vencido += slot.saldo - noPrazo;
+      const vencSaldo = slot.saldo - noPrazo;
+      vencido += vencSaldo;
+      if (vencSaldo > 0.009) emAtraso += Math.max(vencSaldo, slot.kpiVencidas != null ? slot.kpiVencidas : ov);
     });
     const fila = this.resumoFila(rows);
+    const filaAtraso = fila ? fila.total : null;
     if (fila) {
       atraso = fila.total;
       inadimplentes = fila.n;
     }
-    return { aReceber, atraso, vencido, aVencer, ativos, quitados, distratados, inadimplentes, semSaldo };
+    // Como o relatório Contas a Receber do Sienge (coluna Total): saldo a vencer + vencido com juros e multa.
+    const aReceberTotal = aVencer + emAtraso;
+    return { aReceber, aReceberTotal, emAtraso, filaAtraso, atraso, vencido, aVencer, ativos, quitados, distratados, inadimplentes, semSaldo };
   },
 
   selectedUnits() {
@@ -2002,8 +2012,8 @@ const EstoqueComercialApp = {
         ? `<small>${p.semSaldo} contrato(s) ativo(s) ainda sem saldo</small>`
         : `<small>${p.ativos} contrato(s) ativo(s) · ${p.inadimplentes} em atraso</small>`;
       finEl.innerHTML = `
-        <div class="est-fin-card"><label>A receber</label><strong>${this.money(p.aReceber)}</strong>${falta}</div>
-        <div class="est-fin-card is-warn"><label>Em atraso</label><strong>${this.money(p.atraso)}</strong><small>Principal, juros e multa</small></div>
+        <div class="est-fin-card"><label>A receber (com juros e multa)</label><strong>${this.money(p.aReceberTotal)}</strong><small>Saldo ${this.money(p.aReceber)} + juros e multa ${this.money(p.aReceberTotal - p.aReceber)}${p.semSaldo ? ` · ${p.semSaldo} contrato(s) ativo(s) ainda sem saldo` : ""}</small></div>
+        <div class="est-fin-card is-warn"><label>Em atraso</label><strong>${this.money(p.emAtraso)}</strong><small>Principal, juros e multa${p.filaAtraso != null ? ` · na Fila de cobrança: ${this.money(p.filaAtraso)}` : ""}</small></div>
         <div class="est-fin-card"><label>A vencer</label><strong>${this.money(p.aVencer)}</strong><small>Saldo ainda no prazo</small></div>
         <div class="est-fin-card is-ok"><label>Quitados</label><strong>${p.quitados}</strong><small>Fora do saldo a receber</small></div>
       `;
@@ -4142,7 +4152,7 @@ const EstoqueComercialApp = {
         clientes: new Set(comSaldo.map((b) => String((b.cliente && b.cliente.id) || b.id))).size,
         quitados: vivos.filter((b) => b.aberto <= 0.009 && b.recebido > 0.009).length
       },
-      integra: { aReceber: p.aReceber, atraso: p.atraso, vencido: p.vencido, inadimplentes: p.inadimplentes, ativos: p.ativos, quitados: p.quitados, semSaldo: p.semSaldo },
+      integra: { aReceber: p.aReceber, aReceberTotal: p.aReceberTotal, emAtraso: p.emAtraso, atraso: p.atraso, vencido: p.vencido, inadimplentes: p.inadimplentes, ativos: p.ativos, quitados: p.quitados, semSaldo: p.semSaldo },
       semUnidade: comSaldo.filter((b) => !usados.has(b.id)).map((b) => ({
         titulo: b.id, cliente: (b.cliente && b.cliente.name) || "", unidades: b.units.map((x) => x.name).join(", "), aberto: b.aberto,
         ...this.motivoTituloSemUnidade(b, ccId)
@@ -4287,6 +4297,10 @@ const EstoqueComercialApp = {
       integra: soma((c) => c.integra.aReceber),
       siengeAtraso: soma((c) => c.sienge.vencidoAdd),
       integraAtraso: soma((c) => c.integra.atraso),
+      // Total com juros e multa (coluna Total do relatório Contas a Receber): saldo + acréscimo das parcelas vencidas.
+      siengeTotal: soma((c) => (Number(c.sienge.aReceber) || 0) + Math.max(0, (Number(c.sienge.vencidoAdd) || 0) - (Number(c.sienge.vencido) || 0))),
+      integraTotal: soma((c) => c.integra.aReceberTotal != null ? c.integra.aReceberTotal
+        : (Number(c.integra.aReceber) || 0) + Math.max(0, (Number(c.integra.atraso) || 0) - (Number(c.integra.vencido) || 0))),
       siengeTitVenc: soma((c) => c.sienge.titulosVencidos),
       integraInad: soma((c) => c.integra.inadimplentes),
       semUnidN: soma((c) => c.semUnidade.n),
@@ -4380,8 +4394,8 @@ const EstoqueComercialApp = {
         ${(g.rodando || bate) ? "" : `<button type="button" class="est-forcar-falta" onclick="EstoqueComercialApp.forcarOQueFalta()">Forçar o que falta</button>`}
       </div>
       <div class="est-conf-grid">
-        <div><label>Sienge · a receber</label><b>${this.money(tot.sienge)}</b><small>Em atraso com juros e multa ${this.money(tot.siengeAtraso)} em ${tot.siengeTitVenc} título(s)</small></div>
-        <div><label>Integra · a receber</label><b>${this.money(tot.integra)}</b><small>Em atraso ${this.money(tot.integraAtraso)} em ${tot.integraInad} contrato(s)</small></div>
+        <div><label>Sienge · a receber com juros e multa</label><b>${this.money(tot.siengeTotal)}</b><small>Saldo ${this.money(tot.sienge)} · em atraso com juros e multa ${this.money(tot.siengeAtraso)} em ${tot.siengeTitVenc} título(s)</small></div>
+        <div><label>Integra · a receber com juros e multa</label><b>${this.money(tot.integraTotal)}</b><small>Saldo ${this.money(tot.integra)} · em atraso ${this.money(tot.integraAtraso)} em ${tot.integraInad} contrato(s)</small></div>
         <div><label>Diferença</label><b>${g.rodando ? "Conferindo" : (bate ? "Bate" : (g.interrompido ? "Incompleta" : this.money(dif)))}</b><small>${g.rodando ? "A conferência está percorrendo os empreendimentos. O total cresce a cada um que termina." : (g.interrompido ? `Parou em ${g.ccs.length} empreendimento(s). Forçar o que falta continua dos que ainda não entraram.` : (tot.semUnidN ? `${tot.semUnidN} título(s) com saldo no Sienge sem unidade ativa no Integra: ${this.money(tot.semUnidV)}` : "Todo título com saldo tem unidade no Integra"))}${!g.rodando && !g.interrompido && tot.semTitulo ? ` · ${tot.semTitulo} unidade(s) ativa(s) sem título no Sienge` : ""}</small></div>
       </div>
       ${acertarHtml}
