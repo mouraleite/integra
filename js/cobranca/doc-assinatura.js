@@ -172,20 +172,29 @@ const DocAssinaturaApp = {
     if (m) m.style.display = "none";
   },
 
+  /* Baixa de qualquer documento em aberto (a lixeira da linha): sempre com justificativa.
+     Quem não é administrador pede e o administrador aprova; o administrador dá a baixa direto, também justificando.
+     O documento não é apagado: fica como "Baixado", com quem pediu, quem decidiu e o porquê. */
   pedirBaixa(id) {
     const chave = decodeURIComponent(String(id || ""));
     const row = (this.itens || []).find((r) => String(r.id) === chave);
     if (!row || !this.emAberto(row)) return;
     if (chave.indexOf("local-") === 0) { alert("Este documento ainda não foi salvo na lista compartilhada. Atualize a tela e tente de novo."); return; }
+    if (row.baixa && row.baixa.status === "pendente") { alert("Já existe um pedido de baixa aguardando o administrador para este documento."); return; }
+    const admin = this.souAdmin();
+    const tipo = this.tipoLabel(row.tipo).toLowerCase();
+    const regra = admin
+      ? "Como administrador, a baixa vale na hora. O documento fica na lista como Baixado, com a justificativa."
+      : "A baixa só vale depois que o administrador aprovar." + (row.tipo === "distrato" ? " Enquanto isso, não é possível gerar outro distrato para este título." : "");
     this.modalBaixa(`
-      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">Pedir baixa do ${this.esc(this.tipoLabel(row.tipo).toLowerCase())}</h3>
+      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">${admin ? "Dar baixa" : "Pedir baixa"} do ${this.esc(tipo)}</h3>
       <div style="font-size:0.85rem;color:#475569;margin-bottom:10px;">${this.esc(this.nomeExibido(row))} · Título ${this.esc(row.titulo)} · gerado em ${this.esc(this.quando(row.createdAt))} por ${this.esc(row.userName || "—")}</div>
-      <div style="font-size:0.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;margin-bottom:10px;">A baixa só vale depois que o administrador aprovar. Enquanto isso, não é possível gerar outro distrato para este título.</div>
-      <label for="docs-baixa-just" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Justificativa</label>
+      <div style="font-size:0.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;margin-bottom:10px;">${this.esc(regra)}</div>
+      <label for="docs-baixa-just" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Justificativa (obrigatória)</label>
       <textarea id="docs-baixa-just" rows="4" maxlength="1000" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Por que este documento deve ser baixado? (ex.: valor errado, cliente desistiu, novo cálculo)"></textarea>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
         <button type="button" class="btn btn-cancel" onclick="DocAssinaturaApp.fecharModalBaixa()">Cancelar</button>
-        <button type="button" class="btn btn-primary" id="docs-baixa-enviar" onclick="DocAssinaturaApp.enviarPedidoBaixa('${encodeURIComponent(chave)}')">Pedir baixa</button>
+        <button type="button" class="btn btn-primary" id="docs-baixa-enviar" onclick="DocAssinaturaApp.enviarPedidoBaixa('${encodeURIComponent(chave)}')">${admin ? "Dar baixa" : "Pedir baixa"}</button>
       </div>`);
     const t = document.getElementById("docs-baixa-just");
     if (t) t.focus();
@@ -199,18 +208,43 @@ const DocAssinaturaApp = {
     if (!row) return;
     if (just.length < 10) { alert("Escreva a justificativa da baixa (pelo menos 10 caracteres)."); if (el) el.focus(); return; }
     const eu = this.eu();
-    const baixa = { status: "pendente", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: new Date().toISOString() };
+    const agora = new Date().toISOString();
+    const admin = this.souAdmin();
+    const baixa = admin
+      ? { status: "aprovada", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: agora, decididoPor: eu.userName, decididoPorEmail: eu.userEmail, decididoEm: agora, motivoRecusa: "" }
+      : { status: "pendente", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: agora };
+    const patch = admin ? { baixa: baixa, status: "baixado", baixadoEm: agora } : { baixa: baixa };
     try {
-      await window.DadosCobranca.tabela(this.COL).gravar(chave, { baixa: baixa }, { merge: true });
+      await window.DadosCobranca.tabela(this.COL).gravar(chave, patch, { merge: true });
     } catch (e) {
       console.error("[Assinatura] pedido de baixa", e);
       alert("Não foi possível gravar o pedido de baixa. Tente de novo.");
       return;
     }
-    row.baixa = baixa;
+    Object.assign(row, patch);
     this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === chave ? row : x)));
     this.fecharModalBaixa();
     this.pintar();
+  },
+
+  /** Recusa da baixa: o motivo vai num pop-up do Integra (antes era a janela do navegador). */
+  recusarBaixa(id) {
+    if (!this.souAdmin()) return;
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !row.baixa || row.baixa.status !== "pendente") return;
+    this.modalBaixa(`
+      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">Recusar a baixa do ${this.esc(this.tipoLabel(row.tipo).toLowerCase())}</h3>
+      <div style="font-size:0.85rem;color:#475569;margin-bottom:10px;">${this.esc(this.nomeExibido(row))} · Título ${this.esc(row.titulo)} · pedida por ${this.esc(row.baixa.pedidoPor || "—")} em ${this.esc(this.quando(row.baixa.pedidoEm))}</div>
+      <div style="font-size:0.82rem;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:10px;"><b>Justificativa do pedido:</b> ${this.esc(row.baixa.justificativa || "—")}</div>
+      <label for="docs-baixa-motivo" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Motivo da recusa</label>
+      <textarea id="docs-baixa-motivo" rows="3" maxlength="1000" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Por que a baixa não foi aceita?"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button type="button" class="btn btn-cancel" onclick="DocAssinaturaApp.fecharModalBaixa()">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="DocAssinaturaApp.decidirBaixa('${encodeURIComponent(chave)}', false)">Recusar baixa</button>
+      </div>`);
+    const t = document.getElementById("docs-baixa-motivo");
+    if (t) t.focus();
   },
 
   async decidirBaixa(id, aprovar) {
@@ -220,8 +254,10 @@ const DocAssinaturaApp = {
     if (!row || !row.baixa || row.baixa.status !== "pendente") return;
     let motivo = "";
     if (!aprovar) {
-      motivo = String(prompt("Motivo da recusa da baixa:") || "").trim();
-      if (!motivo) return;
+      const el = document.getElementById("docs-baixa-motivo");
+      motivo = String((el && el.value) || "").trim();
+      if (!motivo) { alert("Escreva o motivo da recusa."); if (el) el.focus(); return; }
+      this.fecharModalBaixa();
     } else {
       const msg = "Aprovar a baixa do " + this.tipoLabel(row.tipo).toLowerCase() + " de " + this.nomeExibido(row) + " (título " + row.titulo + ")?\n\nJustificativa: " + row.baixa.justificativa;
       const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
@@ -256,7 +292,8 @@ const DocAssinaturaApp = {
     }
     const b = r.baixa;
     if (b && b.status === "pendente") {
-      return `<span class="docs-sit" style="background:#fef3c7;color:#92400e;" title="${this.esc("Pedida por " + (b.pedidoPor || "") + " em " + this.quando(b.pedidoEm) + ". Justificativa: " + (b.justificativa || ""))}">Baixa pedida</span>`;
+      return `<span class="docs-sit" style="background:#fef3c7;color:#92400e;" title="${this.esc("Pedida por " + (b.pedidoPor || "") + " em " + this.quando(b.pedidoEm) + ". Justificativa: " + (b.justificativa || ""))}">Baixa pedida</span>`
+        + `<small class="docs-just" title="${this.esc(b.justificativa || "")}">${this.esc(b.pedidoPor || "")}: ${this.esc(b.justificativa || "")}</small>`;
     }
     if (b && b.status === "recusada") {
       return `<span class="docs-sit" title="${this.esc("Baixa recusada por " + (b.decididoPor || "") + ": " + (b.motivoRecusa || ""))}">Aguardando · baixa recusada</span>`;
@@ -264,15 +301,24 @@ const DocAssinaturaApp = {
     return `<span class="docs-sit">Aguardando</span>`;
   },
 
+  /** Só a decisão do administrador sobre um pedido pendente. Pedir baixa fica no ícone da lixeira da linha. */
   botoesBaixaHtml(r) {
-    if (!r || r.tipo !== "distrato" || !this.emAberto(r)) return "";
+    if (!r || !this.emAberto(r) || !r.baixa || r.baixa.status !== "pendente" || !this.souAdmin()) return "";
     const chave = encodeURIComponent(String(r.id));
-    if (r.baixa && r.baixa.status === "pendente") {
-      if (!this.souAdmin()) return "";
-      return `<button type="button" class="btn btn-primary btn-sm" style="padding:3px 8px;font-size:0.72rem;" onclick="DocAssinaturaApp.decidirBaixa('${chave}', true)">Aprovar baixa</button>`
-        + `<button type="button" class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.72rem;margin-left:4px;" onclick="DocAssinaturaApp.decidirBaixa('${chave}', false)">Recusar</button>`;
+    return `<button type="button" class="btn btn-primary docs-btn" onclick="DocAssinaturaApp.decidirBaixa('${chave}', true)">Aprovar baixa</button>`
+      + `<button type="button" class="btn btn-outline docs-btn" onclick="DocAssinaturaApp.recusarBaixa('${chave}')">Recusar</button>`;
+  },
+
+  /** Lixeira da linha: documento em aberto pede baixa com justificativa; finalizado o administrador remove da lista. */
+  botaoLixeiraHtml(r) {
+    const chave = encodeURIComponent(String(r.id));
+    if (this.emAberto(r)) {
+      const pendente = r.baixa && r.baixa.status === "pendente";
+      const titulo = pendente ? "Baixa já pedida, aguardando o administrador" : (this.souAdmin() ? "Dar baixa (com justificativa)" : "Pedir baixa (com justificativa)");
+      return `<button type="button" class="tvig-ico is-danger" title="${titulo}" ${pendente ? "disabled style=\"opacity:.35\"" : ""} onclick="DocAssinaturaApp.pedirBaixa('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
     }
-    return `<button type="button" class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.72rem;" title="Pedir ao administrador a baixa deste distrato, para poder gerar outro" onclick="DocAssinaturaApp.pedirBaixa('${chave}')">Pedir baixa</button>`;
+    if (!this.souAdmin()) return "";
+    return `<button type="button" class="tvig-ico is-danger" title="Remover da lista" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
   },
 
   lerLocal() {
@@ -1325,12 +1371,12 @@ const DocAssinaturaApp = {
       return `<tr>
             <td>${this.esc(this.quando(r.createdAt))}</td>
             <td>${this.esc(this.tipoLabel(r.tipo))}</td>
-            <td>${this.esc(this.nomeExibido(r))}</td>
+            <td class="docs-cliente" title="${this.esc(this.nomeExibido(r))}">${this.esc(this.nomeExibido(r))}</td>
             <td>${this.esc(r.titulo || "—")}</td>
             <td>${this.esc(this.rotuloUnidade(r))}</td>
-            <td>${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
-            <td>${this.situacaoHtml(r)}</td>
-            <td class="docs-acoes">${this.botoesBaixaHtml(r)}${distrato}<button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
+            <td title="${this.esc(r.userName || "")}">${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
+            <td class="docs-sit-cel">${this.situacaoHtml(r)}</td>
+            <td><div class="docs-acoes-box"><div class="docs-acoes-btns">${this.botoesBaixaHtml(r)}${distrato}</div><div class="docs-acoes-ico"><button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button>${this.botaoLixeiraHtml(r)}</div></div></td>
           </tr>`;
     };
     const corpo = ordem.map((id) => {
@@ -1341,6 +1387,7 @@ const DocAssinaturaApp = {
     }).join("");
     const tabela = rows.length
       ? `<div class="cc-scroll"><table class="cc-table docs-cc-table">
+          <colgroup><col style="width:118px"><col style="width:118px"><col><col style="width:70px"><col style="width:110px"><col style="width:16%"><col style="width:170px"><col style="width:250px"></colgroup>
           <thead><tr>
             ${this.th("quando", "Quando")}
             ${this.th("tipo", "Documento")}

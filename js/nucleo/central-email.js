@@ -801,7 +801,10 @@ const CentralEmailApp = {
       }
       g.itens.push(v);
     });
-    const botoes = grupos.map((g) => `<section class="cem-var-grupo"><h4>${this.esc(g.nome)}</h4>${g.itens.map((v) => `<button type="button" class="cem-var" onclick="CentralEmailApp.inserir('${v.token}')">${this.esc(v.label)}</button>`).join("")}</section>`).join("");
+    const botoes = grupos.map((g) => `<section class="cem-var-grupo"><h4>${this.esc(g.nome)}</h4><div class="cem2-vars">${g.itens.map((v) => `<button type="button" class="cem-var" title="Inserir ${this.esc(v.token)}" onclick="CentralEmailApp.inserir('${v.token}')">${this.esc(v.label)}</button>`).join("")}</div></section>`).join("");
+    const aviso = atual && atual.status === "aprovado"
+      ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga."
+      : "Ao salvar, a régua fica desligada até o administrador aprovar.";
     const pop = document.createElement("div");
     pop.id = "cem-modal";
     pop.className = "cem-modal";
@@ -810,56 +813,76 @@ const CentralEmailApp = {
         <h3 id="cem-titulo">${atual ? "Editar template" : "Novo template"}</h3>
         <button type="button" class="btn btn-fechar" onclick="CentralEmailApp.fecharModal()">Fechar</button>
       </div>
-      <div class="cem-body">
+      <div class="cem-body cem2">
         <div class="cem-editor">
           <div class="cem-escrever">
-            <div class="cem-grade">
-              <label>Nome<input id="cem-nome" class="cem-campo" value="${this.esc(atual ? atual.nome : "")}"></label>
-              <label>Tag<select id="cem-tag" class="cem-campo">${tags}</select></label>
-              <label class="cem-span">Título do e-mail<input id="cem-assunto" class="cem-campo" value="${this.esc(atual ? atual.assunto : "")}"></label>
-              <label>Dias depois de vencido<input id="cem-dias" class="cem-campo" type="number" min="0" step="1" value="${atual ? atual.diasVencido : 5}"></label>
-              <div class="cem-ativo">
-                <span class="cem-rotulo">Régua</span>
-                <label class="moura-switch"${podeLigar ? "" : ` title="${atual && atual.status === "aprovado" ? "Só o administrador liga ou desliga a régua." : "A régua só pode ser ligada depois que o administrador aprovar o template."}"`}>
-                  <input type="checkbox" id="cem-ativo"${atual && atual.ativo ? " checked" : ""}${podeLigar ? "" : " disabled"}>
-                  <span class="moura-switch-track" aria-hidden="true"></span>
-                  <span class="moura-switch-text">${atual && atual.ativo ? "Ativada" : "Desativada"}</span>
-                </label>
+            <section class="cem2-bloco">
+              <h4 class="cem2-tit"><span>1</span> Identificação</h4>
+              <div class="cem2-grade">
+                <label>Nome do template<input id="cem-nome" class="cem-campo" value="${this.esc(atual ? atual.nome : "")}" placeholder="Ex.: 3 vencidas, com pagamento recente"></label>
+                <label>Tag da fila<select id="cem-tag" class="cem-campo" onchange="CentralEmailApp.iaTrocouTag()">${tags}</select></label>
+                <label class="cem2-span">Título do e-mail<input id="cem-assunto" class="cem-campo" value="${this.esc(atual ? atual.assunto : "")}" placeholder="O que o cliente vê na caixa de entrada"></label>
               </div>
-            </div>
-            <div class="cem-dest">
-              <span class="cem-rotulo">Enviar para</span>
+            </section>
+            <section class="cem2-bloco">
+              <h4 class="cem2-tit"><span>2</span> Quando enviar</h4>
+              <div class="cem2-grade cem2-g3">
+                <label>Dias depois de vencido<input id="cem-dias" class="cem-campo" type="number" min="0" step="1" value="${atual ? atual.diasVencido : 5}"></label>
+                <label title="No envio, a régua grava a ocorrência em Ocorrências e Promessas com esta data de retorno. Até lá o título não entra na fila nova da Agenda do operador.">Dias para retorno<input id="cem-retorno" class="cem-campo" type="number" min="0" max="90" step="1" value="${atual ? atual.diasRetorno : 5}"></label>
+                <div class="cem-ativo">
+                  <span class="cem-rotulo">Régua</span>
+                  <label class="moura-switch"${podeLigar ? "" : ` title="${atual && atual.status === "aprovado" ? "Só o administrador liga ou desliga a régua." : "A régua só pode ser ligada depois que o administrador aprovar o template."}"`}>
+                    <input type="checkbox" id="cem-ativo"${atual && atual.ativo ? " checked" : ""}${podeLigar ? "" : " disabled"}>
+                    <span class="moura-switch-track" aria-hidden="true"></span>
+                    <span class="moura-switch-text">${atual && atual.ativo ? "Ativada" : "Desativada"}</span>
+                  </label>
+                </div>
+              </div>
+              <p class="cem2-nota">O envio registra a ocorrência na ficha do cliente com a data de retorno; até lá ele não entra na fila nova da Agenda.</p>
+            </section>
+            <section class="cem2-bloco">
+              <h4 class="cem2-tit"><span>3</span> Para quem</h4>
               <div class="cem-dest-opcoes" role="radiogroup">
                 <label class="cem-radio"><input type="radio" name="cem-destino" value="contrato"${destino === "contrato" ? " checked" : ""} onchange="CentralEmailApp.trocarDestino()"> E-mails do contrato</label>
                 <label class="cem-radio"><input type="radio" name="cem-destino" value="fixo"${destino === "fixo" ? " checked" : ""} onchange="CentralEmailApp.trocarDestino()"> E-mail selecionado</label>
               </div>
-              <label class="cem-dest-campo" id="cem-para-wrap"${destino === "fixo" ? "" : " hidden"}>E-mail de destino<input id="cem-para" class="cem-campo" placeholder="nome@empresa.com.br" value="${this.esc(atual ? atual.para : "")}"></label>
-              <label class="cem-dest-campo">Cópia (CC)<input id="cem-cc" class="cem-campo" placeholder="Separe os e-mails por vírgula" value="${this.esc(atual ? atual.cc : "")}"></label>
-              <label class="cem-dest-campo">Enviar de<select id="cem-de" class="cem-campo">${this.CAIXAS_ENVIO.map((c) => `<option value="${this.esc(c.valor)}"${this.caixaValida(atual && atual.remetente) === c.valor ? " selected" : ""}>${this.esc(c.rotulo)}</option>`).join("")}</select></label>
-            </div>
-            <p class="cem-legenda">${atual && atual.status === "aprovado" ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga." : "Ao salvar, a régua fica desligada até o administrador aprovar."}</p>
-            <div id="cem-ia" class="cem-ia">${this.iaHtml()}</div>
-            <label class="cem-bloco-campo">Texto<textarea id="cem-corpo" class="cem-campo">${this.esc(atual ? atual.corpo : "")}</textarea></label>
-            <p class="cem-legenda">Prévia com um cliente de exemplo. Na fila do dia, nome, unidade, empreendimento, cidade e vencimento saem do contrato.</p>
-            <div id="cem-previa" class="cem-previa"></div>
+              <div class="cem2-grade cem2-g3">
+                <label id="cem-para-wrap"${destino === "fixo" ? "" : " hidden"}>E-mail de destino<input id="cem-para" class="cem-campo" placeholder="nome@empresa.com.br" value="${this.esc(atual ? atual.para : "")}"></label>
+                <label>Cópia (CC)<input id="cem-cc" class="cem-campo" placeholder="Separe por vírgula" value="${this.esc(atual ? atual.cc : "")}"></label>
+                <label>Enviar de<select id="cem-de" class="cem-campo">${this.CAIXAS_ENVIO.map((c) => `<option value="${this.esc(c.valor)}"${this.caixaValida(atual && atual.remetente) === c.valor ? " selected" : ""}>${this.esc(c.rotulo)}</option>`).join("")}</select></label>
+              </div>
+            </section>
+            <section class="cem2-bloco">
+              <div class="cem2-tit-linha">
+                <h4 class="cem2-tit"><span>4</span> Texto</h4>
+                <div class="cem2-abas" role="tablist">
+                  <button type="button" role="tab" id="cem2-aba-escrever" class="cem2-aba is-on" onclick="CentralEmailApp.iaAba('escrever')"><i data-lucide="pencil" style="width:14px;height:14px;"></i> Escrever</button>
+                  <button type="button" role="tab" id="cem2-aba-sugestoes" class="cem2-aba" onclick="CentralEmailApp.iaAba('sugestoes')"><i data-lucide="sparkles" style="width:14px;height:14px;"></i> Sugestões</button>
+                </div>
+              </div>
+              <div id="cem2-escrever">
+                <textarea id="cem-corpo" class="cem-campo" placeholder="Escreva o e-mail ou use a aba Sugestões. Clique nas variáveis ao lado para inserir.">${this.esc(atual ? atual.corpo : "")}</textarea>
+                <p class="cem2-nota">Prévia com um cliente de exemplo. No envio, nome, unidade, empreendimento, cidade e vencimento saem do contrato.</p>
+                <div id="cem-previa" class="cem-previa"></div>
+              </div>
+              <div id="cem-ia" class="cem2-sug" hidden></div>
+            </section>
           </div>
           <aside class="cem-vars-lado">
             <h4>Variáveis</h4>
+            <p class="cem2-nota">Clique para inserir no texto.</p>
             ${botoes}
             <section class="cem-var-grupo">
               <h4>Data de retorno</h4>
-              <label class="cem-retorno">Dias depois do envio
-                <input id="cem-retorno" type="number" min="0" max="90" step="1" value="${atual ? atual.diasRetorno : 5}">
-              </label>
-              <p class="cem-retorno-nota">No envio, a régua grava a ocorrência em Ocorrências e Promessas com esta data de retorno. Até lá o título não entra na fila nova da Agenda do operador.</p>
               <button type="button" class="cem-var" onclick="CentralEmailApp.inserirRetorno()">Inserir data de retorno</button>
             </section>
           </aside>
         </div>
       </div>
-      <div class="cem-foot"><button type="button" class="btn btn-primary" onclick="CentralEmailApp.salvar('${this.esc(atual ? atual.id : "")}')">Salvar</button></div>
+      <div class="cem-foot cem2-foot"><span class="cem2-nota">${aviso}</span><button type="button" class="btn btn-primary" onclick="CentralEmailApp.salvar('${this.esc(atual ? atual.id : "")}')">Salvar</button></div>
     </div>`;
     document.body.appendChild(pop);
+    if (window.lucide && lucide.createIcons) lucide.createIcons();
     const chave = document.getElementById("cem-ativo");
     if (chave) chave.addEventListener("change", () => {
       const txt = chave.parentElement && chave.parentElement.querySelector(".moura-switch-text");
@@ -908,13 +931,13 @@ const CentralEmailApp = {
   },
 
   /* ---------- Sugestões de texto (biblioteca, sem IA e sem custo) ----------
-     5 sugestões curtas, uma por tom de voz, montadas pela situação da tag (central-email-sugestoes.js).
-     Escolhido o tom, "Nova sugestão" traz outra combinação naquele tom, sem repetir as já mostradas.
-     O texto vem com as variáveis do template e a data de retorno do campo "Dias depois do envio". */
-  ia: { sugestoes: [], tom: "", vistos: new Set(), carregando: false, erro: "" },
+     Aba "Sugestões" do bloco Texto: um tom por vez (Cordial, Direto, Empático, Formal, Firme), com a prévia já
+     com o cliente de exemplo. "Outra sugestão" traz outra combinação do tom, sem repetir; as setas voltam às
+     anteriores. "Usar este texto" copia título e texto para a aba Escrever. Biblioteca: central-email-sugestoes.js. */
+  ia: { aba: "escrever", tom: "cordial", porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" },
 
   iaReset() {
-    this.ia = { sugestoes: [], tom: "", vistos: new Set(), carregando: false, erro: "" };
+    this.ia = { aba: "escrever", tom: "cordial", porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" };
   },
 
   iaTomId(nome) {
@@ -922,31 +945,67 @@ const CentralEmailApp = {
     return n.split(/\s+/)[0] || n;
   },
 
+  iaCampos() {
+    const val = (id) => String((document.getElementById(id) || {}).value || "");
+    const tag = Number(val("cem-tag"));
+    return {
+      tag: Number.isFinite(tag) && val("cem-tag") !== "" ? String(tag) : "10",
+      retorno: Math.max(0, Math.round(Number(val("cem-retorno")) || 0))
+    };
+  },
+
+  /** Sugestão atual do tom (gera a primeira se ainda não houver). */
+  iaAtual() {
+    const S = window.CentralEmailSugestoes;
+    if (!S) return null;
+    const { tag, retorno } = this.iaCampos();
+    if (this.ia.tag !== tag) {
+      this.ia.porTom = {};
+      this.ia.pos = {};
+      this.ia.vistos = new Set();
+      this.ia.tag = tag;
+    }
+    const tom = this.ia.tom;
+    const lista = this.ia.porTom[tom] = this.ia.porTom[tom] || [];
+    if (!lista.length) {
+      const s = S.proxima(tag, tom, retorno, this.ia.vistos);
+      this.ia.vistos.add(s.chave);
+      lista.push(s);
+      this.ia.pos[tom] = 0;
+    }
+    return lista[Math.min(this.ia.pos[tom] || 0, lista.length - 1)];
+  },
+
   iaHtml() {
-    const ia = this.ia || {};
-    const lista = ia.tom ? ia.sugestoes.filter((s) => this.iaTomId(s.tom) === ia.tom).slice(-1) : ia.sugestoes;
-    const cards = lista.map((s) => {
-      const i = ia.sugestoes.indexOf(s);
-      return `<div class="cem-ia-card">
-        <div class="cem-ia-tom">${this.esc(s.tom)}</div>
-        <div class="cem-ia-assunto"><b>Título:</b> ${this.esc(s.assunto)}</div>
-        <div class="cem-ia-texto">${this.esc(s.texto)}</div>
-        <div class="cem-ia-acoes">
-          <button type="button" class="btn btn-primary" onclick="CentralEmailApp.iaUsar(${i})">Usar este texto</button>
-          <button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaNova(${i})" ${ia.carregando ? "disabled" : ""}>Nova sugestão neste tom</button>
+    const S = window.CentralEmailSugestoes;
+    if (!S) return `<p class="cem-ia-erro">A biblioteca de sugestões não carregou. Atualize a página (Ctrl+F5).</p>`;
+    const s = this.iaAtual();
+    const tom = this.ia.tom;
+    const lista = this.ia.porTom[tom] || [];
+    const pos = Math.min(this.ia.pos[tom] || 0, lista.length - 1);
+    const titulo = this.ia.cru ? this.esc(s.assunto) : this.esc(this.aplicar(String(s.assunto || ""), this.EXEMPLO));
+    const corpo = this.ia.cru
+      ? `<div class="cem2-sug-cru">${this.esc(s.texto)}</div>`
+      : this.htmlEmail(s.texto, this.EXEMPLO, this.PARCELAS_EXEMPLO);
+    return `<div class="cem2-tons" role="tablist">${S.TONS.map((t) => `<button type="button" class="cem2-tom${t.id === tom ? " is-on" : ""}" onclick="CentralEmailApp.iaTom('${t.id}')">${this.esc(t.nome)}</button>`).join("")}</div>
+      <div class="cem2-sug-card">
+        <div class="cem2-sug-topo">
+          <span class="cem2-sug-tag">Tag: ${this.esc(this.rotuloTag(Number(this.ia.tag)))}</span>
+          <label class="cem2-sug-cru-op"><input type="checkbox" ${this.ia.cru ? "checked" : ""} onchange="CentralEmailApp.iaCru(this.checked)"> Mostrar variáveis</label>
         </div>
-      </div>`;
-    }).join("");
-    return `<div class="cem-ia-topo">
-        <span class="cem-rotulo">Sugestões de texto</span>
-        ${ia.tom ? `<button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaVoltar()">Ver os 5 tons</button>` : ""}
-        <button type="button" class="btn btn-outline cem-ia-btn" onclick="CentralEmailApp.iaPedir('tons')">
-          <i data-lucide="sparkles" style="width:14px;height:14px;"></i> ${ia.sugestoes.length ? "Outras 5 sugestões" : "Sugerir textos"}
-        </button>
+        <div class="cem2-sug-assunto"><b>Título:</b> ${titulo}</div>
+        <div class="cem2-sug-texto">${corpo}</div>
+        <div class="cem2-sug-acoes">
+          <div class="cem2-sug-nav">
+            <button type="button" class="btn btn-outline" title="Sugestão anterior" onclick="CentralEmailApp.iaMover(-1)" ${pos <= 0 ? "disabled" : ""}><i data-lucide="chevron-left" style="width:16px;height:16px;"></i></button>
+            <span>${pos + 1} de ${lista.length}</span>
+            <button type="button" class="btn btn-outline" title="Próxima já vista" onclick="CentralEmailApp.iaMover(1)" ${pos >= lista.length - 1 ? "disabled" : ""}><i data-lucide="chevron-right" style="width:16px;height:16px;"></i></button>
+          </div>
+          <button type="button" class="btn btn-outline" onclick="CentralEmailApp.iaOutra()"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Outra sugestão</button>
+          <button type="button" class="btn btn-primary" onclick="CentralEmailApp.iaUsar()"><i data-lucide="check" style="width:14px;height:14px;"></i> Usar este texto</button>
+        </div>
       </div>
-      ${ia.erro ? `<p class="cem-ia-erro">${this.esc(ia.erro)}</p>` : ""}
-      ${!ia.sugestoes.length && !ia.erro ? `<p class="cem-legenda">Textos curtos em 5 tons de voz (Cordial, Direto, Empático, Formal, Firme), montados pela situação da tag escolhida e já com as variáveis. Escolha a tag antes de sugerir.</p>` : ""}
-      ${cards ? `<div class="cem-ia-lista${ia.tom ? " is-um" : ""}">${cards}</div>` : ""}`;
+      <p class="cem2-nota">Prévia com o cliente de exemplo. Ao usar, o texto vai para a aba Escrever com as variáveis, e você pode ajustar.</p>`;
   },
 
   iaPintar() {
@@ -956,63 +1015,62 @@ const CentralEmailApp = {
     if (window.lucide && lucide.createIcons) lucide.createIcons();
   },
 
-  iaPedir(modo, tomId) {
+  iaAba(aba) {
+    this.ia.aba = aba === "sugestoes" ? "sugestoes" : "escrever";
+    const sug = this.ia.aba === "sugestoes";
+    const esc = document.getElementById("cem2-escrever");
+    const ia = document.getElementById("cem-ia");
+    if (esc) esc.hidden = sug;
+    if (ia) ia.hidden = !sug;
+    const a1 = document.getElementById("cem2-aba-escrever");
+    const a2 = document.getElementById("cem2-aba-sugestoes");
+    if (a1) a1.classList.toggle("is-on", !sug);
+    if (a2) a2.classList.toggle("is-on", sug);
+    if (sug) this.iaPintar();
+    else this.atualizarPreview();
+  },
+
+  iaTom(tom) {
+    this.ia.tom = tom;
+    this.iaPintar();
+  },
+
+  iaCru(on) {
+    this.ia.cru = !!on;
+    this.iaPintar();
+  },
+
+  iaMover(passo) {
+    const lista = this.ia.porTom[this.ia.tom] || [];
+    this.ia.pos[this.ia.tom] = Math.max(0, Math.min(lista.length - 1, (this.ia.pos[this.ia.tom] || 0) + passo));
+    this.iaPintar();
+  },
+
+  iaOutra() {
     const S = window.CentralEmailSugestoes;
-    this.ia.erro = "";
-    if (!S) {
-      this.ia.erro = "A biblioteca de sugestões não carregou. Atualize a página (Ctrl+F5).";
-      this.iaPintar();
-      return;
-    }
-    const val = (id) => String((document.getElementById(id) || {}).value || "");
-    const tag = Number(val("cem-tag"));
-    const tagId = Number.isFinite(tag) && val("cem-tag") !== "" ? String(tag) : "10";
-    const retorno = Math.max(0, Math.round(Number(val("cem-retorno")) || 0));
-    if (!(this.ia.vistos instanceof Set)) this.ia.vistos = new Set();
-    // Trocou a tag desde a última sugestão: recomeça a lista.
-    if (this.ia.tag !== tagId) {
-      this.ia.sugestoes = [];
-      this.ia.vistos = new Set();
-      this.ia.tag = tagId;
-    }
-    const gerar = (tom) => {
-      const s = S.proxima(tagId, tom, retorno, this.ia.vistos);
-      this.ia.vistos.add(s.chave);
-      return s;
-    };
-    if (modo === "nova" && tomId) {
-      this.ia.sugestoes = this.ia.sugestoes.concat([gerar(tomId)]);
-      this.ia.tom = tomId;
-    } else {
-      this.ia.sugestoes = S.TONS.map((t) => gerar(t.id));
-      this.ia.tom = "";
-    }
+    if (!S) return;
+    const { tag, retorno } = this.iaCampos();
+    this.iaAtual();
+    const s = S.proxima(tag, this.ia.tom, retorno, this.ia.vistos);
+    this.ia.vistos.add(s.chave);
+    const lista = this.ia.porTom[this.ia.tom];
+    lista.push(s);
+    this.ia.pos[this.ia.tom] = lista.length - 1;
     this.iaPintar();
   },
 
-  iaNova(i) {
-    const s = this.ia.sugestoes[i];
-    if (!s) return;
-    this.iaPedir("nova", s.tomId || this.iaTomId(s.tom));
+  iaTrocouTag() {
+    if (this.ia.aba === "sugestoes") this.iaPintar();
   },
 
-  iaVoltar() {
-    // Volta a mostrar uma sugestão de cada tom (a mais recente de cada um).
-    const ultima = {};
-    this.ia.sugestoes.forEach((s) => { ultima[this.iaTomId(s.tom)] = s; });
-    this.ia.sugestoes = Object.values(ultima);
-    this.ia.tom = "";
-    this.iaPintar();
-  },
-
-  iaUsar(i) {
-    const s = this.ia.sugestoes[i];
+  iaUsar() {
+    const s = this.iaAtual();
     if (!s) return;
     const assunto = document.getElementById("cem-assunto");
     const corpo = document.getElementById("cem-corpo");
     if (assunto && s.assunto) assunto.value = s.assunto;
     if (corpo) corpo.value = s.texto;
-    this.atualizarPreview();
+    this.iaAba("escrever");
     if (corpo) corpo.focus();
   },
 
