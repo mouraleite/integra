@@ -1422,8 +1422,11 @@ const ParticipacoesApp = {
     this.companyIds = next;
     this.companyId = next.length === 1 ? next[0] : "";
     this.fileName = "";
+    // Guarda o que já foi lido antes de trocar (o PDF aberto no navegador segue válido enquanto estiver guardado).
+    this.guardarEmpresasLidas();
+    const guardadas = this._empLidas || {};
     this.files.forEach((f) => {
-      if (f.objectUrl) {
+      if (f.objectUrl && !guardadas[String(f.companyId || "")]) {
         try { URL.revokeObjectURL(f.objectUrl); } catch (e) {}
       }
     });
@@ -1439,17 +1442,32 @@ const ParticipacoesApp = {
       return;
     }
     const gen = (this._empGen = (this._empGen || 0) + 1);
+    // Empresas já lidas nesta aba (há menos de 15 minutos) entram na hora, sem buscar de novo; só as outras vão
+    // ao Firebase e ao servidor. Antes, filtrar uma empresa depois de "Todos" recarregava tudo do zero.
+    const faltam = next.filter((cid) => !this.empresaLida(cid));
+    next.filter((cid) => this.empresaLida(cid)).forEach((cid) => {
+      this.files.push(...this._empLidas[cid].files);
+    });
+    this.ordenarArquivos();
+    if (!faltam.length) {
+      this.loading = false;
+      this.parsing = false;
+      this.uploadProgress = "";
+      this.pararCarga();
+      this.render();
+      return;
+    }
     this.loading = true;
-    this.uploadProgress = next.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
+    this.uploadProgress = faltam.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
     this._cargaPct = 18;
     this.render();
     this.iniciarCarga();
-    for (let i = 0; i < next.length; i++) {
+    for (let i = 0; i < faltam.length; i++) {
       if (gen !== this._empGen) return;
-      this.restoreCacheForCompany(next[i]);
-      await this.mergeCloudPeriods(next[i]);
-      await this.loadFilesFromServer(next[i]);
-      this._cargaPct = 18 + Math.round(40 * ((i + 1) / next.length));
+      this.restoreCacheForCompany(faltam[i]);
+      await this.mergeCloudPeriods(faltam[i]);
+      await this.loadFilesFromServer(faltam[i]);
+      this._cargaPct = 18 + Math.round(40 * ((i + 1) / faltam.length));
     }
     if (gen !== this._empGen) return;
     this.loading = false;
@@ -1463,7 +1481,43 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    this.guardarEmpresasLidas();
     this.render();
+  },
+
+  /* Empresas já lidas nesta aba: { [companyId]: { files, em } }. Vale 15 minutos; envio de PDF regrava. */
+  EMP_LIDAS_MS: 15 * 60 * 1000,
+
+  empresaLida(cid) {
+    const x = this._empLidas && this._empLidas[String(cid)];
+    return !!(x && Date.now() - x.em < this.EMP_LIDAS_MS && x.files.length);
+  },
+
+  /** Guarda os períodos já lidos (todos com despesas) de cada empresa na tela. */
+  guardarEmpresasLidas() {
+    if (!this._empLidas) this._empLidas = {};
+    if (this.loading || this.parsing) return;
+    const porEmp = {};
+    (this.files || []).forEach((f) => {
+      const cid = String((f && f.companyId) || "");
+      if (!cid) return;
+      (porEmp[cid] = porEmp[cid] || []).push(f);
+    });
+    Object.keys(porEmp).forEach((cid) => {
+      const lista = porEmp[cid];
+      if (!lista.every((f) => Array.isArray(f.expenses))) return;
+      const atual = this._empLidas[cid];
+      // Mesma lista já guardada: mantém a hora da leitura (não renova o prazo só por trocar o filtro).
+      if (atual && atual.files.length === lista.length) {
+        const ja = new Set(atual.files);
+        if (lista.every((f) => ja.has(f))) return;
+      }
+      this._empLidas[cid] = { files: lista, em: Date.now() };
+    });
+  },
+
+  ordenarArquivos() {
+    this.files.sort((a, b) => String(b.closing || "").localeCompare(String(a.closing || "")) || String(b.name || "").localeCompare(String(a.name || "")));
   },
 
   async onFile(key) {
@@ -1608,6 +1662,10 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    // PDF novo: a empresa deixa de valer como "já lida" e é guardada de novo com o período enviado
+    // (se algum período ainda não foi lido, a próxima troca de filtro busca de novo).
+    if (this._empLidas) delete this._empLidas[String(this.companyId || "")];
+    this.guardarEmpresasLidas();
     if (input) input.value = "";
     this.render();
   },
