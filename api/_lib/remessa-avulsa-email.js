@@ -169,6 +169,13 @@ module.exports = async function handler(req, res) {
       vencimento: String((bruto && bruto.vencimento) || "").slice(0, 10)
     };
     const r = { titulo: it.titulo, parcela: it.parcela };
+    // Vencimento já passado: não envia (o operador contata o cliente para gerar o boleto em outra data).
+    if (/^\d{4}-\d{2}-\d{2}$/.test(it.vencimento) && it.vencimento < dia) {
+      r.status = "vencido";
+      r.erro = "Vencimento já passou: contate o cliente para gerar o boleto em outra data.";
+      resultados.push(r);
+      continue;
+    }
     const id = it.titulo + "_" + it.parcela;
     let ja = null;
     try {
