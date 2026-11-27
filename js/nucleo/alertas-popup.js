@@ -13,6 +13,16 @@ const AlertasPopupApp = {
         <p style="color:#64748b;font-size:0.82rem;">Na tela real também aparecem Lembrar Mais Tarde e Marcar como Concluído neste Mês.</p>`
     },
     {
+      id: "remessa-avulsa",
+      nome: "Boletos avulsos para gerar",
+      quando: "No login, nos dias em que o batimento das 7h da Remessa avulsa encontra parcelas do mês sem boleto. Não abre no primeiro dia útil do mês (dia da remessa mensal). Lembrar mais tarde esconde até a próxima entrada; Abrir Remessa avulsa não mostra mais naquele dia.",
+      logica: "O batimento das 7h lê o extrato do mês: parcelas sem boleto e sem recebimento, situação Normal, condição Parcelas Mensais ou Parcela Acordo, sem financiamento em aberto. O back office gera o boleto avulso no Sienge e envia por e-mail na Remessa avulsa, pela caixa e com o texto da aba Configurações.",
+      quem: "Operador de cobrança back office com acesso à Remessa avulsa. Administrador não recebe.",
+      titulo: "Boletos avulsos para gerar",
+      corpo: `<p>O batimento das 7h encontrou <b>12 parcela(s)</b> deste mês sem boleto gerado.</p>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real há Lembrar mais tarde e Abrir Remessa avulsa.</p>`
+    },
+    {
       id: "vistoria-resultado",
       nome: "Vistoria pedida na ficha foi aceita",
       quando: "Assim que o back office aceita a vistoria. Fica até a pessoa fechar.",

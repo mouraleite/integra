@@ -24,7 +24,53 @@ const RemessaAvulsaApp = {
     linhas: [],
     contas: {},
     analisou: false,
-    origem: ""
+    origem: "",
+    // Abas (Parcelas / Configurações), envio do boleto por e-mail e configuração do texto.
+    aba: "parcelas",
+    cfg: null,
+    envios: {},
+    sel: new Set(),
+    enviando: false,
+    pulado: ""
+  },
+
+  /* Texto padrão do e-mail do boleto (o mesmo do Sienge). O servidor usa o mesmo padrão quando a configuração
+     ainda não foi gravada (api/_lib/remessa-avulsa-email.js). Variáveis no formato do Sienge. */
+  CFG_PADRAO: {
+    remetente: "recebimentos@mouraleite.com.br",
+    cc: "",
+    assunto: "Boleto Mensal: <dtCobranca> | Moura Leite Loteamentos",
+    corpo: "Olá, <nmCliente>.\n\nSeu boleto referente a parcela de <dtCobranca> já está disponível em anexo.\nCidade e loteamento: <nmEmpreend> | Quadra/Lote: <nuUnidade>\n\n🔑 Como acessar o boleto:\n1. Abra o arquivo do boleto;\n2. Insira a senha solicitada (seu CPF ou CNPJ completo, sem pontos e traços);\n3. O pagamento pode ser realizado a partir de 1 hora após o recebimento deste e-mail.\n⚠️ Antes de concluir o pagamento, confira se os dados do beneficiário correspondem às informações do boleto.\n\n📲 Canais de atendimento Moura Leite:\nTelefone/WhatsApp: 4020-2109\nE-mail: relacionamento@mouraleite.com.br\nPortal do Cliente: https://www.mouraleite.com.br/portaldocliente/\n\n✨ Indique e Ganhe:\nAgora que você já conquistou seu lote, que tal indicar amigos e familiares? Seus indicados compram com desconto, e você recebe R$ 500 por venda concretizada.\nSaiba mais em mouraleite.com.br/indique-e-ganhe\n\nAtenciosamente,\n\nMoura Leite Loteamentos"
+  },
+
+  VARS_EMAIL: [
+    { token: "<nmCliente>", label: "Nome do cliente" },
+    { token: "<dtCobranca>", label: "Vencimento da parcela" },
+    { token: "<nmEmpreend>", label: "Empreendimento" },
+    { token: "<nuUnidade>", label: "Quadra/Lote" }
+  ],
+
+  CAIXAS: [
+    { valor: "recebimentos@mouraleite.com.br", rotulo: "recebimentos@mouraleite.com.br" },
+    { valor: "", rotulo: "Caixa padrão do Integra" }
+  ],
+
+  /** Unidade(s) do título no extrato do Sienge (campo units), usada no texto do e-mail. */
+  unidadesDe(bill, item) {
+    for (const row of [bill, item]) {
+      if (!row) continue;
+      if (typeof row.units === "string" && row.units.trim()) return row.units.trim();
+      if (Array.isArray(row.units)) {
+        const nomes = row.units.map((u) => u && (u.name || u.unitName || u.id)).filter(Boolean);
+        if (nomes.length) return nomes.join(", ");
+      }
+      if (row.unitName) return String(row.unitName);
+    }
+    return "";
+  },
+
+  chave(r) {
+    return String(r.titulo) + "_" + String(r.parcela);
   },
 
   COLS: [
@@ -81,6 +127,92 @@ const RemessaAvulsaApp = {
     this.render();
     this.carregarEmpresas();
     this.carregarBatimento();
+    if (!this.state.cfg) this.carregarConfig();
+  },
+
+  /* ---------- Pop-up do back office ----------
+     No login, em dia útil, quando o batimento das 7h de hoje achou parcelas sem boleto (fora o primeiro dia útil,
+     que é o da remessa mensal). "Lembrar mais tarde" esconde até a próxima entrada; "Abrir Remessa avulsa" leva
+     para a tela e não mostra mais hoje. Só para o operador de cobrança back office (administrador não recebe). */
+  AVISO_KEY: "crm_remav_aviso_",
+
+  async avisar(previa) {
+    const u = (window.AppState && AppState.currentUser) || null;
+    if (!previa) {
+      if (!(typeof window.isCobrancaBackOfficeUser === "function" && window.isCobrancaBackOfficeUser(u))) return;
+      if (typeof window.hasCrmPerm === "function" && !window.hasCrmPerm("sub_fin_cr_remessa_avulsa_acessar")) return;
+    }
+    const hoje = this.iso(new Date());
+    if (!previa) {
+      try {
+        if (localStorage.getItem(this.AVISO_KEY + hoje) === "1") return;
+        if (sessionStorage.getItem(this.AVISO_KEY + hoje) === "depois") return;
+      } catch (e) {}
+    }
+    let total = 0;
+    let quando = "";
+    if (previa) {
+      total = 12;
+      quando = hoje.split("-").reverse().join("/") + " 07:02";
+    } else {
+      // O banco pode ainda não estar pronto logo depois do login.
+      for (let i = 0; i < 20 && !(window.firebaseDb && window.firebaseCollections); i++) await new Promise((r) => setTimeout(r, 1000));
+      const fc = window.firebaseCollections;
+      if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+      try {
+        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        if (!existe) return;
+        const d = snap.data() || {};
+        if (d.date !== hoje || !d.done || d.pulado || !Array.isArray(d.linhas)) return;
+        total = Number(d.total) || d.linhas.length;
+        const at = d.at ? new Date(d.at) : null;
+        quando = at && !isNaN(at.getTime()) ? at.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(",", "") : "";
+      } catch (e) {
+        return;
+      }
+    }
+    if (!total) return;
+    this.abrirAviso(total, quando, !!previa);
+  },
+
+  abrirAviso(total, quando, previa) {
+    let pop = document.getElementById("remav-aviso");
+    if (pop) pop.remove();
+    pop = document.createElement("div");
+    pop.id = "remav-aviso";
+    pop.className = "cem-modal";
+    pop.dataset.previa = previa ? "1" : "";
+    pop.innerHTML = `<div class="cem-card cem-card-aviso" role="dialog" aria-modal="true" aria-labelledby="remav-aviso-tit">
+      <div class="cem-head"><h3 id="remav-aviso-tit">Boletos avulsos para gerar</h3></div>
+      <div class="cem-body">
+        <p style="margin:0 0 10px;color:#334155;">O batimento das 7h${quando ? " (" + this.esc(quando) + ")" : ""} encontrou <b>${Number(total).toLocaleString("pt-BR")} parcela(s)</b> deste mês sem boleto gerado.</p>
+        <p style="margin:0;color:#475569;font-size:0.88rem;line-height:1.45;">Gere os boletos avulsos no Sienge e depois envie cada boleto por e-mail na Remessa avulsa, pela caixa <b>${this.esc(((this.state.cfg || this.CFG_PADRAO).remetente) || "padrão do Integra")}</b>, com o texto padrão.</p>
+      </div>
+      <div class="cem-foot" style="justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn btn-outline" onclick="RemessaAvulsaApp.avisoDepois()">Lembrar mais tarde</button>
+        <button type="button" class="btn btn-primary" onclick="RemessaAvulsaApp.avisoAbrir()">Abrir Remessa avulsa</button>
+      </div>
+    </div>`;
+    document.body.appendChild(pop);
+  },
+
+  avisoFechar() {
+    const pop = document.getElementById("remav-aviso");
+    const previa = !!(pop && pop.dataset.previa === "1");
+    if (pop) pop.remove();
+    return previa;
+  },
+
+  avisoDepois() {
+    if (this.avisoFechar()) return;
+    try { sessionStorage.setItem(this.AVISO_KEY + this.iso(new Date()), "depois"); } catch (e) {}
+  },
+
+  avisoAbrir() {
+    if (this.avisoFechar()) return;
+    try { localStorage.setItem(this.AVISO_KEY + this.iso(new Date()), "1"); } catch (e) {}
+    if (typeof window.switchTab === "function") window.switchTab("remessa-avulsa", "Remessa avulsa");
   },
 
   async carregarEmpresas() {
@@ -97,9 +229,18 @@ const RemessaAvulsaApp = {
     const root = document.getElementById("remessa-avulsa-root");
     if (!root) return;
     const st = this.state;
+    // Abas: Parcelas (a remessa e o envio do boleto) e Configurações (título, caixa e texto do e-mail).
+    const aba = (id, ico, rot) => `<button type="button" role="tab" aria-selected="${st.aba === id}" class="ml-tab ${st.aba === id ? "is-active" : ""}" onclick="RemessaAvulsaApp.setAba('${id}')"><i data-lucide="${ico}"></i> ${rot}</button>`;
+    const abas = `<div class="ml-tabs remav-abas" role="tablist">${aba("parcelas", "list", "Parcelas")}${aba("config", "settings", "Configurações")}</div>`;
+    if (st.aba === "config") {
+      root.innerHTML = abas + this.configHtml();
+      this.ligarConfig();
+      if (window.lucide) window.lucide.createIcons();
+      return;
+    }
     // 27/11/2026: tela no padrão do Integra. Filtros, busca e ações numa linha; regra em nota recolhível;
     // KPIs compactos com o status do batimento; tabela cc-table (cabeçalho verde fixo, zebra, valores alinhados).
-    root.innerHTML = `
+    root.innerHTML = abas + `
       <div class="remav-painel">
         <div class="remav-filtros">
           <div id="remav-emp"></div>
@@ -109,6 +250,7 @@ const RemessaAvulsaApp = {
           <div class="remav-acoes">
             <button type="button" class="btn btn-primary cc-atualizar" id="remav-analisar"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Analisar</button>
             <button type="button" class="btn btn-excel" id="remav-excel" title="Exportar a tabela atual para Excel" ${st.linhas.length ? "" : "disabled"}><i data-lucide="download" style="width:14px;height:14px;"></i> Exportar em Excel</button>
+            <button type="button" class="btn btn-outline remav-enviar" id="remav-enviar" title="Enviar por e-mail o boleto das parcelas marcadas (o boleto precisa já estar gerado no Sienge)" onclick="RemessaAvulsaApp.enviarSelecionados()" disabled><i data-lucide="mail" style="width:14px;height:14px;"></i> <span id="remav-enviar-rot">Enviar por e-mail</span></button>
           </div>
         </div>
         <details class="remav-regra">
@@ -122,7 +264,7 @@ const RemessaAvulsaApp = {
       </div>
       <div class="cc-scroll remav-scroll">
         <table class="cc-table remav-tabela" id="remav-tabela">
-          <colgroup><col style="width:9%"><col style="width:16%"><col style="width:7%"><col style="width:17%"><col style="width:7%"><col style="width:7%"><col style="width:8%"><col><col style="width:9%"></colgroup>
+          <colgroup><col style="width:34px"><col style="width:8%"><col style="width:14%"><col style="width:6%"><col style="width:15%"><col style="width:6%"><col style="width:6%"><col style="width:7%"><col><col style="width:8%"><col style="width:150px"></colgroup>
           <thead><tr id="remav-head"></tr></thead>
           <tbody id="remav-body"></tbody>
         </table>
@@ -265,6 +407,8 @@ const RemessaAvulsaApp = {
       box.innerHTML = "";
     } else if (this.state.erro) {
       box.innerHTML = `<span class="remav-tag is-erro"><i data-lucide="alert-triangle" style="width:13px;height:13px;"></i> ${this.esc(this.state.erro)}</span>`;
+    } else if (this.state.pulado === "primeiro-dia-util" && !this.state.analisou) {
+      box.innerHTML = `<span class="remav-tag"><i data-lucide="calendar" style="width:13px;height:13px;"></i> Hoje é o primeiro dia útil do mês: é o dia da remessa mensal, então o batimento das 7h não roda. Analisar lê o Sienge se precisar.</span>`;
     } else if (this.state.origem === "7h" && this.state.batimentoEm) {
       box.innerHTML = `<span class="remav-tag"><i data-lucide="clock" style="width:13px;height:13px;"></i> Batimento das 7h · ${this.esc(this.state.batimentoEm)}. Analisar lê o Sienge de novo.</span>`;
     } else {
@@ -284,23 +428,28 @@ const RemessaAvulsaApp = {
     const head = document.getElementById("remav-head");
     const body = document.getElementById("remav-body");
     if (!head || !body) return;
-    head.innerHTML = this.COLS.map((c) => this.th(c)).join("");
+    const visiveis = this.state.loading || !this.state.analisou ? [] : this.visiveis();
+    const marcaveis = visiveis.filter((r) => !this.enviado(r));
+    const todasMarcadas = marcaveis.length > 0 && marcaveis.every((r) => this.state.sel.has(this.chave(r)));
+    head.innerHTML = `<th class="is-center"><input type="checkbox" title="Marcar todas as parcelas ainda não enviadas" ${todasMarcadas ? "checked" : ""} ${marcaveis.length ? "" : "disabled"} onchange="RemessaAvulsaApp.marcarTodas(this.checked)"></th>`
+      + this.COLS.map((c) => this.th(c)).join("") + `<th class="is-center">E-mail do boleto</th>`;
     if (this.state.loading) {
       const w = Math.max(8, Math.min(100, this.state.progresso || 8));
-      body.innerHTML = `<tr><td colspan="9" class="remav-vazio">
+      body.innerHTML = `<tr><td colspan="11" class="remav-vazio">
         <div class="ml-load" style="margin:8px auto;">
           <div class="loading-spinner" aria-hidden="true"></div>
           <div class="loading-status-text">${this.esc(this.state.status || "Analisando…")}</div>
           <div class="ml-load-track"><div class="loading-progress-bar" style="width:${w}%"></div></div>
         </div></td></tr>`;
     } else if (!this.state.analisou) {
-      body.innerHTML = `<tr><td colspan="9" class="remav-vazio">Escolha o período e clique em Analisar.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="11" class="remav-vazio">Escolha o período e clique em Analisar.</td></tr>`;
     } else {
-      const rows = this.visiveis();
+      const rows = visiveis;
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="9" class="remav-vazio">Nenhuma parcela elegível nesse período.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="11" class="remav-vazio">Nenhuma parcela elegível nesse período.</td></tr>`;
       } else {
         body.innerHTML = rows.map((r) => `<tr>
+          <td class="is-center">${this.enviado(r) ? "" : `<input type="checkbox" ${this.state.sel.has(this.chave(r)) ? "checked" : ""} onchange="RemessaAvulsaApp.marcar('${this.esc(this.chave(r))}', this.checked)">`}</td>
           <td title="${this.esc(r.conta || "")}">${this.esc(r.conta || "—")}</td>
           <td title="${this.esc(r.empresa)}">${this.esc(r.empresa)}</td>
           <td class="is-center">${this.esc(r.cc)}</td>
@@ -310,9 +459,11 @@ const RemessaAvulsaApp = {
           <td class="is-center">${this.esc(r.clienteId)}</td>
           <td title="${this.esc(r.cliente)}">${this.esc(r.cliente)}</td>
           <td class="is-center">${this.esc(this.fmtData(r.vencimento))}</td>
+          <td class="is-center remav-email-cel">${this.celulaEnvio(r)}</td>
         </tr>`).join("");
       }
     }
+    this.pintarBotaoEnviar();
     const excel = document.getElementById("remav-excel");
     if (excel) excel.disabled = this.state.loading || !this.visiveis().length;
     const analisar = document.getElementById("remav-analisar");
@@ -498,6 +649,12 @@ const RemessaAvulsaApp = {
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe || this.state.analisou || this.state.loading) return;
       const data = snap.data() || {};
+      // Primeiro dia útil do mês: o batimento das 7h não roda (é o dia da remessa mensal).
+      if (data.pulado === "primeiro-dia-util" && data.date === this.iso(new Date())) {
+        this.state.pulado = data.pulado;
+        this.pintarStatus();
+        return;
+      }
       if (!data.done || data.de !== mes.de || data.ate !== mes.ate || !Array.isArray(data.linhas)) return;
       const fin = await this.financiamentosAbertos();
       if (this.state.analisou || this.state.loading) return;
@@ -514,10 +671,12 @@ const RemessaAvulsaApp = {
         parcela: r.parcela,
         clienteId: r.clienteId,
         cliente: r.cliente,
+        unidade: r.unidade || "",
         vencimento: r.vencimento
       }));
       this.state.analisou = true;
       this.state.origem = "7h";
+      this.carregarEnvios();
       const quando = data.at ? new Date(data.at) : null;
       this.state.batimentoEm = quando && !isNaN(quando.getTime())
         ? quando.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })
@@ -623,6 +782,7 @@ const RemessaAvulsaApp = {
               parcela: parcela,
               clienteId: clienteId,
               cliente: cliente.toUpperCase(),
+              unidade: this.unidadesDe(bill, item),
               vencimento: venc
             });
           });
@@ -644,12 +804,279 @@ const RemessaAvulsaApp = {
       this.pintarStatus();
       this.pintarKpis();
       this.pintarTabela();
+      this.carregarEnvios();
     } catch (e) {
       if (geracao !== this.state.geracao) return;
       this.state.loading = false;
       this.state.erro = (e && e.message) || "Não foi possível ler o Sienge.";
       this.pintarStatus();
       this.pintarTabela();
+    }
+  },
+
+  /* ---------- Envio do boleto por e-mail ----------
+     O back office gera o boleto avulso no Sienge; aqui o Integra busca a 2ª via (PDF) e manda para o e-mail do
+     cliente pela caixa configurada, com o texto da aba Configurações. Envios ficam em remessa_avulsa_envios. */
+  setAba(id) {
+    this.state.aba = id === "config" ? "config" : "parcelas";
+    if (this.state.aba === "config" && !this.state.cfg) this.carregarConfig();
+    this.render();
+  },
+
+  enviado(r) {
+    const e = this.state.envios[this.chave(r)];
+    return !!(e && e.status === "enviado");
+  },
+
+  celulaEnvio(r) {
+    const e = this.state.envios[this.chave(r)];
+    const k = this.esc(this.chave(r));
+    if (e && e.status === "enviado") {
+      const quando = e.em ? new Date(e.em).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "") : "";
+      return `<span class="remav-env is-ok" title="Enviado para ${this.esc(e.para || "")}${e.por ? " por " + this.esc(e.por) : ""}">Enviado ${this.esc(quando)}</span>
+        <button type="button" class="remav-env-btn" title="Enviar de novo" onclick="RemessaAvulsaApp.enviarUm('${k}', true)"><i data-lucide="rotate-ccw" style="width:13px;height:13px;"></i></button>`;
+    }
+    if (e && e.status === "enviando") return `<span class="remav-env">Enviando…</span>`;
+    const erro = e && e.status === "erro" ? `<span class="remav-env is-erro" title="${this.esc(e.erro || "")}">Erro</span>` : "";
+    return `${erro}<button type="button" class="remav-env-btn is-texto" title="Enviar o boleto desta parcela por e-mail" onclick="RemessaAvulsaApp.enviarUm('${k}', false)" ${this.state.enviando ? "disabled" : ""}><i data-lucide="mail" style="width:13px;height:13px;"></i> ${e && e.status === "erro" ? "Tentar de novo" : "Enviar"}</button>`;
+  },
+
+  marcar(k, on) {
+    if (on) this.state.sel.add(k);
+    else this.state.sel.delete(k);
+    this.pintarTabela();
+  },
+
+  marcarTodas(on) {
+    this.visiveis().forEach((r) => {
+      if (this.enviado(r)) return;
+      if (on) this.state.sel.add(this.chave(r));
+      else this.state.sel.delete(this.chave(r));
+    });
+    this.pintarTabela();
+  },
+
+  pintarBotaoEnviar() {
+    const btn = document.getElementById("remav-enviar");
+    const rot = document.getElementById("remav-enviar-rot");
+    if (!btn) return;
+    const n = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r)).length;
+    btn.disabled = !n || this.state.enviando || this.state.loading;
+    if (rot) rot.textContent = this.state.enviando ? "Enviando…" : (n ? "Enviar por e-mail (" + n + ")" : "Enviar por e-mail");
+  },
+
+  async carregarEnvios() {
+    const fc = window.firebaseCollections;
+    if (!fc || !window.firebaseDb || typeof fc.getDocs !== "function" || typeof fc.query !== "function") return;
+    try {
+      const q = fc.query(fc.collection(window.firebaseDb, "remessa_avulsa_envios"),
+        fc.where("vencimento", ">=", this.state.de), fc.where("vencimento", "<=", this.state.ate));
+      const snap = await fc.getDocs(q);
+      const mapa = {};
+      snap.forEach((d) => { mapa[d.id] = d.data() || {}; });
+      // Mantém o que acabou de ser enviado nesta tela e ainda não voltou da leitura.
+      Object.keys(this.state.envios).forEach((k) => { if (!mapa[k] && this.state.envios[k].status !== "enviando") mapa[k] = this.state.envios[k]; });
+      this.state.envios = mapa;
+      this.pintarTabela();
+    } catch (e) {
+      console.warn("[Remessa avulsa] envios", e);
+    }
+  },
+
+  async enviarUm(k, reenviar) {
+    const r = this.state.linhas.find((x) => this.chave(x) === k);
+    if (!r) return;
+    await this.enviar([r], !!reenviar);
+  },
+
+  async enviarSelecionados() {
+    const rows = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r));
+    if (!rows.length) return;
+    await this.enviar(rows, false);
+  },
+
+  async enviar(rows, reenviar) {
+    if (this.state.enviando) return;
+    // Pede o login já no clique (abre a janela da Microsoft se o token não renovou sozinho).
+    const auth = window.MouraAuth;
+    let pedidoToken = Promise.resolve("");
+    try {
+      if (auth && typeof auth.getIntegraTokenInterativo === "function") pedidoToken = auth.getIntegraTokenInterativo();
+      else if (auth && typeof auth.getIntegraToken === "function") pedidoToken = auth.getIntegraToken();
+    } catch (e) {}
+    const cfg = this.state.cfg || this.CFG_PADRAO;
+    const caixa = cfg.remetente || "caixa padrão do Integra";
+    const pergunta = (reenviar ? "Enviar de novo" : "Enviar") + " o boleto de " + rows.length + " parcela(s) por e-mail, pela caixa " + caixa + "?\n\nO boleto precisa já estar gerado no Sienge; sem ele a parcela volta com erro.";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : false;
+    if (!ok) return;
+    let token = "";
+    try { token = await pedidoToken; } catch (e) { token = ""; }
+    this.state.enviando = true;
+    rows.forEach((r) => { this.state.envios[this.chave(r)] = { status: "enviando" }; });
+    this.pintarTabela();
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["X-Integra-Token"] = token;
+    let enviados = 0;
+    const erros = [];
+    try {
+      for (let i = 0; i < rows.length; i += 10) {
+        const lote = rows.slice(i, i + 10);
+        const itens = lote.map((r) => ({ titulo: r.titulo, parcela: r.parcela, clienteId: r.clienteId, cliente: r.cliente, empreendimento: r.empreendimento, unidade: r.unidade || "", vencimento: r.vencimento }));
+        let body = {};
+        try {
+          const res = await fetch("/api/remessa-avulsa-email", { method: "POST", headers, body: JSON.stringify({ itens, reenviar: !!reenviar }) });
+          body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+        } catch (e) {
+          lote.forEach((r) => { this.state.envios[this.chave(r)] = { status: "erro", erro: (e && e.message) || String(e) }; });
+          erros.push((e && e.message) || String(e));
+          continue;
+        }
+        (body.resultados || []).forEach((x) => {
+          const k = String(x.titulo) + "_" + String(x.parcela);
+          if (x.status === "enviado" || x.status === "ja-enviado") {
+            this.state.envios[k] = { status: "enviado", em: x.em || new Date().toISOString(), para: x.para || "" };
+            this.state.sel.delete(k);
+            if (x.status === "enviado") enviados += 1;
+          } else {
+            this.state.envios[k] = { status: "erro", erro: x.erro || "Erro no envio." };
+            erros.push(x.erro || "Erro no envio.");
+          }
+        });
+      }
+    } finally {
+      this.state.enviando = false;
+      this.pintarTabela();
+    }
+    const msg = enviados + " boleto(s) enviado(s)." + (erros.length ? " " + erros.length + " com erro: " + Array.from(new Set(erros)).slice(0, 3).join(" | ") : "");
+    if (typeof window.showToast === "function") window.showToast(msg, erros.length ? "warning" : "success");
+    else alert(msg);
+    this.carregarEnvios();
+  },
+
+  /* ---------- Configurações do e-mail ---------- */
+  async carregarConfig() {
+    const fc = window.firebaseCollections;
+    let salvo = null;
+    try {
+      if (fc && window.firebaseDb && typeof fc.getDoc === "function") {
+        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "remessa_avulsa_email"));
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        if (existe) salvo = snap.data() || null;
+      }
+    } catch (e) {
+      console.warn("[Remessa avulsa] configuração", e);
+    }
+    this.state.cfg = Object.assign({}, this.CFG_PADRAO, salvo || {});
+    if (this.state.aba === "config") this.render();
+  },
+
+  configHtml() {
+    const c = this.state.cfg;
+    if (!c) return `<div class="remav-painel"><p class="remav-vazio-txt">Carregando a configuração…</p></div>`;
+    const caixas = this.CAIXAS.map((x) => `<option value="${this.esc(x.valor)}"${String(c.remetente || "") === x.valor ? " selected" : ""}>${this.esc(x.rotulo)}</option>`).join("");
+    const vars = this.VARS_EMAIL.map((v) => `<button type="button" class="cem-var" title="Inserir ${this.esc(v.token)} no texto" onclick="RemessaAvulsaApp.inserirVar('${this.esc(v.token)}')">${this.esc(v.label)} <small>${this.esc(v.token)}</small></button>`).join("");
+    return `<div class="remav-painel remav-cfg">
+        <div class="remav-cfg-grade">
+          <label class="remav-campo">Enviar de<select id="remav-cfg-de">${caixas}</select></label>
+          <label class="remav-campo">Cópia (CC)<input id="remav-cfg-cc" value="${this.esc(c.cc || "")}" placeholder="Separe por vírgula"></label>
+          <label class="remav-campo remav-cfg-span">Título do e-mail<input id="remav-cfg-assunto" value="${this.esc(c.assunto || "")}"></label>
+          <label class="remav-campo remav-cfg-span">Corpo do e-mail<textarea id="remav-cfg-corpo" rows="18">${this.esc(c.corpo || "")}</textarea></label>
+        </div>
+        <aside class="remav-cfg-lado">
+          <h4>Variáveis do Sienge</h4>
+          <p>Clique para inserir no corpo. No envio, cada uma vira o dado da parcela.</p>
+          <div class="remav-cfg-vars">${vars}</div>
+          <h4>Prévia</h4>
+          <div id="remav-cfg-previa" class="remav-cfg-previa"></div>
+        </aside>
+      </div>
+      <div class="remav-cfg-rodape">
+        <span>${c.atualizadoPor ? "Última alteração: " + this.esc(c.atualizadoPor) + (c.atualizadoEm ? " · " + this.esc(new Date(c.atualizadoEm).toLocaleString("pt-BR")) : "") : "Texto padrão do Sienge (ainda não alterado)."} O boleto vai em anexo, em PDF.</span>
+        <div>
+          <button type="button" class="btn btn-outline" onclick="RemessaAvulsaApp.restaurarConfig()">Restaurar texto do Sienge</button>
+          <button type="button" class="btn btn-primary" onclick="RemessaAvulsaApp.salvarConfig()"><i data-lucide="save" style="width:14px;height:14px;"></i> Salvar</button>
+        </div>
+      </div>`;
+  },
+
+  ligarConfig() {
+    ["remav-cfg-assunto", "remav-cfg-corpo"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("input", () => this.previaConfig());
+    });
+    this.previaConfig();
+  },
+
+  /** Prévia com uma parcela de exemplo (ou a primeira da tabela, se já analisada). */
+  previaConfig() {
+    const box = document.getElementById("remav-cfg-previa");
+    if (!box) return;
+    const r = this.state.linhas[0] || { cliente: "MARIA JOSE DE OLIVEIRA", vencimento: "2026-12-10", empreendimento: "ITU - TERRAS DE ITU", unidade: "Q 12 L 08" };
+    const nome = String(r.cliente || "").toLowerCase().split(/\s+/).map((p, i) => (i > 0 && /^(de|da|do|das|dos|e)$/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1))).join(" ");
+    const v = { "<nmCliente>": nome, "<dtCobranca>": this.fmtData(r.vencimento), "<nmEmpreend>": r.empreendimento || "—", "<nuUnidade>": r.unidade || "—" };
+    const aplicar = (s) => { let t = String(s || ""); Object.keys(v).forEach((k) => { t = t.split(k).join(v[k]); }); return t; };
+    const assunto = aplicar((document.getElementById("remav-cfg-assunto") || {}).value);
+    const corpo = aplicar((document.getElementById("remav-cfg-corpo") || {}).value);
+    box.innerHTML = `<div class="remav-cfg-previa-tit"><b>Título:</b> ${this.esc(assunto)}</div><div>${this.esc(corpo).replace(/\r?\n/g, "<br>")}</div><div class="remav-cfg-anexo">📎 Boleto ${this.esc(r.titulo || "12345")}-${this.esc(r.parcela || "4")}.pdf</div>`;
+  },
+
+  inserirVar(token) {
+    const el = document.getElementById("remav-cfg-corpo");
+    if (!el) return;
+    const i = el.selectionStart || 0;
+    const f = el.selectionEnd || 0;
+    el.value = el.value.slice(0, i) + token + el.value.slice(f);
+    el.focus();
+    el.setSelectionRange(i + token.length, i + token.length);
+    this.previaConfig();
+  },
+
+  async restaurarConfig() {
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm("Voltar o título e o texto para o padrão do Sienge? A mudança só vale depois de Salvar.") : false;
+    if (!ok) return;
+    const a = document.getElementById("remav-cfg-assunto");
+    const c = document.getElementById("remav-cfg-corpo");
+    if (a) a.value = this.CFG_PADRAO.assunto;
+    if (c) c.value = this.CFG_PADRAO.corpo;
+    this.previaConfig();
+  },
+
+  async salvarConfig() {
+    const val = (id) => String((document.getElementById(id) || {}).value || "");
+    const assunto = val("remav-cfg-assunto").trim();
+    const corpo = val("remav-cfg-corpo");
+    if (!assunto || !corpo.trim()) {
+      alert("Informe o título e o corpo do e-mail.");
+      return;
+    }
+    const cc = val("remav-cfg-cc").split(/[,;\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
+    const ruins = cc.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+    if (ruins.length) {
+      alert("E-mail inválido na cópia: " + ruins.join(", "));
+      return;
+    }
+    const u = (window.AppState && AppState.currentUser) || {};
+    const dados = {
+      remetente: val("remav-cfg-de").trim().toLowerCase(),
+      cc: cc.join(", "),
+      assunto,
+      corpo,
+      atualizadoPor: String(u.name || u.email || ""),
+      atualizadoEm: new Date().toISOString()
+    };
+    const fc = window.firebaseCollections;
+    if (!fc || !window.firebaseDb || typeof fc.setDoc !== "function") {
+      alert("O banco não está disponível agora. Tente de novo em instantes.");
+      return;
+    }
+    try {
+      await fc.setDoc(fc.doc(window.firebaseDb, "config", "remessa_avulsa_email"), dados, { merge: true });
+      this.state.cfg = Object.assign({}, this.CFG_PADRAO, dados);
+      if (typeof window.showToast === "function") window.showToast("Configuração do e-mail salva.", "success");
+      this.render();
+    } catch (e) {
+      alert("Não consegui salvar a configuração: " + ((e && e.message) || e));
     }
   },
 
@@ -768,3 +1195,7 @@ document.addEventListener("tabChanged", function (e) {
 });
 
 window.RemessaAvulsaApp = RemessaAvulsaApp;
+
+// Prévia na Gestão de pop-ups: o mesmo pop-up, com número de exemplo; os botões só fecham.
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["remessa-avulsa"] = function () { RemessaAvulsaApp.avisar(true); };

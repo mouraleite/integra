@@ -12863,3 +12863,32 @@ div.cem-previa { white-space: normal; }
 .cc-table.remav-tabela th.is-sorted { background: #0f6b45; }
 .cc-table.remav-tabela td.remav-vazio { text-align: center; padding: 30px; white-space: normal; color: #64748b; }
 @media (max-width: 1200px) { .remav-filtros { grid-template-columns: 1fr 1fr 1fr; } .remav-acoes { grid-column: 1 / -1; justify-content: flex-end; } }
+/* Remessa avulsa: abas, envio do boleto por e-mail e configurações. */
+.remav-abas { margin-bottom: 0; }
+.remav-acoes .remav-enviar { color: #105436; border-color: #b7dcc8; }
+.remav-acoes .remav-enviar:not(:disabled):hover { background: #f0fdf4; }
+.cc-table.remav-tabela td.remav-email-cel { overflow: visible; white-space: nowrap; }
+.remav-env { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 0.66rem; font-weight: 700; }
+.remav-env.is-ok { background: #dcfce7; color: #166534; }
+.remav-env.is-erro { background: #fee2e2; color: #991b1b; cursor: help; margin-right: 4px; }
+.remav-env-btn { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #105436; font-size: 0.68rem; font-weight: 700; cursor: pointer; vertical-align: middle; }
+.remav-env-btn:hover:not(:disabled) { background: #f0fdf4; border-color: #1b8253; }
+.remav-env-btn:disabled { opacity: 0.5; cursor: wait; }
+.remav-cfg { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.remav-cfg-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.remav-cfg-span { grid-column: 1 / -1; }
+.remav-campo select, .remav-campo textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; color: #0f172a; font-size: 0.88rem; font-weight: 500; text-transform: none; letter-spacing: 0; font-family: inherit; }
+.remav-campo select { height: 40px; }
+.remav-campo textarea { padding: 10px 12px; line-height: 1.5; resize: vertical; min-height: 320px; }
+.remav-cfg-lado { border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.remav-cfg-lado h4 { margin: 4px 0 0; font-size: 0.72rem; color: #105436; text-transform: uppercase; letter-spacing: 0.04em; }
+.remav-cfg-lado p { margin: 0; font-size: 0.72rem; color: #64748b; }
+.remav-cfg-vars { display: flex; flex-direction: column; gap: 5px; }
+.remav-cfg-vars .cem-var small { font-weight: 600; color: #64748b; margin-left: 4px; }
+.remav-cfg-previa { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 0.76rem; line-height: 1.45; color: #1e293b; max-height: 420px; overflow: auto; }
+.remav-cfg-previa-tit { margin-bottom: 8px; }
+.remav-cfg-anexo { margin-top: 8px; color: #105436; font-weight: 700; }
+.remav-cfg-rodape { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 0.74rem; color: #64748b; }
+.remav-cfg-rodape > div { display: flex; gap: 8px; }
+.remav-cfg-rodape .btn { height: 38px; display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 1100px) { .remav-cfg { grid-template-columns: 1fr; } }
