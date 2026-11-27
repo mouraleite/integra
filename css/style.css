@@ -12650,6 +12650,10 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .cem2-cliente label { font-size: 0.72rem; font-weight: 800; color: #105436; white-space: nowrap; }
 .cem2-cliente select.cem-campo { flex: 1 1 360px; min-width: 0; height: 36px; }
 .cem2-cliente .cem2-extrato { height: 36px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 0.78rem; }
+.cem2-cliente .cem2-extrato:disabled { opacity: 0.55; cursor: not-allowed; }
+.cem2-cli-dados { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 2px 0; font-size: 0.72rem; color: #1e293b; }
+.cem2-cli-dados[hidden] { display: none; }
+.cem2-cli-dados em { font-style: normal; color: #64748b; font-weight: 600; }
 .cem2-ferramentas { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; flex-wrap: wrap; }
 .cem2-ferr { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #0f172a; font-size: 0.76rem; font-weight: 800; cursor: pointer; }
 .cem2-ferr:hover { border-color: #1b8253; background: #f0fdf4; }
