@@ -2932,9 +2932,26 @@ const ParticipacoesApp = {
       ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
       : `<span class="part-cat-vazio">—</span>`);
     // No chip o nome sai sem o "SPE LTDA"/"LTDA" do fim, para a linha caber no notebook; o nome inteiro fica no título.
+    // Tarja de filtros (27/11/2026, menos poluída): nomes em caixa normal, sem "SPE LTDA"/"LTDA" do fim,
+    // conta com o código em cinza; o nome inteiro fica no título (passar o mouse).
+    const MIUDAS = ["de", "da", "do", "das", "dos", "e"];
+    const caixaNormal = (t) => String(t || "").toLowerCase().split(/(\s+)/).map((p, i) => {
+      if (/^\s+$/.test(p) || !p) return p;
+      if (/^(i|ii|iii|iv|v|vi|vii|viii|ix|x|spe|ltda)$/i.test(p)) return p.toUpperCase();
+      if (i > 0 && MIUDAS.indexOf(p) >= 0) return p;
+      return p.charAt(0).toUpperCase() + p.slice(1);
+    }).join("");
     const curto = (rot) => String(rot || "").replace(/\s+(SPE\s+)?LTDA\.?\s*$/i, "").replace(/\s+SPE\s*$/i, "");
-    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(curto(rot))}</span><b>${this.fmt(tot)}</b></button>`;
-    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    const rotSpe = (id, rot) => {
+      const m = curto(rot).match(/^(\S+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(curto(rot)));
+    };
+    const rotConta = (rot) => {
+      const m = String(rot || "").match(/^([\d.]+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(rot));
+    };
+    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${id ? rotSpe(id, rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${id ? rotConta(rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
       const p = this.painel[c.k] || {};
@@ -3026,6 +3043,18 @@ const ParticipacoesApp = {
         .part-soc-just{height:30px;font-size:.68rem;padding:0 6px;}
         .part-soc-quem{font-size:.56rem;margin-top:2px;}
         .part-soc-tirar{padding:4px;}
+        /* Tarja de filtros: um painel, uma linha por filtro (SPE e Conta), chips sem borda. */
+        .part-soc-filtros{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+        .part-soc-linha{display:flex;align-items:center;gap:8px;min-width:0;}
+        .part-soc-linha + .part-soc-linha{border-top:1px solid #edf2ef;}
+        .part-soc-filtros .part-soc-chips-rot{flex:0 0 42px;margin:0;font-size:.6rem;color:#94a3b8;}
+        .part-soc-filtros .part-soc-chips{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;gap:2px;margin:0;padding:3px 0;scrollbar-width:thin;}
+        .part-soc-filtros .part-soc-chip{flex:0 0 auto;height:26px;padding:0 10px;gap:6px;border:0;border-radius:7px;background:transparent;color:#334155;font-size:.68rem;font-weight:600;}
+        .part-soc-filtros .part-soc-chip:hover{background:#e7f1ec;}
+        .part-soc-filtros .part-soc-chip i{font-style:normal;color:#94a3b8;font-weight:700;margin-right:4px;}
+        .part-soc-filtros .part-soc-chip b{font-weight:700;color:#64748b;font-size:.64rem;}
+        .part-soc-filtros .part-soc-chip.is-on{background:#105436;color:#fff;}
+        .part-soc-filtros .part-soc-chip.is-on i,.part-soc-filtros .part-soc-chip.is-on b{color:#d1fae5;}
       </style>
       <div class="part-soc-cards">
         ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCat ? " · " + this.esc((d.catsBase.find((c) => c.id === this.painelCat) || {}).rot || "") : ""))}
@@ -3033,8 +3062,10 @@ const ParticipacoesApp = {
         ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
         ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
       </div>
-      ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
-      ${d.catsBase.length ?`<div class="part-soc-chips is-contas"><span class="part-soc-chips-rot">Contas Moura Leite</span>${chipCat("", "Todas as contas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div>` : ""}
+      ${d.empsBase.length || d.catsBase.length ? `<div class="part-soc-filtros">
+        ${d.empsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">SPE</span><div class="part-soc-chips">${chip("", "Todas", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div></div>` : ""}
+        ${d.catsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">Conta</span><div class="part-soc-chips">${chipCat("", "Todas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div></div>` : ""}
+      </div>` : ""}
       ${d.credores.length ? `
       <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">
         <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
