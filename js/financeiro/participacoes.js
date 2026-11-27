@@ -2930,7 +2930,9 @@ const ParticipacoesApp = {
     const valor = (v, js, sub) => (v
       ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
       : `<span class="part-cat-vazio">—</span>`);
-    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    // No chip o nome sai sem o "SPE LTDA"/"LTDA" do fim, para a linha caber no notebook; o nome inteiro fica no título.
+    const curto = (rot) => String(rot || "").replace(/\s+(SPE\s+)?LTDA\.?\s*$/i, "").replace(/\s+SPE\s*$/i, "");
+    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(curto(rot))}</span><b>${this.fmt(tot)}</b></button>`;
     const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
@@ -2951,13 +2953,14 @@ const ParticipacoesApp = {
         </td>
         ${celulas}
         <td class="is-right part-cat-tot">${valor(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
-        <td><textarea class="part-soc-escopo" rows="2" placeholder="Qual escopo este credor atende nesta SPE?" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
+        <td><textarea class="part-soc-escopo" rows="1" placeholder="Escopo que este credor atende" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
         <td><select class="part-soc-just is-${this.esc(just)}" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'justifica', this.value)">${opcoes(p.justifica)}</select>
           ${p.por ? `<small class="part-soc-quem">${this.esc(p.por)}${p.em ? " · " + this.esc(new Date(p.em).toLocaleDateString("pt-BR")) : ""}</small>` : ""}</td>
         <td class="is-center"><button type="button" class="part-soc-tirar" title="Tirar do painel (escopo e avaliação ficam guardados)" onclick="ParticipacoesApp.tirarDoPainel(${ci})"><i data-lucide="x" style="width:14px;height:14px;"></i></button></td>
       </tr>`;
     }).join("");
-    const larg = 280 + spes.length * 130 + 130 + 300 + 170 + 40;
+    // Larguras pensadas para notebook a 100% (sem rolagem lateral com até 4 SPEs).
+    const larg = 230 + spes.length * 104 + 112 + 230 + 150 + 34;
     const card = (cls, rot, val, sub) => `<div class="part-soc-card ${cls}"><label>${rot}</label><strong>${val}</strong><small>${sub}</small></div>`;
     const totSpe = (e) => d.credores.reduce((t, c) => { const x = c.spes.find((y) => y.emp === e); return t + (x ? x.total : 0); }, 0);
     return `${this.catEstilosHtml()}
@@ -3000,6 +3003,28 @@ const ParticipacoesApp = {
         .part-soc-quem{display:block;margin-top:4px;font-size:.6rem;color:#94a3b8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
         .part-soc-tirar{border:0;background:transparent;color:#94a3b8;cursor:pointer;padding:6px;display:inline-flex;border-radius:6px;}
         .part-soc-tirar:hover{background:#fee2e2;color:#b91c1c;}
+        /* 27/11/2026: compacto para notebook a 100%. */
+        .part-soc-cards{gap:8px;margin:2px 0 10px;}
+        .part-soc-card{padding:7px 12px;border-radius:8px;}
+        .part-soc-card label{font-size:.6rem;}
+        .part-soc-card strong{font-size:1.02rem;margin-top:1px;}
+        .part-soc-card small{font-size:.66rem;}
+        .part-soc-chips{gap:5px;margin:0 0 8px;}
+        .part-soc-chip{height:28px;padding:0 10px;gap:6px;font-size:.66rem;}
+        .part-soc-chips.is-contas .part-soc-chip{height:26px;font-size:.64rem;}
+        .part-soc-tab{font-size:.7rem;}
+        .part-soc-tab td{padding:5px 6px;}
+        .part-soc-tab thead th{padding:5px 6px;font-size:.66rem;}
+        .part-soc-tab thead th small{font-size:.56rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;}
+        .part-soc-tab .part-cat-nome{font-size:.72rem;}
+        .part-soc-meta{margin-top:2px;font-size:.6rem;gap:2px 6px;}
+        .part-soc-tab .part-cat-val{font-size:.7rem;}
+        .part-soc-tab .part-cat-tot .part-cat-val{font-size:.74rem;}
+        .part-soc-pct{font-size:.56rem;}
+        .part-soc-escopo{min-height:32px;padding:5px 8px;font-size:.7rem;}
+        .part-soc-just{height:30px;font-size:.68rem;padding:0 6px;}
+        .part-soc-quem{font-size:.56rem;margin-top:2px;}
+        .part-soc-tirar{padding:4px;}
       </style>
       <div class="part-soc-cards">
         ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCat ? " · " + this.esc((d.catsBase.find((c) => c.id === this.painelCat) || {}).rot || "") : ""))}
@@ -3010,10 +3035,9 @@ const ParticipacoesApp = {
       ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
       ${d.catsBase.length ?`<div class="part-soc-chips is-contas"><span class="part-soc-chips-rot">Contas Moura Leite</span>${chipCat("", "Todas as contas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div>` : ""}
       ${d.credores.length ? `
-      <p class="part-cat-info">Clique no credor para ver mês a mês por SPE e no valor para ver os lançamentos daquela SPE. Escopo e avaliação ficam gravados para todos.</p>
-      <div class="cc-scroll" style="max-height:calc(100vh - 360px);">
+      <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">
         <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
-          <colgroup><col style="width:280px">${spes.map(() => `<col style="width:130px">`).join("")}<col style="width:130px"><col style="width:300px"><col style="width:170px"><col style="width:40px"></colgroup>
+          <colgroup><col style="width:230px">${spes.map(() => `<col style="width:104px">`).join("")}<col style="width:112px"><col style="width:230px"><col style="width:150px"><col style="width:34px"></colgroup>
           <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">SPE ${this.esc(String(e))}<small>${this.esc(String(this.companyLabel(e) || "").toUpperCase())}</small></th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
           <tbody>${corpo}</tbody>
           <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(totSpe(e))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>

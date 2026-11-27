@@ -233,8 +233,18 @@ const CentralEmailApp = {
   /** Texto do e-mail em HTML (o mesmo que o servidor monta): escapa o texto e coloca quadro e extrato. */
   htmlEmail(texto, ctx, parcelas) {
     let t = this.aplicar(String(texto || "").split("{{quadro_parcelas}}").join("\u0000Q\u0000").split("{{extrato}}").join("\u0000E\u0000"), ctx);
-    t = this.esc(t).replace(/\r?\n/g, "<br>");
+    t = this.negrito(this.esc(t)).replace(/\r?\n/g, "<br>");
     return t.split("\u0000Q\u0000").join(this.quadroHtml(parcelas)).split("\u0000E\u0000").join(this.esc(this.TEXTO_EXTRATO));
+  },
+
+  /** Trecho entre **asteriscos** sai em negrito (o servidor faz o mesmo no envio). Recebe o texto já escapado. */
+  negrito(html) {
+    return String(html || "").replace(/\*\*([^*\r\n]+?)\*\*/g, "<strong>$1</strong>");
+  },
+
+  /** No título do e-mail não há negrito: os asteriscos saem. */
+  semNegrito(texto) {
+    return String(texto || "").replace(/\*\*([^*\r\n]+?)\*\*/g, "$1");
   },
 
   temExtrato(t) {
@@ -499,7 +509,27 @@ const CentralEmailApp = {
     else if (e.naoLidaEm) leitura = { cls: "erro", txt: "Excluído sem ler " + this.dataHora(e.naoLidaEm) };
     let abertura = { cls: "", txt: e.status === "enviado" ? (e.rastreio ? "Não aberto" : "Sem rastreio") : "—" };
     if (e.primeiraAbertura) abertura = { cls: "ok", txt: "Aberto " + (Number(e.aberturas) > 1 ? e.aberturas + "× · " : "") + this.dataHora(e.primeiraAbertura) };
+    // Na tabela, cada etiqueta mostra o status numa linha e a data curta embaixo (txt completo fica no PDF e no resumo).
+    const curta = (iso) => this.dataHoraCurta(iso);
+    envio.rot = e.status === "enviado" ? "Enviado" : "Erro no envio";
+    envio.qdo = e.status === "enviado" ? curta(e.em) : "";
+    if (e.naoEntregueEm) { entrega.rot = "Não entregue"; entrega.qdo = curta(e.naoEntregueEm); }
+    else if (e.entregaEm) { entrega.rot = e.entregaTipo === "retransmitido" ? "No servidor" : "Entregue"; entrega.qdo = curta(e.entregaEm); }
+    if (e.leituraConfirmadaEm) { leitura.rot = "Confirmada"; leitura.qdo = curta(e.leituraConfirmadaEm); }
+    else if (e.naoLidaEm) { leitura.rot = "Excluído sem ler"; leitura.qdo = curta(e.naoLidaEm); }
+    if (e.primeiraAbertura) { abertura.rot = "Aberto" + (Number(e.aberturas) > 1 ? " " + e.aberturas + "×" : ""); abertura.qdo = curta(e.primeiraAbertura); }
     return { envio, entrega, leitura, abertura };
+  },
+
+  /** "26/11 08:27" (com o ano só quando não é o ano corrente). */
+  dataHoraCurta(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    const opt = { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+    const ano = d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", year: "numeric" });
+    if (ano !== String(new Date().getFullYear())) opt.year = "2-digit";
+    return d.toLocaleString("pt-BR", opt).replace(",", "");
   },
 
   listaAcompanhamento() {
@@ -545,7 +575,7 @@ const CentralEmailApp = {
   acompanhamentoHtml() {
     const a = this.acomp();
     const lista = this.listaAcompanhamento();
-    const etq = (x) => `<span class="cem-env ${x.cls}"${x.dica ? ` title="${this.esc(x.dica)}"` : ""}>${this.esc(x.txt)}</span>`;
+    const etq = (x) => `<span class="cem-env cem-env2 ${x.cls}" title="${this.esc(x.txt + (x.dica ? " · " + x.dica : ""))}"><b>${this.esc(x.rot || x.txt)}</b>${x.qdo ? `<small>${this.esc(x.qdo)}</small>` : ""}</span>`;
     const nomeTemplate = (e) => e.templateNome || ((this.achar(e.templateId) || {}).nome) || e.templateId || "—";
     const opcoesTemplate = this.state.templates.map((t) => `<option value="${this.esc(t.id)}"${a.template === t.id ? " selected" : ""}>${this.esc(t.nome)}</option>`).join("");
     const sit = [["", "Todas as situações"], ["lido", "Leitura confirmada"], ["aberto", "Abertos"], ["sem_abertura", "Sem abertura nem leitura"], ["nao_entregue", "Não entregues"], ["erro", "Erro no envio"]]
@@ -553,11 +583,11 @@ const CentralEmailApp = {
     const linhas = lista.map((e) => {
       const s = this.etapasEnvio(e);
       return `<tr>
-        <td class="is-center cem-data">${this.esc(String(this.dataHora(e.em) || e.dia || "").replace(",", ""))}</td>
+        <td class="cem-data">${this.esc(this.dataHoraCurta(e.em) || this.dataBr(e.dia) || "—")}</td>
         <td class="cem-quebra"><strong>${this.esc(this.nomeClienteEnvio(e))}</strong></td>
         <td class="is-center">${this.esc(e.titulo || "—")}</td>
         <td title="${this.esc(nomeTemplate(e))}">${this.esc(nomeTemplate(e))}</td>
-        <td class="cem-para">${this.esc(e.para || "—")}<br><small class="cem-cc">De: ${this.esc(e.caixa || (e.de === "padrao" ? "caixa padrão" : e.de) || "—")}</small></td>
+        <td class="cem-para" title="Para: ${this.esc(e.para || "—")} · De: ${this.esc(e.caixa || (e.de === "padrao" ? "caixa padrão" : e.de) || "—")}"><span class="cem-para-para">${this.esc(e.para || "—")}</span><small class="cem-cc">De: ${this.esc(e.caixa || (e.de === "padrao" ? "caixa padrão" : e.de) || "—")}</small></td>
         <td class="cem-etapas">${etq(s.envio)}</td>
         <td class="cem-etapas">${etq(s.entrega)}</td>
         <td class="cem-etapas">${etq(s.leitura)}</td>
@@ -578,9 +608,9 @@ const CentralEmailApp = {
         <button type="button" class="btn btn-primary cc-atualizar" onclick="CentralEmailApp.atualizarConfirmacoes(false)"${a.atualizando ? " disabled" : ""}><i data-lucide="refresh-cw"></i> ${a.atualizando ? "Lendo…" : "Atualizar confirmações"}</button>
       </div>
       <p class="cem-ac-info">${a.carregando ? "Carregando…" : `${lista.length} de ${total} envio(s) no período.`} Entrega e leitura chegam por e-mail na caixa de envio e dependem do servidor e do leitor do cliente; a abertura vem da imagem de rastreio e não aparece se o cliente bloquear imagens.${a.msg ? ` <strong>${this.esc(a.msg)}</strong>` : ""}</p>
-      <div class="cc-scroll"><table class="cc-table is-confortavel cem-tabela">
-        <colgroup><col style="width:128px"><col style="width:20%"><col style="width:70px"><col style="width:12%"><col><col style="width:118px"><col style="width:120px"><col style="width:124px"><col style="width:116px"><col style="width:76px"></colgroup>
-        <thead><tr><th class="is-center">Envio</th><th>Cliente</th><th class="is-center">Título</th><th>Template</th><th>Para</th><th>Situação</th><th>Entrega</th><th>Leitura (Outlook)</th><th>Abertura</th><th class="is-right">Ações</th></tr></thead>
+      <div class="cc-scroll cem-ac-scroll"><table class="cc-table cem-tabela cem-tabela-ac">
+        <colgroup><col style="width:104px"><col style="width:19%"><col style="width:64px"><col style="width:13%"><col><col style="width:108px"><col style="width:108px"><col style="width:120px"><col style="width:108px"><col style="width:70px"></colgroup>
+        <thead><tr><th>Envio</th><th>Cliente</th><th class="is-center">Título</th><th>Template</th><th>Para</th><th>Situação</th><th>Entrega</th><th>Leitura (Outlook)</th><th>Abertura</th><th class="is-right">Ações</th></tr></thead>
         <tbody>${linhas || `<tr><td colspan="10" style="text-align:center;padding:30px;white-space:normal;">${a.carregando ? "Carregando…" : "Nenhum e-mail encontrado com esses filtros."}</td></tr>`}</tbody>
       </table></div>`;
   },
@@ -801,7 +831,9 @@ const CentralEmailApp = {
       }
       g.itens.push(v);
     });
-    const botoes = grupos.map((g) => `<section class="cem-var-grupo"><h4>${this.esc(g.nome)}</h4><div class="cem2-vars">${g.itens.map((v) => `<button type="button" class="cem-var" title="Inserir ${this.esc(v.token)}" onclick="CentralEmailApp.inserir('${v.token}')">${this.esc(v.label)}</button>`).join("")}</div></section>`).join("");
+    // Cada variável: clicar insere no texto; o ícone copia o código para colar onde quiser (texto ou título);
+    // também dá para arrastar até o texto.
+    const botoes = grupos.map((g) => `<section class="cem-var-grupo"><h4>${this.esc(g.nome)}</h4><div class="cem2-vars">${g.itens.map((v) => `<div class="cem-var-item"><button type="button" class="cem-var" draggable="true" title="Clique para inserir ${this.esc(v.token)} no texto ou arraste até ele" ondragstart="event.dataTransfer.setData('text/plain','${v.token}')" onclick="CentralEmailApp.inserir('${v.token}')">${this.esc(v.label)}</button><button type="button" class="cem-var-copiar" title="Copiar ${this.esc(v.token)}" aria-label="Copiar ${this.esc(v.label)}" onclick="CentralEmailApp.copiarVariavel('${v.token}', this)"><i data-lucide="copy" style="width:13px;height:13px;"></i></button></div>`).join("")}</div></section>`).join("");
     const aviso = atual && atual.status === "aprovado"
       ? "Se alterar o título, o texto, a tag ou os dias, o template volta para o administrador e a régua desliga."
       : "Ao salvar, a régua fica desligada até o administrador aprovar.";
@@ -860,9 +892,18 @@ const CentralEmailApp = {
                   <button type="button" role="tab" id="cem2-aba-sugestoes" class="cem2-aba" onclick="CentralEmailApp.iaAba('sugestoes')"><i data-lucide="sparkles" style="width:14px;height:14px;"></i> Sugestões</button>
                 </div>
               </div>
+              <div class="cem2-cliente">
+                <label for="cem-cli-previa">Cliente da prévia</label>
+                <select id="cem-cli-previa" class="cem-campo" onchange="CentralEmailApp.escolherClientePrevia(this.value)"></select>
+                <span id="cem-cli-extrato"></span>
+              </div>
               <div id="cem2-escrever">
-                <textarea id="cem-corpo" class="cem-campo" placeholder="Escreva o e-mail ou use a aba Sugestões. Clique nas variáveis ao lado para inserir.">${this.esc(atual ? atual.corpo : "")}</textarea>
-                <p class="cem2-nota">Prévia com um cliente de exemplo. No envio, nome, unidade, empreendimento, cidade e vencimento saem do contrato.</p>
+                <div class="cem2-ferramentas">
+                  <button type="button" class="cem2-ferr" title="Negrito (Ctrl+B): selecione o trecho e clique" onclick="CentralEmailApp.negritoSelecao()"><i data-lucide="bold" style="width:14px;height:14px;"></i> Negrito</button>
+                  <span class="cem2-ferr-nota">Selecione um trecho e clique em Negrito (ou Ctrl+B). No texto ele fica entre **asteriscos**; no e-mail sai em negrito.</span>
+                </div>
+                <textarea id="cem-corpo" class="cem-campo" placeholder="Escreva o e-mail ou use a aba Sugestões. Clique, arraste ou copie as variáveis ao lado.">${this.esc(atual ? atual.corpo : "")}</textarea>
+                <p class="cem2-nota" id="cem-previa-nota"></p>
                 <div id="cem-previa" class="cem-previa"></div>
               </div>
               <div id="cem-ia" class="cem2-sug" hidden></div>
@@ -870,7 +911,7 @@ const CentralEmailApp = {
           </div>
           <aside class="cem-vars-lado">
             <h4>Variáveis</h4>
-            <p class="cem2-nota">Clique para inserir no texto.</p>
+            <p class="cem2-nota">Clique para inserir no texto, arraste até ele ou use <i data-lucide="copy" style="width:11px;height:11px;vertical-align:-1px;"></i> para copiar e colar onde quiser.</p>
             ${botoes}
             <section class="cem-var-grupo">
               <h4>Data de retorno</h4>
@@ -889,12 +930,159 @@ const CentralEmailApp = {
       if (txt) txt.textContent = chave.checked ? "Ativada" : "Desativada";
     });
     const corpo = document.getElementById("cem-corpo");
-    if (corpo) corpo.addEventListener("input", () => this.atualizarPreview());
+    if (corpo) {
+      corpo.addEventListener("input", () => this.atualizarPreview());
+      corpo.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && String(e.key).toLowerCase() === "b") {
+          e.preventDefault();
+          this.negritoSelecao();
+        }
+      });
+      // Variável arrastada para o texto: entra no ponto em que foi solta (o navegador já faz) e a prévia atualiza.
+      corpo.addEventListener("drop", () => setTimeout(() => this.atualizarPreview(), 0));
+    }
     ["cem-assunto", "cem-retorno"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("input", () => this.atualizarPreview());
     });
+    const S = window.CentralEmailSugestoes;
+    if (S && S.tomSugerido) this.ia.tom = S.tomSugerido(this.iaCampos().tag);
+    this.previa = { indice: -1, lista: [] };
+    this.montarClientesPrevia();
     this.atualizarPreview();
+  },
+
+  /* ---------- Cliente da prévia ----------
+     A prévia (aba Escrever e Sugestões) usa um cliente real da fila com a tag escolhida: dados do contrato,
+     parcelas vencidas no quadro e o extrato do Sienge pelo botão. Sem fila carregada, usa o cliente de exemplo. */
+  previa: { indice: -1, lista: [] },
+
+  clientesDaTag(tag) {
+    const lista = window.rawClientList || [];
+    const n = Number(tag);
+    if (!Number.isFinite(n) || typeof window.getFilaQueueGroup !== "function") return [];
+    return lista.filter((c) => c && Number(window.getFilaQueueGroup(c)) === n)
+      .sort((a, b) => String(a.customerName || "").localeCompare(String(b.customerName || ""), "pt-BR"))
+      .slice(0, 400);
+  },
+
+  montarClientesPrevia() {
+    const sel = document.getElementById("cem-cli-previa");
+    if (!sel) return;
+    const tag = this.iaCampos().tag;
+    const anterior = this.previa.lista[this.previa.indice];
+    const lista = this.clientesDaTag(tag);
+    this.previa.lista = lista;
+    // Mantém o cliente escolhido se ele continua na tag; se não, pega o primeiro da lista.
+    let idx = anterior ? lista.findIndex((c) => c.customerId === anterior.customerId && String(c.saleId) === String(anterior.saleId)) : -1;
+    if (idx < 0 && lista.length) idx = 0;
+    this.previa.indice = idx;
+    const semFila = !(window.rawClientList || []).length;
+    const opcoes = [`<option value="-1">${semFila ? "Cliente de exemplo (abra a Fila para escolher um cliente real)" : (lista.length ? "Cliente de exemplo" : "Cliente de exemplo (nenhum cliente nesta tag hoje)")}</option>`]
+      .concat(lista.map((c, i) => {
+        const dias = this.diasAtraso(c, tag);
+        const rot = [String(c.customerName || "Cliente").trim(), String(c.unitName || "").trim(), c.saleId ? "título " + c.saleId : "", dias ? dias + " dias" : ""].filter(Boolean).join(" · ");
+        return `<option value="${i}"${i === idx ? " selected" : ""}>${this.esc(rot)}</option>`;
+      }));
+    sel.innerHTML = opcoes.join("");
+    if (idx < 0) sel.value = "-1";
+    this.pintarBotaoExtrato();
+  },
+
+  escolherClientePrevia(valor) {
+    const i = Number(valor);
+    this.previa.indice = Number.isFinite(i) && i >= 0 && i < this.previa.lista.length ? i : -1;
+    this.pintarBotaoExtrato();
+    if (this.ia.aba === "sugestoes") this.iaPintar();
+    else this.atualizarPreview();
+  },
+
+  clientePrevia() {
+    return this.previa.indice >= 0 ? this.previa.lista[this.previa.indice] || null : null;
+  },
+
+  /** Dados que a prévia usa: do cliente escolhido ou do exemplo. */
+  dadosPrevia() {
+    const c = this.clientePrevia();
+    if (!c) return { ctx: this.EXEMPLO, parcelas: this.PARCELAS_EXEMPLO, cliente: null };
+    return { ctx: this.contextoCliente(c), parcelas: this.parcelasDe(c), cliente: c };
+  },
+
+  pintarBotaoExtrato() {
+    const box = document.getElementById("cem-cli-extrato");
+    if (!box) return;
+    const c = this.clientePrevia();
+    if (!c || typeof window.visualizarExtratoDireto !== "function") {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = `<button type="button" class="btn btn-outline cem2-extrato" title="Abrir o extrato do Sienge para conferir o texto" data-customer-id="${this.esc(c.customerId)}" data-title="${this.esc(c.saleId || "")}" data-name="${this.esc(c.customerName || "")}" data-unit="${this.esc(c.unitName || "")}" data-cc="${this.esc(c.costCenterId || "")}" onclick="window.visualizarExtratoDireto(this)"><i data-lucide="file-text" style="width:14px;height:14px;"></i> Ver extrato</button>`;
+    if (window.lucide && lucide.createIcons) lucide.createIcons();
+  },
+
+  /** Coloca **asteriscos** em volta do trecho selecionado no texto (ou tira, se já estiver em negrito). */
+  negritoSelecao() {
+    const el = document.getElementById("cem-corpo");
+    if (!el) return;
+    const i = el.selectionStart || 0;
+    const f = el.selectionEnd || 0;
+    const v = el.value;
+    const trecho = v.slice(i, f);
+    if (i === f || !trecho.trim()) {
+      this.aviso("Selecione no texto o trecho que deve sair em negrito.");
+      return;
+    }
+    let novo;
+    let ini;
+    let fim;
+    if (/^\*\*[\s\S]+\*\*$/.test(trecho)) {
+      novo = trecho.slice(2, -2);
+      ini = i;
+      fim = i + novo.length;
+    } else if (v.slice(i - 2, i) === "**" && v.slice(f, f + 2) === "**") {
+      el.value = v.slice(0, i - 2) + trecho + v.slice(f + 2);
+      el.focus();
+      el.setSelectionRange(i - 2, f - 2);
+      this.atualizarPreview();
+      return;
+    } else {
+      // Espaços nas pontas ficam fora do negrito (senão o ** não fecha no e-mail).
+      const a = trecho.match(/^\s*/)[0];
+      const z = trecho.match(/\s*$/)[0];
+      const miolo = trecho.slice(a.length, trecho.length - z.length);
+      novo = a + "**" + miolo.replace(/\*\*/g, "") + "**" + z;
+      ini = i + a.length;
+      fim = i + novo.length - z.length;
+    }
+    el.value = v.slice(0, i) + novo + v.slice(f);
+    el.focus();
+    el.setSelectionRange(ini, fim);
+    this.atualizarPreview();
+  },
+
+  async copiarVariavel(token, btn) {
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(token);
+        ok = true;
+      }
+    } catch (e) {}
+    if (!ok) {
+      try {
+        const t = document.createElement("textarea");
+        t.value = token;
+        document.body.appendChild(t);
+        t.select();
+        ok = document.execCommand("copy");
+        t.remove();
+      } catch (e) {}
+    }
+    if (btn) {
+      btn.classList.add(ok ? "is-ok" : "is-erro");
+      btn.title = ok ? "Copiado: " + token + " (cole com Ctrl+V)" : "Não consegui copiar";
+      setTimeout(() => { btn.classList.remove("is-ok", "is-erro"); btn.title = "Copiar " + token; }, 1600);
+    }
   },
 
   trocarDestino() {
@@ -931,13 +1119,13 @@ const CentralEmailApp = {
   },
 
   /* ---------- Sugestões de texto (biblioteca, sem IA e sem custo) ----------
-     Aba "Sugestões" do bloco Texto: um tom por vez (Cordial, Direto, Empático, Formal, Firme), com a prévia já
-     com o cliente de exemplo. "Outra sugestão" traz outra combinação do tom, sem repetir; as setas voltam às
+     Aba "Sugestões" do bloco Texto: um tom por vez (Cobrança com boas-vindas, Lembrete, Atraso contumaz, Jurídico).
+     O tom já vem escolhido pelo racional da tag e a prévia usa o cliente escolhido em "Cliente da prévia". "Outra sugestão" traz outra combinação do tom, sem repetir; as setas voltam às
      anteriores. "Usar este texto" copia título e texto para a aba Escrever. Biblioteca: central-email-sugestoes.js. */
-  ia: { aba: "escrever", tom: "cordial", porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" },
+  ia: { aba: "escrever", tom: "lembrete", tomManual: false, porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" },
 
   iaReset() {
-    this.ia = { aba: "escrever", tom: "cordial", porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" };
+    this.ia = { aba: "escrever", tom: "lembrete", tomManual: false, porTom: {}, pos: {}, vistos: new Set(), cru: false, tag: "", erro: "" };
   },
 
   iaTomId(nome) {
@@ -983,11 +1171,13 @@ const CentralEmailApp = {
     const tom = this.ia.tom;
     const lista = this.ia.porTom[tom] || [];
     const pos = Math.min(this.ia.pos[tom] || 0, lista.length - 1);
-    const titulo = this.ia.cru ? this.esc(s.assunto) : this.esc(this.aplicar(String(s.assunto || ""), this.EXEMPLO));
+    const dp = this.dadosPrevia();
+    const titulo = this.ia.cru ? this.esc(s.assunto) : this.esc(this.semNegrito(this.aplicar(String(s.assunto || ""), dp.ctx)));
     const corpo = this.ia.cru
       ? `<div class="cem2-sug-cru">${this.esc(s.texto)}</div>`
-      : this.htmlEmail(s.texto, this.EXEMPLO, this.PARCELAS_EXEMPLO);
-    return `<div class="cem2-tons" role="tablist">${S.TONS.map((t) => `<button type="button" class="cem2-tom${t.id === tom ? " is-on" : ""}" onclick="CentralEmailApp.iaTom('${t.id}')">${this.esc(t.nome)}</button>`).join("")}</div>
+      : this.htmlEmail(s.texto, dp.ctx, dp.parcelas);
+    const sugerido = S.tomSugerido ? S.tomSugerido(this.ia.tag) : "";
+    return `<div class="cem2-tons" role="tablist">${S.TONS.map((t) => `<button type="button" class="cem2-tom${t.id === tom ? " is-on" : ""}"${t.id === sugerido ? ' title="Tom sugerido para esta tag"' : ""} onclick="CentralEmailApp.iaTom('${t.id}')">${this.esc(t.nome)}${t.id === sugerido ? ' <span class="cem2-tom-sug">sugerido</span>' : ""}</button>`).join("")}</div>
       <div class="cem2-sug-card">
         <div class="cem2-sug-topo">
           <span class="cem2-sug-tag">Tag: ${this.esc(this.rotuloTag(Number(this.ia.tag)))}</span>
@@ -1005,7 +1195,7 @@ const CentralEmailApp = {
           <button type="button" class="btn btn-primary" onclick="CentralEmailApp.iaUsar()"><i data-lucide="check" style="width:14px;height:14px;"></i> Usar este texto</button>
         </div>
       </div>
-      <p class="cem2-nota">Prévia com o cliente de exemplo. Ao usar, o texto vai para a aba Escrever com as variáveis, e você pode ajustar.</p>`;
+      <p class="cem2-nota">Prévia com ${dp.cliente ? "o cliente escolhido acima" : "o cliente de exemplo"}. Ao usar, o texto vai para a aba Escrever com as variáveis, e você pode ajustar.</p>`;
   },
 
   iaPintar() {
@@ -1032,6 +1222,7 @@ const CentralEmailApp = {
 
   iaTom(tom) {
     this.ia.tom = tom;
+    this.ia.tomManual = true;
     this.iaPintar();
   },
 
@@ -1060,7 +1251,12 @@ const CentralEmailApp = {
   },
 
   iaTrocouTag() {
+    // Tag nova: o tom acompanha o racional dela (se o operador ainda não escolheu outro) e a lista de clientes muda.
+    const S = window.CentralEmailSugestoes;
+    if (S && S.tomSugerido && !this.ia.tomManual) this.ia.tom = S.tomSugerido(this.iaCampos().tag);
+    this.montarClientesPrevia();
     if (this.ia.aba === "sugestoes") this.iaPintar();
+    else this.atualizarPreview();
   },
 
   iaUsar() {
@@ -1085,11 +1281,16 @@ const CentralEmailApp = {
     const corpo = document.getElementById("cem-corpo");
     const assunto = document.getElementById("cem-assunto");
     if (!previa) return;
-    const titulo = this.aplicar(String((assunto && assunto.value) || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), this.EXEMPLO);
+    const dp = this.dadosPrevia();
+    const nota = document.getElementById("cem-previa-nota");
+    if (nota) nota.textContent = dp.cliente
+      ? "Prévia com o cliente escolhido acima: dados do contrato e parcelas vencidas da fila de hoje."
+      : "Prévia com um cliente de exemplo. No envio, nome, unidade, empreendimento, cidade e vencimento saem do contrato.";
+    const titulo = this.semNegrito(this.aplicar(String((assunto && assunto.value) || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), dp.ctx));
     const anexo = /\{\{extrato\}\}/.test(String((corpo && corpo.value) || "") + String((assunto && assunto.value) || ""));
     previa.innerHTML = (titulo ? `<strong>Título:</strong> ${this.esc(titulo)}<br><br>` : "")
-      + this.htmlEmail(corpo && corpo.value, this.EXEMPLO, this.PARCELAS_EXEMPLO)
-      + (anexo ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato ${this.esc(this.EXEMPLO.titulo)}.pdf (anexado no envio)</span>` : "");
+      + this.htmlEmail(corpo && corpo.value, dp.ctx, dp.parcelas)
+      + (anexo ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato ${this.esc(dp.ctx.titulo)}.pdf (anexado no envio)</span>` : "");
   },
 
   async salvar(id) {
@@ -1198,7 +1399,7 @@ const CentralEmailApp = {
   verTemplate(id) {
     const t = this.achar(id);
     if (!t) return;
-    const assunto = this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), this.EXEMPLO);
+    const assunto = this.semNegrito(this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), this.EXEMPLO));
     this.abrirLeitura(t.nome, (assunto ? `<strong>${this.esc(assunto)}</strong><br><br>` : "") + this.htmlEmail(t.corpo, this.EXEMPLO, this.PARCELAS_EXEMPLO)
       + (this.temExtrato(t) ? `<br><br><span style="color:#105436;font-weight:700;">📎 Extrato em PDF anexado no envio</span>` : ""));
   },
@@ -1209,7 +1410,7 @@ const CentralEmailApp = {
     const c = this.clientesDoTemplate(t)[indice];
     if (!c) return;
     const ctx = this.contextoCliente(c);
-    const assunto = this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), ctx);
+    const assunto = this.semNegrito(this.aplicar(String(t.assunto || "").split("{{quadro_parcelas}}").join("").split("{{extrato}}").join(""), ctx));
     const dest = this.destinatarios(t, c);
     const cab = "De: " + this.esc(this.rotuloCaixa(t.remetente)) + "<br>"
       + (dest.para.length ? "Para: " + this.esc(dest.para.join(", ")) + "<br>" : (t.destino === "fixo" ? "" : "Para: e-mail do cliente no Sienge<br>"))

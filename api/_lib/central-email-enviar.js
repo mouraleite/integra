@@ -273,6 +273,8 @@ function montarAssunto(texto, v) {
   let s = String(texto || "").replace(/\{\{retorno:(\d+)\}\}/g, (_, n) => dataMais(n));
   s = s.split("{{quadro_parcelas}}").join("").split("{{extrato}}").join("");
   Object.keys(v).forEach((k) => { s = s.split("{{" + k + "}}").join(v[k]); });
+  // Título não tem negrito: tira os asteriscos de **trecho**.
+  s = s.replace(/\*\*([^*\r\n]+?)\*\*/g, "$1");
   return s.replace(/[\r\n]+/g, " ").trim().slice(0, 250);
 }
 
@@ -280,6 +282,8 @@ function montarHtml(texto, v, parcelas) {
   let s = esc(String(texto || "").replace(/\{\{retorno:(\d+)\}\}/g, (_, n) => dataMais(n)));
   Object.keys(v).forEach((k) => { s = s.split("{{" + k + "}}").join(esc(v[k])); });
   s = s.split("{{extrato}}").join(esc(TEXTO_EXTRATO));
+  // Trecho que o operador marcou com **asteriscos** sai em negrito (o texto já está escapado).
+  s = s.replace(/\*\*([^*\r\n]+?)\*\*/g, "<strong>$1</strong>");
   const quadro = quadroHtml(parcelas);
   s = s.split("{{quadro_parcelas}}").join("\u0000Q\u0000");
   s = s.replace(/\r?\n/g, "<br>");
