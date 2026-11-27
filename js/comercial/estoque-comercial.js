@@ -2019,12 +2019,16 @@ const EstoqueComercialApp = {
       const falta = p.semSaldo
         ? `<small>${p.semSaldo} contrato(s) ativo(s) ainda sem saldo</small>`
         : `<small>${p.ativos} contrato(s) ativo(s) · ${p.inadimplentes} em atraso</small>`;
+      // Cards com ícone e faixa de cor; o detalhe fica em linhas curtas ("Saldo …", "Juros e multa …").
+      const ico = (n) => `<span class="est-fin-ico"><i data-lucide="${n}"></i></span>`;
+      const linha = (rot, val) => `<span><em>${rot}</em> ${val}</span>`;
       finEl.innerHTML = `
-        <div class="est-fin-card"><label>A receber (com juros e multa)</label><strong>${this.money(p.aReceberTotal)}</strong><small>Saldo ${this.money(p.aReceber)} + juros e multa ${this.money(p.aReceberTotal - p.aReceber)}${p.semSaldo ? ` · ${p.semSaldo} contrato(s) ativo(s) ainda sem saldo` : ""}</small></div>
-        <div class="est-fin-card is-warn"><label>Em atraso</label><strong>${this.money(p.emAtraso)}</strong><small>Principal, juros e multa${p.filaAtraso != null ? ` · na Fila de cobrança: ${this.money(p.filaAtraso)}` : ""}</small></div>
-        <div class="est-fin-card"><label>A vencer</label><strong>${this.money(p.aVencer)}</strong><small>Saldo ainda no prazo</small></div>
-        <div class="est-fin-card is-ok"><label>Quitados</label><strong>${p.quitados}</strong><small>Fora do saldo a receber</small></div>
+        <div class="est-fin-card is-receber">${ico("wallet")}<div><label>A receber com juros e multa</label><strong>${this.money(p.aReceberTotal)}</strong><small>${linha("Saldo", this.money(p.aReceber))}${linha("Juros e multa", this.money(p.aReceberTotal - p.aReceber))}${p.semSaldo ? `<span class="est-fin-alerta">${p.semSaldo} contrato(s) ativo(s) ainda sem saldo</span>` : ""}</small></div></div>
+        <div class="est-fin-card is-warn">${ico("alert-triangle")}<div><label>Em atraso</label><strong>${this.money(p.emAtraso)}</strong><small>${linha("Principal, juros e multa", "")}${p.filaAtraso != null ? linha("Na Fila de cobrança", this.money(p.filaAtraso)) : ""}</small></div></div>
+        <div class="est-fin-card is-vencer">${ico("calendar-clock")}<div><label>A vencer</label><strong>${this.money(p.aVencer)}</strong><small>${linha("Saldo ainda no prazo", "")}</small></div></div>
+        <div class="est-fin-card is-ok">${ico("check-circle-2")}<div><label>Quitados</label><strong>${Number(p.quitados || 0).toLocaleString("pt-BR")}</strong><small>${linha("Contratos fora do saldo a receber", "")}</small></div></div>
       `;
+      if (window.lucide && lucide.createIcons) lucide.createIcons();
       let conf = document.getElementById("est-conferencia");
       if (!conf) {
         conf = document.createElement("div");

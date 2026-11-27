@@ -15,6 +15,7 @@ const CentralEmailApp = {
     { token: "{{texto_abertas}}", label: "Parcelas em aberto", grupo: "Parcelas" },
     { token: "{{ordinal_proxima}}", label: "Próxima parcela", grupo: "Parcelas" },
     { token: "{{vencimento_proxima}}", label: "Vencimento da próxima", grupo: "Parcelas" },
+    { token: "{{ultimo_pagamento}}", label: "Data do último pagamento", grupo: "Parcelas" },
     { token: "{{quadro_parcelas}}", label: "Quadro de parcelas vencidas", grupo: "Parcelas" },
     { token: "{{extrato}}", label: "Extrato em anexo (PDF)", grupo: "Anexo" }
   ],
@@ -35,7 +36,16 @@ const CentralEmailApp = {
     texto_abertas: "01 parcela em aberto",
     ordinal_proxima: "2ª",
     vencimento_proxima: "10/11",
+    ultimo_pagamento: "03/11/2026",
     titulo: "16752"
+  },
+
+  /** Data do último pagamento do título, pela mesma conta da coluna "Últ. Pagto" da Fila (dias desde o pagamento,
+      na janela de pagamentos recentes). Fora dela a Fila mostra "Sem Pagto"; aqui sai "sem pagamento recente". */
+  ultimoPagamentoDe(client) {
+    const d = typeof window.clientLastPaymentDays === "function" ? window.clientLastPaymentDays(client) : Infinity;
+    if (!Number.isFinite(d) || d < 0) return "sem pagamento recente";
+    return this.dataMais(-Math.round(d));
   },
 
   esc(v) {
@@ -188,6 +198,7 @@ const CentralEmailApp = {
       texto_abertas: texto,
       ordinal_proxima: this.ordinal(qtd + 1),
       vencimento_proxima: "—",
+      ultimo_pagamento: this.ultimoPagamentoDe(client),
       titulo: String((client && client.saleId) || "").trim() || "—"
     };
   },
@@ -896,6 +907,7 @@ const CentralEmailApp = {
                 <label for="cem-cli-previa">Cliente da prévia</label>
                 <select id="cem-cli-previa" class="cem-campo" onchange="CentralEmailApp.escolherClientePrevia(this.value)"></select>
                 <span id="cem-cli-extrato"></span>
+                <div id="cem-cli-dados" class="cem2-cli-dados" hidden></div>
               </div>
               <div id="cem2-escrever">
                 <div class="cem2-ferramentas">
@@ -961,8 +973,9 @@ const CentralEmailApp = {
     const lista = window.rawClientList || [];
     const n = Number(tag);
     if (!Number.isFinite(n) || typeof window.getFilaQueueGroup !== "function") return [];
+    // Mesma ordem da Fila: maior atraso primeiro, depois o nome.
     return lista.filter((c) => c && Number(window.getFilaQueueGroup(c)) === n)
-      .sort((a, b) => String(a.customerName || "").localeCompare(String(b.customerName || ""), "pt-BR"))
+      .sort((a, b) => (this.diasAtraso(b, n) - this.diasAtraso(a, n)) || String(a.customerName || "").localeCompare(String(b.customerName || ""), "pt-BR"))
       .slice(0, 400);
   },
 
@@ -978,7 +991,12 @@ const CentralEmailApp = {
     if (idx < 0 && lista.length) idx = 0;
     this.previa.indice = idx;
     const semFila = !(window.rawClientList || []).length;
-    const opcoes = [`<option value="-1">${semFila ? "Cliente de exemplo (abra a Fila para escolher um cliente real)" : (lista.length ? "Cliente de exemplo" : "Cliente de exemplo (nenhum cliente nesta tag hoje)")}</option>`]
+    // Sem a Fila montada nesta sessão, a Central monta sozinha (não precisa abrir a tela da Fila).
+    if (semFila) this.carregarFilaParaPrevia();
+    const rotVazio = semFila
+      ? (this._carregandoFila ? "Carregando os clientes da Fila…" : "Cliente de exemplo (a Fila não carregou; tente de novo em instantes)")
+      : (lista.length ? "Cliente de exemplo" : "Cliente de exemplo (nenhum cliente nesta tag hoje)");
+    const opcoes = [`<option value="-1">${rotVazio}</option>`]
       .concat(lista.map((c, i) => {
         const dias = this.diasAtraso(c, tag);
         const rot = [String(c.customerName || "Cliente").trim(), String(c.unitName || "").trim(), c.saleId ? "título " + c.saleId : "", dias ? dias + " dias" : ""].filter(Boolean).join(" · ");
@@ -987,6 +1005,31 @@ const CentralEmailApp = {
     sel.innerHTML = opcoes.join("");
     if (idx < 0) sel.value = "-1";
     this.pintarBotaoExtrato();
+  },
+
+  /** Monta a Fila do dia (mesma carga da tela da Fila, que usa o cache do dia) e preenche a lista da prévia. */
+  carregarFilaParaPrevia() {
+    if (this._carregandoFila || (window.rawClientList || []).length) return;
+    if (typeof loadDashboardData !== "function") return;
+    this._carregandoFila = true;
+    try {
+      if (!window._isDefaultersLoading) loadDashboardData(false);
+    } catch (e) {}
+    const inicio = Date.now();
+    const esperar = () => {
+      const pronta = (window.rawClientList || []).length > 0;
+      if (pronta || Date.now() - inicio > 120000) {
+        this._carregandoFila = false;
+        if (document.getElementById("cem-cli-previa")) {
+          this.montarClientesPrevia();
+          if (this.ia.aba === "sugestoes") this.iaPintar();
+          else this.atualizarPreview();
+        }
+        return;
+      }
+      setTimeout(esperar, 1500);
+    };
+    setTimeout(esperar, 1500);
   },
 
   escolherClientePrevia(valor) {
@@ -1012,11 +1055,35 @@ const CentralEmailApp = {
     const box = document.getElementById("cem-cli-extrato");
     if (!box) return;
     const c = this.clientePrevia();
-    if (!c || typeof window.visualizarExtratoDireto !== "function") {
+    // Valores que as variáveis trazem para o cliente escolhido, para conferir com o extrato.
+    const dados = document.getElementById("cem-cli-dados");
+    if (dados) {
+      if (c) {
+        const ctx = this.contextoCliente(c);
+        const parc = this.parcelasDe(c);
+        const tot = parc.reduce((s, p) => s + (Number(p.corrigido) || 0), 0);
+        const item = (rot, v) => `<span><em>${this.esc(rot)}</em> ${this.esc(v == null || v === "" ? "—" : v)}</span>`;
+        dados.innerHTML = item("Nome", ctx.nome) + item("Unidade", ctx.unidade) + item("Empreendimento", ctx.empreendimento) + item("Cidade", ctx.cidade)
+          + item("Título", ctx.titulo) + item("Vencimento", ctx.vencimento) + item("Parcelas em aberto", ctx.texto_abertas)
+          + item("Próxima parcela", ctx.ordinal_proxima) + item("Último pagamento", ctx.ultimo_pagamento) + item("Vencidas no quadro", parc.length + " · " + this.money(tot) + " corrigido")
+          + item("E-mail do contrato", this.emailDe(c) || "sem e-mail no cadastro");
+        dados.hidden = false;
+      } else {
+        dados.innerHTML = "";
+        dados.hidden = true;
+      }
+    }
+    if (typeof window.visualizarExtratoDireto !== "function") {
       box.innerHTML = "";
       return;
     }
-    box.innerHTML = `<button type="button" class="btn btn-outline cem2-extrato" title="Abrir o extrato do Sienge para conferir o texto" data-customer-id="${this.esc(c.customerId)}" data-title="${this.esc(c.saleId || "")}" data-name="${this.esc(c.customerName || "")}" data-unit="${this.esc(c.unitName || "")}" data-cc="${this.esc(c.costCenterId || "")}" onclick="window.visualizarExtratoDireto(this)"><i data-lucide="file-text" style="width:14px;height:14px;"></i> Ver extrato</button>`;
+    if (!c) {
+      // Botão sempre à vista; sem cliente real escolhido ele fica desativado e explica o porquê.
+      box.innerHTML = `<button type="button" class="btn btn-outline cem2-extrato" disabled title="Escolha um cliente da Fila na lista ao lado para abrir o extrato dele"><i data-lucide="file-text" style="width:14px;height:14px;"></i> Ver extrato</button>`;
+      if (window.lucide && lucide.createIcons) lucide.createIcons();
+      return;
+    }
+    box.innerHTML = `<button type="button" class="btn btn-outline cem2-extrato" title="Abrir o extrato do Sienge deste cliente para conferir se as variáveis trazem os mesmos dados" data-customer-id="${this.esc(c.customerId)}" data-title="${this.esc(c.saleId || "")}" data-name="${this.esc(c.customerName || "")}" data-unit="${this.esc(c.unitName || "")}" data-cc="${this.esc(c.costCenterId || "")}" onclick="window.visualizarExtratoDireto(this)"><i data-lucide="file-text" style="width:14px;height:14px;"></i> Ver extrato</button>`;
     if (window.lucide && lucide.createIcons) lucide.createIcons();
   },
 

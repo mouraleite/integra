@@ -234,7 +234,7 @@ function money(n) {
   return "R$ " + (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-const CAMPOS = ["primeiro_nome", "nome", "unidade", "empreendimento", "cidade", "vencimento", "texto_abertas", "ordinal_proxima", "vencimento_proxima", "titulo"];
+const CAMPOS = ["primeiro_nome", "nome", "unidade", "empreendimento", "cidade", "vencimento", "texto_abertas", "ordinal_proxima", "vencimento_proxima", "ultimo_pagamento", "titulo"];
 const TEXTO_EXTRATO = "Segue em anexo o extrato financeiro atualizado.";
 
 function quadroHtml(parcelas) {
@@ -409,6 +409,7 @@ module.exports = async function handler(req, res) {
 module.exports.montarHtml = montarHtml;
 // Para as rotas de acompanhamento (abertura e confirmações).
 module.exports.lerDoc = lerDoc;
+module.exports.gravarDoc = gravarDoc;
 module.exports.gravarCampos = gravarCampos;
 module.exports.enviosDoPeriodo = enviosDoPeriodo;
 module.exports.tokenAbertura = tokenAbertura;

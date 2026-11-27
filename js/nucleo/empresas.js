@@ -134,6 +134,12 @@ const EmpresasApp = {
     return this.flagOn(custom, "spe_socios") || this.flagOn(custom, "gestao_elenco");
   },
 
+  /** Nome usual e percentuais: travados só em SPE de sócios. Com Gestão Ellenco ligada continuam editáveis
+      (27/11/2026: o nome usual e os percentuais dessas SPEs são usados na Prestação Ellenco). */
+  textoTravado(custom) {
+    return this.flagOn(custom, "spe_socios") && !this.flagOn(custom, "gestao_elenco");
+  },
+
   activeLock(custom) {
     if (this.flagOn(custom, "gestao_elenco")) return "gestao_elenco";
     if (this.flagOn(custom, "spe_socios")) return "spe_socios";
@@ -271,7 +277,8 @@ const EmpresasApp = {
     const tr = document.querySelector('#empresas-content tr[data-company-id="' + id + '"]');
     if (tr) {
       tr.classList.toggle("is-spe-locked", locked);
-      tr.querySelectorAll(".inline-input").forEach((input) => { input.disabled = locked; });
+      const travaTexto = this.textoTravado(custom);
+      tr.querySelectorAll(".inline-input").forEach((input) => { input.disabled = travaTexto; });
       tr.querySelectorAll(".emp-lock-cell").forEach((td) => {
         td.classList.toggle("is-lock-on", td.dataset.lock === active);
       });
@@ -486,7 +493,7 @@ const EmpresasApp = {
       const percLiq = this.fmtPct(custom.percentual_liquido_mldu || 0);
       const locked = this.rowLocked(custom);
       const active = this.activeLock(custom);
-      const lock = locked ? "disabled" : "";
+      const lock = this.textoTravado(custom) ? "disabled" : "";
       const checkedCons = this.flagOn(custom, "consolidacao_padrao") ? "checked" : "";
       const checkedGerida = this.flagOn(custom, "gerida_pelo_grupo") ? "checked" : "";
       const checkedCobInt = this.flagOn(custom, "cobranca_interna") ? "checked" : "";

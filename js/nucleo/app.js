@@ -5471,6 +5471,9 @@ async function processSuccessfulLogin(loggedUser) {
       if (typeof window.checkNexDueAlerts === "function") {
         window.checkNexDueAlerts();
       }
+      if (window.RemessaAvulsaApp && typeof RemessaAvulsaApp.avisar === "function") {
+        RemessaAvulsaApp.avisar();
+      }
       if (typeof window.checkDistratoPrazoMes === "function") {
         window.checkDistratoPrazoMes();
       }
