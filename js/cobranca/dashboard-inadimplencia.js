@@ -2252,7 +2252,7 @@ const DashboardInadimplencia = (function() {
       let y2 = 0;
       b2.forEach(b => { const h = (b.v/escala)*(H-padTop-padBot); rects += `<rect x="${x2 - barW/2}" y="${H-padBot-y2-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y2+=h; });
       
-      return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;margin:0 auto;">
+      return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;flex:none;">
           ${topArrowSvg}
           ${rects}
           <text x="${x1}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="#64748b">${label1}</text>
@@ -2271,6 +2271,8 @@ const DashboardInadimplencia = (function() {
       return `<div style="text-align:center;"><div style="font-size:8.5px;font-weight:700;color:#334155;margin-bottom:3px;">${fmtK(total)}</div><svg width="${W}" height="${H}" style="display:block;margin:0 auto;">${rects}</svg><div style="font-size:8.5px;color:#64748b;margin-top:3px;">${label}</div></div>`;
     }
 
+    // Os SVGs do sprint não usam "margin:0 auto": no PDF do Teams o html2canvas deslocava o gráfico para a direita e
+    // cortava as últimas barras (a de "Hoje" sumia e o rótulo da variação saía cortado). As colunas já centralizam.
     function barChartSvg(data, labels, color, isVal=false) {
       if (!data||data.length===0) return '';
       const maxVal = Math.max(...data, 1);
@@ -2332,7 +2334,7 @@ const DashboardInadimplencia = (function() {
       
       const axisLine = `<line x1="${0}" y1="${H - padBot}" x2="${W}" y2="${H - padBot}" stroke="#e2e8f0" stroke-width="1.5" />`;
 
-      return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;margin:0 auto;">
+      return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;flex:none;">
           ${topArrowSvg}
           ${axisLine}
           ${bars}
