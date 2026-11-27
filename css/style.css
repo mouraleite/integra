@@ -3607,6 +3607,75 @@ circle.donut-segment {
   color: #0f172a;
 }
 .est-stock-toolbar input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
+
+/* 27/11/2026: Posição de estoque mais amigável. Filtros numa grade com a mesma altura, chips leves com rótulo
+   (Estoque / Situação), status numa linha discreta e KPIs com ícone e faixa de cor. Só nesta aba (a Repactuação
+   reaproveita .est-fin-card). */
+#tab-estoque-comercial .est-stock-panel { padding: 14px 16px 10px; gap: 10px; }
+#tab-estoque-comercial .est-stock-panel > .est-stock-linha,
+#tab-estoque-comercial .est-stock-panel > .est-stock-rodape,
+#tab-estoque-comercial .est-stock-panel > .est-batimento-pause { margin-top: 0; }
+#tab-estoque-comercial .est-stock-filters { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(220px, 1.3fr) auto; gap: 12px; align-items: end; }
+#tab-estoque-comercial .est-stock-filters .ml-emp-filter { max-width: none; min-width: 0; width: 100%; }
+#tab-estoque-comercial .est-stock-field { min-width: 0; }
+#tab-estoque-comercial .est-stock-field label { font-size: 0.7rem; letter-spacing: 0.04em; margin-bottom: 6px; }
+#tab-estoque-comercial .est-stock-field select { height: 40px; border-color: #cbd5e1; border-radius: 8px; font-size: 0.9rem; }
+#tab-estoque-comercial .est-stock-acoes { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+#tab-estoque-comercial .est-stock-acoes:not(:has(button:not([style*="display:none"]):not([style*="display: none"]))) { display: none; }
+#tab-estoque-comercial .est-stock-acoes .est-forcar-falta,
+#tab-estoque-comercial .est-stock-acoes .est-btn-parar { height: 40px; padding: 0 16px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
+#tab-estoque-comercial .est-stock-linha { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 8px; border: 1px solid #edf2ef; border-radius: 10px; background: #f8fafc; min-width: 0; }
+#tab-estoque-comercial .est-stock-linha-rot { flex: 0 0 auto; min-width: 58px; font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8; }
+#tab-estoque-comercial .est-stock-pills { margin: 0; gap: 2px; flex-wrap: nowrap; overflow-x: auto; padding: 3px 0; scrollbar-width: thin; }
+#tab-estoque-comercial .est-pill { flex: 0 0 auto; border: 0; background: transparent; border-radius: 7px; padding: 0 12px; height: 28px; font-size: 0.76rem; color: #334155; }
+#tab-estoque-comercial .est-pill:hover { background: #e7f1ec; }
+#tab-estoque-comercial .est-pill b { color: #64748b; font-weight: 700; }
+#tab-estoque-comercial .est-pill.is-active { background: #105436; color: #fff; }
+#tab-estoque-comercial .est-pill.is-active b { color: #d1fae5; }
+#tab-estoque-comercial .est-stock-rodape { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+#tab-estoque-comercial .est-stock-meta { margin: 0; font-size: 0.72rem; }
+#tab-estoque-comercial .est-stock-progress { margin: 0; flex: 0 1 auto; padding: 4px 10px; border-radius: 999px; background: #fff7ed; color: #9a3412; font-size: 0.74rem; font-weight: 600; }
+#tab-estoque-comercial .est-stock-progress .est-stock-bar { margin-top: 4px; }
+/* KPIs */
+#tab-estoque-comercial .est-stock-finance { gap: 12px; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid #e6eeea; border-top: 3px solid #1b8253; background: #fff; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card > div { min-width: 0; flex: 1 1 auto; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-warn { border-top-color: #ea580c; background: #fff; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-vencer { border-top-color: #2563eb; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-ok { border-top-color: #64748b; background: #fff; }
+#tab-estoque-comercial .est-fin-ico { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: #e7f6ee; color: #105436; }
+#tab-estoque-comercial .est-fin-ico svg { width: 18px; height: 18px; }
+#tab-estoque-comercial .est-fin-card.is-warn .est-fin-ico { background: #ffedd5; color: #c2410c; }
+#tab-estoque-comercial .est-fin-card.is-vencer .est-fin-ico { background: #dbeafe; color: #1d4ed8; }
+#tab-estoque-comercial .est-fin-card.is-ok .est-fin-ico { background: #f1f5f9; color: #475569; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card label { font-size: 0.64rem; letter-spacing: 0.05em; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card strong { margin-top: 2px; font-size: 1.3rem; white-space: nowrap; }
+#tab-estoque-comercial .est-fin-card.is-vencer strong { color: #1e3a8a; }
+#tab-estoque-comercial .est-fin-card.is-ok strong { color: #334155; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card small { margin-top: 6px; display: flex; flex-direction: column; gap: 1px; font-size: 0.7rem; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card small em { font-style: normal; color: #94a3b8; }
+#tab-estoque-comercial .est-fin-alerta { margin-top: 2px; color: #9a3412; font-weight: 600; }
+/* Busca e filtro de situação */
+#tab-estoque-comercial .est-stock-toolbar { gap: 12px; }
+#tab-estoque-comercial .est-stock-toolbar input { flex: 0 1 380px; height: 40px; border-color: #cbd5e1; border-radius: 8px; }
+#tab-estoque-comercial .est-stock-linha.is-situacao { margin: 0; flex: 1 1 auto; }
+#tab-estoque-comercial .est-fin-filtros { gap: 2px; flex-wrap: nowrap; overflow-x: auto; padding: 3px 0; }
+#tab-estoque-comercial .est-fin-filtro { flex: 0 0 auto; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: #334155; font-size: 0.76rem; }
+#tab-estoque-comercial .est-fin-filtro:hover { background: #e7f1ec; }
+#tab-estoque-comercial .est-fin-filtro b { color: #64748b; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente b { color: #c2410c; }
+#tab-estoque-comercial .est-fin-filtro.is-active { background: #105436; color: #fff; }
+#tab-estoque-comercial .est-fin-filtro.is-active b { color: #d1fae5; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente.is-active { background: #c2410c; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente.is-active b { color: #ffedd5; }
+#tab-estoque-comercial .est-conf { border-radius: 14px; padding: 12px 16px; }
+#tab-estoque-comercial .est-conf-grid > div { padding: 8px 12px; border-radius: 10px; background: #f8fafc; border: 1px solid #edf2ef; min-width: 0; }
+#tab-estoque-comercial .est-conf-grid b { font-size: 1.05rem; }
+#tab-estoque-comercial .est-conf-grid small { font-size: 0.7rem; line-height: 1.35; }
+@media (max-width: 1200px) {
+  #tab-estoque-comercial .est-stock-filters { grid-template-columns: 1fr 1fr; }
+  #tab-estoque-comercial .est-stock-finance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .est-stock-table-wrap.crm-scroll-table,
 .est-stock-table-wrap {
   max-height: calc(100vh - 320px);

@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=dfa60225c2">
+  <link rel="stylesheet" href="css/style.css?v=estlayout1">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -3480,29 +3480,36 @@ Promitente comprador(a)</textarea>
               <div id="est-filtro-empresa"></div>
               <div id="est-filtro-cc"></div>
               <input type="hidden" id="est-filter-emp" value="">
-              <div class="est-stock-field" style="flex: 1; min-width: 160px;">
+              <div class="est-stock-field">
                 <label for="est-filter-unit">Unidade</label>
                 <select id="est-filter-unit" onchange="EstoqueComercialApp.onUnitChange()">
                   <option value="">Todas as unidades</option>
                 </select>
               </div>
-              <button type="button" class="est-btn-parar" id="est-btn-parar" onclick="EstoqueComercialApp.parar()" style="display:none;">
-                <i data-lucide="square" style="width: 14px;"></i> Parar
-              </button>
-              <button type="button" class="est-forcar-falta" id="est-btn-forcar" onclick="EstoqueComercialApp.forcarOQueFalta()" style="display:none;">
-                Forçar o que falta
-              </button>
+              <div class="est-stock-acoes">
+                <button type="button" class="est-btn-parar" id="est-btn-parar" onclick="EstoqueComercialApp.parar()" style="display:none;">
+                  <i data-lucide="square" style="width: 14px;"></i> Parar
+                </button>
+                <button type="button" class="est-forcar-falta" id="est-btn-forcar" onclick="EstoqueComercialApp.forcarOQueFalta()" style="display:none;">
+                  Forçar o que falta
+                </button>
+              </div>
             </div>
             <div id="est-batimento-pause" class="est-batimento-pause" hidden></div>
-            <div id="est-stock-pills" class="est-stock-pills"></div>
-            <div id="est-stock-progress" class="est-stock-progress" style="display: none;"></div>
-            <div id="est-stock-meta" class="est-stock-meta"></div>
+            <div class="est-stock-linha">
+              <span class="est-stock-linha-rot">Estoque</span>
+              <div id="est-stock-pills" class="est-stock-pills"></div>
+            </div>
+            <div class="est-stock-rodape">
+              <div id="est-stock-meta" class="est-stock-meta"></div>
+              <div id="est-stock-progress" class="est-stock-progress" style="display: none;"></div>
+            </div>
           </div>
           <div id="est-stock-finance" class="est-stock-finance"></div>
           <div id="est-stock-kpis" class="est-stock-kpis"></div>
             <div class="est-stock-toolbar">
             <input type="search" id="est-stock-search" placeholder="Pesquisar empreendimento, unidade ou contrato" oninput="EstoqueComercialApp.scheduleRender()">
-            <div id="est-fin-filtros" class="est-fin-filtros" role="group" aria-label="Filtro rápido por situação"></div>
+            <div class="est-stock-linha is-situacao"><span class="est-stock-linha-rot">Situação</span><div id="est-fin-filtros" class="est-fin-filtros" role="group" aria-label="Filtro rápido por situação"></div></div>
           </div>
           <div class="table-container crm-scroll-table est-stock-table-wrap">
             <table class="custom-table est-stock-table">
@@ -8939,7 +8946,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/doc-assinatura.js?v=a109203e1d"></script>
   <script defer src="js/cobranca/compromissario.js?v=58c6cdf4dd"></script>
   <script defer src="js/comercial/comercial.js?v=d470ed9e13"></script>
-  <script defer src="js/comercial/estoque-comercial.js?v=e27096fbf3"></script>
+  <script defer src="js/comercial/estoque-comercial.js?v=estlayout1"></script>
   <script defer src="js/nucleo/condicoes-pagamento.js?v=b9728514f2"></script>
   <script defer src="js/nucleo/documentos-sienge.js?v=6b96789811"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
