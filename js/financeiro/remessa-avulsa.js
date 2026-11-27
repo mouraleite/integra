@@ -450,7 +450,7 @@ const RemessaAvulsaApp = {
         body.innerHTML = `<tr><td colspan="11" class="remav-vazio">Nenhuma parcela elegível nesse período.</td></tr>`;
       } else {
         body.innerHTML = rows.map((r) => `<tr>
-          <td class="is-center">${this.enviado(r) ? "" : `<input type="checkbox" ${this.state.sel.has(this.chave(r)) ? "checked" : ""} onchange="RemessaAvulsaApp.marcar('${this.esc(this.chave(r))}', this.checked)">`}</td>
+          <td class="is-center">${this.enviado(r) || this.vencida(r) ? "" : `<input type="checkbox" ${this.state.sel.has(this.chave(r)) ? "checked" : ""} onchange="RemessaAvulsaApp.marcar('${this.esc(this.chave(r))}', this.checked)">`}</td>
           <td title="${this.esc(r.conta || "")}">${this.esc(r.conta || "—")}</td>
           <td title="${this.esc(r.empresa)}">${this.esc(r.empresa)}</td>
           <td class="is-center">${this.esc(r.cc)}</td>
@@ -829,6 +829,23 @@ const RemessaAvulsaApp = {
     return !!(e && e.status === "enviado");
   },
 
+  /** Vencimento antes de hoje: o boleto não vai por e-mail; o operador contata o cliente para gerar em outra data. */
+  vencida(r) {
+    const d = new Date();
+    const hoje = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return !!(r && r.vencimento && String(r.vencimento).slice(0, 10) < hoje);
+  },
+
+  async contatarCliente(k) {
+    const r = this.state.linhas.find((x) => this.chave(x) === k);
+    if (!r) return;
+    if (typeof window.viewCustomerCard !== "function") {
+      alert("A ficha do cliente não está disponível nesta página. Atualize (Ctrl+F5).");
+      return;
+    }
+    await window.viewCustomerCard(r.clienteId, r.titulo, r.titulo);
+  },
+
   celulaEnvio(r) {
     const e = this.state.envios[this.chave(r)];
     const k = this.esc(this.chave(r));
@@ -838,6 +855,10 @@ const RemessaAvulsaApp = {
         <button type="button" class="remav-env-btn" title="Enviar de novo" onclick="RemessaAvulsaApp.enviarUm('${k}', true)"><i data-lucide="rotate-ccw" style="width:13px;height:13px;"></i></button>`;
     }
     if (e && e.status === "enviando") return `<span class="remav-env">Enviando…</span>`;
+    if (this.vencida(r)) {
+      return `<span class="remav-env is-vencido" title="Vencimento já passou: o boleto não pode ir por e-mail. Contate o cliente para gerar o boleto em outra data e registre em Ocorrências e Promessas.">Vencido</span>
+        <button type="button" class="remav-env-btn is-texto is-contato" title="Abrir a ficha do cliente para contatar e registrar em Ocorrências e Promessas" onclick="RemessaAvulsaApp.contatarCliente('${k}')"><i data-lucide="phone" style="width:13px;height:13px;"></i> Contatar cliente</button>`;
+    }
     const erro = e && e.status === "erro" ? `<span class="remav-env is-erro" title="${this.esc(e.erro || "")}">Erro</span>` : "";
     return `${erro}<button type="button" class="remav-env-btn is-texto" title="Enviar o boleto desta parcela por e-mail" onclick="RemessaAvulsaApp.enviarUm('${k}', false)" ${this.state.enviando ? "disabled" : ""}><i data-lucide="mail" style="width:13px;height:13px;"></i> ${e && e.status === "erro" ? "Tentar de novo" : "Enviar"}</button>`;
   },
@@ -850,7 +871,7 @@ const RemessaAvulsaApp = {
 
   marcarTodas(on) {
     this.visiveis().forEach((r) => {
-      if (this.enviado(r)) return;
+      if (this.enviado(r) || this.vencida(r)) return;
       if (on) this.state.sel.add(this.chave(r));
       else this.state.sel.delete(this.chave(r));
     });
@@ -861,7 +882,7 @@ const RemessaAvulsaApp = {
     const btn = document.getElementById("remav-enviar");
     const rot = document.getElementById("remav-enviar-rot");
     if (!btn) return;
-    const n = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r)).length;
+    const n = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r) && !this.vencida(r)).length;
     btn.disabled = !n || this.state.enviando || this.state.loading;
     if (rot) rot.textContent = this.state.enviando ? "Enviando…" : (n ? "Enviar por e-mail (" + n + ")" : "Enviar por e-mail");
   },
@@ -894,13 +915,19 @@ const RemessaAvulsaApp = {
   },
 
   async enviarSelecionados() {
-    const rows = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r));
+    const rows = this.visiveis().filter((r) => this.state.sel.has(this.chave(r)) && !this.enviado(r) && !this.vencida(r));
     if (!rows.length) return;
     await this.enviar(rows, false);
   },
 
   async enviar(rows, reenviar) {
     if (this.state.enviando) return;
+    const vencidas = (rows || []).filter((r) => this.vencida(r));
+    if (vencidas.length) {
+      alert("Parcela com vencimento já passado não pode ter o boleto enviado por e-mail. Contate o cliente para gerar o boleto em outra data e registre em Ocorrências e Promessas.");
+      rows = rows.filter((r) => !this.vencida(r));
+      if (!rows.length) return;
+    }
     // Pede o login já no clique (abre a janela da Microsoft se o token não renovou sozinho).
     const auth = window.MouraAuth;
     let pedidoToken = Promise.resolve("");
