@@ -11539,7 +11539,7 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .emp-table .inline-input { width: 100%; height: 28px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0 8px; font-size: 0.78rem; color: #0f172a; background: #fff; }
 .emp-table .inline-input:focus { outline: none; border-color: #105436; }
 .emp-table .emp-pct { text-align: center; padding: 0 4px; }
-.emp-table tr.is-spe-locked .inline-input { background: #f1f5f9; color: #64748b; }
+.emp-table tr.is-spe-locked .inline-input:disabled { background: #f1f5f9; color: #64748b; }
 .emp-table tr.is-spe-locked td:not(.is-lock-on) .moura-switch { opacity: 0.45; pointer-events: none; }
 @media (max-width: 900px) {
   .emp-toolbar .cc-toolbar-actions { margin-left: 0; }
