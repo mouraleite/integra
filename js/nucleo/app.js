@@ -32323,7 +32323,21 @@ window.validateReprocessForm = function() {
   
   const isPromessaValid = isPromessaHidden || (canal && iniciativa && text);
 
-  if (account && dueDate && isPromessaValid) {
+  // Desconto de juros e multa: o boleto precisa ser gerado no Sienge com o desconto; aqui o botão fica bloqueado.
+  const taxaSel = document.getElementById('reprocess-taxa');
+  const comDesconto = !!(taxaSel && String(taxaSel.value) !== "1");
+  let avisoDesc = document.getElementById('reprocess-aviso-desconto');
+  if (!avisoDesc && taxaSel && taxaSel.parentNode) {
+    avisoDesc = document.createElement('div');
+    avisoDesc.id = 'reprocess-aviso-desconto';
+    avisoDesc.style.cssText = 'display:none;margin-top:8px;padding:8px 10px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:0.82rem;font-weight:700;line-height:1.35;';
+    avisoDesc.textContent = 'Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto. Aqui só é possível gerar o boleto sem isenção.';
+    taxaSel.parentNode.appendChild(avisoDesc);
+  }
+  if (avisoDesc) avisoDesc.style.display = comDesconto ? 'block' : 'none';
+  btn.title = comDesconto ? 'Boleto com desconto de juros e multa: gere no Sienge.' : (!account ? 'Escolha a conta do boleto (a lista vem do Sienge).' : '');
+
+  if (account && dueDate && isPromessaValid && !comDesconto) {
     btn.disabled = false;
     btn.style.opacity = "1";
     btn.style.cursor = "pointer";
@@ -32336,6 +32350,11 @@ window.validateReprocessForm = function() {
 
 window.submitReprocessBoleto = async function() {
   if (!currentReprocessBillId || currentReprocessInstId === null) return;
+  const taxaSelDesc = document.getElementById('reprocess-taxa');
+  if (taxaSelDesc && String(taxaSelDesc.value) !== "1") {
+    alert("Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto.");
+    return;
+  }
 
   const accountSelectEl = document.getElementById('reprocess-account');
   const selectedOpt = accountSelectEl && accountSelectEl.selectedOptions && accountSelectEl.selectedOptions[0];
@@ -32353,6 +32372,10 @@ window.submitReprocessBoleto = async function() {
     ? window.syncReprocessChargePercents()
     : window.resolveBoletoChargePercents(currentReprocessSource === "simulacao");
   const taxaNow = Number(pctNow && pctNow.taxa);
+  if (Number.isFinite(taxaNow) && taxaNow < 1) {
+    alert("Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto.");
+    return;
+  }
   currentReprocessTaxa = Number.isFinite(taxaNow) ? taxaNow : 0;
   let fine = Number(pctNow && pctNow.fine);
   let interest = Number(pctNow && pctNow.interest);
