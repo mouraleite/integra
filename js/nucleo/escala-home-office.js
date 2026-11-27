@@ -659,6 +659,7 @@ const EscalaHomeOffice = {
   },
 
   async avisar() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("home-office")) return;
     if (!this.state.pronto) await this.carregar();
     const eu = this.eu();
     if (!eu) return;

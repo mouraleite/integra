@@ -480,6 +480,7 @@ const TitulosIncompletosAviso = {
   /** opcoes.previa: abre igual, mas o Ciente só fecha (não grava ciência nem agenda o próximo batimento). */
   abrir(rows, user, dia, opcoes) {
     const previa = !!(opcoes && opcoes.previa);
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("titulos-incompletos")) return;
     if (document.getElementById("tin-batimento-aviso")) return;
     const lista = (rows || []).slice().sort((a, b) => {
       const d = (Number(b.diasCiente) || 0) - (Number(a.diasCiente) || 0);
