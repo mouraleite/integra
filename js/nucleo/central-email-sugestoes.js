@@ -198,7 +198,8 @@
       geral: [
         "Agradecemos o pagamento recente do lote {{unidade}}! Ainda há {{texto_abertas}}, com atraso desde {{vencimento}}.",
         "Recebemos o seu último pagamento, obrigado. Para deixar o lote {{unidade}} em dia, ainda há {{texto_abertas}}.",
-        "Você já está regularizando o lote {{unidade}} e agradecemos por isso. Ainda há {{texto_abertas}}."
+        "Você já está regularizando o lote {{unidade}} e agradecemos por isso. Ainda há {{texto_abertas}}.",
+        "Obrigado pelo pagamento de {{ultimo_pagamento}} do lote {{unidade}}. Para deixar o contrato em dia, ainda há {{texto_abertas}}."
       ],
       firme: ["Para evitar novos juros, é importante quitar o que ainda está em aberto."]
     },

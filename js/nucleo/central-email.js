@@ -15,6 +15,7 @@ const CentralEmailApp = {
     { token: "{{texto_abertas}}", label: "Parcelas em aberto", grupo: "Parcelas" },
     { token: "{{ordinal_proxima}}", label: "Próxima parcela", grupo: "Parcelas" },
     { token: "{{vencimento_proxima}}", label: "Vencimento da próxima", grupo: "Parcelas" },
+    { token: "{{ultimo_pagamento}}", label: "Data do último pagamento", grupo: "Parcelas" },
     { token: "{{quadro_parcelas}}", label: "Quadro de parcelas vencidas", grupo: "Parcelas" },
     { token: "{{extrato}}", label: "Extrato em anexo (PDF)", grupo: "Anexo" }
   ],
@@ -35,7 +36,16 @@ const CentralEmailApp = {
     texto_abertas: "01 parcela em aberto",
     ordinal_proxima: "2ª",
     vencimento_proxima: "10/11",
+    ultimo_pagamento: "03/11/2026",
     titulo: "16752"
+  },
+
+  /** Data do último pagamento do título, pela mesma conta da coluna "Últ. Pagto" da Fila (dias desde o pagamento,
+      na janela de pagamentos recentes). Fora dela a Fila mostra "Sem Pagto"; aqui sai "sem pagamento recente". */
+  ultimoPagamentoDe(client) {
+    const d = typeof window.clientLastPaymentDays === "function" ? window.clientLastPaymentDays(client) : Infinity;
+    if (!Number.isFinite(d) || d < 0) return "sem pagamento recente";
+    return this.dataMais(-Math.round(d));
   },
 
   esc(v) {
@@ -188,6 +198,7 @@ const CentralEmailApp = {
       texto_abertas: texto,
       ordinal_proxima: this.ordinal(qtd + 1),
       vencimento_proxima: "—",
+      ultimo_pagamento: this.ultimoPagamentoDe(client),
       titulo: String((client && client.saleId) || "").trim() || "—"
     };
   },
@@ -1056,7 +1067,7 @@ const CentralEmailApp = {
         const item = (rot, v) => `<span><em>${this.esc(rot)}</em> ${this.esc(v == null || v === "" ? "—" : v)}</span>`;
         dados.innerHTML = item("Nome", ctx.nome) + item("Unidade", ctx.unidade) + item("Empreendimento", ctx.empreendimento) + item("Cidade", ctx.cidade)
           + item("Título", ctx.titulo) + item("Vencimento", ctx.vencimento) + item("Parcelas em aberto", ctx.texto_abertas)
-          + item("Próxima parcela", ctx.ordinal_proxima) + item("Vencidas no quadro", parc.length + " · " + this.money(tot) + " corrigido")
+          + item("Próxima parcela", ctx.ordinal_proxima) + item("Último pagamento", ctx.ultimo_pagamento) + item("Vencidas no quadro", parc.length + " · " + this.money(tot) + " corrigido")
           + item("E-mail do contrato", this.emailDe(c) || "sem e-mail no cadastro");
         dados.hidden = false;
       } else {
