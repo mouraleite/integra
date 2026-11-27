@@ -193,6 +193,56 @@
       return this.eventosNaFaixa(this.state.faixa);
     },
 
+    /* ---------- Ano anterior (comparação nos Indicadores) ----------
+       O mesmo período um ano antes, com os mesmos filtros (empresas, centros de custo, busca e antecedência).
+       Os meses que ainda não estão em memória são lidos uma vez; enquanto isso, devolve null. */
+    umAnoAntes(iso) {
+      const s = String(iso || "");
+      const y = Number(s.slice(0, 4)) - 1;
+      let resto = s.slice(4);
+      if (resto === "-02-29") resto = "-02-28";
+      return y + resto;
+    },
+
+    eventosAnoAnterior() {
+      const de = this.umAnoAntes(this.state.de);
+      const ate = this.umAnoAntes(this.state.ate);
+      if (ate < INICIO + "-01") return [];
+      const meses = mesesDoPeriodo(de < INICIO + "-01" ? INICIO + "-01" : de, ate);
+      const faltam = meses.filter((m) => !this._cache[m]);
+      if (faltam.length) {
+        this.carregarAnoAnterior(faltam);
+        return null;
+      }
+      const emp = new Set(this.state.empresas.map(String));
+      const ccs = new Set(this.state.ccs.map(String));
+      const q = norm(this.state.busca).trim();
+      const base = [];
+      meses.forEach((mes) => {
+        (this._cache[mes].eventos || []).forEach((ev) => {
+          if (ev.data < de || ev.data > ate) return;
+          if (emp.size && !emp.has(String(ev.emp))) return;
+          if (ccs.size && !ccs.has(String(ev.cc || ""))) return;
+          if (q && norm(`${ev.tit} ${ev.cli} ${ev.unid} ${ev.ccNome} ${ev.doc}`).indexOf(q) < 0) return;
+          base.push(ev);
+        });
+      });
+      return this.eventosNaFaixa(this.state.faixa, base);
+    },
+
+    async carregarAnoAnterior(meses) {
+      if (this._lendoAnoAnterior) return;
+      this._lendoAnoAnterior = true;
+      try {
+        for (const m of meses) {
+          try { await this.lerMes(m, false); } catch (e) { this._cache[m] = this._cache[m] || { eventos: [], atualizadoEm: "", vazio: true }; }
+        }
+      } finally {
+        this._lendoAnoAnterior = false;
+      }
+      if (this.state.aba === "indicadores") this.render();
+    },
+
     /** Meses do período (início e fim das datas). */
     mesesAtivos() {
       return mesesDoPeriodo(this.state.de, this.state.ate);
@@ -248,6 +298,7 @@
             <div class="antc-subs">
               ${abaBtn("analitico", "Analítico", "table-2")}
               ${abaBtn("indicadores", "Indicadores", "bar-chart-3")}
+              ${abaBtn("origem", "Financiamento × próprios", "landmark")}
             </div>
             <div class="antc-cab-acoes">
               <span class="antc-atualizado" title="Base salva no Integra. O batimento das 7h relê no Sienge os últimos 7 dias; o histórico desde jan/2024 não muda.">${atualizado ? "Base de " + esc(atualizado) : ""}</span>
@@ -448,6 +499,11 @@
         if (window.lucide) lucide.createIcons();
         return;
       }
+      if (this.state.aba === "origem") {
+        box.innerHTML = topo + this.origemHtml(lista);
+        if (window.lucide) lucide.createIcons();
+        return;
+      }
       box.innerHTML = topo + this.analiticoHtml(lista);
       if (window.lucide) lucide.createIcons();
     },
@@ -586,6 +642,106 @@
         </table></div>`;
     },
 
+    // ---------- Aba Financiamento × recursos próprios ----------
+    /* Cruza cada antecipação com o Registro (cadastro das unidades + Posição de estoque):
+       financiamento = lote quitado com financiamento (letra F e volume na baixa) e antecipação na data da quitação
+       (até 5 dias de diferença); conferir = lote com F sem volume na baixa, na data da quitação; o resto é recurso próprio. */
+    DIAS_QUITACAO: 5,
+
+    origemDe(ev, mapa) {
+      const info = mapa.get(String(ev.tit || "").replace(/\D/g, ""));
+      if (!info || !info.data || info.origem === "prop") return "prop";
+      const d = Math.abs((new Date(ev.data + "T12:00:00") - new Date(info.data + "T12:00:00")) / 86400000);
+      if (!(d <= this.DIAS_QUITACAO)) return "prop";
+      return info.origem;
+    },
+
+    origemHtml(lista) {
+      const R = window.RegistroApp;
+      if (!R || typeof R.origemPorTitulo !== "function") return `<div class="antc-aviso">O Registro não está disponível nesta página. Atualize (Ctrl+F5).</div>`;
+      const o = R.origemPorTitulo();
+      if (!o.temRegistro || !o.temPosicao) {
+        if (!this._lendoRegistro) {
+          this._lendoRegistro = true;
+          R.garantirDados().catch(() => {}).finally(() => {
+            this._lendoRegistro = false;
+            this._registroTentado = true;
+            if (this.state.aba === "origem") this.render();
+          });
+        }
+        if (!this._registroTentado || this._lendoRegistro) return `<div class="ml-load"><div class="loading-spinner" aria-hidden="true"></div><div class="loading-status-text">Lendo o Registro (cadastro das unidades) e a Posição de estoque…</div></div>`;
+        return `<div class="antc-aviso">${!o.temRegistro ? "O Registro ainda não tem o relatório Unidades por Empreendimento. Suba o arquivo em Relacionamento > Registro." : "A Posição de estoque ainda não está disponível. Abra Comercial > Posição de estoque e conclua o batimento."}</div>`;
+      }
+      const ROT = { fin: "Financiamento", prop: "Recursos próprios", conf: "Conferir" };
+      const tot = { fin: { v: 0, n: 0, t: new Set() }, prop: { v: 0, n: 0, t: new Set() }, conf: { v: 0, n: 0, t: new Set() } };
+      const porMes = {};
+      const porEmp = {};
+      const porCc = {};
+      const somar = (alvo, chave, nome, org, v) => {
+        const x = alvo[chave] = alvo[chave] || { nome, fin: 0, prop: 0, conf: 0 };
+        x[org] += v;
+      };
+      lista.forEach((ev) => {
+        const org = this.origemDe(ev, o.mapa);
+        const v = Number(ev.pago) || 0;
+        tot[org].v += v;
+        tot[org].n += 1;
+        tot[org].t.add(String(ev.tit));
+        const mes = String(ev.data).slice(0, 7);
+        porMes[mes] = porMes[mes] || { fin: 0, prop: 0, conf: 0 };
+        porMes[mes][org] += v;
+        somar(porEmp, String(ev.emp), this._empresas[ev.emp] || ev.empNome || ("Empresa " + ev.emp), org, v);
+        somar(porCc, String(ev.cc || ""), ev.cc ? `${ev.cc} - ${ev.ccNome || ""}` : "Sem centro de custo", org, v);
+      });
+      const total = tot.fin.v + tot.prop.v + tot.conf.v;
+      const pctDe = (v) => (total > 0 ? (v / total) * 100 : 0);
+      const card = (org, cls) => `<div class="antc-kpi ${cls}"><span>${ROT[org]}</span><b>${moeda(tot[org].v)}</b><small>${pct(pctDe(tot[org].v))} do recebido · ${tot[org].n.toLocaleString("pt-BR")} antecipações · ${tot[org].t.size.toLocaleString("pt-BR")} contrato(s)</small></div>`;
+      const meses = this.mesesAtivos().slice(-12);
+      const maxMes = Math.max(1, ...meses.map((m) => { const x = porMes[m] || {}; return (x.fin || 0) + (x.prop || 0) + (x.conf || 0); }));
+      const mi = (n) => (Math.abs(n) >= 1e6 ? (n / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + " Mi" : (n / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mil");
+      const barras = meses.map((m) => {
+        const x = porMes[m] || { fin: 0, prop: 0, conf: 0 };
+        const soma = x.fin + x.prop + x.conf;
+        const h = (v) => Math.round((v / maxMes) * 140);
+        return `<div class="antc-barra" title="${esc(MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(2, 4))}: financiamento ${moeda(x.fin)} · recursos próprios ${moeda(x.prop)}${x.conf ? " · conferir " + moeda(x.conf) : ""}">
+          <span class="antc-barra-val">${soma ? mi(soma) : ""}</span>
+          <div class="antc-pilha" style="height:${Math.max(2, h(soma))}px">
+            ${x.conf ? `<div class="antc-pilha-conf" style="flex:${x.conf}"></div>` : ""}
+            ${x.fin ? `<div class="antc-pilha-fin" style="flex:${x.fin}"></div>` : ""}
+            ${x.prop ? `<div class="antc-pilha-prop" style="flex:${x.prop}"></div>` : ""}
+          </div>
+          <span class="antc-barra-rot">${esc(MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(2, 4))}</span>
+          <span class="antc-barra-var">${soma ? pct((x.fin / soma) * 100) + " fin." : ""}</span>
+        </div>`;
+      }).join("");
+      const tabela = (titulo, grupos) => {
+        const linhas = Object.values(grupos).map((x) => Object.assign(x, { total: x.fin + x.prop + x.conf })).sort((a, b) => b.total - a.total);
+        return `<div class="antc-ind-tab"><div class="antc-ind-tit">${esc(titulo)}</div>
+          <div class="cc-scroll" style="max-height:300px;"><table class="cc-table">
+            <colgroup><col><col style="width:108px"><col style="width:108px"><col style="width:90px"><col style="width:108px"><col style="width:62px"></colgroup>
+            <thead><tr><th>Nome</th><th class="is-right">Financiamento</th><th class="is-right">Rec. próprios</th><th class="is-right">Conferir</th><th class="is-right">Total</th><th class="is-right">% fin.</th></tr></thead>
+            <tbody>${linhas.map((x) => `<tr><td title="${esc(x.nome)}">${esc(x.nome)}</td><td class="is-right">${moeda(x.fin)}</td><td class="is-right">${moeda(x.prop)}</td><td class="is-right">${x.conf ? moeda(x.conf) : "—"}</td><td class="is-right">${moeda(x.total)}</td><td class="is-right">${x.total ? pct((x.fin / x.total) * 100) : "—"}</td></tr>`).join("")
+              || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}</tbody>
+          </table></div></div>`;
+      };
+      const reg = R.state || {};
+      const dReg = reg.quando ? new Date(reg.quando).toLocaleDateString("pt-BR") : "—";
+      return `
+        <div class="antc-kpis antc-kpis-4">
+          <div class="antc-kpi"><span>Antecipação recebida</span><b>${moeda(total)}</b><small>${lista.length.toLocaleString("pt-BR")} antecipações no filtro</small></div>
+          ${card("fin", "antc-org-fin")}
+          ${card("prop", "antc-org-prop")}
+          ${card("conf", tot.conf.v > 0.009 ? "is-alerta" : "")}
+        </div>
+        <div class="antc-graficos sem-ano">
+          <div class="antc-graf" style="grid-column:1 / -1;"><div class="antc-ind-tit antc-tit-linha">Mês a mês · origem dos recursos
+            <div class="antc-legenda"><span><i class="antc-leg-cor"></i> Financiamento</span><span><i class="antc-leg-cor is-prop"></i> Recursos próprios</span><span><i class="antc-leg-cor is-conf"></i> Conferir</span></div></div>
+            <div class="antc-barras">${barras}</div></div>
+        </div>
+        <div class="antc-ind-tabs">${tabela("Por empresa", porEmp)}${tabela("Por centro de custo", porCc)}</div>
+        <p class="antc-nota">Financiamento = antecipação do lote quitado com financiamento (letra <b>F</b> no Registro e volume recebido na data da quitação), feita até ${this.DIAS_QUITACAO} dias da data da quitação. Conferir = lote com <b>F</b> sem volume na baixa. O resto é recurso próprio. Registro: ${esc(reg.arquivo || "—")} de ${esc(dReg)}.</p>`;
+    },
+
     // ---------- Aba Indicadores ----------
     indicadoresHtml(lista) {
       const t = this.totais(lista);
@@ -670,10 +826,41 @@
       };
       const porEmpresa = agrupar((e) => String(e.emp), (e) => this._empresas[e.emp] || e.empNome || ("Empresa " + e.emp));
       const porCc = agrupar((e) => String(e.cc || ""), (e) => (e.cc ? `${e.cc} - ${e.ccNome || ""}` : "Sem centro de custo"));
-      const graficoMeses = colunas(meses.map((x) => ({ rot: MESES_NOME[Number(x.slice(5, 7)) - 1] + "/" + x.slice(2, 4), v: porMes[x] || 0 })));
+      // Ano anterior: mesmo mês um ano antes, com os mesmos filtros (barra cinza ao lado da do ano).
+      const anterior = this.eventosAnoAnterior();
+      const porMesAnt = {};
+      let totalAnt = 0;
+      (anterior || []).forEach((e) => {
+        const m = String(e.data).slice(0, 7);
+        const chave = (Number(m.slice(0, 4)) + 1) + m.slice(4);
+        porMesAnt[chave] = (porMesAnt[chave] || 0) + (Number(e.pago) || 0);
+        totalAnt += Number(e.pago) || 0;
+      });
+      const variacao = (v, v0) => (v0 > 0 ? ((v - v0) / v0) * 100 : null);
+      const sinal = (p) => (p == null ? "" : (p > 0 ? "+" : "") + p.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%");
+      const colunasComp = (pares) => {
+        const max = Math.max(1, ...pares.map((p) => Math.max(p.v, p.v0 || 0)));
+        return `<div class="antc-barras">${pares.map((p) => {
+          const pv = variacao(p.v, p.v0);
+          return `<div class="antc-barra" title="${esc(p.rot)}: ${moeda(p.v)}${anterior ? " · ano anterior: " + moeda(p.v0 || 0) + (pv == null ? "" : " (" + sinal(pv) + ")") : ""}">
+            <span class="antc-barra-val">${p.v ? mi(p.v) : ""}</span>
+            <div class="antc-barra-par">
+              ${anterior ? `<div class="antc-barra-col is-ant" style="height:${Math.max(2, Math.round(((p.v0 || 0) / max) * 140))}px"></div>` : ""}
+              <div class="antc-barra-col" style="height:${Math.max(2, Math.round((p.v / max) * 140))}px"></div>
+            </div>
+            <span class="antc-barra-rot">${esc(p.rot)}</span>
+            ${anterior && pv != null ? `<span class="antc-barra-var ${pv >= 0 ? "is-mais" : "is-menos"}">${sinal(pv)}</span>` : (anterior ? `<span class="antc-barra-var">—</span>` : "")}
+          </div>`;
+        }).join("")}</div>`;
+      };
+      const graficoMeses = colunasComp(meses.map((x) => ({ rot: MESES_NOME[Number(x.slice(5, 7)) - 1] + "/" + x.slice(2, 4), v: porMes[x] || 0, v0: porMesAnt[x] || 0 })));
+      const legendaAnt = anterior
+        ? `<div class="antc-legenda"><span><i class="antc-leg-cor"></i> ${esc(this.state.de.slice(0, 4) === this.state.ate.slice(0, 4) ? this.state.de.slice(0, 4) : "Período")}</span><span><i class="antc-leg-cor is-ant"></i> Ano anterior</span></div>`
+        : `<div class="antc-legenda"><span>Carregando o ano anterior…</span></div>`;
+      const pvTotal = anterior ? variacao(t.pago, totalAnt) : null;
       return `
         <div class="antc-kpis antc-kpis-4">
-          <div class="antc-kpi"><span>Antecipação recebida</span><b>${moeda(t.pago)}</b><small>${t.n.toLocaleString("pt-BR")} antecipações</small></div>
+          <div class="antc-kpi"><span>Antecipação recebida</span><b>${moeda(t.pago)}</b><small>${t.n.toLocaleString("pt-BR")} antecipações${anterior ? ` · ano anterior ${moeda(totalAnt)}${pvTotal == null ? "" : ` <em class="${pvTotal >= 0 ? "antc-mais" : "antc-menos"}">(${sinal(pvTotal)})</em>`}` : ""}</small></div>
           <div class="antc-kpi"><span>Contratos</span><b>${contratos.toLocaleString("pt-BR")}</b><small>média de ${moeda(mediaCt)} por contrato</small></div>
           <div class="antc-kpi"><span>Parcelas antecipadas</span><b>${t.parc.toLocaleString("pt-BR")}</b><small>média de ${mediaParc.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} por contrato</small></div>
           <div class="antc-kpi ${t.comercial > 0.009 ? "is-alerta" : ""}"><span>Descontos</span><b>${moeda(t.juros + t.comercial)}</b>
@@ -681,7 +868,7 @@
         </div>
         <div class="antc-graficos ${anos.length > 1 ? "" : "sem-ano"}">
           ${anos.length > 1 ? `<div class="antc-graf"><div class="antc-ind-tit">Por ano</div>${colunas(anos.map((a) => ({ rot: a, v: porAno[a] || 0 })))}</div>` : ""}
-          <div class="antc-graf"><div class="antc-ind-tit">Mês a mês${this.mesesAtivos().length > 12 ? " (últimos 12)" : ""}</div>${graficoMeses}</div>
+          <div class="antc-graf"><div class="antc-ind-tit antc-tit-linha">Mês a mês${this.mesesAtivos().length > 12 ? " (últimos 12)" : ""} · comparado ao ano anterior${legendaAnt}</div>${graficoMeses}</div>
           <div class="antc-graf"><div class="antc-ind-tit">Por faixa de valor</div>${faixasHtml}</div>
         </div>
         <div class="antc-ind-tabs">
@@ -840,6 +1027,25 @@
       .antc-barra-col { width:70%; background:#1b8253; border-radius:3px 3px 0 0; }
       .antc-barra-val { font-size:0.62rem; color:#334155; margin-bottom:2px; white-space:nowrap; }
       .antc-barra-rot { font-size:0.65rem; color:#64748b; margin-top:4px; white-space:nowrap; }
+      .antc-barra-par { width:80%; display:flex; align-items:flex-end; justify-content:center; gap:2px; }
+      .antc-barra-par .antc-barra-col { width:50%; }
+      .antc-barra-col.is-ant { background:#cbd5e1; }
+      .antc-barra-var { font-size:0.6rem; font-weight:700; color:#94a3b8; white-space:nowrap; }
+      .antc-barra-var.is-mais, .antc-mais { color:#15803d; font-style:normal; }
+      .antc-barra-var.is-menos, .antc-menos { color:#b91c1c; font-style:normal; }
+      .antc-tit-linha { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+      .antc-legenda { display:inline-flex; gap:12px; font-size:0.65rem; font-weight:600; color:#64748b; text-transform:none; }
+      .antc-legenda span { display:inline-flex; align-items:center; gap:4px; }
+      .antc-leg-cor { display:inline-block; width:10px; height:10px; border-radius:2px; background:#1b8253; }
+      .antc-leg-cor.is-ant { background:#cbd5e1; }
+      .antc-leg-cor.is-prop { background:#60a5fa; }
+      .antc-leg-cor.is-conf { background:#f59e0b; }
+      .antc-pilha { width:60%; display:flex; flex-direction:column; border-radius:3px 3px 0 0; overflow:hidden; }
+      .antc-pilha-fin { background:#1b8253; }
+      .antc-pilha-prop { background:#60a5fa; }
+      .antc-pilha-conf { background:#f59e0b; }
+      .antc-kpi.antc-org-fin b { color:#105436; }
+      .antc-kpi.antc-org-prop b { color:#1d4ed8; }
       .antc-hbar { display:grid; grid-template-columns:96px 1fr auto; align-items:center; gap:8px; margin-bottom:8px; font-size:0.75rem; }
       .antc-hbar-rot { color:#475569; }
       .antc-hbar-trilho { background:#f1f5f9; border-radius:3px; height:16px; }
