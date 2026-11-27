@@ -226,7 +226,20 @@ const OrcamentoDfcApp = {
   },
 
   /* O filtro lista o plano inteiro. O empreendimento só restringe os valores da tabela. */
+  /* Lista do filtro de plano financeiro. Com o filtro de Custos e despesas ligado, some só o plano dos grupos de
+     custo/despesa desmarcados; receitas, impostos e as demais linhas continuam (antes sumiam junto). */
   planos() {
+    const lista = this.planosTodos();
+    if (!this.filtroGrupoLigado()) return lista;
+    const sel = new Set((this.selectedGrupoIds || []).map(String));
+    const grupos = new Set(this.gruposCustoDespesa().map((g) => String(g.id)));
+    return lista.filter((p) => {
+      const gid = String(this.grupoDaConta(p.id, p.name) || "");
+      return !grupos.has(gid) || sel.has(gid);
+    });
+  },
+
+  planosTodos() {
     const map = new Map();
     const add = (conta, nome) => {
       const id = this.codigoPlano(conta);
@@ -259,15 +272,9 @@ const OrcamentoDfcApp = {
         });
       });
     });
-    let lista = [...map.entries()]
+    return [...map.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
-    if (!this.filtroGrupoLigado()) return lista;
-    const sel = new Set((this.selectedGrupoIds || []).map(String));
-    return lista.filter((p) => {
-      const gid = this.grupoDaConta(p.id, p.name);
-      return !!(gid && sel.has(String(gid)));
-    });
   },
 
   async garantirCatalogoPlano() {
@@ -303,7 +310,7 @@ const OrcamentoDfcApp = {
       cache = this._planOnCache = {
         ids, n: ids.length, em: agora,
         sel: new Set(ids.map((id) => String(id || "").trim())),
-        lista: new Set(this.planos().map((p) => String(p.id)))
+        lista: new Set(this.planosTodos().map((p) => String(p.id)))
       };
     }
     let alvo = this.codigoPlano(code) || code;
@@ -3342,6 +3349,7 @@ const OrcamentoDfcApp = {
         }
       },
       toggleId: (id, on) => {
+        const tudoPlano = !this.filtroPlanoLigado();
         const sid = String(id);
         if (on) {
           if (!this.selectedGrupoIds.includes(sid)) this.selectedGrupoIds.push(sid);
@@ -3349,23 +3357,28 @@ const OrcamentoDfcApp = {
           this.selectedGrupoIds = this.selectedGrupoIds.filter((x) => x !== sid);
         }
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
       },
       selectAll: () => {
+        const tudoPlano = !this.filtroPlanoLigado();
         this.selectedGrupoIds = items.map((g) => g.id);
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
       },
       selectNone: () => {
+        const tudoPlano = !this.filtroPlanoLigado();
         this.selectedGrupoIds = [];
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
