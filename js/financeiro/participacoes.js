@@ -2782,6 +2782,7 @@ const ParticipacoesApp = {
   PAINEL_LOCAL: "crm_part_painel_socio_v1",
   painel: null,
   painelEmp: "",
+  painelCat: "",
   JUSTIFICA: [
     { id: "", label: "Em análise" },
     { id: "sim", label: "Justifica" },
@@ -2875,16 +2876,39 @@ const ParticipacoesApp = {
     this.render();
   },
 
-  /** Lançamentos dos credores marcados (todas as categorias), no filtro de empresa e período do topo. */
+  /** Filtro rápido pela conta (Categoria Moura Leite) do credor, abaixo das SPEs. */
+  escolherPainelCat(cat) {
+    this.painelCat = String(cat || "");
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  /** Lançamentos dos credores marcados, no filtro de empresa e período do topo. Os chips de SPE e de conta se
+      combinam: o total de cada chip de SPE respeita a conta escolhida, e o de cada conta respeita a SPE. */
   painelDados() {
     const base = this.catLinhasBase().filter((x) => this.painelOn(x.k));
-    const empsBase = {};
-    base.forEach((x) => { empsBase[x.emp] = (empsBase[x.emp] || 0) + (Number(x.r.valor) || 0); });
-    if (this.painelEmp && !empsBase[this.painelEmp]) this.painelEmp = "";
-    const linhas = this.painelEmp ? base.filter((x) => x.emp === this.painelEmp) : base;
+    const somaPor = (linhas, campo) => {
+      const t = {};
+      linhas.forEach((x) => { t[x[campo]] = (t[x[campo]] || 0) + (Number(x.r.valor) || 0); });
+      return t;
+    };
+    if (this.painelCat && !base.some((x) => x.catId === this.painelCat)) this.painelCat = "";
+    if (this.painelEmp && !base.some((x) => x.emp === this.painelEmp)) this.painelEmp = "";
+    const daCat = this.painelCat ? base.filter((x) => x.catId === this.painelCat) : base;
+    const daEmp = this.painelEmp ? base.filter((x) => x.emp === this.painelEmp) : base;
+    const linhas = this.painelEmp ? daCat.filter((x) => x.emp === this.painelEmp) : daCat;
     const d = this.agregarCat(base, linhas);
+    const empsBase = somaPor(daCat, "emp");
     d.empsBase = Object.keys(empsBase).sort((a, b) => empsBase[b] - empsBase[a]).map((e) => ({ emp: e, total: empsBase[e] }));
-    d.totalBase = base.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    d.totalBase = daCat.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    // Contas presentes nos credores marcados (com a SPE escolhida, se houver), na ordem do plano de contas.
+    const catsTot = somaPor(daEmp, "catId");
+    const rot = {};
+    base.forEach((x) => { if (!rot[x.catId]) rot[x.catId] = x.catId === this.CAT_SEM ? "Sem categoria" : (x.catRot || x.catId); });
+    d.catsBase = Object.keys(rot)
+      .map((id) => ({ id, rot: rot[id], total: catsTot[id] || 0 }))
+      .sort((a, b) => (a.id === this.CAT_SEM) - (b.id === this.CAT_SEM) || a.rot.localeCompare(b.rot, "pt-BR", { numeric: true }));
+    d.totalCats = daEmp.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
     return d;
   },
 
@@ -2908,6 +2932,7 @@ const ParticipacoesApp = {
       ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
       : `<span class="part-cat-vazio">—</span>`);
     const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
       const p = this.painel[c.k] || {};
@@ -2952,6 +2977,9 @@ const ParticipacoesApp = {
         .part-soc-chip b{font-variant-numeric:tabular-nums;color:#105436;}
         .part-soc-chip.is-on{background:#105436;border-color:#105436;color:#fff;}
         .part-soc-chip.is-on b{color:#fff;}
+        .part-soc-chips.is-contas{align-items:center;margin-top:-2px;}
+        .part-soc-chips-rot{font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin-right:2px;white-space:nowrap;}
+        .part-soc-chips.is-contas .part-soc-chip{height:30px;font-size:.7rem;}
         .part-soc-tab td{vertical-align:top;padding:8px 6px;}
         .part-soc-tab thead th{white-space:normal;line-height:1.2;vertical-align:bottom;padding:6px;}
         .part-soc-tab thead th small{display:block;font-weight:600;opacity:.85;font-size:.62rem;}
@@ -2975,12 +3003,13 @@ const ParticipacoesApp = {
         .part-soc-tirar:hover{background:#fee2e2;color:#b91c1c;}
       </style>
       <div class="part-soc-cards">
-        ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)")}
+        ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCat ? " · " + this.esc((d.catsBase.find((c) => c.id === this.painelCat) || {}).rot || "") : ""))}
         ${card("is-sim", "Justifica", this.fmt(aval.sim.v + aval.parcial.v), (aval.sim.n + aval.parcial.n) + " credor(es)" + (aval.parcial.n ? " · " + aval.parcial.n + " em parte" : ""))}
         ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
         ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
       </div>
       ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
+      ${d.catsBase.length ?`<div class="part-soc-chips is-contas"><span class="part-soc-chips-rot">Contas Moura Leite</span>${chipCat("", "Todas as contas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div>` : ""}
       ${d.credores.length ? `
       <p class="part-cat-info">Clique no credor para ver mês a mês por SPE e no valor para ver os lançamentos daquela SPE. Escopo e avaliação ficam gravados para todos.</p>
       <div class="cc-scroll" style="max-height:calc(100vh - 360px);">
