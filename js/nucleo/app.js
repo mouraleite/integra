@@ -61433,8 +61433,9 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:5px 7px;font-size:9px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
         const totalTd = (v, align, extra) => `<td style="padding:6px 7px;border-top:2px solid ${C_HEAD};text-align:${align || "center"};font-weight:800;color:${C_HEAD};${extra || ""}">${v}</td>`;
-        const celZero = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_ZERO};background:${v ? BG_ZERO : "transparent"};">${v || "-"}</td>`;
-        const celWeb = (v) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_WEB};background:${v ? BG_WEB : "transparent"};">${v || "-"}</td>`;
+        // Colunas 0% pago e entrada: fundo da cor da coluna em todas as linhas, alternando claro/escuro junto com a zebra.
+        const celZero = (v, i) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_ZERO};background:${i % 2 === 0 ? "#fdf5f5" : "#fae6e6"};">${v || "-"}</td>`;
+        const celWeb = (v, i) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_WEB};background:${i % 2 === 0 ? "#f4f8ff" : "#e4eefc"};">${v || "-"}</td>`;
 
         const recencyTable = `
             <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
@@ -61443,8 +61444,8 @@ window.gerarMapaZeropaidPDF = async function() {
                 <tbody>
                     ${agingDefs.map((r, i) => `<tr style="background:${zebra(i)};">
                         <td style="padding:5px 7px;font-weight:700;color:#1e293b;">${esc(r.label)}</td>
-                        ${celZero(sz.aging[i])}
-                        ${celWeb(sw.aging[i])}
+                        ${celZero(sz.aging[i], i)}
+                        ${celWeb(sw.aging[i], i)}
                         <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.aging[i] + sw.aging[i] || "-"}</td>
                     </tr>`).join("")}
                     <tr style="background:#e7f6ee;">${totalTd("Total de títulos", "left")}${totalTd(sz.titles, "center", `color:${C_ZERO};`)}${totalTd(sw.titles, "center", `color:${C_WEB};`)}${totalTd(sz.titles + sw.titles)}</tr>
@@ -61495,8 +61496,8 @@ window.gerarMapaZeropaidPDF = async function() {
                 <tbody>
                     ${rows.map((r, i) => `<tr style="background:${zebra(i)};">
                         ${r.cells}
-                        ${celZero(r.zt)}
-                        ${celWeb(r.wt)}
+                        ${celZero(r.zt, i)}
+                        ${celWeb(r.wt, i)}
                         <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${(r.zt + r.wt) || "-"}</td>
                     </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 3}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
                     <tr style="background:#e7f6ee;">
