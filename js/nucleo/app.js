@@ -61398,13 +61398,16 @@ window.gerarMapaZeropaidPDF = async function() {
         const dot = (color) => `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
 
         const chartSlots = monthKeys.map(k => ({ label: `${k.slice(5, 7)}/${k.slice(2, 4)}`, z: sz.months[k], w: sw.months[k] }));
+        // Começa no primeiro mês com venda em atraso; os meses vazios depois dele continuam no gráfico.
+        while (chartSlots.length && !(chartSlots[0].z + chartSlots[0].w)) chartSlots.shift();
         if (sz.older || sw.older) chartSlots.unshift({ label: "Antes", z: sz.older, w: sw.older });
         if (sz.noDate || sw.noDate) chartSlots.push({ label: "S/ data", z: sz.noDate, w: sw.noDate });
 
         // Colunas empilhadas: 0% pago embaixo, entrada Webro em cima e o total no topo.
         const groupedBarChart = (slots) => {
             const maxVal = Math.max(1, ...slots.map(s => s.z + s.w));
-            const W = 600, H = 168, padTop = 18, padBot = 22, padSide = 10;
+            // Largura da coluna esquerda (mesma da tabela Por empreendimento): (1086 - 26 - 36) / 2.
+            const W = 512, H = 168, padTop = 18, padBot = 22, padSide = 10;
             const stepX = (W - padSide * 2) / Math.max(slots.length, 1);
             const barW = Math.min(30, Math.max(12, stepX * 0.55));
             const alt = H - padTop - padBot;
@@ -61548,15 +61551,15 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const legChip = (color, txt) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;background:#fff;border:1.5px solid ${color};color:${color};font-size:10px;font-weight:800;"><span style="width:12px;height:12px;border-radius:3px;background:${color};display:inline-block;"></span>${txt}</span>`;
         const saleBand = `
-            <div style="display:flex;gap:16px;height:100%;align-items:stretch;">
-                <div style="flex:1;min-width:0;display:flex;flex-direction:column;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:36px;height:100%;align-items:stretch;">
+                <div style="min-width:0;display:flex;flex-direction:column;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                         <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;">Títulos por mês da venda</div>
                         <div style="display:flex;gap:8px;">${legChip(C_ZERO, "0% pago")}${legChip(C_WEB, "Entrada Webro")}</div>
                     </div>
                     <div style="flex:1;display:flex;align-items:flex-end;">${groupedBarChart(chartSlots)}</div>
                 </div>
-                <div style="width:340px;flex-shrink:0;">
+                <div style="min-width:0;">
                     <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;margin-bottom:8px;">Aging · títulos por dias em atraso</div>
                     ${recencyTable}
                 </div>
