@@ -295,6 +295,24 @@ const OrcamentoDfcApp = {
     if (!ids.length) return true;
     const code = String(conta || "").trim();
     if (!code) return false;
+    // Vale a marcação da própria conta (ou da conta mais próxima acima dela que está na lista).
+    // Antes, a 2.04 marcada puxava a 2.04.01.01 mesmo desmarcada.
+    let cache = this._planOnCache;
+    const agora = Date.now();
+    if (!cache || cache.ids !== ids || cache.n !== ids.length || agora - cache.em > 1500) {
+      cache = this._planOnCache = {
+        ids, n: ids.length, em: agora,
+        sel: new Set(ids.map((id) => String(id || "").trim())),
+        lista: new Set(this.planos().map((p) => String(p.id)))
+      };
+    }
+    let alvo = this.codigoPlano(code) || code;
+    while (alvo) {
+      if (cache.lista.has(alvo)) return cache.sel.has(alvo);
+      const p = alvo.lastIndexOf(".");
+      if (p <= 0) break;
+      alvo = alvo.slice(0, p);
+    }
     const dig = code.replace(/\D/g, "");
     return ids.some((id) => {
       const sid = String(id || "").trim();
