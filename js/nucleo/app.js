@@ -61529,7 +61529,7 @@ window.gerarMapaZeropaidPDF = async function() {
                 </div>
                 ${kpi("Títulos", s.titles, color)}
                 ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
-                ${kpi("Desde a venda", s.avgSaleLabel)}
+                ${kpi("Atraso médio", s.avgDelay + " dias")}
             </div>`;
         const quadro = (title, body, extra) => `
             <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
