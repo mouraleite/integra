@@ -1,114 +1,108 @@
 /* Central de e-mail: biblioteca de sugestões de texto, sem IA e sem custo.
    Cada sugestão é montada com partes por tom (abertura, pedido, fechamento, assinatura) e partes pela situação
-   da tag (o racional da tag na Fila). As combinações passam de centenas por tag e tom; "Nova sugestão" nunca
-   repete uma já mostrada na janela. Os textos usam só as variáveis do template; {R} vira a data de retorno. */
+   da tag (o racional da tag na Fila). As combinações passam de centenas por tag e tom; "Outra sugestão" nunca
+   repete uma já mostrada na janela. Os textos usam só as variáveis do template; {R} vira a data de retorno.
+   Trechos entre **asteriscos** saem em negrito no e-mail. */
 (function () {
   "use strict";
 
+  // Tons pedidos em 27/11/2026: cobrança com boas-vindas, lembrete, atraso contumaz e jurídico de fácil entendimento.
   const TONS = [
-    { id: "cordial", nome: "Cordial" },
-    { id: "direto", nome: "Direto" },
-    { id: "empatico", nome: "Empático" },
-    { id: "formal", nome: "Formal" },
-    { id: "firme", nome: "Firme" }
+    { id: "boasvindas", nome: "Cobrança com boas-vindas" },
+    { id: "lembrete", nome: "Lembrete" },
+    { id: "contumaz", nome: "Atraso contumaz" },
+    { id: "juridico", nome: "Jurídico" }
   ];
 
   // Partes de cada tom. {R} = "até {{retorno:N}}" (ou "nos próximos dias" sem data de retorno).
   const TOM = {
-    cordial: {
+    boasvindas: {
       abertura: [
-        "{{saudacao}}, {{primeiro_nome}}! Tudo bem?",
-        "{{saudacao}}, {{primeiro_nome}}. Espero que esteja tudo bem por aí.",
-        "Olá, {{primeiro_nome}}! {{saudacao}}.",
-        "{{saudacao}}, {{primeiro_nome}}! Passando para um lembrete rápido.",
-        "Oi, {{primeiro_nome}}, {{saudacao}}! Como vai?",
-        "{{saudacao}}, {{primeiro_nome}}. Tudo certo com você?"
+        "{{saudacao}}, {{primeiro_nome}}! Seja muito bem-vindo(a) à Moura Leite.",
+        "{{saudacao}}, {{primeiro_nome}}! É uma alegria ter você com a gente no {{empreendimento}}.",
+        "Olá, {{primeiro_nome}}! {{saudacao}}. Parabéns pela conquista do seu lote {{unidade}}!",
+        "{{saudacao}}, {{primeiro_nome}}! Obrigado por escolher a Moura Leite para realizar esse sonho.",
+        "{{saudacao}}, {{primeiro_nome}}! Que bom ter você como nosso cliente no {{empreendimento}}.",
+        "Olá, {{primeiro_nome}}, {{saudacao}}! Estamos muito felizes com a sua chegada ao {{empreendimento}}."
       ],
       pedido: [
-        "Se puder, responda este e-mail {R} para combinarmos a regularização. Estamos aqui para ajudar.",
-        "Quando puder, é só responder esta mensagem {R} que a gente encontra o melhor caminho junto com você.",
-        "Conte com a gente: responda este e-mail {R} e enviamos o boleto atualizado.",
+        "Para deixar tudo certo desde o começo, responda este e-mail {R} e enviamos o boleto atualizado.",
+        "Se tiver qualquer dúvida sobre os pagamentos, responda {R}. Estamos aqui para ajudar.",
         "Se o pagamento já foi feito, pode desconsiderar. Se não, responda {R} que ajudamos com o boleto.",
-        "Qualquer dúvida, é só responder por aqui {R}. Teremos prazer em ajudar.",
-        "Fica o convite: responda este e-mail {R} e resolvemos isso de forma simples."
+        "Conte com a nossa equipe: responda {R} e combinamos a melhor forma de pagamento.",
+        "É só responder esta mensagem {R} para começarmos com tudo em dia.",
+        "Responda {R} e explicamos, sem complicação, como funcionam os pagamentos do seu lote."
       ],
-      fechamento: ["Um abraço,", "Obrigado pela atenção!", "Até breve,", "Abraços,"],
+      fechamento: ["Seja bem-vindo(a)!", "Um abraço,", "Conte com a gente,", "Abraços,"],
+      assinatura: ["Equipe Moura Leite", "Equipe de Relacionamento Moura Leite"]
+    },
+    lembrete: {
+      abertura: [
+        "{{saudacao}}, {{primeiro_nome}}. Passando para um lembrete rápido.",
+        "{{saudacao}}, {{primeiro_nome}}! Só um lembrete amigável.",
+        "Olá, {{primeiro_nome}}. {{saudacao}}! Um lembrete sobre o seu lote {{unidade}}.",
+        "{{saudacao}}, {{primeiro_nome}}. Tudo bem? Um aviso breve.",
+        "Oi, {{primeiro_nome}}, {{saudacao}}! Talvez tenha passado despercebido."
+      ],
+      pedido: [
+        "Se já pagou, pode desconsiderar. Se não, responda {R} e enviamos a 2ª via.",
+        "Para receber o boleto atualizado, é só responder este e-mail {R}.",
+        "Qualquer dúvida, responda por aqui {R}.",
+        "Assim que puder, regularize ou responda {R} para combinarmos.",
+        "Responda esta mensagem {R} e ajudamos com o pagamento.",
+        "Fica o lembrete: responda {R} e resolvemos de forma simples."
+      ],
+      fechamento: ["Obrigado!", "Um abraço,", "Até breve,", "Atenciosamente,"],
       assinatura: ["Equipe de Cobrança Moura Leite", "Equipe Moura Leite"]
     },
-    direto: {
+    // Incisivo, mas respeitoso: deixa claro que o atraso se repete e pede retorno com data, sem ameaça.
+    contumaz: {
       abertura: [
         "{{saudacao}}, {{primeiro_nome}}.",
-        "{{primeiro_nome}}, {{saudacao}}.",
-        "{{saudacao}}, {{primeiro_nome}}. Um aviso sobre o seu contrato.",
-        "{{saudacao}}, {{primeiro_nome}}. Segue um lembrete importante."
+        "{{saudacao}}, {{primeiro_nome}}. Precisamos falar sobre o seu contrato.",
+        "{{primeiro_nome}}, {{saudacao}}. Este assunto precisa da sua atenção agora.",
+        "{{saudacao}}, {{nome}}. Voltamos a entrar em contato porque o atraso continua.",
+        "{{saudacao}}, {{primeiro_nome}}. Já tentamos contato outras vezes e ainda não tivemos retorno."
+      ],
+      reforco: [
+        "Os atrasos têm se repetido e precisamos de uma solução definitiva.",
+        "Este não é o primeiro aviso sobre o contrato."
       ],
       pedido: [
-        "Para regularizar, responda este e-mail {R}.",
-        "Responda {R} e enviamos o boleto atualizado.",
-        "Pedimos o retorno {R} para regularizar.",
-        "Responda esta mensagem {R} para receber a 2ª via atualizada.",
-        "Regularize ou responda {R} para combinarmos a forma de pagamento.",
-        "Se já pagou, desconsidere. Caso contrário, responda {R}."
+        "Pedimos o seu retorno **{R}**, sem falta, para regularizar.",
+        "Precisamos da regularização ou de uma proposta sua **{R}**.",
+        "Responda este e-mail **{R}** para definirmos como o contrato fica em dia.",
+        "Não deixe para depois: regularize ou responda **{R}**.",
+        "Contamos com o seu contato **{R}** para evitar as medidas previstas em contrato."
       ],
-      fechamento: ["Obrigado.", "Atenciosamente,", "Aguardamos seu retorno."],
-      assinatura: ["Equipe de Cobrança Moura Leite", "Cobrança Moura Leite"]
+      fechamento: ["Aguardamos seu retorno.", "Atenciosamente,", "Contamos com a sua atenção."],
+      assinatura: ["Departamento de Cobrança · Moura Leite", "Equipe de Cobrança Moura Leite"]
     },
-    empatico: {
+    // Linguagem jurídica, mas fácil de entender: cita o contrato e as consequências em palavras simples.
+    juridico: {
       abertura: [
-        "{{saudacao}}, {{primeiro_nome}}. Sabemos que imprevistos acontecem e queremos ajudar.",
-        "{{saudacao}}, {{primeiro_nome}}. Entendemos que a rotina às vezes aperta.",
-        "{{saudacao}}, {{primeiro_nome}}. Estamos entrando em contato para ajudar, não para pressionar.",
-        "Olá, {{primeiro_nome}}. {{saudacao}}! Sabemos que nem sempre o mês sai como planejado.",
-        "{{saudacao}}, {{primeiro_nome}}. Sua tranquilidade com o seu lote é importante para nós."
-      ],
-      pedido: [
-        "Se estiver passando por alguma dificuldade, responda {R} e vamos buscar juntos uma condição que caiba no seu orçamento.",
-        "Podemos conversar sobre uma forma de pagamento que funcione para você. É só responder {R}.",
-        "Responda este e-mail {R} contando a sua situação. Vamos analisar com atenção.",
-        "Queremos encontrar uma saída boa para os dois lados. Responda {R} e conversamos.",
-        "Se precisar de mais prazo ou de parcelamento, responda {R} que avaliamos com carinho.",
-        "Estamos à disposição para ouvir você. Responda {R} e seguimos juntos."
-      ],
-      fechamento: ["Conte com a gente,", "Um abraço,", "Estamos à disposição,", "Com atenção,"],
-      assinatura: ["Equipe de Cobrança Moura Leite", "Equipe Moura Leite"]
-    },
-    formal: {
-      abertura: [
-        "Prezado(a) {{nome}}, {{saudacao}}.",
-        "Prezado(a) {{primeiro_nome}},",
+        "Prezado(a) {{nome}},",
         "{{saudacao}}, Sr(a). {{nome}}.",
+        "Prezado(a) {{primeiro_nome}}, {{saudacao}}.",
         "Prezado(a) cliente {{nome}},"
       ],
-      pedido: [
-        "Solicitamos a regularização ou o contato por este e-mail {R}.",
-        "Pedimos a gentileza de responder esta mensagem {R} para tratarmos da regularização.",
-        "Permanecemos à disposição para emitir o boleto atualizado mediante retorno {R}.",
-        "Solicitamos seu retorno {R}. Caso o pagamento já tenha sido efetuado, favor desconsiderar.",
-        "Para tratar da regularização, solicitamos resposta a este e-mail {R}."
+      reforco: [
+        "Pelo contrato assinado, o atraso gera multa e juros e permite à empresa adotar as medidas previstas nele.",
+        "Em palavras simples: enquanto houver valor em aberto, o contrato não está sendo cumprido."
       ],
-      fechamento: ["Atenciosamente,", "Cordialmente,", "Respeitosamente,"],
+      pedido: [
+        "Para evitar as medidas previstas em contrato, solicitamos a regularização ou o contato por este e-mail **{R}**.",
+        "Solicitamos seu retorno **{R}**. Caso o pagamento já tenha sido feito, desconsidere esta mensagem.",
+        "Pedimos que responda **{R}** para tratarmos da regularização de forma amigável.",
+        "Ainda é possível resolver de forma amigável: responda este e-mail **{R}**."
+      ],
+      fechamento: ["Atenciosamente,", "Respeitosamente,", "Cordialmente,"],
       assinatura: ["Departamento de Cobrança · Moura Leite", "Moura Leite · Cobrança"]
-    },
-    firme: {
-      abertura: [
-        "{{saudacao}}, {{primeiro_nome}}.",
-        "{{primeiro_nome}}, {{saudacao}}. Este é um aviso importante.",
-        "{{saudacao}}, {{nome}}.",
-        "{{saudacao}}, {{primeiro_nome}}. Precisamos tratar do seu contrato com prioridade."
-      ],
-      pedido: [
-        "É necessário regularizar ou responder este e-mail {R}.",
-        "Pedimos seu retorno {R}, sem falta, para regularizar a situação.",
-        "Aguardamos a regularização ou o seu contato {R}.",
-        "Responda este e-mail {R} para evitarmos as próximas medidas previstas em contrato.",
-        "Não deixe para depois: responda {R} e regularize o contrato."
-      ],
-      fechamento: ["Atenciosamente,", "Aguardamos seu retorno.", "Contamos com a sua atenção."],
-      assinatura: ["Departamento de Cobrança · Moura Leite", "Equipe de Cobrança Moura Leite"]
     }
   };
 
-  // Situação de cada tag (o racional dela). "geral" vale para qualquer tom; "firme" entra só no tom Firme/Formal.
+  // Situação de cada tag (o racional dela). "geral" vale para qualquer tom; "firme" entra nos tons
+  // Atraso contumaz e Jurídico. semPressao: tags sub judice, sem reforço nem menção a medidas.
   const SIT_PADRAO = {
     geral: [
       "Há {{texto_abertas}} no contrato do lote {{unidade}}, no {{empreendimento}}, com atraso desde {{vencimento}}.",
@@ -209,6 +203,7 @@
       firme: ["Para evitar novos juros, é importante quitar o que ainda está em aberto."]
     },
     "3": { // sub judice: texto cuidadoso, sem pressão
+      semPressao: true,
       geral: [
         "Entramos em contato sobre o contrato do lote {{unidade}}, no {{empreendimento}}.",
         "Gostaríamos de tratar com você do contrato do lote {{unidade}} ({{empreendimento}})."
@@ -221,21 +216,32 @@
   SITUACAO["8.5"] = SITUACAO["5"];
   SITUACAO["6"] = SITUACAO["5"];
 
+  // Tom que já vem escolhido ao abrir as sugestões, pelo racional da tag (o operador pode trocar).
+  const TOM_DA_TAG = {
+    "1": "boasvindas", "2": "boasvindas", "-2": "boasvindas", "-3": "boasvindas",
+    "10": "lembrete", "11": "lembrete",
+    "0": "contumaz", "-1": "contumaz",
+    "9": "juridico", "5": "juridico", "6": "juridico", "8.5": "juridico",
+    "3": "juridico", "4": "juridico", "7": "juridico", "8": "juridico", "8.75": "juridico"
+  };
+
+  function tomSugerido(tag) {
+    return TOM_DA_TAG[String(tag)] || "lembrete";
+  }
+
   // Complemento opcional: quadro, extrato ou nada (deixa o texto mais curto).
   const COMPLEMENTO = {
-    cordial: ["", "", "Veja abaixo o resumo:\n{{quadro_parcelas}}"],
-    direto: ["", "{{quadro_parcelas}}", "{{extrato}}"],
-    empatico: ["", ""],
-    formal: ["", "Seguem as parcelas em aberto:\n{{quadro_parcelas}}", "{{extrato}}"],
-    firme: ["", "{{quadro_parcelas}}"]
+    boasvindas: ["", "", "Veja abaixo o resumo:\n{{quadro_parcelas}}"],
+    lembrete: ["", "", "{{quadro_parcelas}}"],
+    contumaz: ["", "{{quadro_parcelas}}", "{{extrato}}"],
+    juridico: ["", "Seguem as parcelas em aberto:\n{{quadro_parcelas}}", "{{extrato}}"]
   };
 
   const ASSUNTO = {
-    cordial: ["Lembrete do seu lote {{unidade}} · {{empreendimento}}", "{{primeiro_nome}}, um lembrete sobre o lote {{unidade}}", "Vamos colocar o lote {{unidade}} em dia?"],
-    direto: ["Parcela em aberto · lote {{unidade}}", "Lote {{unidade}} · {{texto_abertas}}", "Regularização do lote {{unidade}}"],
-    empatico: ["Podemos ajudar com o lote {{unidade}}?", "{{primeiro_nome}}, vamos conversar sobre o lote {{unidade}}?", "Uma solução para o seu lote {{unidade}}"],
-    formal: ["Comunicado · contrato {{titulo}} · lote {{unidade}}", "Pendência financeira · {{empreendimento}} · {{unidade}}", "Aviso de parcela em aberto · contrato {{titulo}}"],
-    firme: ["Importante: lote {{unidade}} em atraso", "Aviso de atraso · contrato {{titulo}}", "Regularize o lote {{unidade}} · {{empreendimento}}"]
+    boasvindas: ["Bem-vindo(a) à Moura Leite, {{primeiro_nome}}!", "{{primeiro_nome}}, vamos deixar o lote {{unidade}} em dia?", "Seu lote {{unidade}} no {{empreendimento}}: um recado importante"],
+    lembrete: ["Lembrete do seu lote {{unidade}} · {{empreendimento}}", "{{primeiro_nome}}, um lembrete sobre o lote {{unidade}}", "Parcela em aberto · lote {{unidade}}"],
+    contumaz: ["Importante: lote {{unidade}} segue em atraso", "Aviso de atraso · contrato {{titulo}}", "{{primeiro_nome}}, precisamos do seu retorno sobre o lote {{unidade}}"],
+    juridico: ["Comunicado · contrato {{titulo}} · lote {{unidade}}", "Notificação de pendência · {{empreendimento}} · {{unidade}}", "Aviso sobre o contrato {{titulo}} · lote {{unidade}}"]
   };
 
   // Gerador pseudoaleatório estável (mesma tag e tom = mesma ordem de sugestões).
@@ -252,22 +258,25 @@
   }
 
   function partesDe(tag, tom) {
-    const t = TOM[tom] || TOM.cordial;
+    const t = TOM[tom] || TOM.lembrete;
     const sit = SITUACAO[String(tag)] || SIT_PADRAO;
     const situacoes = sit.geral && sit.geral.length ? sit.geral : SIT_PADRAO.geral;
-    const reforco = (tom === "firme" || tom === "formal") ? (sit.firme || []).concat("") : [""];
-    return { t, situacoes, reforco, comp: COMPLEMENTO[tom] || [""], assuntos: ASSUNTO[tom] || ASSUNTO.cordial };
+    const firme = tom === "contumaz" || tom === "juridico";
+    // Sub judice: sem reforço e sem pedido que fale em medidas.
+    const reforco = firme && !sit.semPressao ? (sit.firme || []).concat(t.reforco || [], "") : [""];
+    const pedido = sit.semPressao ? t.pedido.filter((p) => !/medidas/i.test(p)) : t.pedido;
+    return { t, pedido: pedido.length ? pedido : t.pedido, situacoes, reforco, comp: COMPLEMENTO[tom] || [""], assuntos: ASSUNTO[tom] || ASSUNTO.lembrete };
   }
 
   /** Quantas combinações diferentes existem para a tag e o tom. */
   function total(tag, tom) {
     const p = partesDe(tag, tom);
-    return p.t.abertura.length * p.situacoes.length * p.reforco.length * p.comp.length * p.t.pedido.length * p.t.fechamento.length;
+    return p.t.abertura.length * p.situacoes.length * p.reforco.length * p.comp.length * p.pedido.length * p.t.fechamento.length;
   }
 
   function montar(tag, tom, idx, diasRetorno) {
     const p = partesDe(tag, tom);
-    const dims = [p.t.abertura.length, p.situacoes.length, p.reforco.length, p.comp.length, p.t.pedido.length, p.t.fechamento.length];
+    const dims = [p.t.abertura.length, p.situacoes.length, p.reforco.length, p.comp.length, p.pedido.length, p.t.fechamento.length];
     const sel = [];
     let resto = idx;
     dims.forEach((n) => { sel.push(resto % n); resto = Math.floor(resto / n); });
@@ -277,11 +286,11 @@
       p.t.abertura[sel[0]],
       situacao,
       p.comp[sel[3]],
-      p.t.pedido[sel[4]].replace("{R}", ret),
+      p.pedido[sel[4]].replace("{R}", ret),
       p.t.fechamento[sel[5]] + "\n" + p.t.assinatura[idx % p.t.assinatura.length]
     ].filter(Boolean);
     return {
-      tom: (TONS.find((x) => x.id === tom) || TONS[0]).nome,
+      tom: (TONS.find((x) => x.id === tom) || TONS[1]).nome,
       tomId: tom,
       chave: tag + "|" + tom + "|" + idx,
       assunto: p.assuntos[idx % p.assuntos.length],
@@ -301,6 +310,7 @@
     return montar(tag, tom, Math.floor(Math.random() * n), diasRetorno);
   }
 
-  window.CentralEmailSugestoes = { TONS, proxima, total, montar };
-  if (typeof module !== "undefined" && module.exports) module.exports = window.CentralEmailSugestoes;
+  const raiz = typeof window !== "undefined" ? window : globalThis;
+  raiz.CentralEmailSugestoes = { TONS, proxima, total, montar, tomSugerido };
+  if (typeof module !== "undefined" && module.exports) module.exports = raiz.CentralEmailSugestoes;
 })();

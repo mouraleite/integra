@@ -12473,6 +12473,27 @@ tr.pr-liberado td { background: #f7faf8; }
 .cem-ac-filtros .cem-ac-busca { flex: 1 1 220px; }
 .cem-ac-filtros .cc-atualizar { margin-left: auto; }
 .cem-ac-info { margin: 0 0 10px; color: #64748b; font-size: 0.78rem; line-height: 1.4; }
+/* 27/11/2026: Acompanhamento mais leve em notebook a 100%: filtros numa linha com a mesma altura, etiquetas com
+   status e data curta em duas linhas fixas, "Para" e "De" em uma linha cada (com reticências), linhas mais baixas. */
+.cem-ac-filtros { display: grid; grid-template-columns: 150px 150px minmax(200px, 1fr) minmax(160px, 220px) minmax(170px, 220px) auto; gap: 10px; align-items: end; }
+.cem-ac-filtros .cem-campo { height: 38px; width: 100%; box-sizing: border-box; font-size: 0.84rem; }
+.cem-ac-filtros .cc-atualizar { margin-left: 0; height: 38px; white-space: nowrap; }
+.cem-ac-info { font-size: 0.72rem; }
+.cem-ac-scroll { max-height: max(320px, calc(100vh - 300px)); }
+.cem-tabela-ac { font-size: 0.74rem; }
+.cem-tabela-ac td { padding: 6px 8px; vertical-align: middle; }
+.cem-tabela-ac td.cem-data { color: #334155; }
+.cem-tabela-ac td.cem-quebra strong { font-weight: 700; color: #0f3d27; line-height: 1.25; }
+.cem-tabela-ac td.cem-para { white-space: nowrap; overflow: hidden; line-height: 1.3; overflow-wrap: normal; }
+.cem-tabela-ac .cem-para-para, .cem-tabela-ac td.cem-para .cem-cc { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cem-tabela-ac td.cem-para .cem-cc { font-size: 0.66rem; }
+.cem-tabela-ac td.cem-etapas { white-space: nowrap; text-align: center; }
+.cem-tabela-ac thead th:nth-child(n+6):nth-child(-n+9) { text-align: center; }
+.cem-tabela-ac td.cem-etapas .cem-env.cem-env2 { white-space: nowrap; }
+.cem-env.cem-env2 { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-width: 92px; padding: 3px 10px; border-radius: 10px; line-height: 1.2; white-space: nowrap; }
+.cem-env.cem-env2 b { font-size: 0.7rem; font-weight: 800; }
+.cem-env.cem-env2 small { font-size: 0.64rem; font-weight: 600; opacity: 0.85; font-variant-numeric: tabular-nums; }
+@media (max-width: 1200px) { .cem-ac-filtros { grid-template-columns: repeat(3, minmax(0, 1fr)); } .cem-ac-filtros .cc-atualizar { grid-column: 1 / -1; justify-self: end; } }
 .cem-vazio { margin: 8px 0 0; color: #64748b; font-size: 0.85rem; }
 .cem-bloco h4 { margin: 8px 0 4px; color: #105436; font-size: 0.95rem; }
 .cem-bloco p { margin: 0 0 8px; color: #64748b; font-size: 0.8rem; }
@@ -12540,6 +12561,34 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .cem2 .cem-vars-lado { position: sticky; top: 0; }
 .cem2-vars { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .cem2-vars .cem-var { padding: 6px 8px; font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 27/11/2026: janela do template mais larga e mais alta; variáveis com o nome inteiro, botão de copiar e arrastar. */
+.cem-modal:has(.cem2) { padding: 12px; }
+.cem-card:has(.cem2) { width: min(1480px, 98vw); max-height: 97vh; }
+.cem2 .cem-editor { grid-template-columns: minmax(0, 1fr) 330px; }
+.cem2 .cem-vars-lado { max-height: calc(97vh - 150px); overflow: auto; }
+.cem2-vars { grid-template-columns: 1fr; gap: 5px; }
+.cem-var-item { display: flex; align-items: stretch; gap: 4px; }
+.cem-var-item .cem-var { flex: 1 1 auto; min-width: 0; white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; cursor: grab; }
+.cem-var-item .cem-var:active { cursor: grabbing; }
+.cem-var-copiar { flex: 0 0 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #bbf7d0; background: #fff; color: #105436; border-radius: 8px; cursor: pointer; }
+.cem-var-copiar:hover { background: #dcfce7; }
+.cem-var-copiar.is-ok { background: #105436; border-color: #105436; color: #fff; }
+.cem-var-copiar.is-erro { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
+.cem2 #cem-corpo { min-height: 260px; }
+.cem2 .cem-previa { max-height: 420px; overflow: auto; }
+.cem2-sug-texto { max-height: 460px; }
+.cem2-cliente { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding: 8px 10px; border: 1px dashed #c9e8d6; border-radius: 10px; background: #f8fcfa; flex-wrap: wrap; }
+.cem2-cliente label { font-size: 0.72rem; font-weight: 800; color: #105436; white-space: nowrap; }
+.cem2-cliente select.cem-campo { flex: 1 1 360px; min-width: 0; height: 36px; }
+.cem2-cliente .cem2-extrato { height: 36px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 0.78rem; }
+.cem2-ferramentas { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; flex-wrap: wrap; }
+.cem2-ferr { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #0f172a; font-size: 0.76rem; font-weight: 800; cursor: pointer; }
+.cem2-ferr:hover { border-color: #1b8253; background: #f0fdf4; }
+.cem2-ferr-nota { font-size: 0.7rem; color: #64748b; }
+.cem2-tom { display: inline-flex; align-items: center; gap: 6px; }
+.cem2-tom-sug { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: #e7f6ee; color: #105436; }
+.cem2-tom.is-on .cem2-tom-sug { background: rgba(255, 255, 255, 0.2); color: #fff; }
+@media (max-width: 1100px) { .cem2 .cem-editor { grid-template-columns: 1fr; } .cem2 .cem-vars-lado { position: static; max-height: none; } .cem2-vars { grid-template-columns: 1fr 1fr; } }
 .cem2-foot { align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 12px; }
 .cem2-foot .cem2-nota { margin: 0; }
 @media (max-width: 900px) { .cem2-grade, .cem2-grade.cem2-g3 { grid-template-columns: 1fr; } }
