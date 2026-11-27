@@ -1424,8 +1424,11 @@ const ParticipacoesApp = {
     this.companyIds = next;
     this.companyId = next.length === 1 ? next[0] : "";
     this.fileName = "";
+    // Guarda o que já foi lido antes de trocar (o PDF aberto no navegador segue válido enquanto estiver guardado).
+    this.guardarEmpresasLidas();
+    const guardadas = this._empLidas || {};
     this.files.forEach((f) => {
-      if (f.objectUrl) {
+      if (f.objectUrl && !guardadas[String(f.companyId || "")]) {
         try { URL.revokeObjectURL(f.objectUrl); } catch (e) {}
       }
     });
@@ -1441,17 +1444,32 @@ const ParticipacoesApp = {
       return;
     }
     const gen = (this._empGen = (this._empGen || 0) + 1);
+    // Empresas já lidas nesta aba (há menos de 15 minutos) entram na hora, sem buscar de novo; só as outras vão
+    // ao Firebase e ao servidor. Antes, filtrar uma empresa depois de "Todos" recarregava tudo do zero.
+    const faltam = next.filter((cid) => !this.empresaLida(cid));
+    next.filter((cid) => this.empresaLida(cid)).forEach((cid) => {
+      this.files.push(...this._empLidas[cid].files);
+    });
+    this.ordenarArquivos();
+    if (!faltam.length) {
+      this.loading = false;
+      this.parsing = false;
+      this.uploadProgress = "";
+      this.pararCarga();
+      this.render();
+      return;
+    }
     this.loading = true;
-    this.uploadProgress = next.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
+    this.uploadProgress = faltam.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
     this._cargaPct = 18;
     this.render();
     this.iniciarCarga();
-    for (let i = 0; i < next.length; i++) {
+    for (let i = 0; i < faltam.length; i++) {
       if (gen !== this._empGen) return;
-      this.restoreCacheForCompany(next[i]);
-      await this.mergeCloudPeriods(next[i]);
-      await this.loadFilesFromServer(next[i]);
-      this._cargaPct = 18 + Math.round(40 * ((i + 1) / next.length));
+      this.restoreCacheForCompany(faltam[i]);
+      await this.mergeCloudPeriods(faltam[i]);
+      await this.loadFilesFromServer(faltam[i]);
+      this._cargaPct = 18 + Math.round(40 * ((i + 1) / faltam.length));
     }
     if (gen !== this._empGen) return;
     this.loading = false;
@@ -1465,7 +1483,43 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    this.guardarEmpresasLidas();
     this.render();
+  },
+
+  /* Empresas já lidas nesta aba: { [companyId]: { files, em } }. Vale 15 minutos; envio de PDF regrava. */
+  EMP_LIDAS_MS: 15 * 60 * 1000,
+
+  empresaLida(cid) {
+    const x = this._empLidas && this._empLidas[String(cid)];
+    return !!(x && Date.now() - x.em < this.EMP_LIDAS_MS && x.files.length);
+  },
+
+  /** Guarda os períodos já lidos (todos com despesas) de cada empresa na tela. */
+  guardarEmpresasLidas() {
+    if (!this._empLidas) this._empLidas = {};
+    if (this.loading || this.parsing) return;
+    const porEmp = {};
+    (this.files || []).forEach((f) => {
+      const cid = String((f && f.companyId) || "");
+      if (!cid) return;
+      (porEmp[cid] = porEmp[cid] || []).push(f);
+    });
+    Object.keys(porEmp).forEach((cid) => {
+      const lista = porEmp[cid];
+      if (!lista.every((f) => Array.isArray(f.expenses))) return;
+      const atual = this._empLidas[cid];
+      // Mesma lista já guardada: mantém a hora da leitura (não renova o prazo só por trocar o filtro).
+      if (atual && atual.files.length === lista.length) {
+        const ja = new Set(atual.files);
+        if (lista.every((f) => ja.has(f))) return;
+      }
+      this._empLidas[cid] = { files: lista, em: Date.now() };
+    });
+  },
+
+  ordenarArquivos() {
+    this.files.sort((a, b) => String(b.closing || "").localeCompare(String(a.closing || "")) || String(b.name || "").localeCompare(String(a.name || "")));
   },
 
   async onFile(key) {
@@ -1610,6 +1664,10 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    // PDF novo: a empresa deixa de valer como "já lida" e é guardada de novo com o período enviado
+    // (se algum período ainda não foi lido, a próxima troca de filtro busca de novo).
+    if (this._empLidas) delete this._empLidas[String(this.companyId || "")];
+    this.guardarEmpresasLidas();
     if (input) input.value = "";
     this.render();
   },
@@ -2931,9 +2989,26 @@ const ParticipacoesApp = {
       ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
       : `<span class="part-cat-vazio">—</span>`);
     // No chip o nome sai sem o "SPE LTDA"/"LTDA" do fim, para a linha caber no notebook; o nome inteiro fica no título.
+    // Tarja de filtros (27/11/2026, menos poluída): nomes em caixa normal, sem "SPE LTDA"/"LTDA" do fim,
+    // conta com o código em cinza; o nome inteiro fica no título (passar o mouse).
+    const MIUDAS = ["de", "da", "do", "das", "dos", "e"];
+    const caixaNormal = (t) => String(t || "").toLowerCase().split(/(\s+)/).map((p, i) => {
+      if (/^\s+$/.test(p) || !p) return p;
+      if (/^(i|ii|iii|iv|v|vi|vii|viii|ix|x|spe|ltda)$/i.test(p)) return p.toUpperCase();
+      if (i > 0 && MIUDAS.indexOf(p) >= 0) return p;
+      return p.charAt(0).toUpperCase() + p.slice(1);
+    }).join("");
     const curto = (rot) => String(rot || "").replace(/\s+(SPE\s+)?LTDA\.?\s*$/i, "").replace(/\s+SPE\s*$/i, "");
-    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${this.esc(curto(rot))}</span><b>${this.fmt(tot)}</b></button>`;
-    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    const rotSpe = (id, rot) => {
+      const m = curto(rot).match(/^(\S+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(curto(rot)));
+    };
+    const rotConta = (rot) => {
+      const m = String(rot || "").match(/^([\d.]+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(rot));
+    };
+    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${id ? rotSpe(id, rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${id ? rotConta(rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
       const p = this.painel[c.k] || {};
@@ -3025,6 +3100,18 @@ const ParticipacoesApp = {
         .part-soc-just{height:30px;font-size:.68rem;padding:0 6px;}
         .part-soc-quem{font-size:.56rem;margin-top:2px;}
         .part-soc-tirar{padding:4px;}
+        /* Tarja de filtros: um painel, uma linha por filtro (SPE e Conta), chips sem borda. */
+        .part-soc-filtros{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+        .part-soc-linha{display:flex;align-items:center;gap:8px;min-width:0;}
+        .part-soc-linha + .part-soc-linha{border-top:1px solid #edf2ef;}
+        .part-soc-filtros .part-soc-chips-rot{flex:0 0 42px;margin:0;font-size:.6rem;color:#94a3b8;}
+        .part-soc-filtros .part-soc-chips{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;gap:2px;margin:0;padding:3px 0;scrollbar-width:thin;}
+        .part-soc-filtros .part-soc-chip{flex:0 0 auto;height:26px;padding:0 10px;gap:6px;border:0;border-radius:7px;background:transparent;color:#334155;font-size:.68rem;font-weight:600;}
+        .part-soc-filtros .part-soc-chip:hover{background:#e7f1ec;}
+        .part-soc-filtros .part-soc-chip i{font-style:normal;color:#94a3b8;font-weight:700;margin-right:4px;}
+        .part-soc-filtros .part-soc-chip b{font-weight:700;color:#64748b;font-size:.64rem;}
+        .part-soc-filtros .part-soc-chip.is-on{background:#105436;color:#fff;}
+        .part-soc-filtros .part-soc-chip.is-on i,.part-soc-filtros .part-soc-chip.is-on b{color:#d1fae5;}
       </style>
       <div class="part-soc-cards">
         ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCat ? " · " + this.esc((d.catsBase.find((c) => c.id === this.painelCat) || {}).rot || "") : ""))}
@@ -3032,8 +3119,10 @@ const ParticipacoesApp = {
         ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
         ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
       </div>
-      ${d.empsBase.length ? `<div class="part-soc-chips">${chip("", "Todas as SPEs", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div>` : ""}
-      ${d.catsBase.length ?`<div class="part-soc-chips is-contas"><span class="part-soc-chips-rot">Contas Moura Leite</span>${chipCat("", "Todas as contas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div>` : ""}
+      ${d.empsBase.length || d.catsBase.length ? `<div class="part-soc-filtros">
+        ${d.empsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">SPE</span><div class="part-soc-chips">${chip("", "Todas", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div></div>` : ""}
+        ${d.catsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">Conta</span><div class="part-soc-chips">${chipCat("", "Todas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div></div>` : ""}
+      </div>` : ""}
       ${d.credores.length ? `
       <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">
         <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
