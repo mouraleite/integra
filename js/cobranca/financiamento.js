@@ -1214,6 +1214,7 @@ const FinanciamentoApp = {
         parcelasErro = true;
         parcelas = [];
       }
+      if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("esteira")) return;
       if (document.getElementById("fin-alerta")) return;
       if (this.jaCienteHoje(chave)) return;
       if (!lista.length && !parcelas.length && !parcelasErro) return;

@@ -1267,6 +1267,7 @@ const WebroRepasseAviso = {
 
   /* previa = true: aberto pela tela de gestão de pop-ups. Ciente e Checar repasse só fecham, sem gravar. */
   abrir(itens, u, previa) {
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("webro-repasse")) return;
     const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const br = (iso) => { const s = String(iso || ""); return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(8, 10) + "/" + s.slice(5, 7) + "/" + s.slice(0, 4) : "—"; };
     const pop = document.createElement("div");

@@ -1253,6 +1253,7 @@ const DocAssinaturaApp = {
 
   /* previa = true: aberto pela tela de gestão de pop-ups. Fechar só fecha, sem marcar o marco como visto. */
   abrirAlertaPendentes(lista, previa) {
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("documentos")) return;
     if (!lista.length || document.getElementById("docs-pend-alerta")) return;
     const linhas = lista.map((item) => `<p class="docs-pend-item">${this.esc(this.fraseAlerta(item))}</p>`).join("");
     const overlay = document.createElement("div");

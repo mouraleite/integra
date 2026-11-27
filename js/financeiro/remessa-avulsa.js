@@ -177,6 +177,7 @@ const RemessaAvulsaApp = {
   },
 
   abrirAviso(total, quando, previa) {
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("remessa-avulsa")) return;
     let pop = document.getElementById("remav-aviso");
     if (pop) pop.remove();
     pop = document.createElement("div");

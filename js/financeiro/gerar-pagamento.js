@@ -141,6 +141,7 @@ const GerarPagamentoApp = {
   },
 
   avisoFechamento() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("fechamento-pagadoria")) return;
     const u = window.AppState && window.AppState.currentUser;
     if (!this.ehAnalistaPagadoria(u)) return;
     const janela = this.janelaFechamento(new Date());
@@ -269,6 +270,7 @@ const GerarPagamentoApp = {
   },
 
   abrirConferenciaLotes() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("lotes")) return;
     if (!this.usuarioVeConferenciaLotes()) return;
     const hoje = this.iso(new Date());
     if (this.conferenciaJaVista(hoje)) return;
