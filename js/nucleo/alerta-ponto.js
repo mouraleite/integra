@@ -228,6 +228,11 @@ const AlertaPonto = {
 
   /* previa = true: abre o mesmo pop-up pela tela de gestão de pop-ups, sem gravar o ciente. */
   abrir(avisos, previa) {
+    if (!previa && typeof window.PopupAtivo === "function") {
+      avisos = Object.assign({}, avisos);
+      if (!window.PopupAtivo("ponto-sexta")) avisos.sexta = false;
+      if (!window.PopupAtivo("ponto-fechamento")) avisos.mes = null;
+    }
     const partes = [];
     if (avisos.sexta) partes.push("Cheque as pendências no cartão de ponto do time.");
     if (avisos.mes) {

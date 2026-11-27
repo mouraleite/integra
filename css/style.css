@@ -12706,6 +12706,18 @@ div.cem-previa { white-space: normal; }
 .apa-tabela tr:last-child td { border-bottom: 0; }
 .apa-tabela .apa-nome { font-weight: 700; color: #0f172a; }
 .apa-acoes { width: 64px; text-align: right; white-space: nowrap; }
+.apa-situacao { width: 128px; white-space: nowrap; }
+.apa-chave { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.apa-chave input { position: absolute; opacity: 0; width: 0; height: 0; }
+.apa-chave-trilho { position: relative; width: 34px; height: 18px; border-radius: 999px; background: #cbd5e1; transition: background 0.15s; flex: none; }
+.apa-chave-trilho::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.25); transition: left 0.15s; }
+.apa-chave input:checked + .apa-chave-trilho { background: #1b8253; }
+.apa-chave input:checked + .apa-chave-trilho::after { left: 18px; }
+.apa-chave input:focus-visible + .apa-chave-trilho { outline: 2px solid #105436; outline-offset: 2px; }
+.apa-chave-txt { font-size: 0.8rem; font-weight: 700; color: #105436; }
+.apa-tabela tr.is-desligado td { color: #94a3b8; }
+.apa-tabela tr.is-desligado .apa-chave-txt { color: #b91c1c; }
+.apa-chave-fixo { font-size: 0.78rem; color: #64748b; }
 .apa-overlay { position: fixed; inset: 0; z-index: 10050; background: rgba(12, 41, 29, 0.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .apa-preview-wrap { width: min(820px, 100%); max-height: 90vh; overflow: auto; }
 .apa-preview-nota { margin: 0 0 8px; color: #fff; font-size: 0.82rem; }

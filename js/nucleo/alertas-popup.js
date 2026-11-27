@@ -223,21 +223,113 @@ const AlertasPopupApp = {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
+  /* ---------- Liga/desliga ----------
+     A lista dos pop-ups desligados fica em config/popups_desligados ({ ids: [...] }) e numa cópia no navegador,
+     para o aviso já saber na entrada. Cada pop-up que respeita a chave chama window.PopupAtivo(id) antes de abrir
+     sozinho (a prévia desta tela continua abrindo). Sem nada gravado, vale DESLIGADOS_PADRAO. */
+  DESLIGADOS_PADRAO: ["lotes"],
+  // Pop-ups que já consultam a chave. Os demais aparecem como "Sempre ligado".
+  COM_CHAVE: ["lotes", "fechamento-pagadoria", "remessa-avulsa", "titulos-incompletos", "webro-repasse", "documentos", "esteira", "ponto-sexta", "ponto-fechamento", "home-office"],
+  CACHE: "crm_popups_desligados_v1",
+  _desligados: null,
+  _carregando: null,
+
+  desligados() {
+    if (!this._desligados) {
+      let ids = null;
+      try { ids = JSON.parse(localStorage.getItem(this.CACHE) || "null"); } catch (e) {}
+      this._desligados = new Set(Array.isArray(ids) ? ids : this.DESLIGADOS_PADRAO);
+    }
+    return this._desligados;
+  },
+
+  ativo(id) {
+    return !this.desligados().has(String(id));
+  },
+
+  guardarCache() {
+    try { localStorage.setItem(this.CACHE, JSON.stringify([...this.desligados()])); } catch (e) {}
+  },
+
+  async esperarBanco() {
+    for (let i = 0; i < 40; i++) {
+      if (window.DadosNucleo && typeof window.DadosNucleo.lerConfig === "function") return "sb";
+      const fc = window.firebaseCollections;
+      if (window.firebaseDb && fc && fc.getDoc && fc.doc) return "fb";
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return "";
+  },
+
+  async carregar() {
+    if (this._carregando) return this._carregando;
+    this._carregando = (async () => {
+      try {
+        const banco = await this.esperarBanco();
+        let snap = null;
+        if (banco === "sb") snap = await window.DadosNucleo.lerConfig("popups_desligados");
+        else if (banco === "fb") snap = await window.firebaseCollections.getDoc(window.firebaseCollections.doc(window.firebaseDb, "config", "popups_desligados"));
+        else return;
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        const ids = existe ? ((snap.data() || {}).ids) : null;
+        this._desligados = new Set(Array.isArray(ids) ? ids.map(String) : this.DESLIGADOS_PADRAO);
+        this.guardarCache();
+      } catch (e) {
+        // Antes do login a leitura pode ser recusada: tenta de novo mais tarde (vale a cópia do navegador).
+        console.warn("[Alertas pop-up] leitura do liga/desliga", e);
+        this._carregando = null;
+        this._tentativas = (this._tentativas || 0) + 1;
+        if (this._tentativas < 6) setTimeout(() => this.carregar(), 15000);
+      }
+    })();
+    return this._carregando;
+  },
+
+  async alternar(id, ligar) {
+    const set = this.desligados();
+    if (ligar) set.delete(String(id)); else set.add(String(id));
+    this.guardarCache();
+    this.abrir();
+    try {
+      const banco = await this.esperarBanco();
+      const dados = { ids: [...set], atualizadoEm: new Date().toISOString(), por: (window.currentUser && (window.currentUser.email || window.currentUser.name)) || "" };
+      if (banco === "sb") await window.DadosNucleo.gravarConfig("popups_desligados", dados);
+      else if (banco === "fb") await window.firebaseCollections.setDoc(window.firebaseCollections.doc(window.firebaseDb, "config", "popups_desligados"), dados);
+      else throw new Error("banco indisponível");
+    } catch (e) {
+      alert("Não consegui gravar no banco do Integra. A mudança vale só neste navegador por enquanto.");
+    }
+  },
+
   abrir() {
     const root = document.getElementById("alertas-popup-root");
     if (!root) return;
-    const linhas = this.itens.map((item) => `<tr>
+    const linhas = this.itens.map((item) => {
+      const temChave = this.COM_CHAVE.indexOf(item.id) >= 0;
+      const ligado = !temChave || this.ativo(item.id);
+      const chave = temChave
+        ? `<label class="apa-chave" title="${ligado ? "Ligado: abre sozinho pela regra" : "Desligado: não abre sozinho"}">
+            <input type="checkbox" ${ligado ? "checked" : ""} onchange="AlertasPopupApp.alternar('${item.id}', this.checked)">
+            <span class="apa-chave-trilho"></span><span class="apa-chave-txt">${ligado ? "Ligado" : "Desligado"}</span></label>`
+        : `<span class="apa-chave-fixo">Sempre ligado</span>`;
+      return `<tr class="${ligado ? "" : "is-desligado"}">
       <td class="apa-nome">${this.esc(item.nome)}</td>
       <td>${this.esc(item.quando)}</td>
       <td>${this.esc(item.logica)}</td>
       <td>${this.esc(item.quem)}</td>
+      <td class="apa-situacao">${chave}</td>
       <td class="apa-acoes">
         <button type="button" class="tvig-ico" title="Visualizar" onclick="AlertasPopupApp.visualizar('${item.id}')">
           <i data-lucide="eye" style="width:15px;height:15px;"></i>
         </button>
       </td>
-    </tr>`).join("");
-    root.innerHTML = `<p class="apa-lead">Cada linha é um pop-up que abre sozinho quando a regra abaixo se cumpre. Visualizar mostra o aviso como a pessoa recebe, sem gravar ciente e sem disparar a regra.</p>
+    </tr>`;
+    }).join("");
+    if (!this._lidoNaTela) {
+      this._lidoNaTela = true;
+      this.carregar().then(() => { if (document.getElementById("alertas-popup-root")) this.abrir(); });
+    }
+    root.innerHTML = `<p class="apa-lead">Cada linha é um pop-up que abre sozinho quando a regra abaixo se cumpre. Visualizar mostra o aviso como a pessoa recebe, sem gravar ciente e sem disparar a regra. A coluna Situação liga ou desliga o pop-up para todos os usuários.</p>
       <div style="overflow:auto;">
         <table class="apa-tabela">
           <thead>
@@ -246,6 +338,7 @@ const AlertasPopupApp = {
               <th>Quando abre</th>
               <th>Lógica</th>
               <th>Quem recebe</th>
+              <th class="apa-situacao">Situação</th>
               <th class="apa-acoes">Ações</th>
             </tr>
           </thead>
@@ -308,3 +401,6 @@ const AlertasPopupApp = {
 };
 
 window.AlertasPopupApp = AlertasPopupApp;
+/** true = o pop-up pode abrir sozinho. Usado pelos módulos antes de abrir o aviso automático. */
+window.PopupAtivo = function (id) { return AlertasPopupApp.ativo(id); };
+AlertasPopupApp.carregar();
