@@ -97,36 +97,32 @@ const RemessaAvulsaApp = {
     const root = document.getElementById("remessa-avulsa-root");
     if (!root) return;
     const st = this.state;
+    // 27/11/2026: tela no padrão do Integra. Filtros, busca e ações numa linha; regra em nota recolhível;
+    // KPIs compactos com o status do batimento; tabela cc-table (cabeçalho verde fixo, zebra, valores alinhados).
     root.innerHTML = `
-      <p style="margin:0 0 14px;color:#64748b;font-size:0.84rem;max-width:820px;">
-        Parcelas do período que ainda não têm boleto nem recebimento, com situação Normal e condição Parcelas Mensais ou Parcela Acordo.
-        Entrada, sinal e parcela única não entram. Cliente com financiamento em aberto também fica de fora.
-        O batimento do mês corrente roda todo dia às 7h. A conta é a cadastrada no centro de custo.
-      </p>
-      <div class="search-filter-panel" style="margin-bottom:14px;">
-        <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+      <div class="remav-painel">
+        <div class="remav-filtros">
           <div id="remav-emp"></div>
-          <label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;font-weight:700;color:#64748b;text-transform:uppercase;">
-            Início
-            <input type="date" id="remav-de" class="form-control" value="${this.esc(st.de)}" style="height:38px;background:#fff;">
-          </label>
-          <label style="display:flex;flex-direction:column;gap:4px;font-size:0.7rem;font-weight:700;color:#64748b;text-transform:uppercase;">
-            Fim
-            <input type="date" id="remav-ate" class="form-control" value="${this.esc(st.ate)}" style="height:38px;background:#fff;">
-          </label>
-          <button type="button" class="btn btn-primary" id="remav-analisar" style="height:38px;font-weight:600;">Analisar</button>
-          <button type="button" class="btn btn-excel" id="remav-excel" title="Exportar tabela atual para Excel" ${st.linhas.length ? "" : "disabled"}>
-            <i data-lucide="download" style="width:14px;height:14px;"></i> Exportar em Excel
-          </button>
+          <label class="remav-campo">Início<input type="date" id="remav-de" value="${this.esc(st.de)}"></label>
+          <label class="remav-campo">Fim<input type="date" id="remav-ate" value="${this.esc(st.ate)}"></label>
+          <label class="remav-campo remav-busca">Buscar<input type="search" id="remav-busca" placeholder="Título, cliente ou empreendimento" value="${this.esc(st.busca)}"></label>
+          <div class="remav-acoes">
+            <button type="button" class="btn btn-primary cc-atualizar" id="remav-analisar"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Analisar</button>
+            <button type="button" class="btn btn-excel" id="remav-excel" title="Exportar a tabela atual para Excel" ${st.linhas.length ? "" : "disabled"}><i data-lucide="download" style="width:14px;height:14px;"></i> Exportar em Excel</button>
+          </div>
         </div>
-        <div style="margin-top:12px;position:relative;">
-          <input type="text" id="remav-busca" class="search-input" placeholder="Pesquise pelo título, cliente ou empreendimento..." value="${this.esc(st.busca)}" style="font-style:italic;width:100%;box-sizing:border-box;">
-        </div>
+        <details class="remav-regra">
+          <summary><i data-lucide="info" style="width:13px;height:13px;"></i> Quais parcelas entram?</summary>
+          <p>Parcelas do período que ainda não têm boleto nem recebimento, com situação Normal e condição Parcelas Mensais ou Parcela Acordo. Entrada, sinal e parcela única não entram. Cliente com financiamento em aberto também fica de fora. O batimento do mês corrente roda todo dia às 7h. A conta é a cadastrada no centro de custo.</p>
+        </details>
       </div>
-      <div id="remav-kpis" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;"></div>
-      <div id="remav-status"></div>
-      <div class="table-container" style="max-height:calc(100vh - 280px);overflow:auto;">
-        <table class="custom-table" id="remav-tabela">
+      <div class="remav-resumo">
+        <div id="remav-kpis" class="remav-kpis"></div>
+        <div id="remav-status" class="remav-status"></div>
+      </div>
+      <div class="cc-scroll remav-scroll">
+        <table class="cc-table remav-tabela" id="remav-tabela">
+          <colgroup><col style="width:9%"><col style="width:16%"><col style="width:7%"><col style="width:17%"><col style="width:7%"><col style="width:7%"><col style="width:8%"><col><col style="width:9%"></colgroup>
           <thead><tr id="remav-head"></tr></thead>
           <tbody id="remav-body"></tbody>
         </table>
@@ -255,40 +251,33 @@ const RemessaAvulsaApp = {
     const rows = this.visiveis();
     const titulos = new Set(rows.map((r) => r.titulo));
     const clientes = new Set(rows.map((r) => r.clienteId || r.cliente));
-    const card = (rotulo, valor) => `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;min-width:120px;">
-        <div style="font-size:0.68rem;font-weight:800;color:#64748b;letter-spacing:0.3px;text-transform:uppercase;">${rotulo}</div>
-        <div style="font-size:1.25rem;font-weight:800;color:#105436;margin-top:2px;">${valor}</div>
-      </div>`;
-    box.innerHTML = card("Parcelas", rows.length) + card("Títulos", titulos.size) + card("Clientes", clientes.size);
+    const card = (rotulo, valor, ico) => `
+      <div class="remav-kpi"><span class="remav-kpi-ico"><i data-lucide="${ico}"></i></span><div><label>${rotulo}</label><strong>${Number(valor || 0).toLocaleString("pt-BR")}</strong></div></div>`;
+    box.innerHTML = card("Parcelas", rows.length, "list") + card("Títulos", titulos.size, "file-text") + card("Clientes", clientes.size, "users");
+    if (window.lucide) window.lucide.createIcons();
   },
 
   pintarStatus() {
     const box = document.getElementById("remav-status");
     if (!box) return;
+    // O carregamento aparece dentro da tabela (pintarTabela); aqui fica só a linha de status.
     if (this.state.loading) {
-      const w = Math.max(8, Math.min(100, this.state.progresso || 8));
-      box.innerHTML = `
-        <div class="ml-load" style="margin:12px 0 16px;">
-          <div class="loading-spinner" aria-hidden="true"></div>
-          <div class="loading-status-text">${this.esc(this.state.status || "Analisando…")}</div>
-          <div class="ml-load-track"><div class="loading-progress-bar" style="width:${w}%"></div></div>
-        </div>`;
-      return;
+      box.innerHTML = "";
+    } else if (this.state.erro) {
+      box.innerHTML = `<span class="remav-tag is-erro"><i data-lucide="alert-triangle" style="width:13px;height:13px;"></i> ${this.esc(this.state.erro)}</span>`;
+    } else if (this.state.origem === "7h" && this.state.batimentoEm) {
+      box.innerHTML = `<span class="remav-tag"><i data-lucide="clock" style="width:13px;height:13px;"></i> Batimento das 7h · ${this.esc(this.state.batimentoEm)}. Analisar lê o Sienge de novo.</span>`;
+    } else {
+      box.innerHTML = "";
     }
-    if (this.state.erro) {
-      box.innerHTML = `<p style="margin:8px 0 12px;color:#b91c1c;font-size:0.84rem;">${this.esc(this.state.erro)}</p>`;
-      return;
-    }
-    if (this.state.origem === "7h" && this.state.batimentoEm) {
-      box.innerHTML = `<p style="margin:0 0 12px;color:#64748b;font-size:0.84rem;">Batimento das 7h · ${this.esc(this.state.batimentoEm)}. Analisar lê o Sienge de novo.</p>`;
-      return;
-    }
-    box.innerHTML = "";
+    if (window.lucide) window.lucide.createIcons();
   },
 
   th(col) {
-    return `<th onclick="RemessaAvulsaApp.ordenar('${col.id}')" style="cursor:pointer;user-select:none;">${this.esc(col.label)} <i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i></th>`;
+    const centro = ["cc", "titulo", "parcela", "clienteId", "vencimento"].indexOf(col.id) >= 0;
+    const ativo = this.state.sort === col.id;
+    const ico = ativo ? (this.state.dir === "desc" ? "chevron-down" : "chevron-up") : "chevrons-up-down";
+    return `<th class="${centro ? "is-center" : ""}${ativo ? " is-sorted" : ""}" onclick="RemessaAvulsaApp.ordenar('${col.id}')" style="cursor:pointer;user-select:none;">${this.esc(col.label === "Centro de Custo" ? "C. custo" : col.label)} <i data-lucide="${ico}" style="width:11px;height:11px;vertical-align:-1px;opacity:${ativo ? 1 : 0.6};"></i></th>`;
   },
 
   pintarTabela() {
@@ -297,24 +286,30 @@ const RemessaAvulsaApp = {
     if (!head || !body) return;
     head.innerHTML = this.COLS.map((c) => this.th(c)).join("");
     if (this.state.loading) {
-      body.innerHTML = "";
+      const w = Math.max(8, Math.min(100, this.state.progresso || 8));
+      body.innerHTML = `<tr><td colspan="9" class="remav-vazio">
+        <div class="ml-load" style="margin:8px auto;">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div class="loading-status-text">${this.esc(this.state.status || "Analisando…")}</div>
+          <div class="ml-load-track"><div class="loading-progress-bar" style="width:${w}%"></div></div>
+        </div></td></tr>`;
     } else if (!this.state.analisou) {
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:28px;color:#64748b;">Escolha o período e clique em Analisar.</td></tr>`;
+      body.innerHTML = `<tr><td colspan="9" class="remav-vazio">Escolha o período e clique em Analisar.</td></tr>`;
     } else {
       const rows = this.visiveis();
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:28px;color:#64748b;">Nenhuma parcela elegível nesse período.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="9" class="remav-vazio">Nenhuma parcela elegível nesse período.</td></tr>`;
       } else {
         body.innerHTML = rows.map((r) => `<tr>
-          <td>${this.esc(r.conta || "—")}</td>
-          <td>${this.esc(r.empresa)}</td>
-          <td style="text-align:center;">${this.esc(r.cc)}</td>
-          <td>${this.esc(r.empreendimento)}</td>
-          <td style="text-align:center;">${this.esc(r.titulo)}</td>
-          <td style="text-align:center;">${this.esc(r.parcela)}</td>
-          <td style="text-align:center;">${this.esc(r.clienteId)}</td>
-          <td>${this.esc(r.cliente)}</td>
-          <td style="text-align:center;">${this.esc(this.fmtData(r.vencimento))}</td>
+          <td title="${this.esc(r.conta || "")}">${this.esc(r.conta || "—")}</td>
+          <td title="${this.esc(r.empresa)}">${this.esc(r.empresa)}</td>
+          <td class="is-center">${this.esc(r.cc)}</td>
+          <td title="${this.esc(r.empreendimento)}">${this.esc(r.empreendimento)}</td>
+          <td class="is-center">${this.esc(r.titulo)}</td>
+          <td class="is-center">${this.esc(r.parcela)}</td>
+          <td class="is-center">${this.esc(r.clienteId)}</td>
+          <td title="${this.esc(r.cliente)}">${this.esc(r.cliente)}</td>
+          <td class="is-center">${this.esc(this.fmtData(r.vencimento))}</td>
         </tr>`).join("");
       }
     }
@@ -338,6 +333,15 @@ const RemessaAvulsaApp = {
     this.state.status = texto;
     this.state.progresso = progresso;
     this.pintarStatus();
+    // O progresso aparece dentro da tabela: atualiza só a linha de carga, sem refazer o cabeçalho.
+    const txt = document.querySelector("#remav-body .loading-status-text");
+    const bar = document.querySelector("#remav-body .loading-progress-bar");
+    if (txt && bar) {
+      txt.textContent = texto || "Analisando…";
+      bar.style.width = Math.max(8, Math.min(100, progresso || 8)) + "%";
+    } else if (this.state.loading) {
+      this.pintarTabela();
+    }
   },
 
   dias(iso) {

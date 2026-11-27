@@ -12832,3 +12832,34 @@ div.cem-previa { white-space: normal; }
 .ctit-selo.is-aberto { background: #fdecec; color: #b91c1c; }
 @media (max-width: 1000px) { .ctit-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ctit-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .ctit-kpis, .ctit-grade { grid-template-columns: 1fr; } .ctit-input { width: 100%; } .ctit-linha { flex-wrap: wrap; } }
+
+/* Remessa avulsa (27/11/2026): tela no padrão do Integra. */
+#remessa-avulsa-root { display: flex; flex-direction: column; gap: 12px; }
+.remav-painel { background: #fff; border: 1px solid #e6eeea; border-radius: 14px; padding: 14px 16px 10px; box-shadow: 0 1px 2px rgba(16, 84, 54, 0.04); }
+.remav-filtros { display: grid; grid-template-columns: minmax(220px, 300px) 150px 150px minmax(200px, 1fr) auto; gap: 12px; align-items: end; }
+.remav-filtros #remav-emp .ml-emp-filter { width: 100%; max-width: none; min-width: 0; }
+.remav-campo { display: flex; flex-direction: column; gap: 6px; font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; min-width: 0; }
+.remav-campo input { height: 40px; width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; color: #0f172a; font-size: 0.88rem; font-weight: 500; text-transform: none; letter-spacing: 0; font-family: inherit; }
+.remav-campo input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
+.remav-acoes { display: flex; gap: 8px; align-items: center; }
+.remav-acoes .btn { height: 40px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 700; }
+.remav-regra { margin-top: 10px; font-size: 0.74rem; color: #64748b; }
+.remav-regra summary { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: #475569; list-style: none; }
+.remav-regra summary::-webkit-details-marker { display: none; }
+.remav-regra p { margin: 6px 0 0; max-width: 900px; line-height: 1.45; }
+.remav-resumo { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.remav-kpis { display: flex; gap: 10px; flex-wrap: wrap; }
+.remav-kpis:empty { display: none; }
+.remav-kpi { display: flex; align-items: center; gap: 10px; min-width: 150px; padding: 8px 14px 8px 10px; background: #fff; border: 1px solid #e6eeea; border-top: 3px solid #1b8253; border-radius: 12px; }
+.remav-kpi-ico { width: 32px; height: 32px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: #e7f6ee; color: #105436; }
+.remav-kpi-ico svg { width: 16px; height: 16px; }
+.remav-kpi label { display: block; font-size: 0.62rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.remav-kpi strong { display: block; font-size: 1.15rem; color: #105436; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.remav-status:empty { display: none; }
+.remav-tag { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 0.74rem; font-weight: 600; }
+.remav-tag.is-info { background: #e7f6ee; color: #105436; }
+.remav-tag.is-erro { background: #fee2e2; color: #991b1b; }
+.remav-scroll { max-height: max(320px, calc(100vh - 330px)); }
+.cc-table.remav-tabela th.is-sorted { background: #0f6b45; }
+.cc-table.remav-tabela td.remav-vazio { text-align: center; padding: 30px; white-space: normal; color: #64748b; }
+@media (max-width: 1200px) { .remav-filtros { grid-template-columns: 1fr 1fr 1fr; } .remav-acoes { grid-column: 1 / -1; justify-content: flex-end; } }
