@@ -316,7 +316,7 @@
             <div class="antc-subs">
               ${abaBtn("analitico", "Analítico", "table-2")}
               ${abaBtn("indicadores", "Indicadores", "bar-chart-3")}
-              ${abaBtn("origem", "Financiamento × próprios", "landmark")}
+              ${abaBtn("origem", "Financiamento × Recursos Próprios", "landmark")}
             </div>
             <div class="antc-cab-acoes">
               <span class="antc-atualizado" title="Base salva no Integra. O batimento das 7h relê no Sienge os últimos 7 dias; o histórico desde jan/2024 não muda.">${atualizado ? "Base de " + esc(atualizado) : ""}</span>
@@ -477,7 +477,7 @@
       const box = document.getElementById("antc-corpo");
       if (!box) return;
       if (this.state.carregando) {
-        box.innerHTML = `<div class="ml-load"><div class="loading-spinner" aria-hidden="true"></div><span class="loading-status-text" id="antc-progresso">Lendo as antecipações salvas…</span></div>`;
+        box.innerHTML = `<div class="ml-load antc-load" role="status" aria-live="polite"><div class="loading-spinner" aria-hidden="true"></div><span class="loading-status-text" id="antc-progresso">Lendo as antecipações salvas…</span><div class="ml-load-track"><div class="loading-progress-bar"></div></div></div>`;
         return;
       }
       if (this.state.erro) {
@@ -687,10 +687,10 @@
             if (this.state.aba === "origem") this.render();
           });
         }
-        if (!this._registroTentado || this._lendoRegistro) return `<div class="ml-load"><div class="loading-spinner" aria-hidden="true"></div><div class="loading-status-text">Lendo o Registro (cadastro das unidades) e a Posição de estoque…</div></div>`;
+        if (!this._registroTentado || this._lendoRegistro) return `<div class="ml-load antc-load" role="status" aria-live="polite"><div class="loading-spinner" aria-hidden="true"></div><div class="loading-status-text">Lendo o Registro (cadastro das unidades) e a Posição de estoque…</div><div class="ml-load-track"><div class="loading-progress-bar"></div></div></div>`;
         return `<div class="antc-aviso">${!o.temRegistro ? "O Registro ainda não tem o relatório Unidades por Empreendimento. Suba o arquivo em Relacionamento > Registro." : "A Posição de estoque ainda não está disponível. Abra Comercial > Posição de estoque e conclua o batimento."}</div>`;
       }
-      const ROT = { fin: "Financiamento", prop: "Recursos próprios", conf: "Conferir" };
+      const ROT = { fin: "Financiamento", prop: "Recursos Próprios", conf: "Conferir" };
       const tot = { fin: { v: 0, n: 0, t: new Set() }, prop: { v: 0, n: 0, t: new Set() }, conf: { v: 0, n: 0, t: new Set() } };
       const porMes = {};
       const porEmp = {};
@@ -712,52 +712,74 @@
         somar(porCc, String(ev.cc || ""), ev.cc ? `${ev.cc} - ${ev.ccNome || ""}` : "Sem centro de custo", org, v);
       });
       const total = tot.fin.v + tot.prop.v + tot.conf.v;
+      const temConf = tot.conf.v > 0.009 || tot.conf.n > 0;
       const pctDe = (v) => (total > 0 ? (v / total) * 100 : 0);
-      const card = (org, cls) => `<div class="antc-kpi ${cls}"><span>${ROT[org]}</span><b>${moeda(tot[org].v)}</b><small>${pct(pctDe(tot[org].v))} do recebido · ${tot[org].n.toLocaleString("pt-BR")} antecipações · ${tot[org].t.size.toLocaleString("pt-BR")} contrato(s)</small></div>`;
+      const num = (n) => n.toLocaleString("pt-BR");
+      // Cards: cor da origem na borda e barra com a fatia do recebido.
+      const card = (org) => `<div class="antc-kpi antc-org antc-org-${org}${org === "conf" && tot.conf.v > 0.009 ? " is-alerta" : ""}">
+          <span>${ROT[org]}</span><b>${moeda(tot[org].v)}</b>
+          <div class="antc-org-trilho"><i style="width:${Math.min(100, pctDe(tot[org].v)).toFixed(1)}%"></i></div>
+          <small><strong>${pct(pctDe(tot[org].v))}</strong> do recebido · ${num(tot[org].n)} antecipações · ${num(tot[org].t.size)} contrato(s)</small></div>`;
+      // Faixa única com a divisão do recebido (financiamento x recursos próprios x conferir).
+      const faixa = total > 0 ? `<div class="antc-org-faixa">${["fin", "prop", "conf"].filter((k) => tot[k].v > 0.009).map((k) =>
+        `<div class="antc-org-seg is-${k}" style="flex:${tot[k].v}" title="${ROT[k]}: ${moeda(tot[k].v)} (${pct(pctDe(tot[k].v))})">${pctDe(tot[k].v) >= 12 ? pct(pctDe(tot[k].v)) : ""}</div>`).join("")}</div>` : "";
       const meses = this.mesesAtivos().slice(-12);
       const maxMes = Math.max(1, ...meses.map((m) => { const x = porMes[m] || {}; return (x.fin || 0) + (x.prop || 0) + (x.conf || 0); }));
       const mi = (n) => (Math.abs(n) >= 1e6 ? (n / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + " Mi" : (n / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mil");
+      const ALT = 170;
       const barras = meses.map((m) => {
         const x = porMes[m] || { fin: 0, prop: 0, conf: 0 };
         const soma = x.fin + x.prop + x.conf;
-        const h = (v) => Math.round((v / maxMes) * 140);
-        return `<div class="antc-barra" title="${esc(MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(2, 4))}: financiamento ${moeda(x.fin)} · recursos próprios ${moeda(x.prop)}${x.conf ? " · conferir " + moeda(x.conf) : ""}">
+        const hTot = Math.max(2, Math.round((soma / maxMes) * ALT));
+        const seg = (k) => {
+          if (!x[k]) return "";
+          const h = soma ? (x[k] / soma) * hTot : 0;
+          const p = soma ? (x[k] / soma) * 100 : 0;
+          return `<div class="antc-pilha-${k}" style="flex:${x[k]}">${h >= 16 && p >= 8 ? `<em>${Math.round(p)}%</em>` : ""}</div>`;
+        };
+        const pf = soma ? (x.fin / soma) * 100 : 0;
+        const rot = MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(2, 4);
+        return `<div class="antc-barra" title="${esc(rot)}: total ${moeda(soma)} · financiamento ${moeda(x.fin)} · recursos próprios ${moeda(x.prop)}${x.conf ? " · conferir " + moeda(x.conf) : ""}">
           <span class="antc-barra-val">${soma ? mi(soma) : ""}</span>
-          <div class="antc-pilha" style="height:${Math.max(2, h(soma))}px">
-            ${x.conf ? `<div class="antc-pilha-conf" style="flex:${x.conf}"></div>` : ""}
-            ${x.fin ? `<div class="antc-pilha-fin" style="flex:${x.fin}"></div>` : ""}
-            ${x.prop ? `<div class="antc-pilha-prop" style="flex:${x.prop}"></div>` : ""}
-          </div>
-          <span class="antc-barra-rot">${esc(MESES_NOME[Number(m.slice(5, 7)) - 1] + "/" + m.slice(2, 4))}</span>
-          <span class="antc-barra-var">${soma ? pct((x.fin / soma) * 100) + " fin." : ""}</span>
+          <div class="antc-pilha" style="height:${hTot}px">${seg("conf")}${seg("fin")}${seg("prop")}</div>
+          <span class="antc-barra-rot">${esc(rot)}</span>
+          <span class="antc-pill-fin${pf >= 0.05 ? "" : " is-zero"}">${soma ? pct(pf) + " fin." : "—"}</span>
         </div>`;
       }).join("");
       const tabela = (titulo, grupos) => {
         const linhas = Object.values(grupos).map((x) => Object.assign(x, { total: x.fin + x.prop + x.conf })).sort((a, b) => b.total - a.total);
-        return `<div class="antc-ind-tab"><div class="antc-ind-tit">${esc(titulo)}</div>
-          <div class="cc-scroll" style="max-height:300px;"><table class="cc-table">
-            <colgroup><col><col style="width:108px"><col style="width:108px"><col style="width:90px"><col style="width:108px"><col style="width:62px"></colgroup>
-            <thead><tr><th>Nome</th><th class="is-right">Financiamento</th><th class="is-right">Rec. próprios</th><th class="is-right">Conferir</th><th class="is-right">Total</th><th class="is-right">% fin.</th></tr></thead>
-            <tbody>${linhas.map((x) => `<tr><td title="${esc(x.nome)}">${esc(x.nome)}</td><td class="is-right">${moeda(x.fin)}</td><td class="is-right">${moeda(x.prop)}</td><td class="is-right">${x.conf ? moeda(x.conf) : "—"}</td><td class="is-right">${moeda(x.total)}</td><td class="is-right">${x.total ? pct((x.fin / x.total) * 100) : "—"}</td></tr>`).join("")
-              || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}</tbody>
+        const soma = linhas.reduce((s, x) => ({ fin: s.fin + x.fin, prop: s.prop + x.prop, conf: s.conf + x.conf, total: s.total + x.total }), { fin: 0, prop: 0, conf: 0, total: 0 });
+        const val = (v, cls) => (Math.abs(v) >= 0.005 ? `<span class="${cls}">${moeda(v)}</span>` : `<span class="antc-zero">—</span>`);
+        const barraFin = (x) => {
+          const p = x.total ? (x.fin / x.total) * 100 : 0;
+          return `<div class="antc-mini"><div class="antc-mini-trilho"><i style="width:${p.toFixed(1)}%"></i></div><span>${x.total ? pct(p) : "—"}</span></div>`;
+        };
+        const cols = temConf ? 6 : 5;
+        return `<div class="antc-ind-tab"><div class="antc-ind-tit">${esc(titulo)} <small>${num(linhas.length)}</small></div>
+          <div class="cc-scroll" style="max-height:340px;"><table class="cc-table antc-org-tab">
+            <colgroup><col><col style="width:112px"><col style="width:120px">${temConf ? `<col style="width:90px">` : ""}<col style="width:112px"><col style="width:118px"></colgroup>
+            <thead><tr><th>Nome</th><th class="is-right">Financiamento</th><th class="is-right">Rec. Próprios</th>${temConf ? `<th class="is-right">Conferir</th>` : ""}<th class="is-right">Total</th><th>% financiamento</th></tr></thead>
+            <tbody>${linhas.map((x) => `<tr><td title="${esc(x.nome)}">${esc(x.nome)}</td><td class="is-right">${val(x.fin, "antc-v-fin")}</td><td class="is-right">${val(x.prop, "antc-v-prop")}</td>${temConf ? `<td class="is-right">${val(x.conf, "antc-v-conf")}</td>` : ""}<td class="is-right"><b>${moeda(x.total)}</b></td><td>${barraFin(x)}</td></tr>`).join("")
+              || `<tr><td colspan="${cols}" style="text-align:center;padding:30px;">Nenhuma antecipação para exibir.</td></tr>`}</tbody>
+            ${linhas.length ? `<tfoot><tr><td>Total</td><td class="is-right">${moeda(soma.fin)}</td><td class="is-right">${moeda(soma.prop)}</td>${temConf ? `<td class="is-right">${moeda(soma.conf)}</td>` : ""}<td class="is-right">${moeda(soma.total)}</td><td>${soma.total ? pct((soma.fin / soma.total) * 100) : "—"}</td></tr></tfoot>` : ""}
           </table></div></div>`;
       };
       const reg = R.state || {};
       const dReg = reg.quando ? new Date(reg.quando).toLocaleDateString("pt-BR") : "—";
       return `
         <div class="antc-kpis antc-kpis-4">
-          <div class="antc-kpi"><span>Antecipação recebida</span><b>${moeda(total)}</b><small>${lista.length.toLocaleString("pt-BR")} antecipações no filtro</small></div>
-          ${card("fin", "antc-org-fin")}
-          ${card("prop", "antc-org-prop")}
-          ${card("conf", tot.conf.v > 0.009 ? "is-alerta" : "")}
+          <div class="antc-kpi antc-org antc-org-tot"><span>Antecipação recebida</span><b>${moeda(total)}</b>${faixa}<small>${num(lista.length)} antecipações no filtro</small></div>
+          ${card("fin")}
+          ${card("prop")}
+          ${temConf ? card("conf") : ""}
         </div>
         <div class="antc-graficos sem-ano">
           <div class="antc-graf" style="grid-column:1 / -1;"><div class="antc-ind-tit antc-tit-linha">Mês a mês · origem dos recursos
-            <div class="antc-legenda"><span><i class="antc-leg-cor"></i> Financiamento</span><span><i class="antc-leg-cor is-prop"></i> Recursos próprios</span><span><i class="antc-leg-cor is-conf"></i> Conferir</span></div></div>
-            <div class="antc-barras">${barras}</div></div>
+            <div class="antc-legenda"><span><i class="antc-leg-cor"></i> Financiamento</span><span><i class="antc-leg-cor is-prop"></i> Recursos Próprios</span>${temConf ? `<span><i class="antc-leg-cor is-conf"></i> Conferir</span>` : ""}</div></div>
+            <div class="antc-barras antc-barras-org">${barras}</div></div>
         </div>
         <div class="antc-ind-tabs">${tabela("Por empresa", porEmp)}${tabela("Por centro de custo", porCc)}</div>
-        <p class="antc-nota">Financiamento = antecipação do lote quitado com financiamento (letra <b>F</b> no Registro e volume recebido na data da quitação), feita até ${this.DIAS_QUITACAO} dias da data da quitação. Conferir = lote com <b>F</b> sem volume na baixa. O resto é recurso próprio. Registro: ${esc(reg.arquivo || "—")} de ${esc(dReg)}.</p>`;
+        <p class="antc-nota">Financiamento = antecipação do lote quitado com financiamento (letra <b>F</b> no Registro e volume recebido na data da quitação), feita até ${this.DIAS_QUITACAO} dias da data da quitação. Conferir = lote com <b>F</b> sem volume na baixa. O resto é Recursos Próprios. Registro: ${esc(reg.arquivo || "—")} de ${esc(dReg)}.</p>`;
     },
 
     // ---------- Aba Indicadores ----------
@@ -1056,11 +1078,11 @@
       .antc-legenda span { display:inline-flex; align-items:center; gap:4px; }
       .antc-leg-cor { display:inline-block; width:10px; height:10px; border-radius:2px; background:#1b8253; }
       .antc-leg-cor.is-ant { background:#cbd5e1; }
-      .antc-leg-cor.is-prop { background:#60a5fa; }
+      .antc-leg-cor.is-prop { background:#3b82f6; }
       .antc-leg-cor.is-conf { background:#f59e0b; }
       .antc-pilha { width:60%; display:flex; flex-direction:column; border-radius:3px 3px 0 0; overflow:hidden; }
       .antc-pilha-fin { background:#1b8253; }
-      .antc-pilha-prop { background:#60a5fa; }
+      .antc-pilha-prop { background:#3b82f6; }
       .antc-pilha-conf { background:#f59e0b; }
       .antc-kpi.antc-org-fin b { color:#105436; }
       .antc-kpi.antc-org-prop b { color:#1d4ed8; }
@@ -1071,6 +1093,40 @@
       .antc-hbar-val { font-weight:700; color:#105436; white-space:nowrap; font-variant-numeric:tabular-nums; }
       .antc-hbar-val small { font-weight:400; color:#64748b; margin-left:4px; }
       .antc-ind-tabs { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+      .antc-load .loading-progress-bar { width:8%; animation:antc-carga 8s ease-out forwards; }
+      @keyframes antc-carga { from { width:8%; } to { width:92%; } }
+      .antc-kpi.antc-org { border-left-width:4px; }
+      .antc-org-tot { border-left-color:#105436; }
+      .antc-org-fin { border-left-color:#1b8253; }
+      .antc-org-prop { border-left-color:#3b82f6; }
+      .antc-org-conf { border-left-color:#f59e0b; }
+      .antc-org small strong { color:#0f172a; }
+      .antc-org-trilho { height:6px; background:#eef2f6; border-radius:999px; overflow:hidden; margin:4px 0 2px; }
+      .antc-org-trilho i { display:block; height:100%; border-radius:inherit; background:#1b8253; }
+      .antc-org-prop .antc-org-trilho i { background:#3b82f6; }
+      .antc-org-conf .antc-org-trilho i { background:#f59e0b; }
+      .antc-org-faixa { display:flex; height:14px; border-radius:4px; overflow:hidden; margin:4px 0 2px; }
+      .antc-org-seg { display:flex; align-items:center; justify-content:center; font-size:0.6rem; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; }
+      .antc-org-seg.is-fin { background:#1b8253; }
+      .antc-org-seg.is-prop { background:#3b82f6; }
+      .antc-org-seg.is-conf { background:#f59e0b; }
+      .antc-barras-org { height:240px; gap:10px; padding-top:6px; }
+      .antc-barras-org .antc-pilha { width:58%; max-width:72px; border-radius:4px 4px 0 0; }
+      .antc-barras-org .antc-barra-val { font-weight:700; color:#0f172a; font-size:0.66rem; }
+      .antc-pilha > div { display:flex; align-items:center; justify-content:center; min-height:0; }
+      .antc-pilha em { font-style:normal; font-size:0.6rem; font-weight:700; color:#fff; }
+      .antc-pill-fin { margin-top:3px; font-size:0.6rem; font-weight:700; color:#105436; background:#e7f6ee; border-radius:999px; padding:1px 6px; white-space:nowrap; }
+      .antc-pill-fin.is-zero { color:#94a3b8; background:#f1f5f9; }
+      .antc-ind-tit small { font-weight:600; color:#94a3b8; margin-left:4px; }
+      .antc-org-tab .antc-v-fin { color:#105436; font-weight:600; }
+      .antc-org-tab .antc-v-prop { color:#1d4ed8; font-weight:600; }
+      .antc-org-tab .antc-v-conf { color:#b45309; font-weight:600; }
+      .antc-org-tab .antc-zero { color:#cbd5e1; }
+      .antc-mini { display:flex; align-items:center; gap:6px; }
+      .antc-mini-trilho { flex:1; height:6px; background:#dbeafe; border-radius:999px; overflow:hidden; }
+      .antc-mini-trilho i { display:block; height:100%; background:#1b8253; }
+      .antc-mini span { width:42px; text-align:right; font-variant-numeric:tabular-nums; font-size:0.7rem; }
+      .antc-org-tab tfoot td { position:sticky; bottom:0; background:#105436; color:#fff; font-weight:700; padding:5px 6px; }
       @media (max-width: 1100px) { .antc-graficos, .antc-ind-tabs { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(st);
