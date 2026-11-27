@@ -61401,21 +61401,29 @@ window.gerarMapaZeropaidPDF = async function() {
         if (sz.older || sw.older) chartSlots.unshift({ label: "Antes", z: sz.older, w: sw.older });
         if (sz.noDate || sw.noDate) chartSlots.push({ label: "S/ data", z: sz.noDate, w: sw.noDate });
 
+        // Colunas empilhadas: 0% pago embaixo, entrada Webro em cima e o total no topo.
         const groupedBarChart = (slots) => {
-            const maxVal = Math.max(1, ...slots.map(s => Math.max(s.z, s.w)));
+            const maxVal = Math.max(1, ...slots.map(s => s.z + s.w));
             const W = 600, H = 168, padTop = 18, padBot = 22, padSide = 10;
             const stepX = (W - padSide * 2) / Math.max(slots.length, 1);
-            const barW = Math.min(18, Math.max(8, stepX * 0.36));
+            const barW = Math.min(30, Math.max(12, stepX * 0.55));
+            const alt = H - padTop - padBot;
             let out = "";
             slots.forEach((s, i) => {
                 const cx = padSide + stepX * i + stepX / 2;
-                [[s.z, C_ZERO, -barW / 2 - 1], [s.w, C_WEB, barW / 2 + 1]].forEach(([v, color, off]) => {
-                    const x = cx + off;
-                    const h = (v / maxVal) * (H - padTop - padBot);
-                    const y = H - padBot - h;
-                    out += `<rect x="${x - barW / 2}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${v ? color : "#e2e8f0"}" rx="2"/>`;
-                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="9" font-weight="800" fill="${color}">${v}</text>`;
+                const x = cx - barW / 2;
+                let base = H - padBot;
+                [[s.z, C_ZERO], [s.w, C_WEB]].forEach(([v, color]) => {
+                    if (!v) return;
+                    const h = (v / maxVal) * alt;
+                    const y = base - h;
+                    out += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${color}"/>`;
+                    if (h >= 12) out += `<text x="${cx}" y="${y + h / 2 + 3}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#fff">${v}</text>`;
+                    base = y;
                 });
+                const total = s.z + s.w;
+                if (total) out += `<text x="${cx}" y="${base - 3}" text-anchor="middle" font-size="9" font-weight="800" fill="#0f172a">${total}</text>`;
+                else out += `<rect x="${x}" y="${H - padBot - 1}" width="${barW}" height="1" fill="#e2e8f0"/>`;
                 out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="8.5" font-weight="600" fill="#475569">${s.label}</text>`;
             });
             return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;">
@@ -61529,7 +61537,7 @@ window.gerarMapaZeropaidPDF = async function() {
                 </div>
                 ${kpi("Títulos", s.titles, color)}
                 ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
-                ${kpi("Desde a venda", s.avgSaleLabel)}
+                ${kpi("Atraso médio", s.avgDelay + " dias")}
             </div>`;
         const quadro = (title, body, extra) => `
             <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
@@ -61632,68 +61640,7 @@ window.gerarMapaZeropaidPDF = async function() {
             pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
         };
         await fotografar(container, false);
-
-        // Páginas seguintes: lista dos títulos (empresa, centro de custo, título, cliente, atraso, valor e última ocorrência).
-        const empresaDe = (c) => {
-            const id = String(c.companyId || "").trim();
-            const nome = (typeof getCompanyName === "function" && id) ? getCompanyName(id, true) : "";
-            return id ? (nome && nome !== id && !/^EMPRESA #/i.test(nome) ? id + " - " + nome : id) : "—";
-        };
-        const ccDe = (c) => {
-            const id = ccIdOf(c);
-            return id && id !== "N/D" ? id + " - " + empLabel(c.costCenterId) : "—";
-        };
-        const ultimaOcorrencia = (c) => {
-            const n = typeof window.getLatestCustomerContact === "function" ? window.getLatestCustomerContact(c.customerId) : null;
-            if (!n || !n.date) return { data: "Sem ocorrência", texto: "" };
-            const d = new Date(n.date);
-            const data = isNaN(d.getTime()) ? "" : d.toLocaleDateString("pt-BR");
-            const canal = n.canal || n.fase || "";
-            const texto = String(n.text || "").replace(/\s+/g, " ").trim();
-            return { data: data + (canal ? " · " + canal : ""), texto: texto.length > 150 ? texto.slice(0, 147) + "…" : texto };
-        };
-        const linhasLista = zeroList.map(c => ({ c, tipo: "0% pago" })).concat(webroList.map(c => ({ c, tipo: "Entrada Webro" })))
-            .sort((a, b) => (a.tipo === b.tipo ? 0 : (a.tipo === "0% pago" ? -1 : 1)) || (Number(b.c.maxDaysDelay) || 0) - (Number(a.c.maxDaysDelay) || 0));
-        const POR_PAGINA = 16;
-        const totalPaginas = Math.ceil(linhasLista.length / POR_PAGINA);
-        for (let p = 0; p < totalPaginas; p++) {
-            if (btn) btn.textContent = `Página ${p + 2} de ${totalPaginas + 1}…`;
-            const fatia = linhasLista.slice(p * POR_PAGINA, (p + 1) * POR_PAGINA);
-            const pag = document.createElement("div");
-            pag.style.cssText = container.style.cssText;
-            pag.innerHTML = `
-                <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg, #105436 0%, #1b8253 100%);border-radius:10px;padding:8px 14px;margin-bottom:10px;flex-shrink:0;">
-                    <div>
-                        <h1 style="margin:0;color:#fff;font-size:15px;font-weight:800;">Títulos 0% pago e entrada Webro</h1>
-                        <p style="margin:2px 0 0 0;color:#d1fae5;font-size:10px;">Posição em ${nowLabel} · do maior para o menor atraso · página ${p + 2} de ${totalPaginas + 1}</p>
-                    </div>
-                    <div style="display:flex;gap:8px;">${legChip(C_ZERO, "0% pago: " + sz.titles)}${legChip(C_WEB, "Entrada Webro: " + sw.titles)}</div>
-                </div>
-                <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:9.5px;">
-                    <colgroup><col style="width:7%"><col style="width:12%"><col style="width:15%"><col style="width:6%"><col style="width:17%"><col style="width:6%"><col style="width:9%"><col style="width:28%"></colgroup>
-                    <thead><tr style="background:${C_HEAD};">${th("Situação")}${th("Empresa")}${th("Centro de custo")}${th("Título", "center")}${th("Cliente")}${th("Atraso", "center")}${th("Valor atualizado", "right")}${th("Última ocorrência")}</tr></thead>
-                    <tbody>
-                        ${fatia.map((l, i) => {
-                            const c = l.c;
-                            const zero = l.tipo === "0% pago";
-                            const cor = zero ? C_ZERO : C_WEB;
-                            const oc = ultimaOcorrencia(c);
-                            const titulo = String(c.saleId || "").replace(/^B-/i, "").split("-")[0];
-                            return `<tr style="background:${zebra(i)};border-bottom:1px solid #e2e8f0;">
-                                <td style="padding:6px 7px;"><span style="display:inline-block;padding:2px 6px;border-radius:8px;background:${zero ? BG_ZERO : BG_WEB};color:${cor};font-weight:800;font-size:8.5px;white-space:nowrap;">${esc(l.tipo)}</span></td>
-                                <td style="padding:6px 7px;${ellipsisTd}color:#334155;" title="${esc(empresaDe(c))}">${esc(empresaDe(c))}</td>
-                                <td style="padding:6px 7px;${ellipsisTd}color:#334155;" title="${esc(ccDe(c))}">${esc(ccDe(c))}</td>
-                                <td style="padding:6px 7px;text-align:center;font-weight:800;color:#0f172a;">${esc(titulo)}</td>
-                                <td style="padding:6px 7px;${ellipsisTd}font-weight:700;color:#0f172a;" title="${esc(c.customerName)}">${esc(c.customerName || "Cliente " + c.customerId)}</td>
-                                <td style="padding:6px 7px;text-align:center;font-weight:800;color:${cor};">${Number(c.maxDaysDelay) || 0}</td>
-                                <td style="padding:6px 7px;text-align:right;font-weight:700;color:#0f172a;white-space:nowrap;">R$ ${clientValue(c).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                <td style="padding:6px 7px;color:#334155;line-height:1.3;"><div style="font-weight:800;color:#105436;font-size:8.5px;">${esc(oc.data)}</div><div style="overflow:hidden;max-height:22px;">${esc(oc.texto)}</div></td>
-                            </tr>`;
-                        }).join("")}
-                    </tbody>
-                </table>`;
-            await fotografar(pag, true);
-        }
+        // Só a página do resumo: a lista analítica dos clientes saiu do PDF.
         pdf.save("Mapa_Clientes_0_Pago.pdf");
     } catch (e) {
         console.error("Erro ao gerar mapa 0% pago:", e);
