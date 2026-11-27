@@ -85,6 +85,14 @@ const ParticipacoesApp = {
     return this.crmCompanies().filter((c) => this.gestaoEllencoOn(c.id));
   },
 
+  /** Nome usual da empresa (cadastro de Empresas, campo nome_usual); vazio se não houver. */
+  nomeUsual(id) {
+    const map = this.empresasCustomMap();
+    const custom = map[id] || map[String(id)] || map[Number(id)] || null;
+    const usual = custom ? String(custom.nome_usual || "").trim() : "";
+    return usual && !/^nome usual$/i.test(usual) ? usual : "";
+  },
+
   crmCompany(id) {
     return this.crmCompanies().find((c) => String(c.id) === String(id)) || null;
   },
@@ -3001,6 +3009,9 @@ const ParticipacoesApp = {
     }).join("");
     const curto = (rot) => String(rot || "").replace(/\s+(SPE\s+)?LTDA\.?\s*$/i, "").replace(/\s+SPE\s*$/i, "");
     const rotSpe = (id, rot) => {
+      // Nome usual do cadastro de Empresas, quando existir (menor que a razão social).
+      const usual = this.nomeUsual(id);
+      if (usual) return `<i>${this.esc(String(id))}</i>${this.esc(caixaNormal(usual))}`;
       const m = curto(rot).match(/^(\S+)\s*-\s*(.+)$/);
       return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(curto(rot)));
     };
@@ -3128,7 +3139,7 @@ const ParticipacoesApp = {
       <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">
         <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
           <colgroup><col style="width:230px">${spes.map(() => `<col style="width:104px">`).join("")}<col style="width:112px"><col style="width:230px"><col style="width:150px"><col style="width:34px"></colgroup>
-          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">SPE ${this.esc(String(e))}<small>${this.esc(String(this.companyLabel(e) || "").toUpperCase())}</small></th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
+          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">SPE ${this.esc(String(e))}<small>${this.esc(String(this.nomeUsual(e) || this.companyLabel(e) || "").toUpperCase())}</small></th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
           <tbody>${corpo}</tbody>
           <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(totSpe(e))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>
         </table>
