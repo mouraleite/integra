@@ -3607,6 +3607,75 @@ circle.donut-segment {
   color: #0f172a;
 }
 .est-stock-toolbar input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
+
+/* 27/11/2026: Posição de estoque mais amigável. Filtros numa grade com a mesma altura, chips leves com rótulo
+   (Estoque / Situação), status numa linha discreta e KPIs com ícone e faixa de cor. Só nesta aba (a Repactuação
+   reaproveita .est-fin-card). */
+#tab-estoque-comercial .est-stock-panel { padding: 14px 16px 10px; gap: 10px; }
+#tab-estoque-comercial .est-stock-panel > .est-stock-linha,
+#tab-estoque-comercial .est-stock-panel > .est-stock-rodape,
+#tab-estoque-comercial .est-stock-panel > .est-batimento-pause { margin-top: 0; }
+#tab-estoque-comercial .est-stock-filters { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(220px, 1.3fr) auto; gap: 12px; align-items: end; }
+#tab-estoque-comercial .est-stock-filters .ml-emp-filter { max-width: none; min-width: 0; width: 100%; }
+#tab-estoque-comercial .est-stock-field { min-width: 0; }
+#tab-estoque-comercial .est-stock-field label { font-size: 0.7rem; letter-spacing: 0.04em; margin-bottom: 6px; }
+#tab-estoque-comercial .est-stock-field select { height: 40px; border-color: #cbd5e1; border-radius: 8px; font-size: 0.9rem; }
+#tab-estoque-comercial .est-stock-acoes { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+#tab-estoque-comercial .est-stock-acoes:not(:has(button:not([style*="display:none"]):not([style*="display: none"]))) { display: none; }
+#tab-estoque-comercial .est-stock-acoes .est-forcar-falta,
+#tab-estoque-comercial .est-stock-acoes .est-btn-parar { height: 40px; padding: 0 16px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
+#tab-estoque-comercial .est-stock-linha { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 4px 8px; border: 1px solid #edf2ef; border-radius: 10px; background: #f8fafc; min-width: 0; }
+#tab-estoque-comercial .est-stock-linha-rot { flex: 0 0 auto; min-width: 58px; font-size: 0.62rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #94a3b8; }
+#tab-estoque-comercial .est-stock-pills { margin: 0; gap: 2px; flex-wrap: nowrap; overflow-x: auto; padding: 3px 0; scrollbar-width: thin; }
+#tab-estoque-comercial .est-pill { flex: 0 0 auto; border: 0; background: transparent; border-radius: 7px; padding: 0 12px; height: 28px; font-size: 0.76rem; color: #334155; }
+#tab-estoque-comercial .est-pill:hover { background: #e7f1ec; }
+#tab-estoque-comercial .est-pill b { color: #64748b; font-weight: 700; }
+#tab-estoque-comercial .est-pill.is-active { background: #105436; color: #fff; }
+#tab-estoque-comercial .est-pill.is-active b { color: #d1fae5; }
+#tab-estoque-comercial .est-stock-rodape { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+#tab-estoque-comercial .est-stock-meta { margin: 0; font-size: 0.72rem; }
+#tab-estoque-comercial .est-stock-progress { margin: 0; flex: 0 1 auto; padding: 4px 10px; border-radius: 999px; background: #fff7ed; color: #9a3412; font-size: 0.74rem; font-weight: 600; }
+#tab-estoque-comercial .est-stock-progress .est-stock-bar { margin-top: 4px; }
+/* KPIs */
+#tab-estoque-comercial .est-stock-finance { gap: 12px; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid #e6eeea; border-top: 3px solid #1b8253; background: #fff; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card > div { min-width: 0; flex: 1 1 auto; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-warn { border-top-color: #ea580c; background: #fff; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-vencer { border-top-color: #2563eb; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card.is-ok { border-top-color: #64748b; background: #fff; }
+#tab-estoque-comercial .est-fin-ico { flex: 0 0 36px; width: 36px; height: 36px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: #e7f6ee; color: #105436; }
+#tab-estoque-comercial .est-fin-ico svg { width: 18px; height: 18px; }
+#tab-estoque-comercial .est-fin-card.is-warn .est-fin-ico { background: #ffedd5; color: #c2410c; }
+#tab-estoque-comercial .est-fin-card.is-vencer .est-fin-ico { background: #dbeafe; color: #1d4ed8; }
+#tab-estoque-comercial .est-fin-card.is-ok .est-fin-ico { background: #f1f5f9; color: #475569; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card label { font-size: 0.64rem; letter-spacing: 0.05em; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card strong { margin-top: 2px; font-size: 1.3rem; white-space: nowrap; }
+#tab-estoque-comercial .est-fin-card.is-vencer strong { color: #1e3a8a; }
+#tab-estoque-comercial .est-fin-card.is-ok strong { color: #334155; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card small { margin-top: 6px; display: flex; flex-direction: column; gap: 1px; font-size: 0.7rem; }
+#tab-estoque-comercial .est-stock-finance .est-fin-card small em { font-style: normal; color: #94a3b8; }
+#tab-estoque-comercial .est-fin-alerta { margin-top: 2px; color: #9a3412; font-weight: 600; }
+/* Busca e filtro de situação */
+#tab-estoque-comercial .est-stock-toolbar { gap: 12px; }
+#tab-estoque-comercial .est-stock-toolbar input { flex: 0 1 380px; height: 40px; border-color: #cbd5e1; border-radius: 8px; }
+#tab-estoque-comercial .est-stock-linha.is-situacao { margin: 0; flex: 1 1 auto; }
+#tab-estoque-comercial .est-fin-filtros { gap: 2px; flex-wrap: nowrap; overflow-x: auto; padding: 3px 0; }
+#tab-estoque-comercial .est-fin-filtro { flex: 0 0 auto; height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: #334155; font-size: 0.76rem; }
+#tab-estoque-comercial .est-fin-filtro:hover { background: #e7f1ec; }
+#tab-estoque-comercial .est-fin-filtro b { color: #64748b; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente b { color: #c2410c; }
+#tab-estoque-comercial .est-fin-filtro.is-active { background: #105436; color: #fff; }
+#tab-estoque-comercial .est-fin-filtro.is-active b { color: #d1fae5; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente.is-active { background: #c2410c; }
+#tab-estoque-comercial .est-fin-filtro.is-inadimplente.is-active b { color: #ffedd5; }
+#tab-estoque-comercial .est-conf { border-radius: 14px; padding: 12px 16px; }
+#tab-estoque-comercial .est-conf-grid > div { padding: 8px 12px; border-radius: 10px; background: #f8fafc; border: 1px solid #edf2ef; min-width: 0; }
+#tab-estoque-comercial .est-conf-grid b { font-size: 1.05rem; }
+#tab-estoque-comercial .est-conf-grid small { font-size: 0.7rem; line-height: 1.35; }
+@media (max-width: 1200px) {
+  #tab-estoque-comercial .est-stock-filters { grid-template-columns: 1fr 1fr; }
+  #tab-estoque-comercial .est-stock-finance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .est-stock-table-wrap.crm-scroll-table,
 .est-stock-table-wrap {
   max-height: calc(100vh - 320px);
@@ -11470,7 +11539,7 @@ label.cessao-pop-field .form-control, label.cessao-pop-field select { width: 100
 .emp-table .inline-input { width: 100%; height: 28px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0 8px; font-size: 0.78rem; color: #0f172a; background: #fff; }
 .emp-table .inline-input:focus { outline: none; border-color: #105436; }
 .emp-table .emp-pct { text-align: center; padding: 0 4px; }
-.emp-table tr.is-spe-locked .inline-input { background: #f1f5f9; color: #64748b; }
+.emp-table tr.is-spe-locked .inline-input:disabled { background: #f1f5f9; color: #64748b; }
 .emp-table tr.is-spe-locked td:not(.is-lock-on) .moura-switch { opacity: 0.45; pointer-events: none; }
 @media (max-width: 900px) {
   .emp-toolbar .cc-toolbar-actions { margin-left: 0; }
@@ -12581,6 +12650,10 @@ textarea.cem-campo { height: auto; min-height: 180px; padding: 8px; line-height:
 .cem2-cliente label { font-size: 0.72rem; font-weight: 800; color: #105436; white-space: nowrap; }
 .cem2-cliente select.cem-campo { flex: 1 1 360px; min-width: 0; height: 36px; }
 .cem2-cliente .cem2-extrato { height: 36px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 0.78rem; }
+.cem2-cliente .cem2-extrato:disabled { opacity: 0.55; cursor: not-allowed; }
+.cem2-cli-dados { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 2px 0; font-size: 0.72rem; color: #1e293b; }
+.cem2-cli-dados[hidden] { display: none; }
+.cem2-cli-dados em { font-style: normal; color: #64748b; font-weight: 600; }
 .cem2-ferramentas { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; flex-wrap: wrap; }
 .cem2-ferr { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #0f172a; font-size: 0.76rem; font-weight: 800; cursor: pointer; }
 .cem2-ferr:hover { border-color: #1b8253; background: #f0fdf4; }
@@ -12759,3 +12832,63 @@ div.cem-previa { white-space: normal; }
 .ctit-selo.is-aberto { background: #fdecec; color: #b91c1c; }
 @media (max-width: 1000px) { .ctit-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ctit-grade { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 600px) { .ctit-kpis, .ctit-grade { grid-template-columns: 1fr; } .ctit-input { width: 100%; } .ctit-linha { flex-wrap: wrap; } }
+
+/* Remessa avulsa (27/11/2026): tela no padrão do Integra. */
+#remessa-avulsa-root { display: flex; flex-direction: column; gap: 12px; }
+.remav-painel { background: #fff; border: 1px solid #e6eeea; border-radius: 14px; padding: 14px 16px 10px; box-shadow: 0 1px 2px rgba(16, 84, 54, 0.04); }
+.remav-filtros { display: grid; grid-template-columns: minmax(220px, 300px) 150px 150px minmax(200px, 1fr) auto; gap: 12px; align-items: end; }
+.remav-filtros #remav-emp .ml-emp-filter { width: 100%; max-width: none; min-width: 0; }
+.remav-campo { display: flex; flex-direction: column; gap: 6px; font-size: 0.7rem; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em; min-width: 0; }
+.remav-campo input { height: 40px; width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; color: #0f172a; font-size: 0.88rem; font-weight: 500; text-transform: none; letter-spacing: 0; font-family: inherit; }
+.remav-campo input:focus { outline: none; border-color: #105436; box-shadow: 0 0 0 3px rgba(16, 84, 54, 0.12); }
+.remav-acoes { display: flex; gap: 8px; align-items: center; }
+.remav-acoes .btn { height: 40px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 700; }
+.remav-regra { margin-top: 10px; font-size: 0.74rem; color: #64748b; }
+.remav-regra summary { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: #475569; list-style: none; }
+.remav-regra summary::-webkit-details-marker { display: none; }
+.remav-regra p { margin: 6px 0 0; max-width: 900px; line-height: 1.45; }
+.remav-resumo { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.remav-kpis { display: flex; gap: 10px; flex-wrap: wrap; }
+.remav-kpis:empty { display: none; }
+.remav-kpi { display: flex; align-items: center; gap: 10px; min-width: 150px; padding: 8px 14px 8px 10px; background: #fff; border: 1px solid #e6eeea; border-top: 3px solid #1b8253; border-radius: 12px; }
+.remav-kpi-ico { width: 32px; height: 32px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: #e7f6ee; color: #105436; }
+.remav-kpi-ico svg { width: 16px; height: 16px; }
+.remav-kpi label { display: block; font-size: 0.62rem; font-weight: 800; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.remav-kpi strong { display: block; font-size: 1.15rem; color: #105436; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.remav-status:empty { display: none; }
+.remav-tag { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 0.74rem; font-weight: 600; }
+.remav-tag.is-info { background: #e7f6ee; color: #105436; }
+.remav-tag.is-erro { background: #fee2e2; color: #991b1b; }
+.remav-scroll { max-height: max(320px, calc(100vh - 330px)); }
+.cc-table.remav-tabela th.is-sorted { background: #0f6b45; }
+.cc-table.remav-tabela td.remav-vazio { text-align: center; padding: 30px; white-space: normal; color: #64748b; }
+@media (max-width: 1200px) { .remav-filtros { grid-template-columns: 1fr 1fr 1fr; } .remav-acoes { grid-column: 1 / -1; justify-content: flex-end; } }
+/* Remessa avulsa: abas, envio do boleto por e-mail e configurações. */
+.remav-abas { margin-bottom: 0; }
+.remav-acoes .remav-enviar { color: #105436; border-color: #b7dcc8; }
+.remav-acoes .remav-enviar:not(:disabled):hover { background: #f0fdf4; }
+.cc-table.remav-tabela td.remav-email-cel { overflow: visible; white-space: nowrap; }
+.remav-env { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #475569; font-size: 0.66rem; font-weight: 700; }
+.remav-env.is-ok { background: #dcfce7; color: #166534; }
+.remav-env.is-erro { background: #fee2e2; color: #991b1b; cursor: help; margin-right: 4px; }
+.remav-env-btn { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #105436; font-size: 0.68rem; font-weight: 700; cursor: pointer; vertical-align: middle; }
+.remav-env-btn:hover:not(:disabled) { background: #f0fdf4; border-color: #1b8253; }
+.remav-env-btn:disabled { opacity: 0.5; cursor: wait; }
+.remav-cfg { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; align-items: start; }
+.remav-cfg-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.remav-cfg-span { grid-column: 1 / -1; }
+.remav-campo select, .remav-campo textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; color: #0f172a; font-size: 0.88rem; font-weight: 500; text-transform: none; letter-spacing: 0; font-family: inherit; }
+.remav-campo select { height: 40px; }
+.remav-campo textarea { padding: 10px 12px; line-height: 1.5; resize: vertical; min-height: 320px; }
+.remav-cfg-lado { border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.remav-cfg-lado h4 { margin: 4px 0 0; font-size: 0.72rem; color: #105436; text-transform: uppercase; letter-spacing: 0.04em; }
+.remav-cfg-lado p { margin: 0; font-size: 0.72rem; color: #64748b; }
+.remav-cfg-vars { display: flex; flex-direction: column; gap: 5px; }
+.remav-cfg-vars .cem-var small { font-weight: 600; color: #64748b; margin-left: 4px; }
+.remav-cfg-previa { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; font-size: 0.76rem; line-height: 1.45; color: #1e293b; max-height: 420px; overflow: auto; }
+.remav-cfg-previa-tit { margin-bottom: 8px; }
+.remav-cfg-anexo { margin-top: 8px; color: #105436; font-weight: 700; }
+.remav-cfg-rodape { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 0.74rem; color: #64748b; }
+.remav-cfg-rodape > div { display: flex; gap: 8px; }
+.remav-cfg-rodape .btn { height: 38px; display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 1100px) { .remav-cfg { grid-template-columns: 1fr; } }

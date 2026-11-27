@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=dfa60225c2">
+  <link rel="stylesheet" href="css/style.css?v=remavmail1">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -3480,29 +3480,36 @@ Promitente comprador(a)</textarea>
               <div id="est-filtro-empresa"></div>
               <div id="est-filtro-cc"></div>
               <input type="hidden" id="est-filter-emp" value="">
-              <div class="est-stock-field" style="flex: 1; min-width: 160px;">
+              <div class="est-stock-field">
                 <label for="est-filter-unit">Unidade</label>
                 <select id="est-filter-unit" onchange="EstoqueComercialApp.onUnitChange()">
                   <option value="">Todas as unidades</option>
                 </select>
               </div>
-              <button type="button" class="est-btn-parar" id="est-btn-parar" onclick="EstoqueComercialApp.parar()" style="display:none;">
-                <i data-lucide="square" style="width: 14px;"></i> Parar
-              </button>
-              <button type="button" class="est-forcar-falta" id="est-btn-forcar" onclick="EstoqueComercialApp.forcarOQueFalta()" style="display:none;">
-                Forçar o que falta
-              </button>
+              <div class="est-stock-acoes">
+                <button type="button" class="est-btn-parar" id="est-btn-parar" onclick="EstoqueComercialApp.parar()" style="display:none;">
+                  <i data-lucide="square" style="width: 14px;"></i> Parar
+                </button>
+                <button type="button" class="est-forcar-falta" id="est-btn-forcar" onclick="EstoqueComercialApp.forcarOQueFalta()" style="display:none;">
+                  Forçar o que falta
+                </button>
+              </div>
             </div>
             <div id="est-batimento-pause" class="est-batimento-pause" hidden></div>
-            <div id="est-stock-pills" class="est-stock-pills"></div>
-            <div id="est-stock-progress" class="est-stock-progress" style="display: none;"></div>
-            <div id="est-stock-meta" class="est-stock-meta"></div>
+            <div class="est-stock-linha">
+              <span class="est-stock-linha-rot">Estoque</span>
+              <div id="est-stock-pills" class="est-stock-pills"></div>
+            </div>
+            <div class="est-stock-rodape">
+              <div id="est-stock-meta" class="est-stock-meta"></div>
+              <div id="est-stock-progress" class="est-stock-progress" style="display: none;"></div>
+            </div>
           </div>
           <div id="est-stock-finance" class="est-stock-finance"></div>
           <div id="est-stock-kpis" class="est-stock-kpis"></div>
             <div class="est-stock-toolbar">
             <input type="search" id="est-stock-search" placeholder="Pesquisar empreendimento, unidade ou contrato" oninput="EstoqueComercialApp.scheduleRender()">
-            <div id="est-fin-filtros" class="est-fin-filtros" role="group" aria-label="Filtro rápido por situação"></div>
+            <div class="est-stock-linha is-situacao"><span class="est-stock-linha-rot">Situação</span><div id="est-fin-filtros" class="est-fin-filtros" role="group" aria-label="Filtro rápido por situação"></div></div>
           </div>
           <div class="table-container crm-scroll-table est-stock-table-wrap">
             <table class="custom-table est-stock-table">
@@ -8882,14 +8889,14 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
-  <script defer src="js/nucleo/alertas-popup.js?v=7bd18bd64d"></script>
+  <script defer src="js/nucleo/alertas-popup.js?v=remavmail1"></script>
   <script defer src="js/nucleo/aviso-endereco.js?v=a0430c490c"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=8a514194a2"></script>
+  <script defer src="js/nucleo/app.js?v=remavmail1"></script>
   <script defer src="js/fiscal/followup-cnd.js?v=628ac71ef1"></script>
   <script defer src="js/cobranca/followup-gestor.js?v=b4f1569be0"></script>
-  <script defer src="js/nucleo/central-email-sugestoes.js?v=34a6caf4ea"></script>
-  <script defer src="js/nucleo/central-email.js?v=3749b07c27"></script>
+  <script defer src="js/nucleo/central-email-sugestoes.js?v=ultpag1"></script>
+  <script defer src="js/nucleo/central-email.js?v=ultpag1"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=720f06e7ab"></script>
@@ -8931,7 +8938,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/escala-home-office.js?v=7339676b66"></script>
   <script defer src="js/nucleo/alerta-ponto.js?v=888800e037"></script>
   <script defer src="js/engenharia/construcao.js?v=5f3905cd79"></script>
-  <script defer src="js/nucleo/empresas.js?v=f30fc03a02"></script>
+  <script defer src="js/nucleo/empresas.js?v=ellusual1"></script>
   <script defer src="js/cobranca/relacionamento.js?v=cd43b98234"></script>
   <script defer src="js/cobranca/aditamento.js?v=2258"></script>
   <script defer src="js/cobranca/cessao-direitos.js?v=e878bff904"></script>
@@ -8939,13 +8946,13 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/doc-assinatura.js?v=a109203e1d"></script>
   <script defer src="js/cobranca/compromissario.js?v=58c6cdf4dd"></script>
   <script defer src="js/comercial/comercial.js?v=d470ed9e13"></script>
-  <script defer src="js/comercial/estoque-comercial.js?v=e27096fbf3"></script>
+  <script defer src="js/comercial/estoque-comercial.js?v=estlayout1"></script>
   <script defer src="js/nucleo/condicoes-pagamento.js?v=b9728514f2"></script>
   <script defer src="js/nucleo/documentos-sienge.js?v=6b96789811"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
   <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
   <script defer src="js/comercial/recebimentos-webro.js?v=34a0e9aa85"></script>
-  <script defer src="js/financeiro/remessa-avulsa.js?v=bf12fde797"></script>
+  <script defer src="js/financeiro/remessa-avulsa.js?v=remavmail1"></script>
   <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
   <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
   <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
@@ -8972,7 +8979,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
   <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
   <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
-  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=916f9134ce"></script>
+  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=excelsocio1"></script>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=05060dfa3b"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>

@@ -2847,8 +2847,9 @@ const ParticipacoesApp = {
   PAINEL_COL: "participacoes_painel",
   PAINEL_LOCAL: "crm_part_painel_socio_v1",
   painel: null,
-  painelEmp: "",
-  painelCat: "",
+  // SPEs e contas marcadas no Painel do sócio (várias de uma vez; vazio = todas).
+  painelEmps: [],
+  painelCats: [],
   JUSTIFICA: [
     { id: "", label: "Em análise" },
     { id: "sim", label: "Justifica" },
@@ -2936,15 +2937,18 @@ const ParticipacoesApp = {
     if (campo === "justifica") this.render();
   },
 
+  /** Marca ou desmarca a SPE (várias de uma vez). "Todas" limpa a marcação. */
   escolherPainelEmp(emp) {
-    this.painelEmp = String(emp || "");
+    const id = String(emp || "");
+    this.painelEmps = !id ? [] : (this.painelEmps.indexOf(id) >= 0 ? this.painelEmps.filter((x) => x !== id) : this.painelEmps.concat([id]));
     this.catDetalhe = null;
     this.render();
   },
 
-  /** Filtro rápido pela conta (Categoria Moura Leite) do credor, abaixo das SPEs. */
+  /** Marca ou desmarca a conta (Categoria Moura Leite), várias de uma vez. "Todas" limpa a marcação. */
   escolherPainelCat(cat) {
-    this.painelCat = String(cat || "");
+    const id = String(cat || "");
+    this.painelCats = !id ? [] : (this.painelCats.indexOf(id) >= 0 ? this.painelCats.filter((x) => x !== id) : this.painelCats.concat([id]));
     this.catDetalhe = null;
     this.render();
   },
@@ -2958,11 +2962,16 @@ const ParticipacoesApp = {
       linhas.forEach((x) => { t[x[campo]] = (t[x[campo]] || 0) + (Number(x.r.valor) || 0); });
       return t;
     };
-    if (this.painelCat && !base.some((x) => x.catId === this.painelCat)) this.painelCat = "";
-    if (this.painelEmp && !base.some((x) => x.emp === this.painelEmp)) this.painelEmp = "";
-    const daCat = this.painelCat ? base.filter((x) => x.catId === this.painelCat) : base;
-    const daEmp = this.painelEmp ? base.filter((x) => x.emp === this.painelEmp) : base;
-    const linhas = this.painelEmp ? daCat.filter((x) => x.emp === this.painelEmp) : daCat;
+    // Marcação que não existe mais nos credores marcados (ex.: trocou a empresa do topo) sai sozinha.
+    this.painelCats = (this.painelCats || []).filter((c) => base.some((x) => x.catId === c));
+    this.painelEmps = (this.painelEmps || []).filter((e) => base.some((x) => x.emp === e));
+    const cats = new Set(this.painelCats);
+    const emps = new Set(this.painelEmps);
+    const naCat = (x) => !cats.size || cats.has(x.catId);
+    const naEmp = (x) => !emps.size || emps.has(x.emp);
+    const daCat = base.filter(naCat);
+    const daEmp = base.filter(naEmp);
+    const linhas = daCat.filter(naEmp);
     const d = this.agregarCat(base, linhas);
     const empsBase = somaPor(daCat, "emp");
     d.empsBase = Object.keys(empsBase).sort((a, b) => empsBase[b] - empsBase[a]).map((e) => ({ emp: e, total: empsBase[e] }));
@@ -2978,6 +2987,146 @@ const ParticipacoesApp = {
     return d;
   },
 
+  /* Excel para o sócio administrador da SPE: os credores e lançamentos das SPEs e contas marcadas no painel, com
+     o escopo e a avaliação do Integra e duas colunas amarelas para o sócio responder (Justifica? e Considerações). */
+  async gerarExcelSocio() {
+    const d = this._painelDados || this.painelDados();
+    const spes = this._painelSpes || d.empsBase.map((e) => e.emp);
+    if (!d || !d.credores.length) {
+      alert("Não há credores no painel com essa seleção.");
+      return;
+    }
+    let ExcelJS;
+    try {
+      ExcelJS = await this.ensureExcelJS();
+    } catch (e) {
+      alert("Não foi possível carregar a biblioteca de Excel. Recarregue a página.");
+      return;
+    }
+    const VERDE = "FF105436";
+    const AMARELO = "FFFFF2CC";
+    const borda = { style: "thin", color: { argb: "FFD9E2DC" } };
+    const bordas = { top: borda, bottom: borda, left: borda, right: borda };
+    const moeda = "#,##0.00;[Red]-#,##0.00";
+    const nomeSpe = (e) => String(this.nomeUsual(e) || this.companyLabel(e) || e).trim();
+    const rotJust = (j) => ((this.JUSTIFICA.find((o) => o.id === String(j || "")) || this.JUSTIFICA[0]).label);
+    const contasSel = this.painelCats.length
+      ? d.catsBase.filter((c) => this.painelCats.indexOf(c.id) >= 0).map((c) => c.rot)
+      : ["Todas as contas"];
+    const hoje = new Date().toLocaleDateString("pt-BR");
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "CRM Moura Leite";
+    wb.created = new Date();
+
+    // Aba 1: credores, para o sócio responder.
+    const ws = wb.addWorksheet("Considerações do sócio", { properties: { showGridLines: false }, views: [{ state: "frozen", ySplit: 6, xSplit: 1 }] });
+    const nCol = 2 + spes.length + 1 + 2 + 2;
+    ws.columns = [{ width: 44 }, { width: 30 }].concat(spes.map(() => ({ width: 16 })), [{ width: 16 }, { width: 36 }, { width: 18 }, { width: 22 }, { width: 60 }]);
+    ws.getCell("A1").value = "Prestação de contas Ellenco · Painel do sócio";
+    ws.getCell("A1").font = { name: "Arial", bold: true, size: 14, color: { argb: VERDE } };
+    ws.getCell("A2").value = "SPE(s): " + spes.map((e) => e + " - " + nomeSpe(e)).join(" · ");
+    ws.getCell("A3").value = "Conta(s): " + contasSel.join(" · ") + "   ·   Gerado em " + hoje;
+    ws.getCell("A4").value = "Preencha as colunas amarelas: \"Justifica a cobrança? (sócio)\" (Sim, Em parte ou Não) e \"Considerações do sócio\".";
+    ["A2", "A3", "A4"].forEach((c) => { ws.getCell(c).font = { name: "Arial", size: 9, color: { argb: c === "A4" ? "FF9A3412" : "FF475569" }, italic: c === "A4" }; });
+    const cab = ["Credor", "Conta Moura Leite"].concat(spes.map((e) => "SPE " + e + "\n" + nomeSpe(e)), ["Acumulado", "Escopo (Integra)", "Avaliação (Integra)", "Justifica a cobrança? (sócio)", "Considerações do sócio"]);
+    const hRow = ws.getRow(6);
+    cab.forEach((t, i) => {
+      const c = hRow.getCell(i + 1);
+      c.value = t;
+      const socio = i >= nCol - 2;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: socio ? "FF7C2D12" : "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: socio ? "FFFFD966" : VERDE } };
+      c.alignment = { vertical: "middle", horizontal: i >= 2 && i < 2 + spes.length + 1 ? "right" : "left", wrapText: true };
+      c.border = bordas;
+    });
+    hRow.height = 32;
+    let r = 7;
+    const totSpe = spes.map(() => 0);
+    let totGeral = 0;
+    d.credores.forEach((cr) => {
+      const p = (this.painel && this.painel[cr.k]) || {};
+      const row = ws.getRow(r);
+      const vals = [cr.credor, cr.catRot || "Sem categoria"];
+      spes.forEach((e, i) => {
+        const x = cr.spes.find((y) => y.emp === e);
+        const v = x ? Math.round(x.total * 100) / 100 : 0;
+        totSpe[i] += v;
+        vals.push(v || null);
+      });
+      totGeral += cr.total;
+      vals.push(Math.round(cr.total * 100) / 100, p.escopo || "", rotJust(p.justifica), null, null);
+      vals.forEach((v, i) => {
+        const c = row.getCell(i + 1);
+        c.value = v;
+        const num = i >= 2 && i < 2 + spes.length + 1;
+        const socio = i >= nCol - 2;
+        c.font = { name: "Arial", size: 9, bold: i === 0 || i === 2 + spes.length };
+        c.alignment = { vertical: "top", horizontal: num ? "right" : "left", wrapText: !num };
+        if (num) c.numFmt = moeda;
+        if (socio) {
+          c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: AMARELO } };
+          c.protection = { locked: false };
+        }
+        c.border = bordas;
+      });
+      row.getCell(nCol - 1).dataValidation = { type: "list", allowBlank: true, formulae: ['"Sim,Em parte,Não"'], showErrorMessage: true, errorTitle: "Resposta", error: "Escolha Sim, Em parte ou Não." };
+      r++;
+    });
+    const tRow = ws.getRow(r);
+    const tVals = ["Total", ""].concat(totSpe.map((v) => Math.round(v * 100) / 100), [Math.round(totGeral * 100) / 100]);
+    for (let i = 1; i <= nCol; i++) {
+      const c = tRow.getCell(i);
+      c.value = i <= tVals.length ? tVals[i - 1] : null;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: VERDE } };
+      c.alignment = { horizontal: i >= 3 && i <= 2 + spes.length + 1 ? "right" : "left" };
+      if (i >= 3 && i <= 2 + spes.length + 1) c.numFmt = moeda;
+      c.border = bordas;
+    }
+    ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6, column: nCol } };
+
+    // Aba 2: lançamentos da seleção, para o sócio conferir cada valor.
+    const wl = wb.addWorksheet("Lançamentos", { properties: { showGridLines: false }, views: [{ state: "frozen", ySplit: 3 }] });
+    wl.columns = [{ width: 12 }, { width: 14 }, { width: 40 }, { width: 30 }, { width: 28 }, { width: 50 }, { width: 16 }, { width: 12 }];
+    wl.getCell("A1").value = "Lançamentos da seleção";
+    wl.getCell("A1").font = { name: "Arial", bold: true, size: 12, color: { argb: VERDE } };
+    const cabL = ["Data", "Período", "Credor", "Conta Moura Leite", "SPE", "Detalhe", "Valor", "Doc"];
+    cabL.forEach((t, i) => {
+      const c = wl.getRow(3).getCell(i + 1);
+      c.value = t;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: VERDE } };
+      c.border = bordas;
+    });
+    const nomeCred = {};
+    d.credores.forEach((cr) => { nomeCred[cr.k] = cr.credor; });
+    const lanc = d.linhas.slice().sort((a, b) => String(nomeCred[a.k] || a.k).localeCompare(String(nomeCred[b.k] || b.k), "pt-BR") || String(a.m).localeCompare(String(b.m)));
+    lanc.forEach((x, idx) => {
+      const row = wl.getRow(4 + idx);
+      const vals = [x.r.date || "", this.periodLabel(x.r.periodo, x.r.periodo || x.m || ""), nomeCred[x.k] || x.r.credor || x.k, x.catRot || "Sem categoria", x.emp + " - " + nomeSpe(x.emp), x.r.detalhe || "", Number(x.r.valor) || 0, x.r.doc || ""];
+      vals.forEach((v, i) => {
+        const c = row.getCell(i + 1);
+        c.value = v;
+        c.font = { name: "Arial", size: 9 };
+        c.alignment = { vertical: "top", horizontal: i === 6 ? "right" : "left", wrapText: i === 5 };
+        if (i === 6) c.numFmt = moeda;
+        c.border = bordas;
+      });
+    });
+    wl.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: cabL.length } };
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    const nomeArq = (spes.length === 1 ? "SPE " + spes[0] + " " + nomeSpe(spes[0]) : spes.length + " SPEs").replace(/[\\/:*?"<>|]+/g, " ");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Painel do sócio - ${nomeArq} - ${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  },
+
   painelHtml() {
     const d = this.painelDados();
     this._painelDados = d;
@@ -2991,7 +3140,8 @@ const ParticipacoesApp = {
       a.n += 1;
       a.v += c.total;
     });
-    const spes = this.painelEmp ? [this.painelEmp] : d.empsBase.map((e) => e.emp);
+    const spes = d.empsBase.map((e) => e.emp).filter((e) => !this.painelEmps.length || this.painelEmps.indexOf(e) >= 0);
+    this._painelSpes = spes;
     const mes = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
     const pct = (v, t) => (t > 0 ? Math.round((v / t) * 100) : 0);
     const valor = (v, js, sub) => (v
@@ -3019,8 +3169,16 @@ const ParticipacoesApp = {
       const m = String(rot || "").match(/^([\d.]+)\s*-\s*(.+)$/);
       return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(rot));
     };
-    const chip = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelEmp === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')"><span>${id ? rotSpe(id, rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
-    const chipCat = (id, rot, tot) => `<button type="button" class="part-soc-chip${this.painelCat === id ? " is-on" : ""}" title="${this.esc(rot)}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')"><span>${id ? rotConta(rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    // Chip marcado tem o check; "Todas" fica marcado quando nenhuma SPE/conta foi escolhida.
+    const marca = (on) => (on ? `<i class="part-soc-check" aria-hidden="true">✓</i>` : "");
+    const chip = (id, rot, tot) => {
+      const on = id ? this.painelEmps.indexOf(id) >= 0 : !this.painelEmps.length;
+      return `<button type="button" class="part-soc-chip${on ? " is-on" : ""}" aria-pressed="${on}" title="${this.esc(rot)}${id ? " · clique para marcar ou desmarcar" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')">${id ? marca(on) : ""}<span>${id ? rotSpe(id, rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    };
+    const chipCat = (id, rot, tot) => {
+      const on = id ? this.painelCats.indexOf(id) >= 0 : !this.painelCats.length;
+      return `<button type="button" class="part-soc-chip${on ? " is-on" : ""}" aria-pressed="${on}" title="${this.esc(rot)}${id ? " · clique para marcar ou desmarcar" : ""}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')">${id ? marca(on) : ""}<span>${id ? rotConta(rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    };
     const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
     const corpo = d.credores.map((c, ci) => {
       const p = this.painel[c.k] || {};
@@ -3124,16 +3282,25 @@ const ParticipacoesApp = {
         .part-soc-filtros .part-soc-chip b{font-weight:700;color:#64748b;font-size:.64rem;}
         .part-soc-filtros .part-soc-chip.is-on{background:#105436;color:#fff;}
         .part-soc-filtros .part-soc-chip.is-on i,.part-soc-filtros .part-soc-chip.is-on b{color:#d1fae5;}
+        .part-soc-filtros .part-soc-chip i.part-soc-check{color:#fff;margin-right:0;font-size:.7rem;}
+        .part-soc-acoes{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 8px;flex-wrap:wrap;}
+        .part-soc-acoes span{font-size:.7rem;color:#64748b;}
+        .part-soc-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;font-size:.74rem;white-space:nowrap;}
       </style>
       <div class="part-soc-cards">
-        ${card("", "Acumulado " + (this.painelEmp ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmp ? this.esc(this.rotuloEmpresa(this.painelEmp)) : d.empsBase.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCat ? " · " + this.esc((d.catsBase.find((c) => c.id === this.painelCat) || {}).rot || "") : ""))}
+        ${card("", "Acumulado " + (this.painelEmps.length === 1 ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmps.length === 1 ? this.esc(this.rotuloEmpresa(this.painelEmps[0])) : spes.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCats.length ? " · " + (this.painelCats.length === 1 ? this.esc((d.catsBase.find((c) => c.id === this.painelCats[0]) || {}).rot || "") : this.painelCats.length + " contas") : ""))}
         ${card("is-sim", "Justifica", this.fmt(aval.sim.v + aval.parcial.v), (aval.sim.n + aval.parcial.n) + " credor(es)" + (aval.parcial.n ? " · " + aval.parcial.n + " em parte" : ""))}
         ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
         ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
       </div>
       ${d.empsBase.length || d.catsBase.length ? `<div class="part-soc-filtros">
         ${d.empsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">SPE</span><div class="part-soc-chips">${chip("", "Todas", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div></div>` : ""}
-        ${d.catsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">Conta</span><div class="part-soc-chips">${chipCat("", "Todas", d.totalCats)}${d.catsBase.filter((c) => c.total || c.id === this.painelCat).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div></div>` : ""}
+        ${d.catsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">Conta</span><div class="part-soc-chips">${chipCat("", "Todas", d.totalCats)}${d.catsBase.filter((c) => c.total || this.painelCats.indexOf(c.id) >= 0).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div></div>` : ""}
+      </div>` : ""}
+      ${d.credores.length ? `
+      <div class="part-soc-acoes">
+        <span>Marque uma ou mais SPEs e contas. O Excel sai com os credores e lançamentos da seleção e colunas para o sócio responder.</span>
+        <button type="button" class="btn btn-excel" onclick="ParticipacoesApp.gerarExcelSocio()"><i data-lucide="download" style="width:14px;height:14px;"></i> Gerar Excel para o sócio</button>
       </div>` : ""}
       ${d.credores.length ? `
       <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">

@@ -5,6 +5,7 @@ const rotas = {
   "sienge-upload": require("./_lib/sienge-upload"),
   "github-leitura": require("./_lib/github-leitura"),
   "central-email-enviar": require("./_lib/central-email-enviar"),
+  "remessa-avulsa-email": require("./_lib/remessa-avulsa-email"),
   "central-email-confirmacoes": require("./_lib/central-email-confirmacoes"),
   // Imagem de rastreio de abertura: pública (leitor de e-mail do cliente), protegida pela assinatura do id.
   "email-aberto": require("./_lib/email-aberto"),
@@ -40,7 +41,7 @@ const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/in
 // proxy-download fica fora: o boleto/extrato abre numa aba nova, que não leva o login. Ele só aceita
 // links do próprio Sienge (que já trazem a chave do relatório), então não serve de passagem para outros sites.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "central-email-confirmacoes", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "central-email-confirmacoes", "remessa-avulsa-email", "sienge-builder-proxy", "sync-customers", "sync-creditors",
   "cvcrm-proxy", "scod-proxy", "clicksign",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
@@ -90,6 +91,8 @@ module.exports = async function handler(req, res) {
       if (ativo === false) Object.assign(acesso, { ok: false, motivo: "nao-cadastrado-ou-inativo" });
     }
     try { res.setHeader("X-Integra-Auth", acesso.motivo); } catch (e) {}
+    // Quem fez o pedido (para o registro de quem enviou); só vale quando o login foi confirmado.
+    req.integraEmail = acesso.ok ? String(acesso.email || "") : "";
     if (!acesso.ok) {
       const bloquear = modoBloqueio();
       console.warn("[integra-auth] " + JSON.stringify({
