@@ -984,13 +984,15 @@ const OrcamentoDfcApp = {
     }
     let salvos = {};
     try { salvos = await this.lerRealizadoSalvo(fim, empresas, ate); } catch (e) { salvos = {}; }
-    const publicar = (aviso) => {
+    // lendo = ainda há empresa sendo buscada no caixa e banco. Sem isso, a publicação do que já estava salvo
+    // (vazio no primeiro acesso do dia) mostrava "não devolveu movimento" durante toda a leitura (27/11/2026).
+    const publicar = (aviso, lendo) => {
       const todos = [];
       empresas.forEach((id) => {
         if (Object.prototype.hasOwnProperty.call(salvos, id)) todos.push.apply(todos, salvos[id] || []);
       });
       this._lancamentos2026 = todos;
-      this._caixaEstado = todos.length ? "ok" : "vazio";
+      this._caixaEstado = todos.length ? "ok" : (lendo ? "lendo" : "vazio");
       this._caixaErro = "";
       this._caixaAviso = aviso || "";
       if (document.getElementById("orc-dfc-body")) this.paintBody();
@@ -1004,7 +1006,7 @@ const OrcamentoDfcApp = {
       this._caixaChave = chave;
       return;
     }
-    if (buscar.length) publicar("O realizado salvo já está na tela.");
+    if (buscar.length) publicar("O realizado salvo já está na tela.", true);
     if (typeof fluxo.ensureCategories === "function") {
       try { await fluxo.ensureCategories(); } catch (e) {}
     }
@@ -1021,6 +1023,11 @@ const OrcamentoDfcApp = {
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
         const novos = await fluxo.buscarMovimentos(inicio, ate, buscar);
+        // Várias empresas e nenhum movimento em nenhuma: é falha de leitura (ex.: login expirado, que faz o
+        // servidor recusar o Sienge), não ausência de realizado. Não grava vazio para o dia inteiro.
+        if (buscar.length >= 3 && !(novos || []).length) {
+          throw new Error("O caixa e banco não devolveu nenhum movimento para nenhuma empresa. Pode ser o login do Integra expirado: saia e entre de novo e abra a tela outra vez.");
+        }
         movs = movs.concat(novos || []);
       } catch (e) {
         const bruto = String((e && e.message) || "");
