@@ -2576,6 +2576,9 @@ const SiengeApiService = {
           if (filaIncompleta) {
             console.warn("%c[Sienge] Fila incompleta. O cache do dia e o sprint não serão gravados com essa carga.", "color:#f59e0b;font-weight:bold;");
           }
+          if (filaVazia && explicitForce) {
+            setTimeout(() => alert("A busca no Sienge voltou sem nenhum título, então a fila não foi atualizada. Confira se o seu login está ativo (saia e entre de novo no Integra) e tente outra vez."), 0);
+          }
 
           if (isFilaNonBusinessDay(todayStr) && !defaultersCacheLooksIncomplete(result, { companyIds: fetchedCompanyIds }, expectedCompanyIds)) {
             markFilaFullRefreshDone(todayStr);

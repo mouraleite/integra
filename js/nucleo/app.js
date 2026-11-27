@@ -15015,6 +15015,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const refreshBtn = document.getElementById("btn-refresh-dashboard");
   if (refreshBtn) {
     refreshBtn.onclick = async () => {
+      // Confirma o login Microsoft já no clique (abre a janela da Microsoft se o token não renovou sozinho).
+      // Em 27/11/2026 o token não renovava: o servidor recusava todas as chamadas ao Sienge (sem-login),
+      // a busca voltava vazia e o botão parecia não fazer nada.
+      const auth = window.MouraAuth;
+      let pedidoToken = Promise.resolve("ok");
+      try {
+        if (auth && typeof auth.getIntegraTokenInterativo === "function") pedidoToken = auth.getIntegraTokenInterativo();
+      } catch (e) {}
+      let token = "";
+      try { token = await pedidoToken; } catch (e) { token = ""; }
+      if (!token) {
+        alert("Não consegui confirmar seu login Microsoft, e sem ele o Sienge não responde. Se abriu uma janela da Microsoft, escolha sua conta da Moura Leite; se não abriu, libere pop-ups para este site ou saia e entre de novo no Integra.");
+        return;
+      }
       if (window.SiengeApiService) {
         SiengeApiService._defaultersFetchGen = (SiengeApiService._defaultersFetchGen || 0) + 1;
         SiengeApiService._defaultersPromise = null;
