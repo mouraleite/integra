@@ -4119,6 +4119,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fiscal-rastrear-pedido": "Rastrear pedido",
     "plano-financeiro": "Plano Financeiro e Visões",
     "indexadores": "Indexadores Financeiros",
+    "orion-viabilidades": "Viabilidade",
+    "orion-premissas": "Premissas da viabilidade",
     "documentos-sienge": "Tipos de Documento",
     "compromissario_prefeitura": "Compromissário (Prefeituras)",
     "compromissario_associacoes": "Compromissário (Associações)",
@@ -4209,6 +4211,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "participacoes": "pie-chart",
     "plano-financeiro": "layout-list",
     "indexadores": "trending-up",
+    "orion-viabilidades": "building-2",
+    "orion-premissas": "sliders-horizontal",
     "documentos-sienge": "file-check",
     "compromissario_prefeitura": "building",
     "compromissario_associacoes": "users-round",
@@ -4429,6 +4433,11 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     if (typeof ConfigTagsApp !== "undefined") ConfigTagsApp.loadTags();
   } else if (tabId === "motivos-cancelamento") {
     if (typeof window.renderMotivosCancelamento === "function") window.renderMotivosCancelamento();
+  } else if (tabId === "orion-viabilidades") {
+    // Viabilidade (vinda do Órion): menu Projetos.
+    if (typeof OrionViabilidadesApp !== "undefined") OrionViabilidadesApp.init();
+  } else if (tabId === "orion-premissas") {
+    if (typeof OrionPremissasApp !== "undefined") OrionPremissasApp.init();
   } else if (tabId === "config-users") {
     if (typeof ConfigUsersApp !== "undefined") ConfigUsersApp.loadUsers();
   } else if (tabId === "suporte") {
