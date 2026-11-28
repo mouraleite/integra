@@ -372,10 +372,10 @@ const EscalaHomeOffice = {
   },
 
   async lerRemoto() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    // Supabase: documento genérico, guardado inteiro em configuracoes (chave config/escala_home_office).
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "escala_home_office"));
+      const snap = await window.DadosNucleo.lerConfig("escala_home_office");
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe) return null;
       const data = snap.data() || {};
@@ -399,10 +399,9 @@ const EscalaHomeOffice = {
   async salvar() {
     const dados = { ferias: this.state.ferias, ajustes: this.state.ajustes || {} };
     try { localStorage.setItem("crm_escala_home_office", JSON.stringify(dados)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "escala_home_office"), dados, { merge: true });
+      await window.DadosNucleo.gravarConfig("escala_home_office", dados, { merge: true });
     } catch (e) {
       console.warn("[Escala HO] gravação", e);
     }
@@ -659,6 +658,7 @@ const EscalaHomeOffice = {
   },
 
   async avisar() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("home-office")) return;
     if (!this.state.pronto) await this.carregar();
     const eu = this.eu();
     if (!eu) return;
@@ -668,7 +668,26 @@ const EscalaHomeOffice = {
     try { if (localStorage.getItem(chave) === "1") return; } catch (e) {}
     this.abrirAviso(dia, eu);
     try { localStorage.setItem(chave, "1"); } catch (e) {}
+  },
+
+  /* Prévia pela tela de gestão de pop-ups: o mesmo aviso, com o próximo dia de home office da escala.
+     Não marca "já visto" nem grava cache; se a escala não estiver carregada, só lê. */
+  async previa() {
+    if (!this.state.pronto) {
+      const fonte = (await this.lerRemoto()) || this.lerLocal();
+      this.state.ferias = fonte.ferias;
+      this.state.ajustes = fonte.ajustes;
+      this.state.pronto = true;
+    }
+    const eu = this.eu();
+    const de = this.proximoDiaUtil(this.hoje());
+    const dias = this.escala(de, this.addDias(de, 28)).filter((d) => d.ho && !d.semHome);
+    const dia = dias.find((d) => d.ho === eu) || dias[0] || { data: de, ho: "leticia", cedo: "", tarde: "", ausencias: [], semHome: false };
+    this.abrirAviso(dia, dia.ho);
   }
 };
 
 window.EscalaHomeOffice = EscalaHomeOffice;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["home-office"] = function () { return EscalaHomeOffice.previa(); };

@@ -32,10 +32,10 @@ const UsuariosOnline = {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
+  // Presença no Supabase (tabela usuarios_online). Id da linha = presenceId (e-mail, ou e-mail__sessão).
   fb() {
-    const db = window.firebaseDb;
-    const f = window.firebaseCollections;
-    return db && f && f.setDoc && f.doc ? { db, f } : null;
+    const D = window.DadosNucleo;
+    return D && D.tabela ? { t: D.tabela(this.COLLECTION) } : null;
   },
 
   docId(email) {
@@ -85,10 +85,9 @@ const UsuariosOnline = {
 
   async sessoesGravadas(ref) {
     const fb = this.fb();
-    if (!fb || !fb.f.getDoc) return [];
+    if (!fb) return [];
     try {
-      const snap = await fb.f.getDoc(ref);
-      const data = snap && snap.exists && snap.exists() ? (snap.data() || {}) : {};
+      const data = (await fb.t.obter(ref)) || {};
       return Array.isArray(data.sessoes) ? data.sessoes : [];
     } catch (e) {
       return null;
@@ -142,7 +141,7 @@ const UsuariosOnline = {
     const pessoa = u.atuando || {};
     const emailPessoa = String(pessoa.email || u.email || "").toLowerCase();
     const conta = String(u._emailConta || u.email || "").toLowerCase();
-    const ref = fb.f.doc(fb.db, this.COLLECTION, this.presenceId(u));
+    const ref = this.presenceId(u);
     const remotas = await this.sessoesGravadas(ref);
     const payload = {
       email: emailPessoa,
@@ -152,7 +151,7 @@ const UsuariosOnline = {
       profile: u.profile_name || "",
       since: stamp.since,
       lastSeen: Date.now(),
-      lastSeenAt: fb.f.serverTimestamp ? fb.f.serverTimestamp() : null,
+      lastSeenAt: Date.now(),
       tab: this.tab || "",
       tabLabel: this.tabLabel(this.tab),
       agent: this.agent(),
@@ -161,7 +160,7 @@ const UsuariosOnline = {
     };
     if (remotas) payload.sessoes = this.montarSessoes(remotas, stamp, false);
     try {
-      await fb.f.setDoc(ref, payload, { merge: true });
+      await fb.t.gravar(ref, payload, { merge: true });
     } catch (e) {
       console.warn("[usuarios-online] sinal não gravado:", e);
     }
@@ -203,20 +202,22 @@ const UsuariosOnline = {
       localStorage.removeItem(this.storeKey("beat"));
     } catch (e) {}
     if (!fb) return;
-    const ref = fb.f.doc(fb.db, this.COLLECTION, this.presenceId(u));
+    const ref = this.presenceId(u);
     const payload = { online: false, logoutAt: Date.now() };
     if (since) {
       const remotas = await this.sessoesGravadas(ref);
       if (remotas) payload.sessoes = this.montarSessoes(remotas, { since: since, anterior: null }, true);
     }
     try {
-      await fb.f.setDoc(ref, payload, { merge: true });
+      await fb.t.gravar(ref, payload, { merge: true });
     } catch (e) {}
   },
 
   seenAt(row) {
     const ts = row && row.lastSeenAt;
     if (ts && typeof ts.toMillis === "function") return ts.toMillis();
+    // No Supabase lastSeenAt já vem em epoch ms.
+    if (typeof ts === "number" && ts) return ts;
     return Number(row && row.lastSeen) || 0;
   },
 
@@ -268,24 +269,23 @@ const UsuariosOnline = {
 
   listen() {
     const fb = this.fb();
-    if (!fb || !fb.f.onSnapshot || !fb.f.collection) {
-      this.error = "Firebase indisponível. Atualize a página.";
+    if (!fb || !fb.t.ouvir) {
+      this.error = "Banco de dados indisponível. Atualize a página.";
       this.render();
       return;
     }
     if (this.unsub) return;
-    this.unsub = fb.f.onSnapshot(fb.f.collection(fb.db, this.COLLECTION), (snap) => {
-      const rows = [];
-      snap.forEach((d) => rows.push(Object.assign({ id: d.id }, d.data())));
-      this.rows = rows;
+    this.unsub = fb.t.ouvir((snap) => {
+      this.rows = snap.docs.map((d) => Object.assign({}, d));
       this.loaded = true;
       this.error = "";
       this.render();
-    }, (err) => {
-      console.warn("[usuarios-online] leitura:", err);
-      this.error = "Não foi possível ler os usuários online no Firebase.";
-      this.loaded = true;
-      this.render();
+    }, {
+      aoErro: (err) => {
+        console.warn("[usuarios-online] leitura:", err);
+        this.error = "Não foi possível ler os usuários online.";
+        this.render();
+      },
     });
     if (!this.clock) this.clock = setInterval(() => { if (this.aba !== "acessos") this.render(); }, 30000);
   },

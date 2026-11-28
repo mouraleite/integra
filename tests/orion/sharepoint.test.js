@@ -1,7 +1,7 @@
 /* Carga SharePoint: leitura do relatório 2653 do Sienge com a mesma regra do Órion. Dados FICTÍCIOS. */
 const test = require("node:test");
 const assert = require("node:assert");
-const S = require("../../orion-sharepoint-calc.js");
+const S = require("../../js/orcamento/orion-sharepoint-calc.js");
 
 const relatorio = [
   ["Comparativo Orçamento Empresarial X Realizado Agrupado"],

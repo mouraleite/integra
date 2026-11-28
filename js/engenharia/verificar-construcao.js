@@ -98,6 +98,12 @@ function _vcRotuloPedido(docObj) {
         return { statusLabel: 'Pedido da ficha', statusColor: 'color:#0369a1; font-weight:600;', solicitadoHa: _vcHaPedido(docObj) };
     }
     if (docObj.status === 'aguardando_fotos') {
+        // Enviada para o app de vistoria: mostra com quem está, em vez de "Link Enviado".
+        if (docObj.app && docObj.app.responsavelEmail) {
+            const quem = String(docObj.app.responsavelNome || docObj.app.responsavelEmail).split(' ')[0];
+            const ha = _vcHaPedido(docObj);
+            return { statusLabel: 'No app – Aguardando Fotos', statusColor: 'color: #d97706; font-weight: 600;', solicitadoHa: 'Com ' + quem + (ha ? ' · ' + ha : '') };
+        }
         return { statusLabel: 'Link Enviado – Aguardando Fotos', statusColor: 'color: #d97706; font-weight: 600;', solicitadoHa: _vcHaPedido(docObj) };
     }
     if (docObj.status === 'aguardando_validacao') {
@@ -173,25 +179,24 @@ function _vcResolvePendingVistoria(keys, checksByContract, latestCheckDateByCont
 
 window.closePendingLinkVistorias = async function(contractKeys, reason) {
     const keys = [...new Set((contractKeys || []).map(_vcNormalizeKey).filter(Boolean))];
-    if (!keys.length || !window.firebaseDb || !window.firebaseCollections) return 0;
-    const { collection, getDocs, query, where, doc, updateDoc } = window.firebaseCollections;
+    if (!keys.length || !window.DadosEngenharia) return 0;
+    const tab = window.DadosEngenharia.tabela('vistorias');
     const pendingStatuses = new Set(['solicitada', 'aguardando_fotos', 'aguardando_validacao']);
     const keySet = new Set(keys);
     let closed = 0;
     try {
-        const snap = await getDocs(query(collection(window.firebaseDb, 'vistorias'), where('status', '!=', 'concluida')));
+        const lista = await tab.listar({ filtros: [['status', 'neq', 'concluida']] });
         const updates = [];
-        snap.forEach(d => {
-            const data = d.data();
+        lista.forEach(data => {
             if (data.isTest || !pendingStatuses.has(data.status)) return;
             if (data.status === 'aguardando_validacao') return;
             const docKeys = _vcDocIdentityKeys(data);
             if (!docKeys.some(k => keySet.has(k))) return;
-            updates.push(updateDoc(doc(window.firebaseDb, 'vistorias', d.id), {
+            updates.push(tab.gravar(data.id, {
                 status: 'concluida',
                 closedBy: reason || 'vistoria_interna',
                 closedAt: new Date().toISOString()
-            }));
+            }, { merge: true }));
         });
         await Promise.all(updates);
         closed = updates.length;
@@ -285,18 +290,21 @@ window.applyVistoriaRecorrenciaRecord = function(rec) {
 };
 
 window.pullVistoriaRecorrenciaFromCloud = async function() {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !fc.doc || !window.firebaseDb) return null;
+    // config/vistoria_recorrencia e as chaves de config/global no Supabase (configuracoes), via window.DadosNucleo.
+    const DN = window.DadosNucleo;
+    if (!DN) return null;
     const records = [];
     try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "vistoria_recorrencia"));
+        const snap = await DN.lerConfig("vistoria_recorrencia");
         const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
         if (exists && snap.data()) records.push(snap.data());
     } catch (e) {}
     try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
-        const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        const data = exists ? (snap.data() || {}) : {};
+        const [cfgRaw, diasRaw] = await Promise.all([
+            DN.lerConfiguracao("crm_moura_vistoria_send_days_config"),
+            DN.lerConfiguracao("crm_moura_vistoria_recurrence_days")
+        ]);
+        const data = { crm_moura_vistoria_send_days_config: cfgRaw, crm_moura_vistoria_recurrence_days: diasRaw };
         let cfg = {};
         try { cfg = JSON.parse(data.crm_moura_vistoria_send_days_config || "{}") || {}; } catch (e) { cfg = {}; }
         const intervalDays = Number(cfg.intervalDays) || Number(data.crm_moura_vistoria_recurrence_days) || 0;
@@ -317,8 +325,7 @@ window.pullVistoriaRecorrenciaFromCloud = async function() {
 };
 
 window.pushVistoriaRecorrenciaDoc = async function(payload, intervalDays) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.setDoc || !fc.doc || !window.firebaseDb || !payload) return false;
+    if (!window.DadosNucleo || !payload) return false;
     const rec = {
         enabled: payload.enabled !== false,
         dueDays: Array.isArray(payload.dueDays) ? payload.dueDays : [],
@@ -327,27 +334,22 @@ window.pushVistoriaRecorrenciaDoc = async function(payload, intervalDays) {
         intervalDays: Number(intervalDays) >= 1 ? Number(intervalDays) : (Number(payload.intervalDays) || 90),
         updatedAt: Number(payload.updatedAt) || Date.now()
     };
-    await fc.setDoc(fc.doc(window.firebaseDb, "config", "vistoria_recorrencia"), rec, { merge: true });
+    await window.DadosNucleo.gravarConfig("vistoria_recorrencia", rec, { merge: true });
     return true;
 };
 
 window.pushVistoriaSendConfigToCloud = async function(payload, intervalDays) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb || !payload) return false;
+    const DN = window.DadosNucleo;
+    if (!DN || !payload) return false;
     const raw = JSON.stringify(payload);
-    const docRef = fc.doc(window.firebaseDb, "config", "global");
-    await fc.runTransaction(window.firebaseDb, async (tx) => {
-        const snap = await tx.get(docRef);
-        const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        const cloud = exists ? (snap.data() || {}) : {};
-        const chosen = typeof window.pickNewerVistoriaSendConfig === "function"
-            ? window.pickNewerVistoriaSendConfig(raw, cloud.crm_moura_vistoria_send_days_config || "")
+    // runTransaction em config/global -> trocarConfiguracao na chave da configuração (lê, escolhe a mais nova e grava
+    // sem perder gravação de outra pessoa). A chave dos dias vai à parte (não fica na mesma transação).
+    await DN.trocarConfiguracao(window.VISTORIA_SEND_CONFIG_KEY, (atual) => {
+        return typeof window.pickNewerVistoriaSendConfig === "function"
+            ? window.pickNewerVistoriaSendConfig(raw, atual || "")
             : raw;
-        const patch = {};
-        patch[window.VISTORIA_SEND_CONFIG_KEY] = chosen;
-        if (Number(intervalDays) >= 1) patch.crm_moura_vistoria_recurrence_days = String(intervalDays);
-        tx.set(docRef, patch, { merge: true });
     });
+    if (Number(intervalDays) >= 1) await DN.gravarConfiguracoes({ crm_moura_vistoria_recurrence_days: String(intervalDays) });
     return true;
 };
 
@@ -579,7 +581,7 @@ window.saveVistoriaRecurrence = async function() {
 
 (function bootVistoriaRecorrenciaCloud() {
     const tryPull = () => {
-        if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return false;
+        if (!window.DadosNucleo) return false;
         window.pullVistoriaRecorrenciaFromCloud().catch(() => {});
         return true;
     };
@@ -956,10 +958,8 @@ window.VerificarConstrucaoApp = {
         this.loadData();
         
         if (this._unsubscribeVistorias) this._unsubscribeVistorias();
-        if (window.firebaseCollections && window.firebaseDb) {
-            const { collection, onSnapshot, query, where } = window.firebaseCollections;
-            const q = query(collection(window.firebaseDb, 'vistorias'), where('status', '!=', 'concluida'));
-            this._unsubscribeVistorias = onSnapshot(q, (snapshot) => {
+        if (window.DadosEngenharia) {
+            this._unsubscribeVistorias = window.DadosEngenharia.tabela('vistorias').ouvir(() => {
                 clearTimeout(this._reloadTimeout);
                 this._reloadTimeout = setTimeout(() => {
                     // Only reload if the container is visible
@@ -968,18 +968,17 @@ window.VerificarConstrucaoApp = {
                         this.loadData();
                     }
                 }, 1500);
-            });
+            }, { filtros: [['status', 'neq', 'concluida']], colunas: 'id, status' });
         }
     },
 
     _subscribeObrasAndamento() {
-        if (!window.firebaseDb || !window.firebaseCollections) return;
-        const { doc, onSnapshot } = window.firebaseCollections;
-        const ref = doc(window.firebaseDb, 'config', 'global');
+        // onSnapshot em config/global -> leitura inicial da chave + ouvirConfiguracao (só avisa mudanças).
+        const DN = window.DadosNucleo;
+        if (!DN) return;
         if (this._unsubscribeObras) this._unsubscribeObras();
-        this._unsubscribeObras = onSnapshot(ref, (snap) => {
-            const data = snap.exists() ? snap.data() : null;
-            const cloudRaw = data && data.crm_obras_andamento;
+        const aoErro = (err) => console.warn('[Vistoria] Sync obras em andamento:', err);
+        const aplicar = (cloudRaw) => {
             if (cloudRaw) {
                 const cloud = typeof cloudRaw === 'string' ? cloudRaw : JSON.stringify(cloudRaw);
                 const local = localStorage.getItem('crm_obras_andamento') || '';
@@ -997,14 +996,18 @@ window.VerificarConstrucaoApp = {
             } else {
                 this._seedObrasCloudFromLocal();
             }
-        }, (err) => console.warn('[Vistoria] Sync obras em andamento:', err));
+        };
+        this._unsubscribeObras = DN.ouvirConfiguracao('crm_obras_andamento', (chave, valor) => {
+            try { aplicar(valor); } catch (e) { aoErro(e); }
+        });
+        DN.lerConfiguracao('crm_obras_andamento').then(aplicar).catch(aoErro);
     },
 
     _seedObrasCloudFromLocal() {
         if (this._obrasSeeded) return;
         const saved = _vcReadObrasState();
         const hasIntentional = Object.values(saved).some(v => v && v.isOn && v.previsao);
-        if (!hasIntentional || !window.firebaseCollections) return;
+        if (!hasIntentional || !window.DadosNucleo) return;
         this._obrasSeeded = true;
 
         const empList = _vcCollectOverdueCostCenters();
@@ -1020,12 +1023,11 @@ window.VerificarConstrucaoApp = {
         });
 
         localStorage.setItem('crm_obras_andamento', JSON.stringify(migrated));
-        const { doc, setDoc } = window.firebaseCollections;
         const userName = (window.AppState && window.AppState.currentUser && window.AppState.currentUser.name) || '';
-        setDoc(doc(window.firebaseDb, 'config', 'global'), {
+        window.DadosNucleo.gravarConfiguracoes({
             crm_obras_andamento: JSON.stringify(migrated),
             crm_obras_andamento_meta: JSON.stringify({ updatedAt: Date.now(), updatedBy: userName })
-        }, { merge: true }).catch(err => console.error('[Vistoria] Falha ao publicar obras em andamento:', err));
+        }).catch(err => console.error('[Vistoria] Falha ao publicar obras em andamento:', err));
     },
 
     render() {
@@ -1052,9 +1054,14 @@ window.VerificarConstrucaoApp = {
                         </label>
                     </div>
                     <div class="cc-toolbar-actions">
+                        ${this.modo === 'app' ? `
+                        <div id="vc-app-vistoriador" class="vc-app-vist"></div>
+                        <button type="button" class="btn btn-primary vc-wpp" onclick="window.VerificarConstrucaoApp.enviarParaApp()" id="btn-solicitar-wpp" disabled>
+                            <i data-lucide="smartphone"></i> Enviar para o app
+                        </button>` : `
                         <button type="button" class="btn btn-primary vc-wpp" onclick="window.VerificarConstrucaoApp.solicitarWhatsApp()" id="btn-solicitar-wpp" disabled>
                             <i data-lucide="message-circle"></i> Solicitar Vistoria (WhatsApp)
-                        </button>
+                        </button>`}
                     </div>
                 </div>
 
@@ -1107,6 +1114,7 @@ window.VerificarConstrucaoApp = {
         `;
 
         this._ensureModals();
+        if (this.modo === 'app') this._pintarVistoriadorApp();
         const subCb = document.getElementById('vc-include-subjudice');
         if (subCb) subCb.checked = !!this.includeSubjudice;
         const subLabel = document.getElementById('vc-include-subjudice-label');
@@ -1207,25 +1215,11 @@ window.VerificarConstrucaoApp = {
     },
 
     async lerClientesDoBatimento() {
-        const fc = window.firebaseCollections;
-        if (!window.firebaseDb || !fc || !fc.getDoc || !fc.doc) return null;
+        // vistoria_batimento no Supabase: uma linha por dia com a lista inteira (sem _meta e shards _p<i>).
+        // null se o cron ainda não gerou o dia de hoje.
+        if (!window.DadosEngenharia) return null;
         const hoje = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-        const metaSnap = await fc.getDoc(fc.doc(window.firebaseDb, "vistoria_batimento", "_meta"));
-        const metaOk = metaSnap && (typeof metaSnap.exists === "function" ? metaSnap.exists() : metaSnap.exists);
-        if (!metaOk) return null;
-        const meta = metaSnap.data() || {};
-        if (meta.date !== hoje || !Number(meta.parts)) return null;
-        const clients = [];
-        for (let i = 0; i < Number(meta.parts); i++) {
-            const snap = await fc.getDoc(fc.doc(window.firebaseDb, "vistoria_batimento", hoje + "_p" + i));
-            const ok = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-            if (!ok) continue;
-            try {
-                const chunk = JSON.parse((snap.data() || {}).data || "[]");
-                if (Array.isArray(chunk)) clients.push.apply(clients, chunk);
-            } catch (e) {}
-        }
-        return clients;
+        return window.DadosEngenharia.lerVistoriaBatimento(hoje);
     },
 
     async loadData() {
@@ -1541,9 +1535,8 @@ window.VerificarConstrucaoApp = {
         const unitOk = !_vcPlaceholderUnit(row.unidade);
         const ccOk = !!row.costCenterId;
         if (!nameOk && !unitOk && !ccOk) return;
-        if (!window.firebaseDb || !window.firebaseCollections) return;
+        if (!window.DadosEngenharia) return;
         try {
-            const { doc, updateDoc } = window.firebaseCollections;
             const patch = {};
             if (nameOk) patch.clienteName = row.clienteName;
             if (row.customerId) patch.customerId = String(row.customerId);
@@ -1557,7 +1550,7 @@ window.VerificarConstrucaoApp = {
             if (row.tituloKey || row.titulo) patch.tituloKey = row.tituloKey || row.titulo;
             if (row.contractId) patch.contractId = String(row.contractId);
             if (row.contractKeys && row.contractKeys.length) patch.contractKeys = row.contractKeys;
-            updateDoc(doc(window.firebaseDb, 'vistorias', row.vistoriaAtiva.id), patch).catch(err => console.warn('[Vistoria] Falha ao gravar dados recuperados:', err));
+            window.DadosEngenharia.tabela('vistorias').gravar(row.vistoriaAtiva.id, patch, { merge: true }).catch(err => console.warn('[Vistoria] Falha ao gravar dados recuperados:', err));
         } catch (e) {}
     },
 
@@ -1711,7 +1704,7 @@ window.VerificarConstrucaoApp = {
         box.innerHTML = kpi('Unidades', rows.length)
             + kpi('Pendentes de vistoria', conta('Pendente de Vistoria'), 'is-neg')
             + kpi('Pedidos da ficha', conta('Pedido da ficha'), 'is-alerta')
-            + kpi('Aguardando fotos', conta('Link Enviado – Aguardando Fotos'), 'is-alerta')
+            + kpi('Aguardando fotos', conta('Link Enviado – Aguardando Fotos') + conta('No app – Aguardando Fotos'), 'is-alerta')
             + kpi('Aguardando validação', conta('Aguardando Validação'))
             + kpi('Selecionadas', document.querySelectorAll('.vc-row-checkbox:checked').length, 'is-pos', 'vc-kpi-sel');
     },
@@ -1813,13 +1806,12 @@ window.VerificarConstrucaoApp = {
             toSave[k] = { isOn: !!v.isOn, previsao: v.previsao || '' };
         });
         localStorage.setItem('crm_obras_andamento', JSON.stringify(toSave));
-        if (window.firebaseDb && window.firebaseCollections) {
-            const { doc, setDoc } = window.firebaseCollections;
+        if (window.DadosNucleo) {
             const userName = (window.AppState && window.AppState.currentUser && window.AppState.currentUser.name) || '';
-            setDoc(doc(window.firebaseDb, 'config', 'global'), {
+            window.DadosNucleo.gravarConfiguracoes({
                 crm_obras_andamento: JSON.stringify(toSave),
                 crm_obras_andamento_meta: JSON.stringify({ updatedAt: Date.now(), updatedBy: userName })
-            }, { merge: true }).catch(err => console.error('[Vistoria] Falha ao sincronizar obras em andamento:', err));
+            }).catch(err => console.error('[Vistoria] Falha ao sincronizar obras em andamento:', err));
         }
         document.getElementById('modal-obras-andamento').style.display = 'none';
         const viewDistrato = document.getElementById('view-distrato');
@@ -1870,6 +1862,147 @@ window.VerificarConstrucaoApp = {
             console.warn('[Vistoria] Não foi possível buscar coords KMZ:', e.message);
         }
         return null;
+    },
+
+    /* ===== Vistoria (app) =====
+     * Mesma lista e mesma regra da Vistoria (link). Em vez de gerar um link novo a cada envio,
+     * a vistoria é atribuída a um vistoriador e aparece no app dele (/vistoria-app/).
+     * O registro em "vistorias" é o mesmo do link: o app usa a mesma página de fotos e a validação não muda.
+     */
+    setModo(modo) {
+        this.modo = modo === 'app' ? 'app' : 'link';
+    },
+
+    _vistoriadoresApp() {
+        let users = [];
+        try {
+            users = typeof window.getCrmUsersList === 'function'
+                ? (window.getCrmUsersList() || [])
+                : (JSON.parse(localStorage.getItem('crm_users') || '[]') || []);
+        } catch (e) { users = []; }
+        const vistos = new Set();
+        return users.filter((u) => {
+            const email = String((u && u.email) || '').trim().toLowerCase();
+            if (!email || vistos.has(email)) return false;
+            const ativo = !u.status || String(u.status).toUpperCase() !== 'INATIVO';
+            if (!ativo || !u.check_construction) return false;
+            vistos.add(email);
+            return true;
+        }).map((u) => ({
+            id: String(u.email).trim().toLowerCase(),
+            label: String(u.name || u.email).toUpperCase(),
+            nome: String(u.name || u.email),
+            phone: u.phone || '',
+            cidades: Array.isArray(u.const_cities) ? u.const_cities : []
+        })).sort((a, b) => a.label.localeCompare(b.label, 'pt'));
+    },
+
+    _pintarVistoriadorApp() {
+        const wrap = document.getElementById('vc-app-vistoriador');
+        if (!wrap || !window.MlSelectUnico) return;
+        const itens = this._vistoriadoresApp();
+        if (this._vistoriadorApp && !itens.some((i) => i.id === this._vistoriadorApp)) this._vistoriadorApp = '';
+        wrap.innerHTML = MlSelectUnico.html({
+            id: 'vc-app-vist',
+            items: itens.map((i) => ({ id: i.id, label: i.label })),
+            selectedId: this._vistoriadorApp || '',
+            semId: true,
+            placeholder: itens.length ? 'Vistoriador' : 'Nenhum vistoriador cadastrado',
+            largura: '260px'
+        });
+        MlSelectUnico.bind('vc-app-vist', { onSelect: (id) => { this._vistoriadorApp = String(id || ''); } });
+    },
+
+    async enviarParaApp() {
+        if (!this.renderedRows) return;
+        const vistoriador = this._vistoriadoresApp().find((v) => v.id === this._vistoriadorApp);
+        if (!vistoriador) {
+            alert('Escolha o vistoriador que vai receber as vistorias no app.');
+            return;
+        }
+        const cbs = document.querySelectorAll('.vc-row-checkbox:checked');
+        const selected = Array.from(cbs).map(c => this.renderedRows[parseInt(c.value, 10)]).filter(Boolean);
+        const internos = this.renderedRows.filter((r) => r.vistoriaAtiva && r.vistoriaAtiva.status === 'solicitada');
+        const lista = [];
+        const vistos = new Set();
+        internos.concat(selected).forEach((r) => {
+            // Já com fotos enviadas, esperando validação: não volta para o app.
+            if (r.vistoriaAtiva && r.vistoriaAtiva.status === 'aguardando_validacao') return;
+            const chave = (r.vistoriaAtiva && r.vistoriaAtiva.id) || (String(r.titulo || '') + '|' + String(r.unidade || ''));
+            if (vistos.has(chave)) return;
+            vistos.add(chave);
+            lista.push(r);
+        });
+        if (!lista.length) {
+            alert('Selecione os lotes que vão para o app.');
+            return;
+        }
+        const quem = (window.AppState && AppState.currentUser) || {};
+        const atribuicao = {
+            responsavelEmail: vistoriador.id,
+            responsavelNome: vistoriador.nome,
+            atribuidoEm: new Date().toISOString(),
+            atribuidoPor: String(quem.name || quem.email || '')
+        };
+        const btn = document.getElementById('btn-solicitar-wpp');
+        if (btn) { btn.disabled = true; btn.innerHTML = 'Enviando para o app...'; }
+        try {
+            const tabVistorias = window.DadosEngenharia.tabela('vistorias');
+            for (const r of lista) {
+                let vId = r.vistoriaAtiva ? r.vistoriaAtiva.id : null;
+                const loteCoords = await this._fetchLoteCoords(r.costCenterId);
+                const contractKeys = Array.isArray(r.contractKeys) && r.contractKeys.length ? [...r.contractKeys] : [String(r.contractId)];
+                if (r.titulo) contractKeys.push(String(r.titulo));
+                if (r.tituloKey) contractKeys.push(String(r.tituloKey));
+                if (r.contractNumberStr) contractKeys.push(String(r.contractNumberStr));
+                if (r.realSaleIdStr) contractKeys.push(String(r.realSaleIdStr));
+                if (!vId) {
+                    const novoId = await tabVistorias.criar({
+                        customerId: r.customerId,
+                        contractId: r.contractId,
+                        contractKeys: [...new Set(contractKeys.map(String))],
+                        tituloKey: r.tituloKey || r.titulo || '',
+                        titulo: r.titulo || '',
+                        clienteName: r.clienteName || '',
+                        cidade: r.cidade,
+                        empreendimento: r.empreendimento,
+                        costCenterId: r.costCenterId,
+                        unidade: r.unidade,
+                        status: 'aguardando_fotos',
+                        loteCoords: loteCoords || null,
+                        createdAt: Date.now(),
+                        app: atribuicao
+                    });
+                    vId = novoId;
+                } else {
+                    const patch = { status: 'aguardando_fotos', app: atribuicao };
+                    if (loteCoords) patch.loteCoords = loteCoords;
+                    await tabVistorias.gravar(vId, patch, { merge: true });
+                }
+            }
+            const qtd = lista.length;
+            const fone = String(vistoriador.phone || '').replace(/\D/g, '');
+            const foneWpp = fone.length === 10 || fone.length === 11 ? '55' + fone : fone;
+            const avisar = foneWpp && confirm(`${qtd} vistoria(s) enviada(s) para o app de ${vistoriador.nome}.\n\nAvisar pelo WhatsApp?`);
+            if (avisar) {
+                const appUrl = window.location.origin + '/vistoria-app/';
+                const msg = `Olá! Você tem ${qtd} nova(s) vistoria(s) no app de vistorias:\n${appUrl}`;
+                window.open(`https://api.whatsapp.com/send?phone=${foneWpp}&text=${encodeURIComponent(msg)}`, '_blank');
+            } else if (!foneWpp) {
+                alert(`${qtd} vistoria(s) enviada(s) para o app de ${vistoriador.nome}.`);
+            }
+            await this.loadData();
+        } catch (err) {
+            console.error('[Vistoria app] Erro ao enviar:', err);
+            alert('Erro ao enviar para o app: ' + err.message);
+        } finally {
+            const b = document.getElementById('btn-solicitar-wpp');
+            if (b) {
+                b.innerHTML = '<i data-lucide="smartphone"></i> Enviar para o app';
+                if (window.lucide) lucide.createIcons();
+            }
+            this.updateBtn();
+        }
     },
 
     async solicitarWhatsApp() {
@@ -1926,7 +2059,7 @@ window.VerificarConstrucaoApp = {
         };
 
         try {
-            const { collection, addDoc, doc, updateDoc, serverTimestamp } = window.firebaseCollections;
+            const tabVistorias = window.DadosEngenharia.tabela('vistorias');
             const baseUrl = window.location.origin + window.location.pathname.replace(/[^/]*$/, '');
 
             const cityGroups = {};
@@ -1946,7 +2079,7 @@ window.VerificarConstrucaoApp = {
                 if (r.realSaleIdStr) contractKeys.push(String(r.realSaleIdStr));
 
                 if (!vId) {
-                    const docRef = await addDoc(collection(window.firebaseDb, 'vistorias'), {
+                    const novoId = await tabVistorias.criar({
                         customerId: r.customerId,
                         contractId: r.contractId,
                         contractKeys: [...new Set(contractKeys.map(String))],
@@ -1959,15 +2092,15 @@ window.VerificarConstrucaoApp = {
                         unidade: r.unidade,
                         status: 'aguardando_fotos',
                         loteCoords: loteCoords || null,
-                        createdAt: serverTimestamp(),
+                        createdAt: Date.now(),
                         linkEnviadoEm: new Date().toISOString()
                     });
-                    vId = docRef.id;
+                    vId = novoId;
                 } else {
                     const patch = { linkEnviadoEm: new Date().toISOString() };
                     if (loteCoords) patch.loteCoords = loteCoords;
                     if (eraPedido) patch.status = 'aguardando_fotos';
-                    await updateDoc(doc(window.firebaseDb, 'vistorias', vId), patch);
+                    await tabVistorias.gravar(vId, patch, { merge: true });
                 }
 
                 r._generatedVistoriaId = vId;
@@ -2159,7 +2292,7 @@ window.VerificarConstrucaoApp = {
             const { ref, listAll, getDownloadURL } = window.firebaseCollections;
             const storageRef = ref(window.firebaseStorage, `vistorias/${v.id}`);
 
-            document.getElementById('vc-validar-status').textContent = 'Buscando fotos no Firebase...';
+            document.getElementById('vc-validar-status').textContent = 'Buscando fotos...';
             const listRes = await listAll(storageRef);
             if (listRes.items.length === 0) {
                 throw new Error("Nenhuma foto encontrada para esta vistoria.");
@@ -2256,10 +2389,10 @@ window.VerificarConstrucaoApp = {
             }
 
             document.getElementById('vc-validar-status').textContent = 'Finalizando Vistoria...';
-            const { doc, updateDoc, collection, addDoc } = window.firebaseCollections;
-            await updateDoc(doc(window.firebaseDb, 'vistorias', v.id), { status: 'concluida' });
+            const DE = window.DadosEngenharia;
+            await DE.tabela('vistorias').gravar(v.id, { status: 'concluida' }, { merge: true });
             if (v.origem === 'ficha' && v.requestedByEmail && !vistoriaSolicitanteEhBackOffice(v)) {
-                await addDoc(collection(window.firebaseDb, 'vistoria_avisos'), {
+                await DE.tabela('vistoria_avisos').criar({
                     vistoriaId: v.id,
                     email: String(v.requestedByEmail).trim().toLowerCase(),
                     nome: v.requestedBy || '',
@@ -2328,7 +2461,7 @@ window.VerificarConstrucaoApp = {
                 fileName: "Foto Vistoria 1.jpg",
                 createdAt: new Date().toISOString()
             };
-            await addDoc(collection(window.firebaseDb, "construction_checks"), newCheck);
+            await DE.tabela("construction_checks").criar(newCheck);
 
             alert(`✅ Vistoria validada com sucesso!\n${listRes.items.length} foto(s) anexada(s) na unidade ${row.unidade} (ID Sienge: ${siengeUnitId}).`);
             await this.loadData();
@@ -2409,9 +2542,9 @@ window.scheduleVistoriaAlertSnoozeWake = function() {
     }, delay);
 };
 
-window.toggleVistoriaSnoozeMenu = function(ev) {
+window.toggleVistoriaSnoozeMenu = function(ev, idMenu) {
     if (ev) ev.stopPropagation();
-    const menu = document.getElementById("vistoria-snooze-menu");
+    const menu = document.getElementById(idMenu || "vistoria-snooze-menu");
     if (!menu) return;
     const open = menu.style.display === "flex";
     menu.style.display = open ? "none" : "flex";
@@ -2480,12 +2613,9 @@ window.goToVistoriaValidationFromAlert = function() {
 };
 
 window.fetchVistoriasAguardandoValidacao = async function() {
-    if (!window.firebaseDb || !window.firebaseCollections) return [];
-    const { collection, getDocs, query, where } = window.firebaseCollections;
+    if (!window.DadosEngenharia) return [];
     try {
-        const q = query(collection(window.firebaseDb, "vistorias"), where("status", "==", "aguardando_validacao"));
-        const snap = await getDocs(q);
-        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        return await window.DadosEngenharia.tabela("vistorias").listar({ filtros: [["status", "eq", "aguardando_validacao"]] });
     } catch (e) {
         console.warn("[Vistoria alerta] falha ao buscar aguardando_validacao:", e);
         return [];
@@ -2499,34 +2629,64 @@ window.ensureVistoriaValidationAlertModal = function() {
         modal = null;
     }
     if (modal) return modal;
-    modal = document.createElement("div");
-    modal.id = "modal-vistoria-validation-alerts";
+    return _vcCriarModalValidacaoVistoria({
+        idModal: "modal-vistoria-validation-alerts",
+        idLista: "vistoria-validation-alerts-list",
+        idMenu: "vistoria-snooze-menu",
+        adiar: (escolha) => `window.snoozeVistoriaValidationAlert(${escolha})`,
+        ciente: "window.markVistoriaValidationAlertsSeen()",
+        ir: "window.goToVistoriaValidationFromAlert()"
+    });
+};
+
+/** Cria o modal "Vistorias aguardando validação". O alerta real e a prévia passam ids e ações próprios. */
+function _vcCriarModalValidacaoVistoria(o) {
+    const modal = document.createElement("div");
+    modal.id = o.idModal;
     modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
+    const itemMenu = (escolha, rotulo, extra) => `<button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;${extra || ""}" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="${o.adiar(escolha)}">${rotulo}</button>`;
     modal.innerHTML = `
         <div style="background: white; width: 620px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
             <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Vistorias aguardando validação</h2>
             <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">O vistoriador respondeu o link. Há vistorias com fotos prontas para validação:</p>
-            <div id="vistoria-validation-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
+            <div id="${o.idLista}" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
                 <div style="position: relative;">
-                    <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleVistoriaSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
-                    <div id="vistoria-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(15)">15 min</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(30)">30 min</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(60)">1 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(120)">2 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert(180)">3 h</button>
-                        <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeVistoriaValidationAlert('amanha')">Amanhã</button>
+                    <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleVistoriaSnoozeMenu(event, '${o.idMenu}')">Lembrar Mais Tarde ▾</button>
+                    <div id="${o.idMenu}" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
+                        ${itemMenu("15", "15 min")}
+                        ${itemMenu("30", "30 min")}
+                        ${itemMenu("60", "1 h")}
+                        ${itemMenu("120", "2 h")}
+                        ${itemMenu("180", "3 h")}
+                        ${itemMenu("'amanha'", "Amanhã", "border-top:1px solid #e2e8f0;")}
                     </div>
                 </div>
-                <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #fff; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markVistoriaValidationAlertsSeen()">Ciente</button>
-                <button type="button" class="btn btn-primary" style="background: #105436; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.goToVistoriaValidationFromAlert()">Ir para Validar Vistoria</button>
+                <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #fff; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="${o.ciente}">Ciente</button>
+                <button type="button" class="btn btn-primary" style="background: #105436; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="${o.ir}">Ir para Validar Vistoria</button>
             </div>
         </div>
     `;
     document.body.appendChild(modal);
     return modal;
-};
+}
+
+/** Linhas da lista de vistorias aguardando validação (alerta real e prévia). */
+function _vcHtmlListaValidacaoVistoria(pending) {
+    return pending.map(v => {
+        const esc = (s) => String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        const cidade = esc(String(v.cidade || "-").toUpperCase());
+        const emp = esc(v.empreendimento || "-");
+        const unidade = esc(v.unidade || v.contractId || "-");
+        const titulo = esc(v.titulo || v.tituloKey || v.contractId || "-");
+        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;background:#f8fafc;">
+            <div style="font-weight:700;color:#0f172a;font-size:0.92rem;">${unidade} · ${titulo}</div>
+            <div style="font-size:0.8rem;color:#64748b;margin-top:4px;">${cidade} — ${emp}</div>
+            <div style="margin-top:6px;font-size:0.75rem;font-weight:700;color:#7c3aed;">Aguardando Validação</div>
+        </div>`;
+    }).join("");
+}
 
 window.checkVistoriasValidationAlerts = async function(isTest = false) {
     const gate = window.userIsCobrancaBackOffice();
@@ -2568,20 +2728,32 @@ window.checkVistoriasValidationAlerts = async function(isTest = false) {
     const listEl = document.getElementById("vistoria-validation-alerts-list");
     if (!listEl) return;
 
-    listEl.innerHTML = pending.map(v => {
-        const esc = (s) => String(s == null ? "" : s)
-            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-        const cidade = esc(String(v.cidade || "-").toUpperCase());
-        const emp = esc(v.empreendimento || "-");
-        const unidade = esc(v.unidade || v.contractId || "-");
-        const titulo = esc(v.titulo || v.tituloKey || v.contractId || "-");
-        return `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;background:#f8fafc;">
-            <div style="font-weight:700;color:#0f172a;font-size:0.92rem;">${unidade} · ${titulo}</div>
-            <div style="font-size:0.8rem;color:#64748b;margin-top:4px;">${cidade} — ${emp}</div>
-            <div style="margin-top:6px;font-size:0.75rem;font-weight:700;color:#7c3aed;">Aguardando Validação</div>
-        </div>`;
-    }).join("");
+    listEl.innerHTML = _vcHtmlListaValidacaoVistoria(pending);
 
+    modal.style.display = "flex";
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+
+/** Prévia (gestão de pop-ups): mesmo modal com dados de exemplo; todos os botões só fecham, nada é gravado nem agendado. */
+window.PopupPrevias["vistoria"] = function() {
+    const idModal = "modal-vistoria-validation-previa";
+    const antigo = document.getElementById(idModal);
+    if (antigo) antigo.remove();
+    const fechar = `document.getElementById('${idModal}').remove()`;
+    const modal = _vcCriarModalValidacaoVistoria({
+        idModal: idModal,
+        idLista: "vistoria-validation-previa-list",
+        idMenu: "vistoria-snooze-menu-previa",
+        adiar: () => fechar,
+        ciente: fechar,
+        ir: fechar
+    });
+    const exemplo = [
+        { cidade: "Cidade exemplo", empreendimento: "Residencial Exemplo", unidade: "Quadra 12 Lote 08", titulo: "12345" },
+        { cidade: "Cidade exemplo", empreendimento: "Loteamento Modelo", unidade: "Quadra 3 Lote 21", titulo: "67890" }
+    ];
+    document.getElementById("vistoria-validation-previa-list").innerHTML = _vcHtmlListaValidacaoVistoria(exemplo);
     modal.style.display = "flex";
 };
 
@@ -2589,19 +2761,20 @@ window.startVistoriaValidationAlertListener = function() {
     if (window._vistoriaAlertListenerStarted) return;
     const gate = window.userIsCobrancaBackOffice();
     if (!gate.ok) return;
-    if (!window.firebaseDb || !window.firebaseCollections) return;
+    if (!window.DadosEngenharia) return;
     window._vistoriaAlertListenerStarted = true;
-    const { collection, onSnapshot, query, where } = window.firebaseCollections;
     try {
-        const q = query(collection(window.firebaseDb, "vistorias"), where("status", "==", "aguardando_validacao"));
-        window._unsubscribeVistoriaValidationAlert = onSnapshot(q, () => {
+        window._unsubscribeVistoriaValidationAlert = window.DadosEngenharia.tabela("vistorias").ouvir(() => {
             clearTimeout(window._vistoriaAlertDebounce);
             window._vistoriaAlertDebounce = setTimeout(() => {
                 if (typeof window.checkVistoriasValidationAlerts === "function") {
                     window.checkVistoriasValidationAlerts();
                 }
             }, 800);
-        }, (err) => console.warn("[Vistoria alerta] listener:", err));
+        }, {
+            filtros: [["status", "eq", "aguardando_validacao"]], colunas: "id, status",
+            aoErro: (err) => console.warn("[Vistoria alerta] listener:", err)
+        });
     } catch (e) {
         console.warn("[Vistoria alerta] não foi possível iniciar listener:", e);
         window._vistoriaAlertListenerStarted = false;
@@ -2613,15 +2786,15 @@ async function _vcFetchVistoriaIndexes(closeStale) {
     const completedChecksByContract = {};
     const latestCheckDateByContract = {};
 
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosEngenharia) {
         try {
-            const { collection, getDocs, query, where } = window.firebaseCollections;
-            const q = query(collection(window.firebaseDb, 'vistorias'), where('status', '!=', 'concluida'));
-            const snap = await getDocs(q);
-            snap.forEach(doc => {
-                const data = doc.data();
+            const DE = window.DadosEngenharia;
+            const lista = await DE.tabela('vistorias').listar({ filtros: [['status', 'neq', 'concluida']] });
+            lista.forEach(item => {
+                const data = Object.assign({}, item);
+                delete data.id; // como o doc.data() do Firestore
                 if (data.isTest) return;
-                const docObj = { id: doc.id, ...data };
+                const docObj = { id: item.id, ...data };
                 const register = (key) => {
                     if (key === undefined || key === null || String(key).trim() === '') return;
                     const k = String(key);
@@ -2637,9 +2810,8 @@ async function _vcFetchVistoriaIndexes(closeStale) {
                 _vcDocIdentityKeys(data).forEach(register);
             });
 
-            const snapChecks = await getDocs(collection(window.firebaseDb, 'construction_checks'));
-            snapChecks.forEach(doc => {
-                const data = doc.data();
+            const listaChecks = await DE.tabela('construction_checks').listar();
+            listaChecks.forEach(data => {
                 if (data.stage && data.stage.trim() !== '') {
                     const cDate = _vcTimestampToDateStr(data.date || data.createdAt) || '1970-01-01';
 
@@ -2875,12 +3047,10 @@ function _vcBuildVistoriaRows(clients, indexes, thresholdDays, recurrenceDays) {
 }
 
 async function _vcSyncObrasFromCloud() {
-    if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-        const snap = await window.firebaseCollections.getDoc(window.firebaseCollections.doc(window.firebaseDb, 'config', 'global'));
-        const exists = snap && (typeof snap.exists === 'function' ? snap.exists() : snap.exists);
-        if (!exists) return;
-        const cloudRaw = (snap.data() || {}).crm_obras_andamento;
+        // Chave crm_obras_andamento de config/global (configuracoes no Supabase).
+        const cloudRaw = await window.DadosNucleo.lerConfiguracao('crm_obras_andamento');
         if (!cloudRaw) return;
         const cloud = typeof cloudRaw === 'string' ? cloudRaw : JSON.stringify(cloudRaw);
         const local = localStorage.getItem('crm_obras_andamento') || '';
@@ -3126,11 +3296,15 @@ window.abrirAvisoVistoriaSolicitante = function(itens) {
     const chave = lista.map((item) => item.id).sort().join(",");
     if (window._avisoVistoriaAberto === chave) return;
     window._avisoVistoriaAberto = chave;
+    _vcMontarAvisoVistoriaSolicitante(lista, "modal-vistoria-resultado-solicitante", "window.fecharAvisoVistoriaSolicitante()");
+};
 
-    let modal = document.getElementById("modal-vistoria-resultado-solicitante");
+/** Monta e mostra o pop-up "Vistoria finalizada". Usado pelo aviso real e pela prévia (que usa outro id e só fecha). */
+function _vcMontarAvisoVistoriaSolicitante(lista, idModal, acaoFechar) {
+    let modal = document.getElementById(idModal);
     if (!modal) {
         modal = document.createElement("div");
-        modal.id = "modal-vistoria-resultado-solicitante";
+        modal.id = idModal;
         modal.style.cssText = "display:none; position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:100000; align-items:flex-start; justify-content:center; overflow:auto; padding:28px 16px;";
         document.body.appendChild(modal);
     }
@@ -3165,11 +3339,52 @@ window.abrirAvisoVistoriaSolicitante = function(itens) {
                     <h2 style="margin:0; color:#105436; font-size:1.15rem;">Vistoria finalizada</h2>
                     <p style="margin:6px 0 0; color:#64748b; font-size:0.9rem;">O back office aceitou a vistoria que você pediu pela ficha do cliente.</p>
                 </div>
-                <button type="button" class="btn btn-fechar" onclick="window.fecharAvisoVistoriaSolicitante()">Fechar</button>
+                <button type="button" class="btn btn-fechar" onclick="${acaoFechar}">Fechar</button>
             </div>
             <div style="max-height:70vh; overflow:auto; padding-right:4px;">${blocos}</div>
         </div>`;
     modal.style.display = "flex";
+}
+
+/* ─── Prévias para a gestão de pop-ups (alertas-popup.js): abrem o pop-up real com dados de exemplo, sem gravar ─── */
+
+function _vcDataIsoRelativa(dias) {
+    const d = new Date();
+    d.setDate(d.getDate() + dias);
+    return d.toISOString();
+}
+
+function _vcFotoExemplo(texto, cor) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="270"><rect width="100%" height="100%" fill="${cor}"/><text x="50%" y="50%" font-family="Arial" font-size="28" fill="#ffffff" text-anchor="middle" dominant-baseline="middle">${texto}</text></svg>`;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+window.PopupPrevias = window.PopupPrevias || {};
+
+window.PopupPrevias["vistoria-resultado"] = function() {
+    const exemplo = [{
+        id: "previa-1",
+        visto: false,
+        clienteName: "Cliente exemplo",
+        unidade: "Quadra 12 Lote 08",
+        cidade: "Cidade exemplo",
+        empreendimento: "Residencial Exemplo",
+        titulo: "12345",
+        respostasFormulario: {
+            possuiAgua: "Sim",
+            possuiEnergia: "Sim",
+            possuiEntulho: "Não",
+            permiteAcesso: "Sim",
+            estagioObra: "Alvenaria",
+            observacoes: "Obra em andamento, muro levantado na frente do lote."
+        },
+        fotoFrente: _vcFotoExemplo("Frente (exemplo)", "#105436"),
+        fotoMeioFundo: _vcFotoExemplo("Meio / Fundo (exemplo)", "#0f766e"),
+        fotoFundoFrente: _vcFotoExemplo("Fundo / Frente (exemplo)", "#475569")
+    }];
+    // Id próprio: não mexe no aviso real (nem em _avisoVistoriaAberto) e o Fechar só esconde, sem marcar "visto" no Firestore.
+    _vcMontarAvisoVistoriaSolicitante(exemplo, "modal-vistoria-resultado-previa",
+        "document.getElementById('modal-vistoria-resultado-previa').style.display='none'");
 };
 
 function perfilCobrancaBackOffice(u) {
@@ -3200,29 +3415,26 @@ window.fecharAvisoVistoriaSolicitante = async function() {
     const ids = String(window._avisoVistoriaAberto || "").split(",").filter(Boolean);
     window._avisoVistoriaAberto = "";
     if (modal) modal.style.display = "none";
-    if (!ids.length || !window.firebaseDb || !window.firebaseCollections) return;
-    const { doc, updateDoc } = window.firebaseCollections;
-    await Promise.all(ids.map((id) => updateDoc(doc(window.firebaseDb, "vistoria_avisos", id), {
+    if (!ids.length || !window.DadosEngenharia) return;
+    const tab = window.DadosEngenharia.tabela("vistoria_avisos");
+    await Promise.all(ids.map((id) => tab.gravar(id, {
         visto: true,
         vistoEm: new Date().toISOString()
-    }).catch((err) => console.warn("[Vistoria] aviso não marcado", err))));
+    }, { merge: true }).catch((err) => console.warn("[Vistoria] aviso não marcado", err))));
 };
 
 window.iniciarAvisoVistoriaSolicitante = function() {
     if (window._avisoVistoriaListener) return;
     const email = String((window.AppState && AppState.currentUser && AppState.currentUser.email) || "").trim().toLowerCase();
     if (typeof window.userIsCobrancaBackOffice === "function" && window.userIsCobrancaBackOffice().ok) return;
-    if (!email || !window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
-    const { collection, query, where, onSnapshot } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, "vistoria_avisos"), where("email", "==", email));
-    window._avisoVistoriaListener = onSnapshot(q, (snap) => {
+    if (!email || !window.DadosEngenharia) return;
+    window._avisoVistoriaListener = window.DadosEngenharia.tabela("vistoria_avisos").ouvir(({ docs }) => {
         const pendentes = [];
-        snap.forEach((d) => {
-            const data = d.data() || {};
-            if (data.visto === false) pendentes.push({ id: d.id, ...data });
+        docs.forEach((data) => {
+            if (data.visto === false) pendentes.push(data);
         });
         if (pendentes.length) window.abrirAvisoVistoriaSolicitante(pendentes);
-    }, (err) => console.warn("[Vistoria] aviso do solicitante", err));
+    }, { filtros: [["email", "eq", email]], aoErro: (err) => console.warn("[Vistoria] aviso do solicitante", err) });
 };
 
 document.addEventListener("DOMContentLoaded", () => {

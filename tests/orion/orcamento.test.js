@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const O = require(path.join(__dirname, "..", "..", "orion-orcamento-calc.js"));
+const O = require(path.join(__dirname, "..", "..", "js", "orcamento", "orion-orcamento-calc.js"));
 
 test("centavos exatos", () => {
   assert.strictEqual(O.centavos(0.1 + 0.2), 30);
@@ -196,7 +196,7 @@ test("DFC gerencial: totais por grupo-pai, AV, AH e geração de caixa", () => {
 });
 
 test("resumo geral: KPIs, mensal, ranking e realizado só dos CCs e planos do orçamento", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const desp = [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(100000) }];
   const rec = [{ cc: "100", cc_nome: "Obra A", plano: "1001", plano_nome: "Venda", m: m(300000) }];
@@ -225,7 +225,7 @@ test("resumo geral: KPIs, mensal, ranking e realizado só dos CCs e planos do or
 });
 
 test("analítico de gastos: visão por CC × plano e por plano", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const desp = [
     { cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(100000) },
@@ -248,7 +248,7 @@ test("analítico de gastos: visão por CC × plano e por plano", () => {
 });
 
 test("forecast: usa só uma versão (a mais recente ou a escolhida)", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const cab = (id, tipo, descricao, corte, versao) => ({ _id: id, ano: 2026, tipo, descricao, mes_corte: corte, versao: versao || 1, status: "Importado Sienge", departamento: { id: 18 } });
   const cabs = [cab("a", "DESPESAS", "Forecast - 2+10", 3), cab("b", "RECEITAS", "Forecast - 2+10", 3), cab("c", "DESPESAS", "Forecast - 8+4", 9), cab("d", "RECEITAS", "Forecast - 8+4", 9), cab("e", "DESPESAS", "Forecast - 8+4", 9, 2), cab("v", "VENDAS", "Forecast - 9+3", 10)];
   assert.deepStrictEqual(C.versoesForecast(cabs, 2026).map((v) => v.descricao), ["Forecast - 8+4", "Forecast - 2+10"]);
@@ -260,7 +260,7 @@ test("forecast: usa só uma versão (a mais recente ou a escolhida)", () => {
 });
 
 test("novo forecast: nome pela regra do fechamento e inclusão no documento do departamento", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const fech = [1, 2, 3, 5].map((mes) => ({ ano: 2026, mes }));
   assert.strictEqual(C.corteForecast(fech, 2026), 3);               // jan, fev e mar fechados em sequência; mai não conta
   assert.strictEqual(C.descricaoForecast(3), "Forecast - 3+9");
@@ -281,7 +281,7 @@ test("novo forecast: nome pela regra do fechamento e inclusão no documento do d
 });
 
 test("analítico: receitas e recortes de investimentos e receita de lotes", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const rec = [{ cc: "100", plano: "1001", plano_nome: "Receita de venda de lote", m: m(100000) }, { cc: "100", plano: "1002", plano_nome: "Aluguel", m: m(5000) }];
   const lotes = C.filtrarRecorte(rec, "lotes");
@@ -294,7 +294,7 @@ test("analítico: receitas e recortes de investimentos e receita de lotes", () =
 });
 
 test("centavos: valores colados do Excel em português", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   assert.strictEqual(C.centavosDigitado("1.234,56"), 123456);
   assert.strictEqual(C.centavosDigitado("1.234.567"), 123456700);
   assert.strictEqual(C.centavosDigitado("1.234"), 123400);
@@ -303,7 +303,7 @@ test("centavos: valores colados do Excel em português", () => {
 });
 
 test("recebimento por grupo (regra do nome do plano do Órion)", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   assert.strictEqual(C.grupoRecebimento("Recebimento à vista"), "À vista");
   assert.strictEqual(C.grupoRecebimento("Sinal de venda"), "Sinal / antecipação");
   assert.strictEqual(C.grupoRecebimento("Parcelas de financiamento"), "Parcelado / financiamento");
@@ -316,7 +316,7 @@ test("recebimento por grupo (regra do nome do plano do Órion)", () => {
 });
 
 test("análise de orçamento: realizado até o corte + forecast depois, por empresa › grupo › centro › plano", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const r = C.analiseOrcamento({
     orc: [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(1000) }, { cc: "100", plano: "9999", m: m(5) }],
@@ -337,7 +337,7 @@ test("análise de orçamento: realizado até o corte + forecast depois, por empr
 });
 
 test("orçamento vigente: um por departamento e tipo, como no Órion", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const cab = (id, status, criado, extra) => Object.assign({ _id: id, orion_id: Number(id) || 0, ano: 2026, tipo: "DESPESAS", descricao: "x" + id, status, criado_em: criado, departamento: { id: 18 } }, extra || {});
   const pega = (l) => C.documentosVigentes(l, { ano: 2026, base: "orcamento", tipos: ["DESPESAS"] }).docs.map((d) => d._id);
   assert.deepStrictEqual(pega([cab("1", "Fechado", "2025-12-01"), cab("2", "Aprovado", "2026-01-10"), cab("3", "Rascunho", "2026-03-01")]), ["2"]);
@@ -347,7 +347,7 @@ test("orçamento vigente: um por departamento e tipo, como no Órion", () => {
 });
 
 test("análise de orçamento (Órion atual): real até o corte + forecast, contra o ano seguinte, cheio e MLDU", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const r = C.analiseOrcamentoAnual({
     n_fc: [{ cc: "100", cc_nome: "Obra A", plano: "2001", plano_nome: "Material", m: m(1000) }],
@@ -369,7 +369,7 @@ test("análise de orçamento (Órion atual): real até o corte + forecast, contr
 });
 
 test("DFC gerencial mensal: séries real, N-1 e referência, cheio e MLDU, por empresa › grupo › plano", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const m = (v) => new Array(12).fill(v);
   const r = C.dfcGerencialMensal({
     real: [{ gid: "g_02", cc: "100", plano: "2001", mes: 1, valor: -100, empresa: "6" }, { gid: "g_01", cc: "100", plano: "1001", mes: 1, valor: 400, empresa: "6" }],
@@ -389,7 +389,7 @@ test("DFC gerencial mensal: séries real, N-1 e referência, cheio e MLDU, por e
 });
 
 test("orçado × realizado: leitura executiva, pontos de atenção e maiores causas", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const r = C.insightsBloco([
     { produto: "100", produto_nome: "Obra A", plano: "1", plano_nome: "Material", ref: 1000000, real: 1500000 },
     { produto: "100", produto_nome: "Obra A", plano: "2", plano_nome: "Serviços", ref: 500000, real: 400000 },
@@ -404,7 +404,7 @@ test("orçado × realizado: leitura executiva, pontos de atenção e maiores cau
 });
 
 test("analítico: leitura executiva e destaque das linhas com a regra do Órion", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const l = C.leituraExecutiva([{ orcado: 100000, realizado: 150000 }, { orcado: 200000, realizado: 200000 }, { orcado: 0, realizado: 5000 }], "DESPESAS", "orçado");
   assert.strictEqual(l.varRs, 55000);
   assert.strictEqual(l.favoravel, false);
@@ -420,7 +420,7 @@ test("analítico: leitura executiva e destaque das linhas com a regra do Órion"
 });
 
 test("excel do orçamento: modelo, exportação e validação tudo-ou-nada com as regras do Órion", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   const ccs = [{ id: "10100", nome: "CERQUEIRA CÉSAR - CHÁCARA" }, { id: "10200", nome: "JARDIM PRIMAVERA" }];
   const planos = [{ id: "2050105", nome: "Despesas Bancárias" }, { id: "2030211", nome: "Despesas Legais" }];
   const linhas = [{ cc: "10100", cc_nome: "CERQUEIRA CÉSAR - CHÁCARA", plano: "2050105", plano_nome: "Despesas Bancárias", m: [100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 250055], obs: "nota" }];
@@ -440,7 +440,7 @@ test("excel do orçamento: modelo, exportação e validação tudo-ou-nada com a
 });
 
 test("vendas: IPCA em cascata e Excel de vendas com as regras do Órion", () => {
-  const C = require("../../orion-orcamento-calc.js");
+  const C = require("../../js/orcamento/orion-orcamento-calc.js");
   assert.ok(Math.abs(C.taxaMensalIpca("4,5", "% a.a.") - (Math.pow(1.045, 1 / 12) - 1)) < 1e-12);
   assert.strictEqual(C.taxaMensalIpca(1, "% a.m."), 0.01);
   const meses = Array.from({ length: 12 }, (_, i) => ({ vendas: 1, ticket: i === 0 ? 10000000 : 0 }));

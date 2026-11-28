@@ -6,7 +6,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const calc = require(path.join(__dirname, "..", "..", "indices-mercado-calc.js"));
+const calc = require(path.join(__dirname, "..", "..", "js", "orcamento", "indices-mercado-calc.js"));
 const bcb = require("./indices-bcb-2023-2026.json");
 const gabarito = require("./indices-orion-gabarito.json");
 

@@ -6,6 +6,14 @@ const {
   sendSiengeQueueBusy
 } = require('../../lib/api-request-queue');
 
+// Recursos do Sienge em que as telas do Integra gravam (levantado no código em 18/11/2026):
+// títulos e parcelas, anexos de unidade e cliente, contratos de venda, notas de compra,
+// reparcelamento, boletos antecipados, contabilidade, lote e boleto de parcela vencida.
+const ESCRITA_PERMITIDA = [
+  'bills', 'units', 'customers', 'sales-contracts', 'purchase-invoices', 'remade-installments',
+  'prepayment-slip-register', 'accountancy', 'batch', 'overdue-receivable-bill'
+];
+
 function encodeLatin1Query(str) {
   let out = '';
   const s = String(str || '');
@@ -74,7 +82,23 @@ module.exports = async function handler(req, res) {
   }
 
   let targetPath = String(req.url || '').replace('/api/sienge-proxy', '');
-  
+
+  // Gravação no Sienge (POST, PUT, PATCH, DELETE) só nos recursos que o Integra usa.
+  // PROXY_ESCRITA_MODE=bloquear barra o resto; sem a variável, só registra (para conferir antes de ligar).
+  const metodoEscrita = String(req.method || 'GET').toUpperCase();
+  if (metodoEscrita !== 'GET' && metodoEscrita !== 'HEAD') {
+    const recurso = targetPath.split('?')[0].split('/').filter(Boolean)[0] || '';
+    if (ESCRITA_PERMITIDA.indexOf(recurso) < 0) {
+      const barrar = String(process.env.PROXY_ESCRITA_MODE || '').trim().toLowerCase() === 'bloquear';
+      console.warn('[sienge-escrita] ' + JSON.stringify({ acao: barrar ? 'bloqueado' : 'so-registro', metodo: metodoEscrita, recurso, caminho: targetPath.split('?')[0].slice(0, 120) }));
+      if (barrar) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.status(403).end(JSON.stringify({ error: 'Gravação no Sienge não permitida por este caminho.' }));
+      }
+    }
+  }
+
   if (targetPath.startsWith('/bulk-data/')) {
     targetPath = '/mouraleite/public/api' + targetPath;
   } else {
@@ -175,3 +199,6 @@ module.exports = async function handler(req, res) {
   if (body.length) proxyReq.write(body);
   proxyReq.end();
 };
+
+// Usado pelo envio de anexos grandes (api/_lib/sienge-upload.js).
+module.exports.encodeSiengePath = encodeSiengePath;

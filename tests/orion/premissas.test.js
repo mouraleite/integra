@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const P = require(path.join(__dirname, "..", "..", "orion-premissas-calc.js"));
+const P = require(path.join(__dirname, "..", "..", "js", "orcamento", "orion-premissas-calc.js"));
 
 test("número em formato brasileiro e americano", () => {
   assert.strictEqual(P.num("3,8"), 3.8);
@@ -101,7 +101,7 @@ test("plano de pagamento: campos extras do Órion (aplica_juros, aplica_correcao
 });
 
 test("curva gerada igual à do Órion (Curva S, sino e linear) e ajuste para 100%", () => {
-  const P = require("../../orion-premissas-calc.js");
+  const P = require("../../js/orcamento/orion-premissas-calc.js");
   assert.deepStrictEqual(P.gerarCurva("s-curve", 12), [6.26, 7.46, 8.62, 9.6, 10.26, 10.49, 10.26, 9.6, 8.62, 7.46, 6.26, 5.11]);
   assert.deepStrictEqual(P.gerarCurva("sino", 12), [3.48, 5.74, 8.47, 11.18, 13.21, 13.96, 13.21, 11.18, 8.47, 5.74, 3.48, 1.88]);
   assert.deepStrictEqual(P.gerarCurva("linear", 12).slice(10), [8.33, 8.37]);

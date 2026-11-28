@@ -681,6 +681,11 @@ const PermutaApp = {
     this.pintar();
     try {
       const st = PermutaState;
+      // Título com mais de um cliente: todos qualificados e assinando como permutantes.
+      st._docCustomer = null;
+      if (typeof window.legalDocAnexarCompradores === "function" && st.customer) {
+        try { st._docCustomer = await window.legalDocAnexarCompradores(st.customer, st.contract || {}); } catch (e) { st._docCustomer = null; }
+      }
       const tituloDoc = (document.getElementById("doc-permuta-title") || {}).value || "INSTRUMENTO PARTICULAR DE PERMUTA DE IMÓVEIS URBANOS";
       const htmlTexto = window.CessaoPopup && typeof CessaoPopup.htmlTexto === "function"
         ? (s) => CessaoPopup.htmlTexto(s)
@@ -723,7 +728,7 @@ const PermutaApp = {
       return idxN === 1 ? "{{INDEXADOR}}" : "{{INDEXADOR_NOVO}}";
     });
     const lote = this.unidadeEscolhida() || {};
-    const customer = st.customer || {};
+    const customer = st._docCustomer || st.customer || {};
     const unit = st.unit || {};
     const sale = st.contract || {};
     let base = {};
@@ -779,6 +784,9 @@ const PermutaApp = {
       TESTEMUNHA_1_RG: t1.doc_rg || t1.rg || "",
       TESTEMUNHA_2_RG: t2.doc_rg || t2.rg || ""
     });
+    if (Array.isArray(base._COMPRADORES) && base._COMPRADORES.length > 1 && typeof window.expandirCompradoresNoModelo === "function") {
+      corpo = window.expandirCompradoresNoModelo(corpo, base._COMPRADORES);
+    }
     Object.keys(mapa).forEach((k) => {
       corpo = corpo.split("{{" + k + "}}").join(String(mapa[k] == null ? "" : mapa[k]));
     });
@@ -814,6 +822,11 @@ const PermutaApp = {
       const par = [{ nome: nomeCli, papel: "Permutante" }];
       if (conj && conj.name) par.push({ nome: conj.name, papel: "Permutante" });
       permutantes.push(par);
+    }
+    // Demais clientes do título (2 por linha).
+    const outros = ((st._docCustomer && st._docCustomer._compradores) || []).map((p) => p && p.name).filter(Boolean);
+    for (let i = 0; i < outros.length; i += 2) {
+      permutantes.push(outros.slice(i, i + 2).map((n) => ({ nome: n, papel: "Permutante" })));
     }
     let empresa = st.empresaNome || "";
     if (!empresa && typeof window.buildLegalDocVarMap === "function") {

@@ -1208,17 +1208,17 @@ const ParametrizacaoParceiroApp = {
     let local = [];
     try { local = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || "[]") || []; } catch (e) { local = []; }
     this.items = Array.isArray(local) ? local : [];
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc } = window.firebaseCollections;
-        const snap = await getDoc(doc(window.firebaseDb, "config", "partner_parametrizations"));
+        // config/partner_parametrizations é montado da tabela parcerias ({ list: "<JSON>", updatedAt }).
+        const snap = await window.DadosNucleo.lerConfig("partner_parametrizations");
         if (snap.exists()) {
           const raw = snap.data().list;
           const cloud = typeof raw === "string" ? JSON.parse(raw) : raw;
           if (Array.isArray(cloud) && cloud.length) this.items = cloud;
         }
       } catch (e) {
-        console.warn("[Parcerias] Firestore indisponível, usando cache local.", e);
+        console.warn("[Parcerias] Supabase indisponível, usando cache local.", e);
       }
     }
     this.items.forEach(p => this.normalizeItem(p));
@@ -1236,9 +1236,9 @@ const ParametrizacaoParceiroApp = {
   persist() {
     this.items.forEach(p => this.normalizeItem(p));
     localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.items));
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, setDoc } = window.firebaseCollections;
-      setDoc(doc(window.firebaseDb, "config", "partner_parametrizations"), {
+    if (window.DadosNucleo) {
+      // Grava a lista na tabela parcerias (uma linha por parceria; as que saíram da lista são apagadas).
+      window.DadosNucleo.gravarConfig("partner_parametrizations", {
         list: JSON.stringify(this.items),
         updatedAt: Date.now()
       }, { merge: true }).catch(err => console.warn("[Parcerias] Falha ao sincronizar", err));
@@ -2618,15 +2618,12 @@ const ParametrizacaoParceiroApp = {
       out.push(mapped);
     };
 
-    if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-      const { collection, getDocs } = window.firebaseCollections;
-      for (const col of ["sienge_creditors", "creditors"]) {
-        try {
-          const snap = await getDocs(collection(window.firebaseDb, col));
-          snap.forEach(d => push(this.mapCreditor(d.data(), d.id)));
-          if (out.length) break;
-        } catch (e) {}
-      }
+    // Base de credores do Sienge no Supabase (sienge_creditors). A coleção antiga "creditors" não foi migrada.
+    if (window.DadosFinanceiro) {
+      try {
+        const lista = await window.DadosFinanceiro.tabela("sienge_creditors").listar();
+        lista.forEach(d => push(this.mapCreditor(d, d.id)));
+      } catch (e) {}
     }
 
     if (!out.length) {

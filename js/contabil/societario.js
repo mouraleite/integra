@@ -405,10 +405,10 @@ const SocietarioApp = {
     try { local = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || "null"); } catch (e) { local = null; }
     const localAt = local && local.updatedAt ? Date.parse(local.updatedAt) || 0 : 0;
     this.graph = this.normalize(local);
-    if (window.firebaseDb && window.firebaseCollections) {
+    // config/<FIRESTORE_DOC> no Supabase (configuracoes, chave "config/estrutura_societaria").
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc } = window.firebaseCollections;
-        const snap = await getDoc(doc(window.firebaseDb, "config", this.FIRESTORE_DOC));
+        const snap = await window.DadosNucleo.lerConfig(this.FIRESTORE_DOC);
         if (snap.exists()) {
           const data = snap.data();
           const raw = data.graph || data;
@@ -416,7 +416,7 @@ const SocietarioApp = {
           if (raw && Array.isArray(raw.entities) && raw.entities.length && remoteAt >= localAt) this.graph = this.normalize(raw);
         }
       } catch (e) {
-        console.warn("[Societário] Firestore indisponível, usando cache local.", e);
+        console.warn("[Societário] Banco de dados indisponível, usando cache local.", e);
       }
     }
     if (!this.graph.entities.length) this.graph = this.defaultGraph();
@@ -457,12 +457,11 @@ const SocietarioApp = {
     const updatedAt = new Date().toISOString();
     this.graph.updatedAt = updatedAt;
     localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.graph));
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, setDoc } = window.firebaseCollections;
-      setDoc(doc(window.firebaseDb, "config", this.FIRESTORE_DOC), {
+    if (window.DadosNucleo) {
+      window.DadosNucleo.gravarConfig(this.FIRESTORE_DOC, {
         graph: this.graph,
         updatedAt: updatedAt
-      }).catch(e => console.warn("[Societário] Falha ao gravar no Firestore", e));
+      }).catch(e => console.warn("[Societário] Falha ao gravar no banco de dados", e));
     }
   },
 

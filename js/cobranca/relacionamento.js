@@ -62,10 +62,10 @@ const RelacionamentoApp = {
 
   /** Traz da nuvem os cartórios cadastrados em outros computadores sem precisar recarregar a página. */
   async atualizarCartoriosDaNuvem() {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !fc.doc || !window.firebaseDb || typeof window.mergeCartoriosList !== "function") return;
+    if (!window.DadosNucleo || typeof window.mergeCartoriosList !== "function") return;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+      // crm_moura_cartorios_list vem da tabela cartorios, montada no config/global pela camada de dados.
+      const snap = await window.DadosNucleo.lerConfig("global", "config", { fresco: true });
       const ok = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       const cloud = ok ? ((snap.data() || {}).crm_moura_cartorios_list || "[]") : "[]";
       const k = "crm_moura_cartorios_list";
@@ -334,14 +334,14 @@ const RelacionamentoApp = {
   async _sincronizarModeloDoc(cfg) {
     const corpoEl = document.getElementById(cfg.corpoId);
     if (corpoEl && corpoEl.value && corpoEl.value !== corpoEl.defaultValue) return;
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+    if (!window.DadosNucleo) return;
     try {
       const tipo = String(cfg.storage).replace(/^crm_docpadrao_/, "");
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "settings", "docpadrao_" + tipo));
+      // settings/docpadrao_<tipo>: linha "settings/docpadrao_<tipo>" em configuracoes.
+      const snap = await window.DadosNucleo.lerSetting("docpadrao_" + tipo);
       if (snap.exists()) localStorage.setItem(cfg.storage, JSON.stringify(snap.data()));
     } catch (e) {
-      console.warn("Modelo " + cfg.storage + " não carregado do Firebase", e);
+      console.warn("Modelo " + cfg.storage + " não carregado do banco", e);
     }
   },
 
@@ -2831,15 +2831,13 @@ const RelacionamentoApp = {
     return total;
   },
 
-  /** A4 retrato, uma imagem por página; logo só na primeira e "N de M" no rodapé, como na impressão. */
+  /** A4 retrato. O miolo entra como texto; a logo continua imagem. "N de M" no rodapé. */
   async _baixarPaginasPdf(paginas, fileName, opts) {
     opts = opts || {};
-    if (typeof html2canvas !== "function" || !window.jspdf) throw new Error("Gerador de PDF indisponível.");
+    if (!window.jspdf || typeof window.pintarElementoComoTextoPdf !== "function") throw new Error("Gerador de PDF indisponível.");
     const W = 794, H = 1123, PAD_X = 57, PAD_TOP = 38, PAD_BOTTOM = 64;
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
     for (let i = 0; i < paginas.length; i++) {
       const page = document.createElement("div");
       page.style.cssText = `position:fixed;left:-13000px;top:0;width:${W}px;height:${H}px;background:#fff;box-sizing:border-box;padding:${PAD_TOP}px ${PAD_X}px ${PAD_BOTTOM}px;overflow:hidden;color:#111;`;
@@ -2866,9 +2864,8 @@ const RelacionamentoApp = {
           area.style.transform = `scale(${s})`;
           area.style.width = (100 / s) + "%";
         }
-        const canvas = await html2canvas(page, { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false, width: W, height: H });
         if (i > 0) pdf.addPage();
-        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, 0, pageW, pageH);
+        window.pintarElementoComoTextoPdf(pdf, page, { pagina: true });
       } finally {
         page.remove();
       }
@@ -3411,6 +3408,10 @@ const RelacionamentoApp = {
       try {
         if (typeof window.enrichCustomerForLegalDocs === "function") {
           customer = await window.enrichCustomerForLegalDocs(customer);
+        }
+        // Título com mais de um cliente: todos qualificados e assinando a autorização.
+        if (typeof window.legalDocAnexarCompradores === "function") {
+          customer = await window.legalDocAnexarCompradores(customer, sale);
         }
       } catch (e) {}
       const unitParts = String(sale.unitId || "").split("-");

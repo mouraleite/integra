@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const V = require("../../orion-viabilidade-calc.js");
+const V = require("../../js/orcamento/orion-viabilidade-calc.js");
 const entrada = require("./viabilidade-ficticia/entrada.json");
 const gabarito = require("./viabilidade-ficticia/gabarito-orion.json");
 

@@ -7,14 +7,18 @@
 // Para um novo desenvolvedor: acrescentar uma linha em AMBIENTES, cadastrar o endereço no Entra ID (SPA) e no deploy.bat.
 (function () {
   const REPO = "mouraleite/integra";
-  const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
+  const URL_PRODUCAO = "https://integra-mouraleite.vercel.app/";
   const AMBIENTES = [
     { chave: "dani", nome: "Teste Dani", pessoa: "da Dani", branch: "develop", cor: "#2563eb" },
     { chave: "marcelo", nome: "Teste Marcelo", pessoa: "do Marcelo", branch: "Marcelo", cor: "#7c3aed" },
-    { chave: "lucelia", nome: "Teste Lucélia", pessoa: "da Lucélia", branch: "lucelia", cor: "#0891b2" }
+    { chave: "lucelia", nome: "Teste Lucélia", pessoa: "da Lucélia", branch: "lucelia", cor: "#0891b2" },
+    { chave: "isabella", nome: "Teste Isabella", pessoa: "da Isabella", branch: "isabella_garcia", slug: "isabellagarcia", cor: "#ea580c" },
+    { chave: "israel", nome: "Teste Israel", pessoa: "do Israel", branch: "israel", cor: "#db2777" }
   ].map((a) => {
-    const slug = a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    return Object.assign(a, { host: "crm-gestao-git-" + slug + "-", url: "https://crm-gestao-git-" + slug + "-crm-mldu.vercel.app/" });
+    // A Vercel tira o sublinhado do nome da branch (isabella_garcia vira isabellagarcia); slug fixo quando precisa.
+    const slug = a.slug || a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    // Bolhas no projeto novo da Vercel (time mouraleite): integra-git-<branch>-mouraleite1.vercel.app.
+    return Object.assign(a, { host: "integra-git-" + slug + "-", url: "https://integra-git-" + slug + "-mouraleite1.vercel.app/" });
   });
   const DISPENSADO = "integra_testes_dispensado";
   const INTERVALO = 5 * 60 * 1000;
@@ -141,19 +145,19 @@
     const lista = chave ? AMBIENTES.filter((a) => a.chave === chave) : comPendencia();
     if (!lista.length) return;
     estilo();
+    estiloSolic();
     const status = { added: "novo", removed: "removido", modified: "alterado", renamed: "renomeado" };
     const blocos = lista.map((amb) => {
       const d = dados[amb.chave];
       const commits = alteracoesUteis(d).slice().reverse();
+      const pedido = solicPendentes.find((x) => x.ambiente === amb.chave) || (minhaSolic && minhaSolic.ambiente === amb.chave ? minhaSolic : null);
+      const prints = (pedido && pedido.prints) || {};
       const itens = commits.map((c) => {
         const msg = String((c.commit && c.commit.message) || "").trim();
-        const titulo = msg.split("\n")[0];
-        const resto = msg.split("\n").slice(1).join("\n").trim();
         const autor = (c.commit && c.commit.author && c.commit.author.name) || (c.author && c.author.login) || "";
         const quando = c.commit && c.commit.author && c.commit.author.date;
-        return `<div class="avdev-item"><h4>${esc(titulo)}</h4>
-          <div class="avdev-meta">${esc(autor)}${quando ? " • " + esc(fmtData(quando)) : ""}</div>
-          ${resto ? `<pre>${esc(resto)}</pre>` : ""}</div>`;
+        const item = { sha: String(c.sha || "").slice(0, 12), titulo: msg.split("\n")[0], corpo: msg.split("\n").slice(1).join("\n").trim() };
+        return `<div class="avdev-item">${htmlCommit(item, { prints, meta: esc(autor) + (quando ? " • " + esc(fmtData(quando)) : "") })}</div>`;
       }).join("");
       const arqs = ((d && d.files) || []).map((f) => `<li>${esc(f.filename)} <span style="color:#94a3b8;">(${esc(status[f.status] || f.status)})</span></li>`).join("");
       return `<div class="avdev-amb" style="color:${amb.cor};"><h3>${esc(amb.nome)}</h3><span>branch ${esc(amb.branch)}</span>
@@ -247,7 +251,7 @@
   }
 
   // ===== Alternador para os desenvolvedores (não administradores) =====
-  // Quem entra numa bolha fica registrado em Firestore (ambientes_dev/<e-mail>). Assim, na produção,
+  // Quem entra numa bolha fica registrado no Supabase (ambientes_dev: uma linha por e-mail e bolha). Assim, na produção,
   // essa pessoa também vê a bolha "Produção | Teste X" para ir e voltar na mesma tela.
   const DEV_COLECAO = "ambientes_dev";
   let meusAmbientes = null; // lista de chaves; null = ainda não consultado
@@ -267,28 +271,32 @@
 
   async function sincronizarDev() {
     const email = emailReal();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!email || !fx || !db) return;
+    if (!email || !window.DadosNucleo) return;
+    await window.DadosNucleo.pronto;
+    const sb = window.sb;
+    if (!sb) return;
     const atual = ambienteAtual();
-    if (atual && !registrouDev && typeof fx.setDoc === "function") {
+    if (atual && !registrouDev) {
       registrouDev = true;
       try {
-        await fx.setDoc(fx.doc(db, DEV_COLECAO, email), { email, ambientes: { [atual.chave]: Date.now() } }, { merge: true });
+        const r = await sb.from(DEV_COLECAO).upsert(
+          { email, ambiente: atual.chave, acessado_em: new Date().toISOString() },
+          { onConflict: "email,ambiente" }
+        );
+        if (r.error) throw r.error;
       } catch (e) {
         console.warn("[Ambientes de teste] Não foi possível registrar o acesso à bolha:", e);
       }
     }
-    if (meusAmbientes !== null || typeof fx.getDoc !== "function") return;
+    if (meusAmbientes !== null) return;
     const cache = ler("integra_meus_ambientes", sessionStorage);
     if (cache) {
       try { meusAmbientes = JSON.parse(cache); return; } catch (e) {}
     }
     try {
-      const snap = await fx.getDoc(fx.doc(db, DEV_COLECAO, email));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-      const d = existe ? snap.data() : null;
-      meusAmbientes = Object.keys((d && d.ambientes) || {}).filter((k) => AMBIENTES.some((a) => a.chave === k));
+      const r = await sb.from(DEV_COLECAO).select("ambiente").eq("email", email);
+      if (r.error) throw r.error;
+      meusAmbientes = (r.data || []).map((l) => l.ambiente).filter((k) => AMBIENTES.some((a) => a.chave === k));
       gravar("integra_meus_ambientes", JSON.stringify(meusAmbientes), sessionStorage);
     } catch (e) {
       meusAmbientes = [];
@@ -367,6 +375,22 @@
     });
   }
 
+  // Leitura do GitHub: pelo servidor do Integra (/api/github-leitura, com a chave da Vercel, funciona com o
+  // repositório privado). Se a chave ainda não foi cadastrada (503 semToken), lê direto do GitHub, como antes.
+  let leituraDireta = false;
+  async function lerGithub(caminho, headers) {
+    if (!leituraDireta) {
+      try {
+        const r = await fetch("/api/github-leitura?c=" + encodeURIComponent(caminho), { headers, cache: "no-store" });
+        if (r.status !== 503) return r;
+        leituraDireta = true;
+      } catch (e) {
+        leituraDireta = true;
+      }
+    }
+    return fetch(API + "/" + caminho, { headers, cache: "no-store" });
+  }
+
   // Consulta condicional (ETag): se nada mudou, o GitHub responde 304.
   async function pedir(url) {
     const chave = "integra_gh_" + url;
@@ -374,7 +398,7 @@
     try { salvo = JSON.parse(ler(chave, sessionStorage) || "null"); } catch (e) { salvo = null; }
     const headers = { Accept: "application/vnd.github+json" };
     if (salvo && salvo.etag) headers["If-None-Match"] = salvo.etag;
-    const res = await fetch(url, { headers, cache: "no-store" });
+    const res = await lerGithub(String(url).replace(API + "/", ""), headers);
     if (res.status === 304 && salvo) return salvo.corpo;
     if (!res.ok) return salvo ? salvo.corpo : null;
     const corpo = await res.json();
@@ -401,7 +425,7 @@
   async function comparar(shaMain, shaBranch) {
     const chave = "integra_cmp3_" + shaMain.slice(0, 12) + "_" + shaBranch.slice(0, 12);
     try { const s = JSON.parse(ler(chave, sessionStorage) || "null"); if (s) return s; } catch (e) {}
-    const res = await fetch(API + "/compare/" + shaMain + "..." + shaBranch, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+    const res = await lerGithub("compare/" + shaMain + "..." + shaBranch, { Accept: "application/vnd.github+json" });
     if (!res.ok) return null;
     const j = await res.json();
     const corpo = {
@@ -419,7 +443,7 @@
     const chave = "integra_msg_" + sha.slice(0, 12);
     const s = ler(chave, sessionStorage);
     if (s != null) return s;
-    const res = await fetch(API + "/commits/" + sha, { headers: { Accept: "application/vnd.github+json" }, cache: "no-store" });
+    const res = await lerGithub("commits/" + sha, { Accept: "application/vnd.github+json" });
     if (!res.ok) return "";
     const j = await res.json();
     const msg = String((j.commit && j.commit.message) || "");
@@ -464,7 +488,7 @@
 
   // ===== Solicitações de envio para a produção =====
   // O desenvolvedor, no ambiente de teste, clica em "Encaminhar para produção": grava um pedido em
-  // Firestore (coleção solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
+  // Supabase (tabela solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
   // (não quem está em "Ver como administrador") recebe um pop-up com o pedido e aprova ou recusa.
   // Aprovar só registra a decisão: a publicação continua sendo "juntar <branch> na main" + deploy.bat.
   const SOLIC = "solicitacoes_producao";
@@ -473,10 +497,11 @@
   let minhaSolic = null;
   let ouvindoSolic = false;
 
+  // Solicitações no Supabase (tabela solicitacoes_producao, via window.DadosEngenharia). solicitante {email, nome}
+  // é achatado em solicitante_email / solicitante_nome (filtros usam o nome da coluna).
   function fb() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    return fx && db ? { fx, db } : null;
+    const DE = window.DadosEngenharia;
+    return DE ? { tab: DE.tabela(SOLIC) } : null;
   }
 
   function adminReal() {
@@ -509,6 +534,7 @@
       const msg = String((c.commit && c.commit.message) || "").trim();
       return {
         sha: String(c.sha || "").slice(0, 12),
+        shaCompleto: /^[0-9a-f]{40}$/.test(String(c.sha || "")) ? String(c.sha) : "",
         titulo: msg.split("\n")[0].slice(0, 300),
         corpo: msg.split("\n").slice(1).join("\n").trim().slice(0, 2000),
         autor: (c.commit && c.commit.author && c.commit.author.name) || (c.author && c.author.login) || "",
@@ -565,25 +591,72 @@
     return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
 
-  // Sugestão automática: telas citadas no código alterado, nome do arquivo e palavras do texto.
+  // Nome da tela como frase comparável: sem acento, sem o que está entre parênteses, só letras e números.
+  function fraseTela(s) {
+    return " " + semAcento(String(s || "").replace(/\([^)]*\)/g, " ")).replace(/[^a-z0-9%]+/g, " ").trim() + " ";
+  }
+
+  // Telas cujo nome inteiro aparece no texto. Se um nome está dentro de outro que também apareceu
+  // ("Fluxo de caixa" dentro de "Fluxo de caixa diário"), fica só o mais longo.
+  function telasNoTexto(menu, texto, exigirCaminho) {
+    const t = fraseTela(texto);
+    if (t.trim().length < 3) return [];
+    const genericos = ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro", "geral", "configuracao"];
+    const achadas = menu.filter((m) => {
+      const nome = fraseTela(m.nome);
+      const palavras = nome.trim().split(" ").filter(Boolean);
+      if (!palavras.length) return false;
+      // Nome de uma palavra só e genérico ("Configurações") não identifica tela nenhuma.
+      if (palavras.length < 2 && genericos.indexOf(palavras[0]) >= 0) return false;
+      if (t.indexOf(nome) < 0) return false;
+      if (!exigirCaminho) return true;
+      // Na linha "Onde:", nome genérico só vale com o menu pai junto ("Caixa e Banco > Configurações").
+      const partes = String(m.caminho || "").split("›").map(fraseTela);
+      return palavras.length >= 2 || partes.length < 2 || t.indexOf(partes[partes.length - 2]) >= 0;
+    });
+    return achadas.filter((m) => !achadas.some((o) => o !== m
+      && fraseTela(o.nome).length > fraseTela(m.nome).length
+      && fraseTela(o.nome).indexOf(fraseTela(m.nome)) >= 0)).map((m) => m.tab);
+  }
+
+  // Linhas "Onde:" / "Onde fica:" dos commits (aceita "- Onde fica: ..." também).
+  function textoOnde(r) {
+    const linhas = [];
+    ((r && r.commits) || []).forEach((c) => {
+      String(c.corpo || "").split("\n").forEach((l) => {
+        const m = /^[\s\-•*]*onde( fica)?\s*:\s*(.+)$/i.exec(l);
+        if (m) linhas.push(m[2]);
+      });
+    });
+    return linhas.join(" \n ");
+  }
+
+  // Arquivo alterado -> aba. Igual ao id da aba vence; senão o id termina com o nome do arquivo
+  // (caixa-diario.js -> fluxo-caixa-diario) ou o arquivo começa com o id ("orcamento-dfc" -> "orcamento").
+  function telasDoArquivo(menu, nomeArquivo) {
+    const base = semAcento(String(nomeArquivo || "").split("/").pop().replace(/\.(js|css|html)$/i, "")).replace(/_/g, "-");
+    if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop", "config", "utils"].indexOf(base) >= 0) return [];
+    const ids = menu.map((t) => ({ tab: t.tab, tb: semAcento(t.tab).replace(/_/g, "-") }));
+    const iguais = ids.filter((x) => x.tb === base);
+    if (iguais.length) return iguais.map((x) => x.tab);
+    const fim = ids.filter((x) => x.tb.endsWith("-" + base));
+    if (fim.length) return fim.map((x) => x.tab);
+    return ids.filter((x) => base.indexOf(x.tb + "-") === 0).map((x) => x.tab);
+  }
+
+  // Sugestão automática de "Onde mudou", da mais confiável para a menos:
+  // 1) linha "Onde:" do commit; 2) telas citadas nas linhas alteradas; 3) nome do arquivo alterado.
+  // Só sem nada disso entra o texto (título e descrição), exigindo o nome inteiro da tela.
   function sugerirTelas(r, descricao) {
     const menu = menuTelas();
     const achadas = new Set();
+    telasNoTexto(menu, textoOnde(r), true).forEach((t) => achadas.add(t));
     ((r && r.abas) || []).forEach((t) => { if (telaPorTab(t)) achadas.add(t); });
-    ((r && r.arquivos) || []).forEach((f) => {
-      const base = semAcento(String(f.nome || "").split("/").pop().replace(/\.(js|css|html)$/i, ""));
-      if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop"].indexOf(base) >= 0) return;
-      menu.forEach((t) => {
-        const tb = semAcento(t.tab).replace(/_/g, "-");
-        if (tb === base || base.indexOf(tb + "-") === 0 || tb.indexOf(base) === 0) achadas.add(t.tab);
-      });
-    });
-    const texto = semAcento([descricao || ""].concat(((r && r.commits) || []).map((c) => (c.titulo || "") + " " + (c.corpo || ""))).join(" "));
-    menu.forEach((t) => {
-      const palavras = semAcento(t.nome).split(/[^a-z0-9%]+/).filter((p) => p.length > 3);
-      if (palavras.length < 2 && ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro"].indexOf(palavras[0]) >= 0) return;
-      if (palavras.length && palavras.every((p) => texto.indexOf(p) >= 0)) achadas.add(t.tab);
-    });
+    ((r && r.arquivos) || []).forEach((f) => telasDoArquivo(menu, f.nome).forEach((t) => achadas.add(t)));
+    if (!achadas.size) {
+      const texto = [descricao || ""].concat(((r && r.commits) || []).map((c) => c.titulo || "")).join(" \n ");
+      telasNoTexto(menu, texto, false).forEach((t) => achadas.add(t));
+    }
     return Array.from(achadas).slice(0, 8);
   }
 
@@ -596,6 +669,55 @@
   function corpoSimples(c) {
     return String(c || "").split("\n").map((l) => l.trim())
       .filter((l) => l && !/^(co-authored-by|signed-off-by|reviewed-by)\s*:/i.test(l)).join("\n");
+  }
+
+  // Tópicos que o commit pode trazer no corpo, um por linha:
+  //   Novo: ...  /  Como funciona: ...  /  Onde: ...  /  Parecido na produção: ...
+  const TOPICOS = [
+    ["novo", /^(novo|nova|novidade)\s*:\s*/i, "O que é novo"],
+    ["como", /^como funciona\s*:\s*/i, "Como funciona"],
+    ["onde", /^onde( fica)?\s*:\s*/i, "Onde fica"],
+    ["parecido", /^(parecido|j[aá] existe)[^:]*:\s*/i, "Já existe parecido na produção?"]
+  ];
+
+  function topicosDe(corpo) {
+    const topicos = {};
+    const resto = [];
+    corpoSimples(corpo).split("\n").forEach((l) => {
+      const t = TOPICOS.find((x) => x[1].test(l));
+      if (t) topicos[t[0]] = (topicos[t[0]] ? topicos[t[0]] + " " : "") + l.replace(t[1], "").trim();
+      else if (l) resto.push(l);
+    });
+    return { topicos, resto: resto.join("\n") };
+  }
+
+  // Só mostra imagem guardada no Storage do Integra (link /arquivo?p=...; o link antigo do Firebase ainda vale até a virada).
+  function printSeguro(u) {
+    const s = String(u || "");
+    return /^\/arquivo\?p=[^"'<>\s]+$/.test(s)
+      || /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(s);
+  }
+
+  function htmlPrints(lista, editavel, sha) {
+    const urls = (lista || []).filter(printSeguro);
+    if (!urls.length && !editavel) return "";
+    return `<div class="avsol-prints">${urls.map((u, i) => `<span class="avsol-print"><a href="${esc(u)}" target="_blank" rel="noopener" title="Abrir o print"><img src="${esc(u)}" alt="Print da alteração" loading="lazy"></a>${editavel ? `<button type="button" class="avsol-print-x" data-tirar="${esc(sha)}" data-i="${i}" title="Tirar este print">×</button>` : ""}</span>`).join("")}
+      ${editavel && urls.length < 3 ? `<label class="avsol-anexar"><input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden data-print="${esc(sha)}"><i data-lucide="image-plus" style="width:14px;height:14px;"></i> Anexar print</label>` : ""}</div>`;
+  }
+
+  /** Uma alteração: título, tópicos (novo, como funciona, onde, parecido), prints e, para o administrador, "publicar até aqui". */
+  function htmlCommit(c, opts) {
+    const o = opts || {};
+    const { topicos, resto } = topicosDe(c.corpo);
+    const tops = TOPICOS.filter((t) => topicos[t[0]]).map((t) => `<div class="avsol-top"><b>${esc(t[2])}</b><span>${esc(topicos[t[0]])}</span></div>`).join("");
+    const radio = o.escolher && c.shaCompleto
+      ? `<label class="avsol-ate"><input type="radio" name="avsol-ate-${esc(o.id)}" value="${esc(c.shaCompleto)}" ${o.marcado === c.shaCompleto ? "checked" : ""}> Publicar até aqui</label>`
+      : "";
+    return `<div class="avsol-ci-cab"><strong>${esc(frase(c.titulo))}</strong>${radio}</div>
+      ${o.meta ? `<div class="avdev-meta">${o.meta}</div>` : ""}
+      ${tops ? `<div class="avsol-tops">${tops}</div>` : ""}
+      ${resto ? `<span class="avsol-det">${esc(resto)}</span>` : ""}
+      ${htmlPrints((o.prints || {})[c.sha], !!o.upload, c.sha)}`;
   }
 
   function tamanhoDe(t) {
@@ -615,13 +737,10 @@
   }
 
   // Resumo em linguagem simples + detalhes técnicos recolhidos.
-  function htmlVisual(r, extraTecnico) {
+  function htmlVisual(r, extraTecnico, opts) {
     const t = (r && r.totais) || { commits: 0, arquivos: 0, mais: 0, menos: 0 };
     const tam = tamanhoDe(t);
-    const itens = ((r && r.commits) || []).map((c) => {
-      const corpo = corpoSimples(c.corpo);
-      return `<li>${esc(frase(c.titulo))}${corpo ? `<span class="avsol-det">${esc(corpo)}</span>` : ""}</li>`;
-    }).join("");
+    const itens = ((r && r.commits) || []).map((c) => `<li class="avsol-ci" data-sha="${esc(c.sha)}">${htmlCommit(c, opts)}</li>`).join("");
     const rotulo = { added: ["novo", "novo"], removed: ["removido", "rem"], modified: ["alterado", "alt"], renamed: ["renomeado", "ren"] };
     const maior = Math.max(1, ...((r && r.arquivos) || []).map((f) => f.mais + f.menos));
     const arqs = ((r && r.arquivos) || []).slice().sort((a, b) => (b.mais + b.menos) - (a.mais + a.menos)).map((f) => {
@@ -637,7 +756,7 @@
       </div>`;
     }).join("");
     return `
-      ${itens ? `<div><div class="avsol-tit">Passo a passo do que foi feito</div><ul class="avsol-lista">${itens}</ul></div>` : ""}
+      ${itens ? `<div><div class="avsol-tit">${opts && opts.escolher ? "Alterações (da mais nova para a mais antiga): marque até onde publicar" : "Passo a passo do que foi feito"}</div><ul class="avsol-lista avsol-cis">${itens}</ul></div>` : ""}
       <div class="avsol-rodape">
         <span class="avsol-tam ${tam[1]}">Mudança ${tam[0]}</span>
         <span class="avsol-meta2">${num(t.commits)} ${t.commits === 1 ? "envio" : "envios"} • ${num(t.arquivos)} ${t.arquivos === 1 ? "arquivo" : "arquivos"} do sistema</span>
@@ -724,6 +843,24 @@
       ".avsol-pub-cab span{display:block;font-size:.78rem;opacity:.85;}",
       ".avdev-barra.solic{background:#f0fdf4;border:1px solid #86efac;color:#14532d;}",
       ".avdev-btn.verde{background:#105436;border-color:#105436;color:#fff;}",
+      ".avsol-cis{list-style:none;padding-left:0;gap:8px;}",
+      ".avsol-ci{border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:6px;}",
+      ".avsol-ci.fica{opacity:.55;background:#f8fafc;}",
+      ".avsol-ci.fica .avsol-ci-cab strong::after{content:' · fica para depois';font-weight:600;color:#94a3b8;font-size:.76rem;}",
+      ".avsol-ci-cab{display:flex;align-items:flex-start;gap:10px;justify-content:space-between;}",
+      ".avsol-ci-cab strong{font-size:.86rem;color:#0f172a;}",
+      ".avsol-ate{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:.76rem;font-weight:700;color:#105436;cursor:pointer;border:1px solid #a7f3d0;border-radius:99px;padding:2px 9px;background:#ecfdf5;}",
+      ".avsol-tops{display:flex;flex-direction:column;gap:4px;}",
+      ".avsol-top{display:grid;grid-template-columns:170px minmax(0,1fr);gap:8px;font-size:.8rem;}",
+      ".avsol-top b{color:#105436;}",
+      ".avsol-top span{color:#334155;}",
+      ".avsol-prints{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}",
+      ".avsol-print{position:relative;display:inline-block;}",
+      ".avsol-print img{display:block;width:160px;height:100px;object-fit:cover;border:1px solid #cbd5e1;border-radius:6px;}",
+      ".avsol-print-x{position:absolute;top:-7px;right:-7px;width:20px;height:20px;border-radius:50%;border:0;background:#b91c1c;color:#fff;cursor:pointer;line-height:18px;font-weight:700;}",
+      ".avsol-anexar{display:inline-flex;align-items:center;gap:6px;border:1px dashed #94a3b8;border-radius:6px;padding:6px 10px;font-size:.76rem;font-weight:700;color:#105436;cursor:pointer;}",
+      ".avsol-anexar.carregando{opacity:.6;pointer-events:none;}",
+      "@media (max-width:640px){.avsol-top{grid-template-columns:1fr;}}",
       "@media (max-width:640px){.avsol-cards{grid-template-columns:repeat(2,minmax(0,1fr));}.avsol-arq{grid-template-columns:70px minmax(0,1fr) 84px;}.avsol-barra{display:none;}}"
     ].join("");
     document.head.appendChild(st);
@@ -750,10 +887,9 @@
     const f = fb();
     if (!amb || !f) return;
     try {
-      const snap = await f.fx.getDocs(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("ambiente", "==", amb.chave)));
+      const lista = await f.tab.listar({ filtros: [["ambiente", "eq", amb.chave]] });
       let ultima = null;
-      snap.forEach((d) => {
-        const v = Object.assign({ id: d.id }, d.data());
+      lista.forEach((v) => {
         if (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm)) ultima = v;
       });
       minhaSolic = ultima;
@@ -793,58 +929,23 @@
     const semAlteracoesCodigo = !r.totais.commits && !r.totais.arquivos;
     const atualizando = minhaSolic && minhaSolic.status === "pendente";
     const anterior = atualizando ? minhaSolic : null;
-    const escolhidas = new Set((anterior && Array.isArray(anterior.telas) && anterior.telas.length) ? anterior.telas : sugerirTelas(r, ""));
-    const menu = menuTelas();
+    // Sem campos para preencher: as telas e o resumo saem das próprias alterações (commits com Novo/Como funciona/Onde).
+    const telas = sugerirTelas(r, "").slice(0, 20);
     corpo.innerHTML = `
       ${semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Não há commits pendentes nesta branch.</strong> Você pode encaminhar uma solicitação manual para o administrador; ela não fará publicação automática.</div>` : ""}
-      ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com o que está abaixo.</div>` : ""}
-      <div>
-        <div class="avsol-tit">1. Em quais telas mudou?</div>
-        <div class="avsol-escolha" id="avsol-telas"></div>
-        <input class="avsol-campo" id="avsol-busca-tela" list="avsol-menu" placeholder="Adicionar outra tela (digite o nome)…">
-        <datalist id="avsol-menu">${menu.map((t) => `<option value="${esc(t.caminho)}"></option>`).join("")}</datalist>
-      </div>
-      <div>
-        <div class="avsol-tit">2. O que muda para quem usa?</div>
-        <textarea class="avsol-texto" id="avsol-desc" placeholder="Em palavras simples. Ex.: agora dá para marcar a data do acordo e anexar o documento do acordo.">${esc(anterior ? anterior.descricao || "" : "")}</textarea>
-      </div>
-      <div>
-        <div class="avsol-tit">3. Como testar (opcional)</div>
-        <textarea class="avsol-texto curto" id="avsol-teste" placeholder="Ex.: abrir um cliente com acordo, clicar em Registrar acordo e anexar um PDF.">${esc(anterior ? anterior.comoTestar || "" : "")}</textarea>
-      </div>
-      ${semAlteracoesCodigo ? "" : htmlVisual(r)}
+      ${atualizando ? `<div class="avsol-aviso">Já existe uma solicitação aguardando o administrador (feita em ${esc(fmtData(minhaSolic.criadoEm))}). Ao enviar, ela é atualizada com as alterações abaixo.</div>` : ""}
+      <div><div class="avsol-tit">Onde mudou</div>${htmlTelas(telas, amb, true)}</div>
+      ${semAlteracoesCodigo ? "" : htmlVisual(r, "")}
       <div class="avsol-acoes">
         <button type="button" class="avdev-btn ok" id="avsol-enviar">${atualizando ? "Atualizar solicitação" : "Enviar para o administrador"}</button>
         <button type="button" class="avdev-btn" data-fechar>Cancelar</button>
       </div>`;
-    const caixaTelas = corpo.querySelector("#avsol-telas");
-    const pintarTelas = () => {
-      const todas = Array.from(escolhidas).concat(sugerirTelas(r, "").filter((t) => !escolhidas.has(t)));
-      caixaTelas.innerHTML = todas.length ? todas.map((tab) => {
-        const t = telaPorTab(tab);
-        return `<label class="avsol-op"><input type="checkbox" value="${esc(tab)}" ${escolhidas.has(tab) ? "checked" : ""}><span>${esc(t ? t.caminho : tab)}</span></label>`;
-      }).join("") : `<div class="avsol-meta2">Nenhuma tela sugerida. Use o campo abaixo para escolher.</div>`;
-      caixaTelas.querySelectorAll("input").forEach((cb) => {
-        cb.onchange = () => { if (cb.checked) escolhidas.add(cb.value); else escolhidas.delete(cb.value); };
-      });
-    };
-    pintarTelas();
-    const busca = corpo.querySelector("#avsol-busca-tela");
-    busca.onchange = () => {
-      const alvo = menu.find((t) => t.caminho === busca.value);
-      if (alvo) { escolhidas.add(alvo.tab); busca.value = ""; pintarTelas(); }
-    };
     corpo.querySelector("#avsol-enviar").onclick = async (ev) => {
       const btn = ev.currentTarget;
-      const descricao = String(corpo.querySelector("#avsol-desc").value || "").trim();
-      const comoTestar = String(corpo.querySelector("#avsol-teste").value || "").trim();
-      if (!escolhidas.size) { alert("Marque pelo menos uma tela onde houve mudança."); return; }
-      if (descricao.length < 10) { alert("Escreva em poucas palavras o que muda para quem usa."); return; }
       const f = fb();
       if (!f) { alert("O banco do Integra ainda não carregou. Tente de novo."); return; }
       btn.disabled = true;
       btn.textContent = "Enviando…";
-      const telas = Array.from(escolhidas).slice(0, 20);
       const pedido = Object.assign({
         ambiente: amb.chave,
         ambienteNome: amb.nome,
@@ -852,19 +953,20 @@
         sha: d.sha,
         shaMain: d.shaMain,
         versaoBase: d.versaoBase || 0,
-        descricao: descricao.slice(0, 4000),
-        comoTestar: comoTestar.slice(0, 2000),
+        descricao: "",
+        comoTestar: "",
         telas,
         telasNomes: telas.map((tab) => { const t = telaPorTab(tab); return t ? t.caminho : tab; }),
         solicitante: usuarioReal(),
         criadoEm: Date.now(),
         status: "pendente",
         avisoVisto: false,
-        semAlteracoesCodigo
+        semAlteracoesCodigo,
+        prints: {}
       }, r);
       try {
-        if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
-        else await f.fx.addDoc(f.fx.collection(f.db, SOLIC), pedido);
+        if (atualizando) await f.tab.gravar(minhaSolic.id, pedido, { merge: true });
+        else await f.tab.criar(pedido);
       } catch (e) {
         console.warn("[Encaminhar para produção] Falha ao gravar:", e);
         alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
@@ -887,14 +989,13 @@
   function ouvirMinhasDecisoes() {
     const email = emailReal();
     const f = fb();
-    if (ouvindoMinhas || !email || !f || typeof f.fx.onSnapshot !== "function") return;
+    if (ouvindoMinhas || !email || !f) return;
     ouvindoMinhas = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("solicitante.email", "==", email)), (snap) => {
+      f.tab.ouvir(({ docs }) => {
         const novas = [];
         let ultima = null;
-        snap.forEach((d) => {
-          const v = Object.assign({ id: d.id }, d.data());
+        docs.forEach((v) => {
           if (v.status !== "pendente" && v.avisoVisto === false) novas.push(v);
           const amb = ambienteAtual();
           if (amb && v.ambiente === amb.chave && (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm))) ultima = v;
@@ -904,9 +1005,12 @@
         try { fechadas = JSON.parse(ler(AVISO_FECHADO, sessionStorage) || "[]"); } catch (e) { fechadas = []; }
         const mostrar = novas.filter((v) => fechadas.indexOf(v.id + ":" + v.status) < 0);
         if (mostrar.length && !document.getElementById("avsol-dev-aviso")) avisarDev(mostrar);
-      }, (e) => {
-        console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
-        ouvindoMinhas = false;
+      }, {
+        filtros: [["solicitante_email", "eq", email]],
+        aoErro: (e) => {
+          console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
+          ouvindoMinhas = false;
+        }
       });
     } catch (e) {
       ouvindoMinhas = false;
@@ -961,7 +1065,7 @@
       const f = fb();
       if (!f) return;
       for (const s of lista) {
-        try { await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), { avisoVisto: true, avisoVistoEm: Date.now() }); } catch (e) {}
+        try { await f.tab.gravar(s.id, { avisoVisto: true, avisoVistoEm: Date.now() }, { merge: true }); } catch (e) {}
       }
     };
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(fundo);
@@ -1001,21 +1105,23 @@
   function ouvirPendentes() {
     if (ouvindoSolic || !adminReal()) return;
     const f = fb();
-    if (!f || typeof f.fx.onSnapshot !== "function") return;
+    if (!f) return;
     ouvindoSolic = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("status", "==", "pendente")), (snap) => {
-        const lista = [];
-        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+      f.tab.ouvir(({ docs }) => {
+        const lista = docs.slice();
         lista.sort((a, b) => Number(a.criadoEm) - Number(b.criadoEm));
         solicPendentes = lista;
         pintar();
         const vistos = vistas();
         const novas = lista.filter((s) => vistos.indexOf(s.id + ":" + s.criadoEm) < 0);
         if (novas.length && adminReal() && !document.getElementById("avsol-admin")) abrirSolicitacoes();
-      }, (e) => {
-        console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
-        ouvindoSolic = false;
+      }, {
+        filtros: [["status", "eq", "pendente"]],
+        aoErro: (e) => {
+          console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
+          ouvindoSolic = false;
+        }
       });
     } catch (e) {
       ouvindoSolic = false;
@@ -1027,8 +1133,10 @@
     const d = dados[s.ambiente];
     const mudouDepois = d && d.sha && s.sha && d.sha !== s.sha;
     const quem = (s.solicitante && (s.solicitante.nome || s.solicitante.email)) || "desenvolvedor";
-    const informadas = Array.isArray(s.telas) && s.telas.length;
-    const telas = informadas ? s.telas : sugerirTelas(s, s.descricao);
+    // As telas são sempre automáticas: recalcula com a regra atual (pedido antigo pode ter falso positivo gravado).
+    const recalculadas = s.semAlteracoesCodigo ? [] : sugerirTelas(s, s.descricao);
+    const informadas = !recalculadas.length && Array.isArray(s.telas) && s.telas.length;
+    const telas = recalculadas.length ? recalculadas : (informadas ? s.telas : []);
     const github = s.semAlteracoesCodigo ? "" : `<p style="margin:8px 0 0;"><a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a></p>`;
     return `<div class="avsol-pedido" style="color:${esc(amb.cor)};" data-id="${esc(s.id)}">
       <div class="avsol-cab">
@@ -1042,7 +1150,7 @@
         ${s.comoTestar ? `<div><div class="avsol-tit">Como testar</div><div class="avsol-desc teste">${esc(s.comoTestar)}</div></div>` : ""}
         ${s.semAlteracoesCodigo ? `<div class="avsol-aviso"><strong>Solicitação manual:</strong> não havia commits pendentes na branch. A aprovação não publica código automaticamente.</div>` : ""}
         ${mudouDepois ? `<div class="avsol-aviso">Depois deste pedido, subiram mais alterações nesse ambiente. Só o que foi pedido será publicado.</div>` : ""}
-        ${s.semAlteracoesCodigo ? "" : htmlVisual(s, github)}
+        ${s.semAlteracoesCodigo ? "" : htmlVisual(s, github, { prints: s.prints || {}, escolher: escolhivel(s), id: s.id, marcado: (s.commits && s.commits[0] && s.commits[0].shaCompleto) || "" })}
         <div class="avsol-acoes">
           <button type="button" class="avdev-btn ok" data-sol="aprovar">${s.semAlteracoesCodigo ? "Aprovar solicitação manual" : "Aprovar e publicar"}</button>
           <button type="button" class="avdev-btn nao" data-sol="recusar">Recusar</button>
@@ -1056,7 +1164,25 @@
     </div>`;
   }
 
-  async function chamarPublicar(id) {
+  /** O pedido tem o código completo de cada alteração e mais de uma alteração: dá para publicar só até um ponto. */
+  function escolhivel(s) {
+    const cs = (s && s.commits) || [];
+    return cs.length > 1 && cs.every((c) => /^[0-9a-f]{40}$/.test(String(c.shaCompleto || "")));
+  }
+
+  /** Marca, na lista do pedido, o que vai agora e o que fica para depois, e ajusta o botão. */
+  function pintarEscolha(caixa, s) {
+    const cs = (s && s.commits) || [];
+    const marcado = caixa.querySelector('input[name="avsol-ate-' + s.id + '"]:checked');
+    const ate = marcado ? marcado.value : (cs[0] && cs[0].shaCompleto) || "";
+    const k = Math.max(0, cs.findIndex((c) => c.shaCompleto === ate));
+    caixa.querySelectorAll(".avsol-ci").forEach((li, i) => li.classList.toggle("fica", i < k));
+    const btn = caixa.querySelector('[data-sol="aprovar"]');
+    if (btn && !btn.disabled) btn.textContent = k > 0 ? "Aprovar e publicar " + (cs.length - k) + " de " + cs.length : "Aprovar e publicar";
+    return { ate, k, parcial: k > 0 };
+  }
+
+  async function chamarPublicar(id, ate) {
     // Pede o token já no clique: se não houver um pronto, abre a janela da Microsoft para confirmar.
     const auth = window.MouraAuth;
     let pedidoToken = Promise.resolve("");
@@ -1070,7 +1196,7 @@
     const res = await fetch("/api/publicar", {
       method: "POST",
       headers: Object.assign({ "Content-Type": "application/json" }, token ? { "X-Integra-Token": token } : {}),
-      body: JSON.stringify({ solicitacao: id })
+      body: JSON.stringify(ate ? { solicitacao: id, ate } : { solicitacao: id })
     });
     let j = {};
     try { j = await res.json(); } catch (e) { j = {}; }
@@ -1081,7 +1207,7 @@
   // Aprovar dentro de uma bolha de teste chamava a API da bolha e caía em "publicação não ligada".
   function naProducao() {
     const host = String(location.hostname || "").toLowerCase();
-    return host === "crm-gestao.vercel.app" || /^crm-gestao-[a-z0-9]+-crm-mldu\.vercel\.app$/.test(host);
+    return host === "integra-mouraleite.vercel.app" || host === "integra-sooty.vercel.app" || /^integra-[a-z0-9]+-mouraleite1\.vercel\.app$/.test(host);
   }
 
   async function decidir(caixa, s, status, motivo) {
@@ -1098,11 +1224,30 @@
     const branch = s.branch || ambientePorChave(s.ambiente).branch;
     const alvo = caixa.querySelector(".avsol-conteudo");
     const registro = { motivo: motivo || "", decididoPor: quem.nome || quem.email, decididoPorEmail: quem.email, decididoEm: Date.now(), avisoVisto: false };
+    const escolha = escolhivel(s) ? pintarEscolha(caixa, s) : { parcial: false };
     if (status === "aprovado" && !s.semAlteracoesCodigo) {
       const btn = caixa.querySelector('[data-sol="aprovar"]');
       if (btn) btn.textContent = "Publicando… (até 1 minuto)";
       let resultado = null;
-      try { resultado = await chamarPublicar(s.id); } catch (e) { resultado = { error: "Sem resposta do servidor." }; }
+      try { resultado = await chamarPublicar(s.id, escolha.parcial ? escolha.ate : ""); } catch (e) { resultado = { error: "Sem resposta do servidor." }; }
+      if (resultado && resultado.publicado && escolha.parcial && resultado.parcial) {
+        // Publicou só uma parte: o resto continua no mesmo pedido, aguardando.
+        const resto = (s.commits || []).slice(0, escolha.k);
+        const parte = { versao: resultado.versao, ate: escolha.ate, em: Date.now(), por: quem.nome || quem.email, quantas: (s.commits || []).length - escolha.k };
+        try {
+          await f.tab.gravar(s.id, {
+            commits: resto,
+            totais: Object.assign({}, s.totais || {}, { commits: resto.length }),
+            publicacoesParciais: (s.publicacoesParciais || []).concat(parte)
+          }, { merge: true });
+        } catch (e) {
+          console.warn("[Solicitações de envio] Falha ao gravar a publicação parcial:", e);
+        }
+        s.commits = resto;
+        alvo.innerHTML = `<div class="avsol-feito ok"><strong>Publicado na produção: v${esc(resultado.versao)}.</strong> Foram ${parte.quantas} alteração(ões). As outras ${resto.length} continuam neste pedido, aguardando.
+          <br><span style="font-size:.8rem;">A Vercel termina de publicar em cerca de 1 minuto.</span></div>`;
+        return;
+      }
       if (resultado && resultado.publicado) {
         status = "publicado";
         Object.assign(registro, { versao: resultado.versao, publicadoEm: Date.now(), testes: resultado.testes || {} });
@@ -1120,7 +1265,7 @@
       }
     }
     try {
-      await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), Object.assign({ status }, registro));
+      await f.tab.gravar(s.id, Object.assign({ status }, registro), { merge: true });
     } catch (e) {
       console.warn("[Solicitações de envio] Falha ao gravar a decisão:", e);
       if (status !== "publicado") {
@@ -1158,6 +1303,10 @@
     fundo.querySelectorAll(".avsol-pedido").forEach((caixa) => {
       const s = lista.find((x) => x.id === caixa.getAttribute("data-id"));
       if (!s) return;
+      if (escolhivel(s)) {
+        caixa.querySelectorAll('input[name="avsol-ate-' + s.id + '"]').forEach((rd) => { rd.onchange = () => pintarEscolha(caixa, s); });
+        pintarEscolha(caixa, s);
+      }
       caixa.querySelectorAll("[data-sol]").forEach((b) => {
         b.onclick = () => {
           const acao = b.getAttribute("data-sol");

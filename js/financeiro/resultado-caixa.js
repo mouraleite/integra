@@ -25,6 +25,7 @@ const ResultadoCaixaApp = {
   mlAbertos: {},
   matrizAbertos: {},
   matrizSort: null,
+  filtroLinha: null,
   mlFatia: "",
   mlDados: null,
   mlLendo: false,
@@ -210,13 +211,14 @@ const ResultadoCaixaApp = {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         try {
-          const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf.slice(0), { type: "array" });
           const f = this.lerForecast(wb);
           if (!Object.keys(f.contas || {}).length) {
             falhas.push(file.name);
             continue;
           }
-          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {} });
+          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {}, buf: buf });
         } catch (e) {
           falhas.push(file.name);
         }
@@ -259,6 +261,13 @@ const ResultadoCaixaApp = {
           });
         });
       });
+      const orfaos = {};
+      Object.keys(substituir).forEach((chave) => {
+        Object.keys(this.forecasts || {}).forEach((ym) => {
+          const item = ((this.forecasts[ym] || {}).porArquivo || {})[chave];
+          if (item && item.orig) orfaos[item.orig] = 1;
+        });
+      });
       seguintes.forEach((ym) => {
         const doc = this.garantirForecast(ym);
         Object.keys(substituir).forEach((nome) => { delete doc.porArquivo[nome]; });
@@ -277,9 +286,28 @@ const ResultadoCaixaApp = {
           this.apagarForecastNuvem(ym);
         }
       });
+      for (let i = 0; i < lidos.length; i++) {
+        const arq = lidos[i];
+        const orig = this.idOriginalForecast(base, arq.empresa, arq.nome);
+        try {
+          await this.salvarOriginal(orig, arq.nome, arq.buf);
+          seguintes.forEach((ym) => {
+            const item = ((this.forecasts[ym] || {}).porArquivo || {})[base + "|" + arq.nome];
+            if (!item) return;
+            item.orig = orig;
+            item.origNome = arq.nome;
+          });
+          delete orfaos[orig];
+        } catch (err) {
+          this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + arq.nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+        }
+      }
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       const gravados = Object.keys(mesesGravados).map((ym) => ({ ym: ym, doc: this.forecasts[ym] }));
       this.aplicarForecastVista();
-      if (falhas.length) this.aviso = "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".";
+      if (falhas.length) this.aviso = ((this.aviso ? this.aviso + " " : "") + "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".").trim();
       this.gravarForecastLocal();
       try {
         for (let i = 0; i < gravados.length; i++) await this.salvarForecastNuvem(gravados[i].ym, gravados[i].doc);
@@ -302,7 +330,14 @@ const ResultadoCaixaApp = {
       const por = (doc && doc.porArquivo) || {};
       const daqui = Object.keys(por).filter((chave) => this.forecastDaCompetencia(chave, por[chave]));
       if (!daqui.length) return;
-      daqui.forEach((chave) => { delete por[chave]; });
+      const orfaos = {};
+      daqui.forEach((chave) => {
+        if (por[chave] && por[chave].orig) orfaos[por[chave].orig] = 1;
+        delete por[chave];
+      });
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       if (!Object.keys(por).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -322,7 +357,9 @@ const ResultadoCaixaApp = {
       const doc = this.forecasts[ym];
       if (!doc || !doc.porArquivo || !doc.porArquivo[nome]) return;
       if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+      const orig = doc.porArquivo[nome].orig || "";
       delete doc.porArquivo[nome];
+      if (orig && !this.origAindaUsado(orig)) this.apagarOriginal(orig);
       if (!Object.keys(doc.porArquivo).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -520,14 +557,14 @@ const ResultadoCaixaApp = {
   },
 
   async salvarForecastNuvem(ym, doc) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !doc) return false;
+    // resultado_caixa no Supabase (window.DadosFinanceiro): setDoc do doc inteiro vira upsert da linha.
+    const D = window.DadosFinanceiro;
+    if (!D || !doc) return false;
     const por = doc.porArquivo || {};
     const nomes = {};
     const contas = {};
     Object.keys(por).forEach((nome) => this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]));
-    await fx.setDoc(fx.doc(db, "resultado_caixa", this.docForecast(ym)), {
+    await D.gravarResultadoCaixa(this.docForecast(ym), {
       tipo: "forecast",
       slot: "fc-" + ym,
       competencia: ym,
@@ -545,12 +582,12 @@ const ResultadoCaixaApp = {
   },
 
   async carregarForecasts() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.where !== "function") return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = (this._fcToken = (this._fcToken || 0) + 1);
     try {
-      const snap = await fx.getDocs(fx.query(fx.collection(db, "resultado_caixa"), fx.where("tipo", "==", "forecast")));
+      // where("tipo", "==", "forecast"): snapshot de imitação com os docs no formato antigo.
+      const snap = await D.listarResultadoCaixa({ tipo: "forecast" });
       if (this._fcToken !== token) return;
       const nuvem = {};
       const semParte = {};
@@ -1209,8 +1246,390 @@ const ResultadoCaixaApp = {
     return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
       <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
       <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
+      <button type="button" class="rcx-baixar${arq && arq.orig ? "" : " is-sem"}" title="${arq && arq.orig ? "Baixar o arquivo original" : "Este envio não guardou o Excel original. Suba o arquivo de novo para baixar."}" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
       <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
     </span>`;
+  },
+
+  pacoteConferencia(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const contas = {};
+      const nomes = {};
+      const meses = {};
+      let meta = { nome: nome, empresa: 0, rotulo: "", base: "" };
+      let achou = false;
+      Object.keys(this.forecasts || {}).sort().forEach((ym) => {
+        const arq = ((this.forecasts[ym] || {}).porArquivo || {})[nome];
+        if (!arq) return;
+        achou = true;
+        meta = {
+          nome: arq.nome || meta.nome,
+          empresa: Number(arq.empresa) || meta.empresa || 0,
+          rotulo: arq.rotulo || meta.rotulo,
+          base: arq.base || meta.base
+        };
+        Object.keys(arq.contas || {}).forEach((cc) => {
+          if (arq.nomes && arq.nomes[cc]) nomes[cc] = arq.nomes[cc];
+          const bag = contas[cc] || (contas[cc] = {});
+          Object.keys(arq.contas[cc] || {}).forEach((code) => {
+            const info = arq.contas[cc][code] || {};
+            const linha = bag[code] || (bag[code] = { nome: info.nome || "", meses: {} });
+            if (info.nome) linha.nome = info.nome;
+            const v = Number((info.meses || {})[ym]) || 0;
+            if (!v) return;
+            linha.meses[ym] = (Number(linha.meses[ym]) || 0) + v;
+            meses[ym] = 1;
+          });
+        });
+      });
+      if (!achou) return null;
+      return { tipo: "fc", nome: nome, meta: meta, contas: contas, nomes: nomes, meses: Object.keys(meses).sort() };
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (!arq) return null;
+    return { tipo: "mes", nome: nome, meta: arq, ano: Number(tipo) || 0 };
+  },
+
+  linhasConferencia(p) {
+    const linhas = [];
+    const ordem = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    if (p.tipo === "fc") {
+      Object.keys(p.contas || {}).sort(ordem).forEach((cc) => {
+        const nomeCc = (p.nomes && p.nomes[cc]) || String(cc);
+        Object.keys(p.contas[cc] || {}).sort(ordem).forEach((code) => {
+          const info = p.contas[cc][code] || {};
+          linhas.push({ cc: nomeCc, code: code, nome: info.nome || "", meses: info.meses || {} });
+        });
+      });
+      return linhas;
+    }
+    const porCc = (p.meta && p.meta.contasPorCc) || {};
+    if (Object.keys(porCc).length) {
+      Object.keys(porCc).sort(ordem).forEach((cc) => {
+        const dono = porCc[cc] || {};
+        const rotulo = dono.nome ? (cc + " - " + dono.nome) : String(cc);
+        Object.keys(dono.contas || {}).sort(ordem).forEach((code) => {
+          const info = dono.contas[code] || {};
+          linhas.push({ cc: rotulo, code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+        });
+      });
+      return linhas;
+    }
+    Object.keys((p.meta && p.meta.contas) || {}).sort(ordem).forEach((code) => {
+      const info = p.meta.contas[code] || {};
+      linhas.push({ cc: "", code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+    });
+    return linhas;
+  },
+
+  colunasConferencia(p) {
+    const nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    if (p.tipo === "fc") {
+      const meses = (p.meses && p.meses.length) ? p.meses : [];
+      return {
+        heads: ["Centro de custo", "Código", "Conta"].concat(meses.map((ym) => {
+          const i = Number(ym.slice(5, 7)) - 1;
+          return (nomes[i] || ym) + "/" + ym.slice(0, 4);
+        })),
+        valores: (linha) => meses.map((ym) => Number(linha.meses[ym]) || 0)
+      };
+    }
+    const heads = ["Centro de custo", "Código", "Conta"];
+    for (let m = 0; m < 12; m++) {
+      heads.push(nomes[m] + " orçado");
+      heads.push(nomes[m] + " realizado");
+    }
+    return {
+      heads: heads,
+      valores: (linha) => {
+        const out = [];
+        for (let m = 1; m <= 12; m++) {
+          const cel = (linha.meses || {})[String(m)] || {};
+          out.push(Number(cel.o) || 0);
+          out.push(Number(cel.r) || 0);
+        }
+        return out;
+      }
+    };
+  },
+
+  nomeAbaConferencia(p, used, inv) {
+    const emp = Number(p.meta && p.meta.empresa) || this.empresaId(p.nome) || 0;
+    if (inv && emp && typeof inv.excelSheetName === "function") return inv.excelSheetName(emp, used);
+    let base = String((p.meta && (p.meta.rotulo || p.meta.nome)) || p.nome || "Arquivo")
+      .replace(/^\d{4}-\d{2}\|/, "")
+      .replace(/[:\\/?*\[\]]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Arquivo";
+    if (base.length > 31) base = base.slice(0, 31);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suf = "-" + (n++);
+      name = (base.slice(0, Math.max(1, 31 - suf.length)) + suf).slice(0, 31);
+    }
+    used.add(name.toLowerCase());
+    return name;
+  },
+
+  preencherConferencia(ws, inv, p, imgId, generatedAt) {
+    const moneyFmt = "#,##0.00";
+    const spec = this.colunasConferencia(p);
+    const linhas = this.linhasConferencia(p);
+    const heads = spec.heads;
+    const lastCol = Math.max(heads.length, 8);
+    const lastL = inv.excelColLetter(lastCol);
+    const nomeArquivo = String((p.meta && p.meta.nome) || p.nome || "").replace(/^\d{4}-\d{2}\|/, "");
+    const empresa = Number(p.meta && p.meta.empresa) || this.empresaId(nomeArquivo) || 0;
+    const comp = p.tipo === "fc"
+      ? (p.meta && p.meta.base ? p.meta.base : "")
+      : (p.ano ? String(p.ano) : "");
+    ws.properties.showGridLines = false;
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 4, topLeftCell: "B5", activeCell: "B5", showGridLines: false }];
+    ws.columns = [
+      { width: 42 },
+      { width: 18 },
+      { width: 42 },
+      ...Array.from({ length: lastCol - 3 }, () => ({ width: 16 }))
+    ];
+    ws.mergeCells("A1:A2");
+    ws.getRow(1).height = 28;
+    ws.getRow(2).height = 22;
+    const titulo = p.tipo === "fc" ? "Forecast gravado" : "Fechamento gravado";
+    const titleCell = ws.getCell("A1");
+    titleCell.value = {
+      richText: [
+        { font: { name: "Calibri", size: 14, bold: true, color: { argb: "FF475569" } }, text: titulo + "\n" },
+        { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nomeArquivo || "Arquivo" }
+      ]
+    };
+    inv.excelPaint(titleCell, {
+      fill: "FFFFFFFF",
+      align: { vertical: "middle", horizontal: "left", wrapText: true, indent: 8 }
+    });
+    if (imgId != null) {
+      try {
+        const logoPx = Math.round(1.54 * 96 / 2.54);
+        ws.addImage(imgId, { tl: { col: 0.04, row: 0.08 }, ext: { width: logoPx, height: logoPx } });
+      } catch (e) {}
+    }
+    const kpis = [
+      { label: "Arquivo", value: nomeArquivo || "—", texto: true },
+      { label: "Empresa", value: empresa ? String(empresa) : "—", texto: true },
+      { label: "Competência", value: comp || "—", texto: true },
+      { label: "Linhas", value: linhas.length, texto: false }
+    ];
+    kpis.forEach((k, i) => {
+      const col = 4 + i;
+      const cellL = ws.getRow(1).getCell(col);
+      const cellV = ws.getRow(2).getCell(col);
+      cellL.value = k.label;
+      cellV.value = k.value;
+      inv.excelPaint(cellL, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 8, color: { argb: "FF94A3B8" } },
+        align: { horizontal: "right", vertical: "bottom" }
+      });
+      inv.excelPaint(cellV, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 12, color: { argb: "FF0F172A" } },
+        align: { horizontal: "right", vertical: "middle" },
+        numFmt: k.texto ? undefined : "#,##0"
+      });
+    });
+    ws.getRow(3).height = 8;
+    const headRow = ws.getRow(4);
+    headRow.height = 20;
+    for (let c = 1; c <= lastCol; c++) {
+      const cell = headRow.getCell(c);
+      cell.value = heads[c - 1] || "";
+      inv.excelPaint(cell, {
+        fill: "FF334155",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: c <= 3 ? "left" : "right", vertical: "middle" },
+        border: true
+      });
+    }
+    const totais = Array(heads.length - 3).fill(0);
+    let rowIdx = 5;
+    linhas.forEach((linha) => {
+      const vals = spec.valores(linha);
+      const row = ws.getRow(rowIdx);
+      row.height = 18;
+      const textos = [linha.cc || "", linha.code || "", linha.nome || ""];
+      textos.forEach((texto, i) => {
+        const cell = row.getCell(i + 1);
+        cell.value = texto;
+        inv.excelPaint(cell, {
+          fill: i === 0 ? "FFE7F6EE" : "FFFFFFFF",
+          font: { bold: i === 0, size: 9, color: { argb: i === 0 ? "FF105436" : "FF0F172A" } },
+          align: { horizontal: "left", vertical: "middle" },
+          border: true
+        });
+      });
+      vals.forEach((n, i) => {
+        const cell = row.getCell(4 + i);
+        const num = Number(n) || 0;
+        totais[i] += num;
+        cell.value = num;
+        inv.excelPaint(cell, {
+          fill: "FFFFFFFF",
+          font: { size: 9, color: { argb: num < 0 ? "FFB91C1C" : (num ? "FF0F172A" : "FF94A3B8") } },
+          align: { horizontal: "right", vertical: "middle" },
+          border: true,
+          numFmt: moneyFmt
+        });
+      });
+      rowIdx += 1;
+    });
+    const total = ws.getRow(rowIdx);
+    total.height = 20;
+    ["", "", "Total"].forEach((texto, i) => {
+      const cell = total.getCell(i + 1);
+      cell.value = texto;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "left", vertical: "middle" },
+        border: true
+      });
+    });
+    totais.forEach((n, i) => {
+      const cell = total.getCell(4 + i);
+      cell.value = n;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "right", vertical: "middle" },
+        border: true,
+        numFmt: moneyFmt
+      });
+    });
+    for (let c = heads.length + 1; c <= lastCol; c++) {
+      inv.excelPaint(total.getCell(c), {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        border: true
+      });
+    }
+    const foot = ws.getRow(rowIdx + 2);
+    foot.getCell(1).value = generatedAt + " · Leitura gravada de " + (nomeArquivo || "arquivo") + ". O Excel original não fica armazenado; estes são os números que entraram na tela.";
+    inv.excelPaint(foot.getCell(1), {
+      font: { italic: true, size: 8, color: { argb: "FF64748B" } },
+      align: { horizontal: "left", vertical: "middle" }
+    });
+    ws.mergeCells(rowIdx + 2, 1, rowIdx + 2, lastCol);
+    if (lastL) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: Math.max(rowIdx - 1, 4), column: heads.length } };
+  },
+
+  async baixarPacotes(pacotes, arquivo) {
+    const lista = (pacotes || []).filter(Boolean);
+    if (!lista.length) {
+      alert("Nenhum arquivo gravado para baixar.");
+      return;
+    }
+    const inv = window.InvestimentoApp;
+    if (!inv || typeof inv.ensureExcelJS !== "function") {
+      alert("O Excel não está disponível nesta tela.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const ExcelJS = await inv.ensureExcelJS();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "CRM Moura Leite";
+      wb.created = new Date();
+      let imgId = null;
+      try {
+        const logo = await inv.logoDataUrl();
+        imgId = wb.addImage({ base64: logo.dataUrl, extension: logo.extension || "png" });
+      } catch (e) {}
+      const used = new Set();
+      const gerado = inv.generatedAtLabel(new Date());
+      lista.forEach((p) => {
+        const ws = wb.addWorksheet(this.nomeAbaConferencia(p, used, inv), { properties: { showGridLines: false } });
+        this.preencherConferencia(ws, inv, p, imgId, gerado);
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = arquivo || "conferencia.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+    } catch (e) {
+      alert((e && e.message) || "Não consegui gerar o Excel.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarArquivo(tipo, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    const ref = this.refOriginal(tipo, nome);
+    if (!ref) {
+      alert("Este arquivo foi enviado antes de guardar o Excel original. Suba o arquivo de novo para poder baixá-lo.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const dado = await this.lerOriginal(ref.id);
+      if (!dado || !dado.buf) throw new Error("vazio");
+      this.dispararDownload(dado.buf, dado.nome || ref.nome || nome);
+    } catch (e) {
+      alert("Não consegui baixar o arquivo original. Suba o arquivo de novo.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarColuna(qual) {
+    const atual = this.anoAtual();
+    const ant = atual > 1900 ? atual - 1 : 0;
+    const refs = [];
+    const sem = [];
+    const guardar = (tipo, nome) => {
+      const ref = this.refOriginal(tipo, nome);
+      if (ref) refs.push(ref);
+      else sem.push(nome);
+    };
+    if (qual === "forecast") {
+      const usados = {};
+      this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
+      const mapa = {};
+      Object.keys(this.forecasts || {}).forEach((ym) => {
+        if (!usados[ym]) return;
+        const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+        Object.keys(por).forEach((nome) => {
+          if (!this.forecastDaCompetencia(nome, por[nome])) return;
+          mapa[nome] = 1;
+        });
+      });
+      Object.keys(mapa).forEach((nome) => guardar("fc", nome));
+    } else {
+      const ano = qual === "anterior" ? ant : atual;
+      Object.keys(((this.anoDados(ano) || {}).arquivos) || {}).forEach((nome) => guardar(String(ano), nome));
+    }
+    if (!refs.length) {
+      alert("Estes arquivos foram enviados antes de guardar o Excel original. Suba de novo para poder baixá-los.");
+      return;
+    }
+    for (let i = 0; i < refs.length; i++) {
+      try {
+        const dado = await this.lerOriginal(refs[i].id);
+        if (!dado || !dado.buf) sem.push(refs[i].nome);
+        else this.dispararDownload(dado.buf, dado.nome || refs[i].nome);
+      } catch (e) {
+        sem.push(refs[i].nome);
+      }
+      if (i < refs.length - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (sem.length) alert("Sem o Excel original: " + sem.map((n) => String(n).replace(/^\d{4}-\d{2}\|/, "")).join(", ") + ". Suba esses arquivos de novo.");
   },
 
   nomeEmpresaArquivo(nome) {
@@ -1556,15 +1975,11 @@ const ResultadoCaixaApp = {
     let mapa = null;
     try { mapa = this.mapaDfc(FC); } catch (e) { mapa = null; }
     if (mapa && Object.keys(mapa.accToNode || {}).length) return mapa;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
-    if (!fx || !db || !fx.getDoc || !plano) return mapa;
+    if (!window.DadosNucleo || !plano) return mapa;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "config", "global"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return mapa;
-      const raw = (snap.data() || {}).crm_plano_visoes_v2;
+      // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+      const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
       if (!raw) return mapa;
       const visoes = JSON.parse(raw);
       if (!Array.isArray(visoes) || !visoes.length) return mapa;
@@ -1747,10 +2162,11 @@ const ResultadoCaixaApp = {
       this._mapa = await this.mapaPronto();
       for (let i = 0; i < files.length; i++) {
         const buf = await files[i].arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array" });
+        const wb = XLSX.read(buf.slice(0), { type: "array" });
         const blocos = this.lerPlanilha(wb);
         if (!blocos.length) throw new Error("Não reconheci centros de custo em " + files[i].name + ". Use o comparativo orçado × realizado por centro de custo.");
         this.aplicarBlocos(files[i].name, blocos);
+        await this.ligarOriginalEnviado(files[i].name, buf);
       }
       const fora = this._fora || [];
       if (fora.length) {
@@ -1895,7 +2311,9 @@ const ResultadoCaixaApp = {
         const meses = {};
         Object.keys(info.meses || {}).forEach((mm) => {
           const o = Math.round((Number(info.meses[mm].o) || 0) * 100) / 100;
-          if (Math.abs(o) >= 0.005) meses[mm] = o;
+          const r = Math.round((Number(info.meses[mm].r) || 0) * 100) / 100;
+          if (Math.abs(o) < 0.005 && Math.abs(r) < 0.005) return;
+          meses[mm] = Math.abs(r) >= 0.005 ? [o, r] : o;
         });
         if (Object.keys(meses).length) contas[code] = { nome: info.nome || "", node: info.node || "", meses: meses };
       });
@@ -1915,8 +2333,19 @@ const ResultadoCaixaApp = {
         const info = dono.contas[code] || {};
         const meses = {};
         Object.keys(info.meses || {}).forEach((mm) => {
-          const o = Number(info.meses[mm]) || 0;
-          if (Math.abs(o) >= 0.005) meses[mm] = { o: o, r: 0 };
+          const cru = info.meses[mm];
+          let o = 0;
+          let r = 0;
+          if (Array.isArray(cru)) {
+            o = Number(cru[0]) || 0;
+            r = Number(cru[1]) || 0;
+          } else if (cru && typeof cru === "object") {
+            o = Number(cru.o) || 0;
+            r = Number(cru.r) || 0;
+          } else {
+            o = Number(cru) || 0;
+          }
+          if (Math.abs(o) >= 0.005 || Math.abs(r) >= 0.005) meses[mm] = { o: o, r: r };
         });
         if (Object.keys(meses).length) contas[code] = { nome: info.nome || code, node: info.node || "", meses: meses };
       });
@@ -1925,10 +2354,144 @@ const ResultadoCaixaApp = {
     return out;
   },
 
+  idOriginalForecast(base, empresa, nome) {
+    const emp = Number(empresa) || 0;
+    const chave = emp ? String(emp) : String(nome || "arq").replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 60);
+    return "fc_" + String(base || "").replace(/[^0-9-]/g, "") + "_" + chave;
+  },
+
+  bufParaBase64(buf) {
+    const blob = new Blob([buf]);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+      reader.onerror = () => reject(reader.error || new Error("Não consegui ler o arquivo."));
+      reader.readAsDataURL(blob);
+    });
+  },
+
+  base64ParaBuf(b64) {
+    const bin = atob(String(b64 || ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  },
+
+  // Excel original de cada envio: no Supabase Storage (bucket "arquivos"), em resultado_caixa_orig/<id>.
+  // O nome do arquivo fica no próprio item (origNome).
+  caminhoOriginal(id) {
+    return "resultado_caixa_orig/" + String(id || "").replace(/[\\/]/g, "_");
+  },
+
+  async salvarOriginal(id, nome, buf) {
+    const A = window.ArquivosIntegra;
+    if (!A || !id || !buf) throw new Error("A nuvem não está disponível.");
+    if (!buf.byteLength) throw new Error("Arquivo vazio.");
+    await A.uploadBytes(A.ref(null, this.caminhoOriginal(id)), buf, { contentType: "application/octet-stream" });
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return true;
+  },
+
+  async lerOriginal(id) {
+    if (this._bytesOriginais && this._bytesOriginais[id]) {
+      return { nome: "", buf: this._bytesOriginais[id] };
+    }
+    const A = window.ArquivosIntegra;
+    if (!A || !id) return null;
+    const url = await A.getDownloadURL(A.ref(null, this.caminhoOriginal(id)));
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (!buf.byteLength) return null;
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return { nome: "", buf: buf };
+  },
+
+  apagarOriginal(id) {
+    if (!id) return;
+    if (this._bytesOriginais) delete this._bytesOriginais[id];
+    const A = window.ArquivosIntegra;
+    if (!A) return;
+    A.deleteObject(A.ref(null, this.caminhoOriginal(id))).catch(function() {});
+  },
+
+  origAindaUsado(id) {
+    if (!id) return false;
+    let achou = false;
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      Object.keys(por).forEach((nome) => {
+        if (por[nome] && por[nome].orig === id) achou = true;
+      });
+    });
+    const visitar = (bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        if (bag.arquivos[nome] && bag.arquivos[nome].orig === id) achou = true;
+      });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => visitar(this.acervo.anterior[k]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => visitar(this.acervo.meses[k]));
+    return achou;
+  },
+
+  async ligarOriginalEnviado(nome, buf) {
+    const lista = [];
+    const visitar = (slot, bag) => {
+      const arq = bag && bag.arquivos && bag.arquivos[nome];
+      if (!arq || !arq._pendente) return;
+      const id = arq._doc || this.docCaixa(arq._slot || slot, arq.empresa, nome);
+      arq._doc = id;
+      lista.push({ arq: arq, id: id });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    for (let i = 0; i < lista.length; i++) {
+      try {
+        await this.salvarOriginal(lista[i].id, nome, buf);
+        lista[i].arq.orig = lista[i].id;
+        lista[i].arq.origNome = nome;
+      } catch (err) {
+        this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+      }
+    }
+  },
+
+  refOriginal(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const chaves = Object.keys(this.forecasts || {});
+      for (let i = 0; i < chaves.length; i++) {
+        const arq = ((this.forecasts[chaves[i]] || {}).porArquivo || {})[nome];
+        if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || arq.nome || nome };
+      }
+      return null;
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || nome };
+    return null;
+  },
+
+  dispararDownload(buf, nome) {
+    const bruto = String(nome || "arquivo.xlsx").replace(/^\d{4}-\d{2}\|/, "").replace(/[\\/:*?"<>|]/g, " ").trim() || "arquivo.xlsx";
+    const arquivo = /\.(xlsx|xlsm)$/i.test(bruto) ? bruto : (bruto + ".xlsx");
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = arquivo;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  },
+
   async salvarArquivoNuvem(slot, nome, arq) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !arq) return false;
+    // resultado_caixa no Supabase: o payload é aberto nas colunas jsonb (entradas, contas, contas_por_cc,
+    // planos_json) de uma linha só; as partes __pN (limite de 1 MB do Firestore) não existem mais.
+    const D = window.DadosFinanceiro;
+    if (!D || !arq) return false;
     const id = arq._doc || this.docCaixa(slot, arq.empresa, nome);
     const limpo = this.enxugarArq(arq);
     const detalhe = JSON.stringify({
@@ -1937,32 +2500,19 @@ const ResultadoCaixaApp = {
       contasPorCc: limpo.contasPorCc || {},
       planosJson: this.empacotarPlanos(limpo.planosPorCc)
     });
-    const LIM = 400000;
     const ids = [];
-    if (detalhe.length > LIM) {
-      for (let i = 0, n = 0; i < detalhe.length; i += LIM, n++) {
-        const pid = id + "__p" + n;
-        ids.push(pid);
-        await fx.setDoc(fx.doc(db, "resultado_caixa", pid), {
-          tipo: "parte",
-          pai: id,
-          texto: detalhe.slice(i, i + LIM)
-        });
-      }
-    }
     const base = {
       slot: slot,
       nome: nome,
       empresa: Number(arq.empresa) || 0,
       rotulo: arq.rotulo || "",
       em: new Date().toISOString(),
-      payload: ids.length ? "" : detalhe,
-      partes: ids
+      payload: detalhe,
+      partes: ids,
+      orig: arq.orig || "",
+      origNome: arq.origNome || ""
     };
-    await fx.setDoc(fx.doc(db, "resultado_caixa", id), base);
-    for (let n = ids.length; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", id + "__p" + n)).catch(function() {});
-    }
+    await D.gravarResultadoCaixa(id, base);
     arq._doc = id;
     arq._partes = ids;
     arq._pendente = false;
@@ -2007,15 +2557,13 @@ const ResultadoCaixaApp = {
   },
 
   apagarNuvem(docId) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!docId || !fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!docId || !D) return;
     this._nuvemToken = (this._nuvemToken || 0) + 1;
-    fx.deleteDoc(fx.doc(db, "resultado_caixa", docId)).catch(() => {});
-    if (String(docId).indexOf("__p") >= 0 || String(docId).indexOf("fc-") === 0) return;
-    for (let n = 0; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", docId + "__p" + n)).catch(function() {});
-    }
+    // Uma linha por arquivo/forecast (sem partes __pN para apagar).
+    D.excluirResultadoCaixa(docId).catch(() => {});
+    if (String(docId).indexOf("fc-") === 0) return;
+    this.apagarOriginal(docId);
   },
 
   aplicarDoc(acervo, id, x) {
@@ -2024,7 +2572,7 @@ const ResultadoCaixaApp = {
       acervo._partes[id] = x.texto || "";
       return;
     }
-    if (x && (x.tipo === "forecast" || String(x.slot || "").indexOf("fc-") === 0)) return;
+    if (x && (x.tipo === "forecast" || x.tipo === "original" || x.tipo === "original-parte" || String(x.slot || "").indexOf("fc-") === 0)) return;
     const nome = x.nome || id;
     let extra = null;
     if (typeof x.payload === "string" && x.payload && !(Array.isArray(x.partes) && x.partes.length)) {
@@ -2039,7 +2587,9 @@ const ResultadoCaixaApp = {
       planosPorCc: (extra && extra.planosJson) ? this.abrirPlanos(extra.planosJson) : ((x.planosPorCc && Object.keys(x.planosPorCc).length) ? x.planosPorCc : this.abrirPlanos(x.planosJson)),
       _doc: id,
       _slot: x.slot || "",
-      _partes: Array.isArray(x.partes) ? x.partes : []
+      _partes: Array.isArray(x.partes) ? x.partes : [],
+      orig: x.orig || "",
+      origNome: x.origNome || ""
     };
     const slot = String(x.slot || "");
     if (slot.indexOf("ant-") === 0) {
@@ -2122,9 +2672,8 @@ const ResultadoCaixaApp = {
   },
 
   async carregarNuvem() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = this._nuvemToken || 0;
     const vazio = !this.temAcervo();
     if (vazio) {
@@ -2134,7 +2683,7 @@ const ResultadoCaixaApp = {
     const leituraVelha = () => (this._nuvemToken || 0) !== token;
     const forecastP = this.carregarForecasts();
     try {
-      const snap = await fx.getDocs(fx.collection(db, "resultado_caixa"));
+      const snap = await D.listarResultadoCaixa(); // snapshot de imitação (docs no formato que aplicarDoc lê)
       if (leituraVelha()) {
         if (!this._subindo) this.lendo = false;
         return;
@@ -2454,8 +3003,9 @@ const ResultadoCaixaApp = {
     return { pos, neg, outros };
   },
 
-  fmt(n) {
+  fmt(n, absoluto) {
     let v = Number(n) || 0;
+    if (absoluto) v = Math.abs(v);
     if (this.escala === "milhoes") v = v / 1000000;
     return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   },
@@ -2508,13 +3058,14 @@ const ResultadoCaixaApp = {
     const bom = v > 0.5;
     const cls = ruim ? "is-neg" : (bom ? "is-pos" : "");
     const p = this.pct(real, orc);
-    const pTxt = p == null ? "—" : (p.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
-    return `<td class="rcx-num ${cls}">${this.fmt(v)}</td><td class="rcx-num ${cls}">${pTxt}</td>`;
+    const pNum = saida && p != null ? Math.abs(p) : p;
+    const pTxt = pNum == null ? "—" : (pNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
+    return `<td class="rcx-num ${cls}">${this.fmt(v, saida)}</td><td class="rcx-num ${cls}">${pTxt}</td>`;
   },
 
   blocoNums(b, saida) {
-    const ant = this.fmt(b.ant);
-    return `<td class="rcx-num rcx-sep rcx-ant">${ant}</td><td class="rcx-num">${this.fmt(b.orc)}</td><td class="rcx-num rcx-real">${this.fmt(b.real)}</td>${this.celVar(b.real, b.orc, saida)}`;
+    const ant = this.fmt(b.ant, saida);
+    return `<td class="rcx-num rcx-sep rcx-ant">${ant}</td><td class="rcx-num">${this.fmt(b.orc, saida)}</td><td class="rcx-num rcx-real">${this.fmt(b.real, saida)}</td>${this.celVar(b.real, b.orc, saida)}`;
   },
 
   somaBloco(lista, qual) {
@@ -2608,8 +3159,10 @@ const ResultadoCaixaApp = {
     const base = "Orçado e realizado de " + (atual || "—") + " vêm do arquivo mais recente de cada empresa, até " + mesNomeFaixa + ". A coluna de " + (antN || "o ano anterior") + " é o realizado do arquivo mais recente dessa empresa, de janeiro até o mês escolhido, no mesmo % Consolidação.";
     const nota = lado === "entradas"
       ? base + " Livia, Livia I e Livia II aparecem como Central Parque. Empreendimentos com o mesmo nome ganham a sigla da cidade. MLDU aparece como Corporativo. Os quatro maiores desvios positivos e os quatro negativos do acumulado ficam à vista; o restante abre ao clicar em Outros."
+        + " Clique num produto para ver só os centros de custo dele na tabela de baixo; clique de novo para ver todas as empresas."
         + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC (Receitas e receitas financeiras)." + agrupa
       : base + " As saídas são as contas da visão DFC, da maior saída para a menor pelo realizado acumulado. Gastar acima do orçado fica em vermelho."
+        + " Clique numa conta para ver só ela na tabela de baixo; clique de novo para ver todas."
         + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC das saídas." + agrupa;
     const avisoRateio = lado === "saidas" && this.faltaCentroNasSaidas()
       ? `<div class="rcx-erro">Para aplicar o % Consolidação nas saídas destes arquivos, suba o Excel de novo. O arquivo que já estava salvo não guarda o centro de custo de cada conta.</div>`
@@ -2643,6 +3196,12 @@ const ResultadoCaixaApp = {
           </div>
         </div>
         <div class="cc-toolbar-actions">
+          ${(lado === "entradas" || lado === "saidas") && Object.keys(this.anos || {}).length ? `<button type="button" class="rcx-arq-btn" title="Copia os gráficos e a tabela no padrão do slide do conselho. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+            <i data-lucide="image"></i> Copiar para o PowerPoint
+          </button>
+          <button type="button" class="rcx-arq-btn" title="Copia as linhas da tabela (só os valores) para colar no relatório em Excel: clique na célula B da primeira linha e Ctrl+V." onclick="ResultadoCaixaApp.copiarExcel(this)">
+            <i data-lucide="sheet"></i> Copiar para o Excel
+          </button>` : ""}
           <button type="button" class="rcx-arq-btn${this.arqsAberto ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleArqs()">
             <i data-lucide="files"></i> Arquivos <span class="ml-tab-count">${qtdArq}</span>
             <i data-lucide="${this.arqsAberto ? "chevron-up" : "chevron-down"}"></i>
@@ -2659,15 +3218,24 @@ const ResultadoCaixaApp = {
       </div>
       ${this.arqsAberto ? `<div class="rcx-arqs-box">
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais desta competência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAtual || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do ano anterior" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAnt || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Forecast</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Forecast</span>
+            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do forecast" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipForecast}</div>
         </div>
       </div>` : ""}
@@ -2682,7 +3250,7 @@ const ResultadoCaixaApp = {
   },
 
   /** Barras do mês selecionado: realizado do ano anterior, orçado e realizado do ano atual. */
-  graficoMesHtml(total) {
+  graficoMesHtml(total, saida) {
     const atual = this.anoAtual();
     const antN = atual > 1900 ? atual - 1 : 0;
     const nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
@@ -2700,7 +3268,7 @@ const ResultadoCaixaApp = {
           const h = b.espera ? 0 : Math.abs(Number(b.valor) || 0) / maior * 100;
           return `<div class="rcx-graf-col ${b.cls}">
             <div class="rcx-graf-track">
-              <span class="rcx-graf-val" style="bottom:${h.toFixed(2)}%">${b.espera ? "…" : this.fmt(b.valor)}</span>
+              <span class="rcx-graf-val" style="bottom:${h.toFixed(2)}%">${b.espera ? "…" : this.fmt(b.valor, saida)}</span>
               <div class="rcx-graf-bar" style="height:${h.toFixed(2)}%"></div>
             </div>
           </div>`;
@@ -2748,7 +3316,7 @@ const ResultadoCaixaApp = {
           const h = (c.total / maior * 100).toFixed(2);
           return `<div class="rcx-graf-col ${c.cls}">
           <div class="rcx-graf-track">
-          <span class="rcx-graf-val" style="bottom:${h}%">${this.fmt(c.rotuloValor)}${c.marca ? " *" : ""}</span>
+          <span class="rcx-graf-val" style="bottom:${h}%">${this.fmt(c.rotuloValor, lado === "saidas")}${c.marca ? " *" : ""}</span>
           <div class="rcx-tot-pilha" style="height:${h}%" title="${caixaEsc(c.rotulo)}: ${this.fmt(c.escuro)} até ${mesCurto} + ${this.fmt(c.claro)} até dezembro">
             ${pedaco(c.claro, c.total, "is-claro")}${pedaco(c.escuro, c.total, "is-escuro")}
           </div></div>
@@ -2891,8 +3459,13 @@ const ResultadoCaixaApp = {
       { k: "forecast", cls: "is-fc", nome: "Forecast" },
       { k: "real", cls: "is-real", nome: ano ? String(ano) : "Realizado" }
     ];
-    const pontos = series.map((se) => s[se.k].map((v, i) => (v == null || (se.k === "forecast" && i + 1 <= sel)) ? ""
-      : `<circle cx="${x(i + 1).toFixed(1)}" cy="${y(v).toFixed(1)}" r="7" class="rcx-ln-hit"><title>${se.nome} · ${this.MESES[i]}: ${this.fmt(v)}</title></circle>`).join("")).join("");
+    // Tooltip por mês: a faixa inteira do mês responde ao mouse e mostra ano anterior, orçado, realizado e forecast.
+    this._lnSerie = this._lnSerie || {};
+    this._lnSerie[lado] = { s: s, nomes: { ant: series[0].nome, real: series[3].nome }, ano: ano, sel: sel };
+    const larg = (W - L - R) / 12;
+    const pontos = `<line x1="0" x2="0" y1="${T}" y2="${H - B}" class="rcx-ln-guia" style="display:none"></line>`
+      + letras.map((l, i) => `<rect x="${(L + i * larg).toFixed(1)}" y="${T}" width="${larg.toFixed(1)}" height="${H - T - B}" class="rcx-ln-faixa"`
+        + ` onmouseenter="ResultadoCaixaApp.lnTip(this,'${lado}',${i + 1},${x(i + 1).toFixed(1)})" onmouseleave="ResultadoCaixaApp.lnTipFechar(this)"></rect>`).join("");
     const legenda = series.filter((se) => s[se.k].some((v) => v != null)).map((se) => `<span class="rcx-ln-leg ${se.cls}"><i></i>${caixaEsc(se.nome)}</span>`).join("");
     const nomesMes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     let nota = "";
@@ -2909,7 +3482,62 @@ const ResultadoCaixaApp = {
       </svg>
       <div class="rcx-ln-legenda">${legenda}</div>
       ${nota ? `<div class="rcx-ln-nota">${caixaEsc(nota)}</div>` : ""}
+      <div class="rcx-ln-tip" role="tooltip" hidden></div>
     </div>`;
+  },
+
+  /** Mostra o quadro do mês no gráfico de evolução mensal. */
+  lnTip(faixa, lado, m, cx) {
+    const pack = this._lnSerie && this._lnSerie[lado];
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (!pack || !tip) return;
+    const s = pack.s;
+    const i = m - 1;
+    const val = (arr) => (arr && arr[i] != null ? this.fmt(arr[i]) : "—");
+    const fc = m > pack.sel ? val(s.forecast) : "—";
+    const real = m <= pack.sel ? val(s.real) : "—";
+    const linha = (cls, nome, v) => `<div class="rcx-ln-tip-l"><span class="rcx-ln-leg ${cls}"><i></i>${caixaEsc(nome)}</span><b>${v}</b></div>`;
+    const v = (arr) => (arr && arr[i] != null ? Number(arr[i]) : null);
+    let dif = "";
+    const realN = m <= pack.sel ? v(s.real) : v(s.forecast);
+    const orcN = v(s.orc);
+    if (realN != null && orcN != null && Math.abs(orcN) > 0.5) {
+      const p = (realN - orcN) / Math.abs(orcN) * 100;
+      const bom = lado === "saidas" ? realN - orcN <= 0 : realN - orcN >= 0;
+      const pTxt = (lado === "saidas" ? Math.abs(p) : p).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      dif = `<div class="rcx-ln-tip-dif ${bom ? "is-pos" : "is-neg"}">${m <= pack.sel ? "Realizado" : "Forecast"} x orçado: ${this.fmt(realN - orcN, lado === "saidas")} (${pTxt}%)</div>`;
+    }
+    tip.innerHTML = `<div class="rcx-ln-tip-tit">${caixaEsc((this.MESES[i] || "") + "/" + (pack.ano || ""))}</div>`
+      + linha("is-ant", pack.nomes.ant, val(s.ant))
+      + linha("is-orc", "Orçado", val(s.orc))
+      + linha("is-real", "Realizado", real)
+      + linha("is-fc", "Forecast", fc)
+      + dif;
+    tip.hidden = false;
+    const svg = faixa.ownerSVGElement;
+    const guia = svg && svg.querySelector(".rcx-ln-guia");
+    if (guia) {
+      guia.setAttribute("x1", cx);
+      guia.setAttribute("x2", cx);
+      guia.style.display = "";
+    }
+    const rb = box.getBoundingClientRect();
+    const rf = faixa.getBoundingClientRect();
+    const meio = rf.left - rb.left + rf.width / 2;
+    const largTip = tip.offsetWidth || 190;
+    let left = meio + 14;
+    if (left + largTip > rb.width - 6) left = meio - largTip - 14;
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = Math.max(4, rf.top - rb.top + 6) + "px";
+  },
+
+  lnTipFechar(faixa) {
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (tip) tip.hidden = true;
+    const guia = faixa && faixa.ownerSVGElement && faixa.ownerSVGElement.querySelector(".rcx-ln-guia");
+    if (guia) guia.style.display = "none";
   },
 
   gradeHtml(rotulo, body, total, totalA, saida, ordemAcumReal) {
@@ -2950,12 +3578,67 @@ const ResultadoCaixaApp = {
     return `<i data-lucide="${this.outrosAberto ? "chevron-down" : "chevron-right"}"></i> Outros <span class="rcx-qtd">${qtd}</span>`;
   },
 
-  linhaPronta(r, cls, nomeHtml, click, saida) {
+  linhaPronta(r, cls, nomeHtml, click, saida, dica) {
+    const title = dica ? (r.nome + " — " + dica) : r.nome;
     return `<tr class="${cls || ""}"${click ? ` onclick="${click}"` : ""}>
-      <td class="rcx-nome" title="${caixaEsc(r.nome)}">${nomeHtml || caixaEsc(r.nome)}</td>
+      <td class="rcx-nome" title="${caixaEsc(title)}">${nomeHtml || caixaEsc(r.nome)}</td>
       ${this.blocoNums(r.mensal, saida)}
       ${this.blocoNums(r.acum, saida)}
     </tr>`;
+  },
+
+  selecionarLinha(lado, chaveEnc) {
+    let chave = "";
+    try { chave = decodeURIComponent(String(chaveEnc || "")); } catch (e) { chave = String(chaveEnc || ""); }
+    if (!chave) return;
+    const atual = this.filtroLinha;
+    if (atual && atual.lado === lado && atual.chave === chave) this.filtroLinha = null;
+    else this.filtroLinha = { lado: lado, chave: chave, nome: this.nomeDaLinha(lado, chave) };
+    this.renderMantendoScroll();
+  },
+
+  limparFiltroLinha() {
+    if (!this.filtroLinha) return;
+    this.filtroLinha = null;
+    this.renderMantendoScroll();
+  },
+
+  nomeDaLinha(lado, chave) {
+    if (lado === "saidas") {
+      const def = this.contasSaida().find((d) => d.id === chave);
+      return (def && def.nome) || chave;
+    }
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === chave);
+    return (row && row.nome) || chave;
+  },
+
+  filtroMatriz(lado) {
+    const f = this.filtroLinha;
+    if (!f || f.lado !== lado) return null;
+    if (lado === "saidas") return { conta: f.chave, nome: f.nome || this.nomeDaLinha(lado, f.chave), ccs: null };
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === f.chave);
+    const ccs = new Set();
+    if (row) (row.ids || []).forEach((id) => {
+      const s = String(id);
+      ccs.add(s);
+      const d = s.replace(/\D/g, "");
+      if (d) ccs.add(d);
+    });
+    return { conta: "", nome: (row && row.nome) || f.nome || "", ccs: ccs };
+  },
+
+  ccNoConjunto(set, ccId) {
+    if (!set) return true;
+    const s = String(ccId);
+    if (set.has(s)) return true;
+    const d = s.replace(/\D/g, "");
+    return !!(d && set.has(d));
+  },
+
+  botaoVerTodas() {
+    return `<button type="button" class="rcx-matriz-limpar" onclick="ResultadoCaixaApp.limparFiltroLinha()">Ver todas</button>`;
   },
 
   somaCodigos(contas, def, mes, campo, ate) {
@@ -3063,9 +3746,19 @@ const ResultadoCaixaApp = {
     if (!Object.keys(this.anos || {}).length) return faixa;
     if (lado === "saidas") return faixa + this.saidasHtml();
     const pack = this.linhasTabela(lado);
+    this._packEntrada = pack;
+    if (this.filtroLinha && this.filtroLinha.lado === "entradas" && !pack.rows.some((r) => this.fold(r.nome) === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
     if (!pack.rows.length) return faixa + `<p class="rcx-vazio">Nenhum valor nesse mês para os grupos desta aba.</p>`;
     const vista = this.destacar(pack.rows);
-    const linha = (r, cls) => this.linhaPronta(r, cls || "", "", "", false);
+    const linha = (r, cls) => {
+      const chave = this.fold(r.nome);
+      const sel = this.filtroLinha && this.filtroLinha.lado === "entradas" && this.filtroLinha.chave === chave;
+      const click = `ResultadoCaixaApp.selecionarLinha('entradas','${encodeURIComponent(chave)}')`;
+      const dica = sel ? "Clique para ver todas as empresas de novo" : "Clique para ver só este produto na tabela de baixo";
+      return this.linhaPronta(r, ((cls || "") + " rcx-clicavel" + (sel ? " is-sel" : "")).trim(), "", click, false, dica);
+    };
     let corpo = "";
     if (vista.pos.length) corpo += this.secaoHtml("trending-up", "Acima do orçado no acumulado", "is-pos") + vista.pos.map((r) => linha(r)).join("");
     if (vista.neg.length) corpo += this.secaoHtml("trending-down", "Abaixo do orçado no acumulado", "is-neg") + vista.neg.map((r) => linha(r)).join("");
@@ -3082,6 +3775,498 @@ const ResultadoCaixaApp = {
       + this.matrizDfcHtml("entradas");
   },
 
+  /* ===== Imagem para o PowerPoint =====
+   * Desenha os gráficos e a tabela no mesmo padrão do slide "Entradas/Saídas consolidadas"
+   * (tabela estilo Excel: cabeçalho cinza, variação acumulada verde/vermelha, total cinza) e copia como PNG.
+   * Medidas tiradas do slide: o bloco ocupa ~22,8 cm de largura, na proporção ~1,46 : 1 (com 8 linhas + Outros + Total).
+   */
+  dadosImagemPpt(lado) {
+    if (lado === "saidas") {
+      const pack = this.linhasSaida();
+      const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
+      // Saídas em valor positivo (como no slide); as 7 maiores pelo realizado acumulado e o resto em OUTROS.
+      // Inverte o sinal (saída = positivo; estorno/devolução dentro da conta = negativo) em vez de tirar o sinal:
+      // assim OUTROS e TOTAL abatem o que voltou, igual à tela.
+      const giro = (b) => ({ ant: -(Number(b.ant) || 0), orc: -(Number(b.orc) || 0), real: -(Number(b.real) || 0) });
+      const todos = pack.rows.filter(vivo).map((r) => ({ nome: r.nome, mensal: giro(r.mensal), acum: giro(r.acum) }))
+        .sort((a, b) => (b.acum.real - a.acum.real) || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+      const top = todos.slice(0, 7);
+      const resto = todos.slice(7);
+      return {
+        titulo: "Saídas por Conta",
+        rotulo: "CONTA",
+        rows: top,
+        outros: resto.length ? { nome: "OUTROS", mensal: this.somaBloco(resto, "mensal"), acum: this.somaBloco(resto, "acum") } : null,
+        total: this.somaBloco(todos, "mensal"),
+        totalA: this.somaBloco(todos, "acum"),
+        ordem: "real",
+        saida: true
+      };
+    }
+    const pack = this.linhasTabela("entradas");
+    const vista = this.destacar(pack.rows);
+    const rows = vista.pos.concat(vista.neg);
+    const outros = vista.outros.length
+      ? { nome: "OUTROS", mensal: this.somaBloco(vista.outros, "mensal"), acum: this.somaBloco(vista.outros, "acum") }
+      : null;
+    return {
+      titulo: "Entradas por Empreendimento",
+      rotulo: "PRODUTO",
+      rows: rows,
+      outros: outros,
+      total: this.somaBloco(pack.rows, "mensal"),
+      totalA: this.somaBloco(pack.rows, "acum"),
+      ordem: "var"
+    };
+  },
+
+  desenharImagemPpt(lado) {
+    const d = this.dadosImagemPpt(lado);
+    const serie = lado === "saidas" ? this.serieSaidas() : this.serieEntradas();
+    if (lado === "saidas") {
+      ["ant", "orc", "real", "forecast"].forEach((k) => { serie[k] = (serie[k] || []).map((v) => (v == null ? null : Math.abs(v))); });
+    }
+    const ano = this.anoAtual();
+    const antN = ano > 1900 ? ano - 1 : 0;
+    const sel = Number(this.mes) || 1;
+    const MES = ["JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"];
+    const COR = {
+      verdeTit: "#1E5E3E", cinza: "#A6A6A6", cinzaClaro: "#D9D9D9", laranja: "#ED7D31", laranjaClaro: "#F8CBAD",
+      verde: "#0E4B2E", verdeClaro: "#CDEBD6", verdeFc: "#00B050", texto: "#000000", textoSuave: "#595959",
+      pos: "#00B050", neg: "#FF0000", cabec: "#D9D9D9", linhaTab: "#7F7F7F"
+    };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n2 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // Medidas em "px de slide" (96 por polegada); a imagem sai 3x maior para ficar nítida no projetor.
+    const W = 861;
+    const RH = 25;
+    const linhasTab = d.rows.length + (d.outros ? 1 : 0) + 1;
+    const TOPO_TAB = 297;
+    const H = TOPO_TAB + 47 + linhasTab * RH + 4;
+    const S = 3;
+    const cv = document.createElement("canvas");
+    cv.width = W * S;
+    cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF";
+    g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 14) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto;
+      g.textAlign = o.al || "left";
+      g.textBaseline = o.base || "middle";
+      g.fillText(t, x, y);
+    };
+
+    // 1) Mês: três barras
+    const total = d.total;
+    txt(MES[sel - 1] + "/" + ano, 97, 16, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const barras = [
+      { v: Math.abs(mi(total.ant)), rot: String(antN || "Ano ant."), cor: COR.cinza, corVal: COR.textoSuave, txt: n2(Math.abs(total.ant)) },
+      { v: Math.abs(mi(total.orc)), rot: "Orçado", cor: COR.laranja, corVal: COR.laranja, txt: n2(Math.abs(total.orc)) },
+      { v: Math.abs(mi(total.real)), rot: String(ano || "Atual"), cor: COR.verde, corVal: COR.verde, txt: n2(Math.abs(total.real)) }
+    ];
+    const maiorMes = Math.max(...barras.map((b) => b.v), 0.0001);
+    const BASE = 205;
+    [49, 107, 171].forEach((cx, i) => {
+      const b = barras[i];
+      const h = b.v / maiorMes * 112;
+      g.fillStyle = b.cor;
+      g.fillRect(cx - 21, BASE - h, 42, h);
+      txt(b.txt, cx, BASE - h - 10, { peso: "bold", tam: 14, cor: b.corVal, al: "center" });
+      txt(b.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 2) Evolução mensal: linhas
+    const PX0 = 277, PX1 = 576, PY0 = 22, PY1 = 171;
+    const vals = [].concat(serie.ant, serie.orc, serie.real, serie.forecast).filter((v) => v != null).map(mi);
+    const passo = this.passoEixo((Math.max(...vals, 0.0001)) / 5);
+    const topo = Math.max(passo * 6, Math.ceil(Math.max(...vals, 0.0001) / passo) * passo);
+    const yDe = (v) => PY1 - (v / topo) * (PY1 - PY0);
+    const xDe = (i) => PX0 + (i + 0.5) * ((PX1 - PX0) / 12);
+    for (let v = 0; v <= topo + 1e-9; v += passo) {
+      txt(v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), PX0 - 8, yDe(v), { tam: 9, cor: COR.textoSuave, al: "right" });
+    }
+    g.strokeStyle = "#D9D9D9";
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(PX0, PY1 + 0.5); g.lineTo(PX1, PY1 + 0.5); g.stroke();
+    ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"].forEach((l, i) => txt(l, xDe(i), 189, { tam: 10, cor: COR.textoSuave, al: "center" }));
+    const linha = (arr, cor, larg, ate) => {
+      g.strokeStyle = cor;
+      g.lineWidth = larg;
+      g.lineJoin = "round";
+      g.beginPath();
+      let aberto = false;
+      arr.forEach((v, i) => {
+        if (v == null || (ate && i + 1 > ate)) { aberto = false; return; }
+        const x = xDe(i), y = yDe(mi(v));
+        if (!aberto) { g.moveTo(x, y); aberto = true; } else g.lineTo(x, y);
+      });
+      g.stroke();
+    };
+    linha(serie.ant, "#BFBFBF", 2.2);
+    linha(serie.orc, COR.laranja, 2.4);
+    const fc = serie.forecast.map((v, i) => (i + 1 >= sel ? v : null));
+    if (sel < 12) linha(fc, COR.verdeFc, 2.4);
+    linha(serie.real, COR.verde, 2.6, sel);
+    const legenda = [["Orçado", COR.laranja], [String(ano || ""), COR.verde], ["Forecast", COR.verdeFc]];
+    g.font = "normal 13px " + FONTE;
+    const largs = legenda.map(([t]) => 26 + g.measureText(t).width + 16);
+    let lx = 426 - largs.reduce((a, b) => a + b, 0) / 2;
+    legenda.forEach(([t, cor], i) => {
+      g.strokeStyle = cor; g.lineWidth = 2.6;
+      g.beginPath(); g.moveTo(lx, 215); g.lineTo(lx + 20, 215); g.stroke();
+      txt(t, lx + 26, 215, { tam: 13, cor: COR.textoSuave });
+      lx += largs[i];
+    });
+
+    // 3) Totais: colunas empilhadas (escuro = jan até o mês; claro = até dezembro)
+    txt("TOTAIS", 729, 30, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const soma = (s, de, ate) => (s || []).slice(de - 1, ate).reduce((t, v) => t + (Number(v) || 0), 0);
+    const cols = [
+      { rot: String(antN || "Ano ant."), e: soma(serie.ant, 1, sel), c: soma(serie.ant, sel + 1, 12), ce: COR.cinza, cc: COR.cinzaClaro, cv: COR.textoSuave },
+      { rot: "Orçado", e: soma(serie.orc, 1, sel), c: soma(serie.orc, sel + 1, 12), ce: COR.laranja, cc: COR.laranjaClaro, cv: COR.laranja },
+      { rot: "Forecast", e: soma(serie.real, 1, sel), c: sel < 12 ? soma(serie.forecast, sel + 1, 12) : 0, ce: COR.verde, cc: COR.verdeClaro, cv: COR.verdeFc,
+        marca: sel < 12 && (!this.forecast || (serie.semForecast || []).length) }
+    ];
+    const maiorTot = Math.max(...cols.map((c) => Math.abs(mi(c.e)) + Math.abs(mi(c.c))), 0.0001);
+    [657, 729, 801].forEach((cx, i) => {
+      const c = cols[i];
+      const he = Math.abs(mi(c.e)) / maiorTot * 136;
+      const hc = Math.abs(mi(c.c)) / maiorTot * 136;
+      g.fillStyle = c.ce; g.fillRect(cx - 23, BASE - he, 46, he);
+      g.fillStyle = c.cc; g.fillRect(cx - 23, BASE - he - hc, 46, hc);
+      if (he >= 16) txt(n2(Math.abs(c.e)), cx, BASE - he / 2, { peso: "bold", tam: 10, cor: "#FFFFFF", al: "center" });
+      if (hc >= 16) txt(n2(Math.abs(c.c)), cx, BASE - he - hc / 2, { peso: "bold", tam: 10, cor: "#404040", al: "center" });
+      txt(n2(Math.abs(c.e) + Math.abs(c.c)) + (c.marca ? " *" : ""), cx, BASE - he - hc - 10, { peso: "bold", tam: 14, cor: c.cv, al: "center" });
+      txt(c.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 4) Tabela no padrão Excel do slide
+    txt(d.titulo, W / 2, 273, { peso: "bold", tam: 19, cor: COR.verdeTit, al: "center" });
+    const X = [0, 241];
+    for (let i = 0; i < 5; i++) X.push(241 + (i + 1) * 59.2);
+    for (let i = 0; i < 5; i++) X.push(537 + (i + 1) * 64.8);
+    const yH1 = TOPO_TAB, yH2 = TOPO_TAB + 23, yB = TOPO_TAB + 47;
+    g.fillStyle = COR.cabec;
+    g.fillRect(0, yH1, W, 47);
+    txt(d.rotulo, X[1] / 2, yH1 + 23.5, { peso: "bold", tam: 14, al: "center" });
+    txt("MENSAL", (X[1] + X[6]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    txt("ACUMULADO", (X[6] + X[11]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    const sub = [String(antN || "Ano ant."), "Orç.", "Real", "Var. R$", "Var. %"];
+    [1, 6].forEach((ini, bloco) => {
+      sub.forEach((s, j) => {
+        let rot = s;
+        if (bloco === 1 && d.ordem === "var" && j === 3) rot = s + " ↓";
+        if (bloco === 1 && d.ordem === "real" && j === 2) rot = s + " ↓";
+        txt(rot, X[ini + j + 1] - 6, yH2 + 12, { peso: "bold", tam: 14, al: "right" });
+      });
+    });
+    const linhas = d.rows.map((r) => ({ r, tipo: "" }));
+    if (d.outros) linhas.push({ r: d.outros, tipo: "outros" });
+    linhas.push({ r: { nome: "TOTAL", mensal: d.total, acum: d.totalA }, tipo: "total" });
+    const recortar = (t, max) => {
+      let s = String(t || "");
+      g.font = "normal 14px " + FONTE;
+      if (g.measureText(s).width <= max) return s;
+      while (s.length > 1 && g.measureText(s + "…").width > max) s = s.slice(0, -1);
+      return s + "…";
+    };
+    linhas.forEach(({ r, tipo }, i) => {
+      const y = yB + i * RH;
+      const total = tipo === "total";
+      if (total) { g.fillStyle = COR.cabec; g.fillRect(0, y, W, RH); }
+      const peso = total ? "bold" : "normal";
+      txt(total ? "TOTAL" : recortar(String(r.nome || "").toUpperCase(), X[1] - 12), 6, y + RH / 2, { peso, tam: 14 });
+      [[r.mensal, 1, false], [r.acum, 6, true]].forEach(([b, ini, acum]) => {
+        const v = b.real - b.orc;
+        // Entradas: realizar acima do orçado é bom (verde). Saídas: gastar acima do orçado é ruim (vermelho).
+        const bom = d.saida ? v < -0.5 : v > 0.5;
+        const ruim = d.saida ? v > 0.5 : v < -0.5;
+        const corVar = acum && !total ? (bom ? COR.pos : (ruim ? COR.neg : COR.texto)) : COR.texto;
+        const pesoVar = acum ? "bold" : peso;
+        // Saídas já chegam em valor positivo (dadosImagemPpt); a variação mantém o sinal, como no slide:
+        // gastou menos que o orçado = negativo (verde), gastou mais = positivo (vermelho).
+        const pRaw = this.pct(b.real, b.orc);
+        const pctTxt = pRaw == null ? "—" : pRaw.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+        const cel = [n2(b.ant), n2(b.orc), n2(b.real), n2(v), pctTxt];
+        cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
+      });
+    });
+    // Linhas da tabela: separadores dos blocos e borda do cabeçalho
+    g.strokeStyle = COR.linhaTab;
+    g.lineWidth = 1;
+    const fimTab = yB + linhas.length * RH;
+    [X[1], X[6]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, yH1); g.lineTo(x + 0.5, fimTab); g.stroke(); });
+    g.beginPath(); g.moveTo(X[1], yH2 + 0.5); g.lineTo(W, yH2 + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, yB + 0.5); g.lineTo(W, yB + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, fimTab - RH + 0.5); g.lineTo(W, fimTab - RH + 0.5); g.stroke();
+    return cv;
+  },
+
+  /**
+   * Caixa ML no padrão do slide "Fluxo de caixa MLDU": cartões Orçamento/Forecast e a tabela
+   * (acumulado, mês, meses seguintes em forecast, total orçado e total forecast).
+   * Saldo inicial de janeiro = contas correntes marcadas; cada coluna começa no saldo final da anterior.
+   * Medidas do slide: bloco ~32 cm de largura, proporção ~1,96 : 1.
+   */
+  desenharImagemCaixaPpt() {
+    const dados = this.mlDados;
+    if (!dados || !(dados.linhas || []).length) throw new Error("Abra a aba Caixa ML e espere carregar antes de copiar.");
+    const sel = Number(this.mes) || 1;
+    const MES = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+    const COR = { verde: "#1D5A36", verdeTxt: "#1E6B3A", laranja: "#E26B0A", cinzaNum: "#595959", linhaClara: "#F2F2F2",
+      cinzaFcf: "#C9C9C9", cinzaSaldo: "#D9D9D9", pos: "#00A651", neg: "#FF0000", texto: "#000000", borda: "#1D5A36" };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n3 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    const m1 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M";
+    const soma = (meses, de, ate, k) => { let t = 0; for (let i = de; i <= ate; i++) t += Number((meses[i - 1] || {})[k]) || 0; return t; };
+
+    // Linhas: grupos de 1º nível do DFC (a variação de caixa vai no rodapé)
+    const varLinha = (dados.linhas || []).find((l) => l.id === "g_12");
+    const grupos = (dados.linhas || []).filter((l) => l.level === 0 && l.id !== "g_12");
+    const escolhidas = new Set(this.mlSelecionadas(dados).map(String));
+    const abertura = (dados.contas || []).filter((c) => escolhidas.has(String(c.numero))).reduce((s, c) => s + (Number(c.abertura) || 0), 0);
+    const vm = (varLinha && varLinha.meses) || Array.from({ length: 12 }, () => ({ o: 0, r: 0, f: 0 }));
+
+    // Colunas
+    const cols = [];
+    if (sel > 1) cols.push({ tipo: "acum", rot: "ACUMULADO JAN - " + MES[sel - 2], sub: true });
+    cols.push({ tipo: "mes", rot: MES[sel - 1], sub: true });
+    const futuros = [];
+    for (let m = sel + 1; m <= 12; m++) futuros.push(m);
+    // Saldos: orçado em cadeia pelo orçado; realizado em cadeia pelo realizado e, depois do mês, pelo forecast
+    const ini = { acumO: abertura, acumR: abertura };
+    const varAcumO = sel > 1 ? soma(vm, 1, sel - 1, "o") : 0;
+    const varAcumR = sel > 1 ? soma(vm, 1, sel - 1, "r") : 0;
+    const iniMesO = abertura + varAcumO, iniMesR = abertura + varAcumR;
+    const varMesO = Number(vm[sel - 1].o) || 0, varMesR = Number(vm[sel - 1].r) || 0;
+    let corrente = iniMesR + varMesR;
+    const fut = futuros.map((m) => { const i0 = corrente; const v = Number(vm[m - 1].f) || 0; corrente = i0 + v; return { m, ini: i0, fim: corrente, v }; });
+    const totOrcVar = soma(vm, 1, 12, "o");
+    const totFcVar = soma(vm, 1, sel, "r") + soma(vm, sel + 1, 12, "f");
+
+    // Medidas em px de slide (96/pol.), imagem 3x para nitidez
+    const W = 1218, S = 3;
+    const CW = { conta: 277, n: 66.5, tOrc: 70, tFc: 98 };
+    const nNum = (sel > 1 ? 3 : 0) + 3 + futuros.length;
+    const TW = CW.conta + nNum * CW.n + CW.tOrc + CW.tFc;
+    const X0 = Math.max(0, (W - TW) / 2);
+    const RH = 26.4, HDR = 53, TOPO = 183, GAP = 9;
+    const nLinhas = grupos.length + 3;
+    const H = Math.ceil(TOPO + HDR + nLinhas * RH + 2 * GAP + 4);
+    const cv = document.createElement("canvas");
+    cv.width = W * S; cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 13) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto; g.textAlign = o.al || "left"; g.textBaseline = "middle";
+      g.fillText(t, x, y);
+    };
+    const caixaArred = (x, y, w, h, r) => {
+      g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+      g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+    };
+    const seta = (x, y, sobe, cor) => {
+      g.fillStyle = cor; g.beginPath();
+      if (sobe) { g.moveTo(x, y - 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y + 7); g.lineTo(x + 2.5, y + 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      else { g.moveTo(x, y + 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y - 7); g.lineTo(x + 2.5, y - 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      g.closePath(); g.fill();
+    };
+
+    // 1) Cartões Orçamento / Forecast
+    const cartao = (x0, titulo, varTotal) => {
+      const w = 596, h = 158;
+      caixaArred(x0 + 0.5, 0.5, w - 1, h - 1, 22);
+      g.strokeStyle = COR.borda; g.lineWidth = 1.2; g.stroke();
+      txt(titulo, x0 + w / 2, 18, { peso: "bold", tam: 21, cor: COR.verde, al: "center" });
+      const fim = abertura + varTotal;
+      const pct = Math.abs(abertura) > 0.5 ? (fim / abertura - 1) * 100 : 0;
+      const terco = w / 3;
+      [1, 2].forEach((k) => { g.strokeStyle = COR.borda; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0 + terco * k, 40); g.lineTo(x0 + terco * k, 145); g.stroke(); });
+      const cx = (k) => x0 + terco * k + terco / 2;
+      txt("Saldo inicial", cx(0), 49, { tam: 14, al: "center" });
+      txt("Variação de Caixa", cx(1), 49, { tam: 14, al: "center" });
+      txt("Saldo Final", cx(2), 49, { tam: 14, al: "center" });
+      txt(m1(abertura), cx(0), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt(m1(varTotal), cx(1), 92, { peso: "bold", tam: 44, cor: varTotal >= 0 ? COR.pos : COR.neg, al: "center" });
+      txt(m1(fim), cx(2), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt("100%", cx(0), 132, { peso: "bold", tam: 18, cor: COR.cinzaNum, al: "center" });
+      const pctTxt = Math.round(pct).toLocaleString("pt-BR") + "%";
+      const corPct = pct >= 0 ? COR.pos : COR.neg;
+      g.font = "bold 18px " + FONTE;
+      const lw = g.measureText(pctTxt).width;
+      seta(cx(2) - lw / 2 - 14, 132, pct >= 0, corPct);
+      txt(pctTxt, cx(2) + 6, 132, { peso: "bold", tam: 18, cor: corPct, al: "center" });
+    };
+    cartao(0, "ORÇAMENTO", totOrcVar);
+    cartao(W - 596, "FORECAST", totFcVar);
+
+    // 2) Tabela
+    const xs = [X0, X0 + CW.conta];
+    for (let i = 0; i < nNum; i++) xs.push(xs[xs.length - 1] + CW.n);
+    xs.push(xs[xs.length - 1] + CW.tOrc);
+    xs.push(xs[xs.length - 1] + CW.tFc);
+    const iFut = 1 + (sel > 1 ? 3 : 0) + 3;          // índice em xs onde começam os meses futuros
+    const iTot = iFut + futuros.length;               // TOTAL ORÇ.
+    const y0 = TOPO;
+    g.fillStyle = COR.verde; g.fillRect(xs[0], y0, xs[iFut] - xs[0], HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iFut], y0, xs[iTot] - xs[iFut], HDR);
+    g.fillStyle = COR.verde; g.fillRect(xs[iTot], y0, CW.tOrc, HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iTot + 1], y0, CW.tFc, HDR);
+    const branco = { peso: "bold", tam: 12.5, cor: "#FFFFFF", al: "center" };
+    txt("Conta", xs[0] + 4, y0 + 40, Object.assign({}, branco, { al: "left" }));
+    let k = 1;
+    if (sel > 1) {
+      txt(cols[0].rot, (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+      ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+      k += 3;
+    }
+    txt(MES[sel - 1], (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+    ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+    futuros.forEach((m, j) => txt(MES[m - 1], (xs[iFut + j] + xs[iFut + j + 1]) / 2, y0 + 15, branco));
+    txt("TOTAL", xs[iTot] + CW.tOrc / 2, y0 + 15, branco);
+    txt("ORÇ.", xs[iTot] + CW.tOrc / 2, y0 + 40, branco);
+    txt("TOTAL", xs[iTot + 1] + CW.tFc / 2, y0 + 15, branco);
+    txt("FORECAST", xs[iTot + 1] + CW.tFc / 2, y0 + 40, branco);
+
+    const valores = (meses) => {
+      const out = [];
+      if (sel > 1) { const o = soma(meses, 1, sel - 1, "o"), r = soma(meses, 1, sel - 1, "r"); out.push(o, r, r - o); }
+      const o = Number(meses[sel - 1].o) || 0, r = Number(meses[sel - 1].r) || 0;
+      out.push(o, r, r - o);
+      futuros.forEach((m) => out.push(Number(meses[m - 1].f) || 0));
+      out.push(soma(meses, 1, 12, "o"), soma(meses, 1, sel, "r") + soma(meses, sel + 1, 12, "f"));
+      return out;
+    };
+    let y = y0 + HDR;
+    const linha = (nome, vals, estilo) => {
+      if (estilo.fundo) { g.fillStyle = estilo.fundo; g.fillRect(xs[0], y, xs[xs.length - 1] - xs[0], RH); }
+      txt(nome, xs[0] + 4, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNome || COR.texto });
+      vals.forEach((v, j) => txt(n3(v), xs[j + 2] - 5, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNum || COR.texto, al: "right" }));
+      y += RH;
+    };
+    grupos.forEach((l, i) => {
+      const fcf = l.tipo === "formula";
+      linha(String(l.nome || "").toUpperCase(), valores(l.meses || []), fcf
+        ? { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt }
+        : { fundo: i % 2 ? "" : COR.linhaClara });
+    });
+    y += GAP;
+    const saldoIni = [];
+    const saldoFim = [];
+    if (sel > 1) { saldoIni.push(ini.acumO, ini.acumR, ini.acumR - ini.acumO); saldoFim.push(iniMesO, iniMesR, iniMesR - iniMesO); }
+    saldoIni.push(iniMesO, iniMesR, iniMesR - iniMesO);
+    saldoFim.push(iniMesO + varMesO, iniMesR + varMesR, (iniMesR + varMesR) - (iniMesO + varMesO));
+    fut.forEach((f) => { saldoIni.push(f.ini); saldoFim.push(f.fim); });
+    saldoIni.push(abertura, abertura);
+    saldoFim.push(abertura + totOrcVar, abertura + totFcVar);
+    linha("SALDO INICIAL", saldoIni, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    linha("SALDO FINAL", saldoFim, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    y += GAP;
+    const varVals = saldoFim.map((v, j) => v - saldoIni[j]);
+    linha("VARIAÇÃO DE CAIXA", varVals, { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt });
+    // Separadores verticais antes do TOTAL ORÇ. e do TOTAL FORECAST
+    g.strokeStyle = "#000000"; g.lineWidth = 1;
+    [xs[iTot], xs[iTot + 1]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, y0); g.lineTo(x + 0.5, y); g.stroke(); });
+    return cv;
+  },
+
+  /**
+   * Botão "Copiar para o Excel": copia as linhas da tabela (as mesmas da imagem) como texto em colunas,
+   * no layout do relatório "Principais entradas / saídas": B = nome, C:E vazias, F:J mensal, K:O acumulado.
+   * Só valores: a formatação, as bolinhas e as cores do relatório continuam as da planilha.
+   */
+  copiarExcel(btn) {
+    const lado = this.aba === "saidas" ? "saidas" : "entradas";
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let d;
+    try { d = this.dadosImagemPpt(lado); } catch (e) {
+      alert("Não consegui montar a tabela: " + ((e && e.message) || e));
+      return;
+    }
+    const num = (v) => (Math.round((Number(v) || 0) / 10000) / 100).toFixed(2).replace(".", ",");
+    const pct = (real, orc) => {
+      const p = this.pct(real, orc);
+      return p == null ? "" : Math.round(p) + "%";
+    };
+    const bloco = (b) => [num(b.ant), num(b.orc), num(b.real), num(b.real - b.orc), pct(b.real, b.orc)];
+    const linhas = d.rows.map((r) => ({ nome: String(r.nome || "").toUpperCase(), mensal: r.mensal, acum: r.acum }));
+    if (d.outros) linhas.push({ nome: "OUTROS", mensal: d.outros.mensal, acum: d.outros.acum });
+    linhas.push({ nome: "TOTAL", mensal: d.total, acum: d.totalA });
+    const tsv = linhas.map((l) => [l.nome, "", "", ""].concat(bloco(l.mensal), bloco(l.acum)).join("\t")).join("\r\n");
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = tsv;
+      ta.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      ta.remove();
+      if (ok) avisar("Copiado! Cole no Excel (Ctrl+V)");
+      else alert("O navegador não deixou copiar. Tente de novo.");
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      navigator.clipboard.writeText(tsv).then(() => avisar("Copiado! Cole no Excel (Ctrl+V)")).catch(fallback);
+    } else {
+      fallback();
+    }
+  },
+
+  /** Botão "Copiar para o PowerPoint": copia a imagem; sem permissão de área de transferência, baixa o PNG. */
+  copiarImagemPpt(btn) {
+    const lado = this.aba === "caixa" ? "caixa" : (this.aba === "saidas" ? "saidas" : "entradas");
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let canvas;
+    try {
+      canvas = lado === "caixa" ? this.desenharImagemCaixaPpt() : this.desenharImagemPpt(lado);
+    } catch (e) {
+      console.error("[Resultado de caixa] Imagem:", e);
+      alert("Não consegui montar a imagem: " + ((e && e.message) || e));
+      return;
+    }
+    const nome = lado + "-" + this.chaveMes(this.anoAtual(), this.mes) + ".png";
+    const baixar = () => {
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = nome;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      avisar("Imagem baixada");
+    };
+    const blob = new Promise((ok, erro) => canvas.toBlob((b) => (b ? ok(b) : erro(new Error("PNG vazio"))), "image/png"));
+    if (navigator.clipboard && typeof navigator.clipboard.write === "function" && typeof window.ClipboardItem === "function") {
+      navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+        .then(() => avisar("Copiado! Cole no PowerPoint (Ctrl+V)"))
+        .catch((e) => {
+          console.warn("[Resultado de caixa] Área de transferência:", e);
+          baixar();
+        });
+    } else {
+      baixar();
+    }
+  },
+
   saidasHtml() {
     const ano = this.anoAtual();
     if (this.semContas(ano)) {
@@ -3094,10 +4279,18 @@ const ResultadoCaixaApp = {
       if (d) return d;
       return String(a.nome || "").localeCompare(String(b.nome || ""), "pt");
     });
-    const corpo = todos.map((r) => this.linhaPronta(r, "", "", "", true)).join("");
+    if (this.filtroLinha && this.filtroLinha.lado === "saidas" && !todos.some((r) => r.key === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
+    const corpo = todos.map((r) => {
+      const sel = this.filtroLinha && this.filtroLinha.lado === "saidas" && this.filtroLinha.chave === r.key;
+      const click = `ResultadoCaixaApp.selecionarLinha('saidas','${encodeURIComponent(r.key)}')`;
+      const dica = sel ? "Clique para ver todas as contas de novo" : "Clique para ver só esta conta na tabela de baixo";
+      return this.linhaPronta(r, "rcx-clicavel" + (sel ? " is-sel" : ""), "", click, true, dica);
+    }).join("");
     const total = this.somaBloco(todos, "mensal");
     const totalA = this.somaBloco(todos, "acum");
-    return `<div class="rcx-topo">${this.graficoMesHtml(total)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
+    return `<div class="rcx-topo">${this.graficoMesHtml(total, true)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
       + this.gradeHtml("Conta", corpo, total, totalA, true, true)
       + this.matrizDfcHtml("saidas");
   },
@@ -3107,7 +4300,7 @@ const ResultadoCaixaApp = {
     if (!k) return;
     if (!this.matrizAbertos) this.matrizAbertos = {};
     this.matrizAbertos[k] = !this.matrizAbertos[k];
-    this.render();
+    this.renderMantendoScroll();
   },
 
   ordenarMatriz(campo) {
@@ -3128,7 +4321,9 @@ const ResultadoCaixaApp = {
     if (!a || this.semContas(ano)) return null;
     const cat = this.catalogoEmpresas();
     const empresas = {};
-    const defs = saida ? this.contasSaida() : this.defsEntradaPowerBi();
+    const filtro = this.filtroMatriz(saida ? "saidas" : "entradas");
+    let defs = saida ? this.contasSaida() : this.defsEntradaPowerBi();
+    if (filtro && filtro.conta) defs = defs.filter((def) => def.id === filtro.conta);
     const grupos = defs.map((def) => ({ def: def, porEmp: {}, ccs: {} }));
     const vivo = (o, r) => Math.abs(o) > 0.5 || Math.abs(r) > 0.5;
     Object.keys(a.arquivos || {}).forEach((nome) => {
@@ -3151,19 +4346,42 @@ const ResultadoCaixaApp = {
         const slot = g.porEmp[key] || (g.porEmp[key] = { orc: 0, real: 0 });
         if (temCc) {
           Object.keys(porCc).forEach((ccId) => {
+            if (filtro && filtro.ccs && !this.ccNoConjunto(filtro.ccs, ccId)) return;
             const bloco = porCc[ccId] || {};
             const o = this.somaCodigos(bloco.contas || {}, g.def, mes, "o", true) * pct;
             const r = this.somaCodigos(bloco.contas || {}, g.def, mes, "r", true) * pct;
             if (!vivo(o, r)) return;
             slot.orc += o;
             slot.real += r;
-            const cc = g.ccs[ccId] || (g.ccs[ccId] = { id: ccId, nome: bloco.nome || "", porEmp: {} });
+            const cc = g.ccs[ccId] || (g.ccs[ccId] = { id: ccId, nome: bloco.nome || "", porEmp: {}, planos: {} });
             if (!cc.nome && bloco.nome) cc.nome = bloco.nome;
+            if (!cc.planos) cc.planos = {};
             const cel = cc.porEmp[key] || (cc.porEmp[key] = { orc: 0, real: 0 });
             cel.orc += o;
             cel.real += r;
+            const fontePlano = (arq.planosPorCc && arq.planosPorCc[ccId] && arq.planosPorCc[ccId].contas) || {};
+            Object.keys(fontePlano).forEach((code) => {
+              const info = fontePlano[code] || {};
+              if (!this.casaNo(info.node, g.def)) return;
+              let po = 0;
+              let pr = 0;
+              for (let m = 1; m <= mes; m++) {
+                const celPlano = (info.meses || {})[String(m)];
+                if (!celPlano) continue;
+                po += Number(celPlano.o) || 0;
+                pr += Number(celPlano.r) || 0;
+              }
+              po *= pct;
+              pr *= pct;
+              if (!vivo(po, pr)) return;
+              const pl = cc.planos[code] || (cc.planos[code] = { code: code, nome: info.nome || "", porEmp: {} });
+              if (info.nome && !pl.nome) pl.nome = info.nome;
+              const pcel = pl.porEmp[key] || (pl.porEmp[key] = { orc: 0, real: 0 });
+              pcel.orc += po;
+              pcel.real += pr;
+            });
           });
-        } else if (arq.contas) {
+        } else if (arq.contas && !(filtro && filtro.ccs)) {
           slot.orc += this.somaCodigos(arq.contas, g.def, mes, "o", true) * pct;
           slot.real += this.somaCodigos(arq.contas, g.def, mes, "r", true) * pct;
         }
@@ -3175,7 +4393,17 @@ const ResultadoCaixaApp = {
       .sort((x, y) => x.nome.localeCompare(y.nome, "pt"));
     const linhas = grupos
       .map((g) => {
-        const ccs = Object.keys(g.ccs).map((id) => g.ccs[id]).filter((cc) => {
+        const ccs = Object.keys(g.ccs).map((id) => {
+          const cc = g.ccs[id];
+          const planos = Object.keys(cc.planos || {}).map((code) => cc.planos[code]).filter((pl) => {
+            return cols.some((e) => {
+              const cel = pl.porEmp[e.id];
+              return cel && vivo(cel.orc, cel.real);
+            });
+          }).sort((x, y) => String(x.code || "").localeCompare(String(y.code || ""), "pt", { numeric: true }));
+          cc.planos = planos;
+          return cc;
+        }).filter((cc) => {
           return cols.some((e) => {
             const cel = cc.porEmp[e.id];
             return cel && vivo(cel.orc, cel.real);
@@ -3207,8 +4435,12 @@ const ResultadoCaixaApp = {
         }
         return String(a.def.nome || "").localeCompare(String(b.def.nome || ""), "pt");
       });
-    if (!cols.length || !linhas.length) return null;
-    return { cols: cols, linhas: linhas, mes: mes, lado: saida ? "saidas" : "entradas" };
+    const ladoMatriz = saida ? "saidas" : "entradas";
+    if (!cols.length || !linhas.length) {
+      if (filtro) return { cols: [], linhas: [], mes: mes, lado: ladoMatriz, filtro: filtro, vazio: true };
+      return null;
+    }
+    return { cols: cols, linhas: linhas, mes: mes, lado: ladoMatriz, filtro: filtro || null };
   },
 
   totalMatriz(porEmp, cols) {
@@ -3235,7 +4467,7 @@ const ResultadoCaixaApp = {
   matrizCelulas(orc, real, sep, saida) {
     const o = Number(orc) || 0;
     const r = Number(real) || 0;
-    return `<td class="rcx-num${sep ? " rcx-sep" : ""}">${this.fmt(o)}</td><td class="rcx-num">${this.fmt(r)}</td>${this.celVar(r, o, !!saida)}`;
+    return `<td class="rcx-num${sep ? " rcx-sep" : ""}">${this.fmt(o, saida)}</td><td class="rcx-num">${this.fmt(r, saida)}</td>${this.celVar(r, o, !!saida)}`;
   },
 
   matrizDfcHtml(lado) {
@@ -3243,6 +4475,16 @@ const ResultadoCaixaApp = {
     const dados = this.matrizDfcDados(saida ? "saidas" : "entradas");
     if (!dados) return "";
     const mesNome = (this.MESES[dados.mes - 1] || "").toLowerCase();
+    const tituloBloco = saida ? "Saídas do DFC por empresa" : "Entradas do DFC por empresa";
+    const filtro = dados.filtro;
+    const tituloFiltro = filtro && filtro.nome ? `${tituloBloco} — ${caixaEsc(filtro.nome)}` : tituloBloco;
+    if (dados.vazio) {
+      const quem = filtro && filtro.nome ? caixaEsc(filtro.nome) : "esta linha";
+      return `<div class="rcx-matriz-bloco">
+        <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+        <div class="rcx-matriz-sub">Nenhum valor de ${quem} nesta tabela. ${this.botaoVerTodas()}</div>
+      </div>`;
+    }
     const abertos = this.matrizAbertos || {};
     const cabEmp = dados.cols.map((e) => {
       const pct = e.pctLabel ? `<span class="rcx-matriz-pct">${caixaEsc(e.pctLabel)}</span>` : "";
@@ -3285,23 +4527,48 @@ const ResultadoCaixaApp = {
         html += g.ccs.map((cc) => {
           const jaTemId = cc.nome && cc.id && String(cc.nome).indexOf(String(cc.id)) === 0;
           const rot = jaTemId ? cc.nome : ((cc.id ? cc.id + " - " : "") + (cc.nome || "Centro de custo"));
+          const chavePlano = "cc:" + g.def.id + ":" + String(cc.id || "").replace(/[^A-Za-z0-9_-]/g, "");
+          const abertoPlano = !!abertos[chavePlano];
+          const planos = cc.planos || [];
+          const nomeCc = planos.length
+            ? `<button type="button" class="rcx-matriz-abre" onclick="ResultadoCaixaApp.toggleMatriz('${chavePlano}')"><i data-lucide="${abertoPlano ? "chevron-down" : "chevron-right"}"></i>${caixaEsc(rot)}</button>`
+            : caixaEsc(rot);
           const ccCells = dados.cols.map((e) => {
             const cel = cc.porEmp[e.id] || { orc: 0, real: 0 };
             return this.matrizCelulas(cel.orc, cel.real, true, saida);
           }).join("");
           const o = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].orc) || 0), 0);
           const r = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].real) || 0), 0);
-          return `<tr class="rcx-filho rcx-matriz-cc"><td class="rcx-nome">${caixaEsc(rot)}</td>${ccCells}${this.matrizCelulas(o, r, true, saida)}</tr>`;
+          let linhaCc = `<tr class="rcx-filho rcx-matriz-cc"><td class="rcx-nome">${nomeCc}</td>${ccCells}${this.matrizCelulas(o, r, true, saida)}</tr>`;
+          if (abertoPlano) {
+            linhaCc += planos.map((pl) => {
+              const jaTemCodigo = pl.nome && pl.code && String(pl.nome).indexOf(String(pl.code)) === 0;
+              const rotPlano = jaTemCodigo ? pl.nome : ((pl.code ? pl.code + " - " : "") + (pl.nome || "Conta"));
+              const plCells = dados.cols.map((e) => {
+                const cel = pl.porEmp[e.id] || { orc: 0, real: 0 };
+                return this.matrizCelulas(cel.orc, cel.real, true, saida);
+              }).join("");
+              const po = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].orc) || 0), 0);
+              const pr = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].real) || 0), 0);
+              return `<tr class="rcx-matriz-plano"><td class="rcx-nome" title="${caixaEsc(rotPlano)}">${caixaEsc(rotPlano)}</td>${plCells}${this.matrizCelulas(po, pr, true, saida)}</tr>`;
+            }).join("");
+          }
+          return linhaCc;
         }).join("");
       }
       return html;
     }).join("");
     const totCells = dados.cols.map((e) => this.matrizCelulas(totEmp[e.id].orc, totEmp[e.id].real, true, saida)).join("");
-    const tituloBloco = saida ? "Saídas do DFC por empresa" : "Entradas do DFC por empresa";
     const pctNota = this.agrupar ? " Cada empresa entra no consolidado pelo % Consolidação." : "";
+    const recorte = filtro && filtro.nome
+      ? (saida
+        ? ` Só a conta ${caixaEsc(filtro.nome)}.`
+        : ` Só os centros de custo de ${caixaEsc(filtro.nome)}.`)
+      : "";
+    const limpar = filtro ? " " + this.botaoVerTodas() : "";
     return `<div class="rcx-matriz-bloco">
-      <div class="rcx-matriz-titulo">${tituloBloco}</div>
-      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}. Clique no grupo para abrir os centros de custo.${pctNota}</div>
+      <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}.${recorte} Clique no grupo para abrir os centros de custo e no centro para abrir o plano financeiro.${pctNota}${limpar}</div>
       <div class="rcx-scroll rcx-matriz-scroll">
         <table class="rcx-grid rcx-matriz">
           <thead>
@@ -3759,6 +5026,9 @@ const ResultadoCaixaApp = {
         <span class="moura-switch-text">Mostrar forecast</span>
       </label>
       <button type="button" class="rcx-arq-btn" onclick="ResultadoCaixaApp.carregarMl(true)">Atualizar</button>
+      ${this.mlDados && !this.mlLendo ? `<button type="button" class="rcx-arq-btn" title="Copia os cartões e a tabela no padrão do slide Fluxo de caixa MLDU. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+        <i data-lucide="image"></i> Copiar para o PowerPoint
+      </button>` : ""}
     </div>
     <p class="rcx-ajuda">Empresa 1, exercício ${ano}. Até ${this.MESES[sel - 1]} o realizado sai do Sienge, só desta empresa. O acumulado anterior compara o orçado da empresa 1 com esse realizado. Os meses seguintes comparam o orçado com o forecast da empresa 1.</p>`;
     if (this.mlLendo) return barra + this.loaderHtml();
@@ -3923,6 +5193,24 @@ const ResultadoCaixaApp = {
       </table></div>
       ${painel}
       ${caixaContas}`;
+  },
+
+  renderMantendoScroll() {
+    const se = document.scrollingElement || document.documentElement;
+    const win = se ? se.scrollTop : 0;
+    const boxes = Array.from(document.querySelectorAll("#resultado-caixa-root .rcx-scroll")).map((el) => ({
+      top: el.scrollTop,
+      left: el.scrollLeft
+    }));
+    this.render();
+    if (se) se.scrollTop = win;
+    const novos = document.querySelectorAll("#resultado-caixa-root .rcx-scroll");
+    novos.forEach((el, i) => {
+      const g = boxes[i];
+      if (!g) return;
+      el.scrollTop = g.top;
+      el.scrollLeft = g.left;
+    });
   },
 
   render() {

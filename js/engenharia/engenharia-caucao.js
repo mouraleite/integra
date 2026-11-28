@@ -233,13 +233,11 @@ window.EngenhariaCaucaoApp = {
 
   async pullLiberated() {
     this.loadLiberated();
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !fc.doc || !window.firebaseDb) return this.state.liberated;
+    // Chave crm_engenharia_caucao_liberados_v1 de config/global: no Supabase, uma linha de configuracoes.
+    const DN = window.DadosNucleo;
+    if (!DN) return this.state.liberated;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return this.state.liberated;
-      const raw = (snap.data() || {}).crm_engenharia_caucao_liberados_v1 || "";
+      const raw = (await DN.lerConfiguracao("crm_engenharia_caucao_liberados_v1")) || "";
       if (!raw) return this.state.liberated;
       const merged = window.mergedCaucaoLiberados
         ? window.mergedCaucaoLiberados([this.state.liberated, raw])
@@ -950,49 +948,22 @@ window.EngenhariaCaucaoApp = {
     return { rows, bills };
   },
 
+  // Base do passado no Supabase: uma linha só em caucao_base (id "passado"); os chunks _passado_<n> sumiram.
   async lerPassado(start, end) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !window.firebaseDb) return null;
-    const snap = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado"));
-    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    if (!exists) return null;
-    const meta = snap.data() || {};
+    const DE = window.DadosEngenharia;
+    if (!DE) return null;
+    const passado = await DE.lerPassadoCaucao();
+    if (!passado) return null;
+    const meta = passado.meta || {};
     if (String(meta.startDate || "") > start || String(meta.endDate || "") < end) return null;
-    const rows = [];
-    for (let i = 0; i < (Number(meta.chunks) || 0); i++) {
-      const part = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado_" + i));
-      const ok = part && (typeof part.exists === "function" ? part.exists() : part.exists);
-      if (!ok) return null;
-      rows.push.apply(rows, (part.data() || {}).rows || []);
-    }
-    return { rows, meta };
+    return { rows: passado.rows || [], meta };
   },
 
+  // Uma linha só (sem fatiar): startDate, endDate, count, geradoEm e rows.
   async gravarPassado(start, end, rows) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.setDoc || !fc.doc || !window.firebaseDb) return;
-    const chunks = this.fatiarRows(rows, 400000);
-    let old = 0;
-    try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (exists) old = Number((snap.data() || {}).chunks) || 0;
-    } catch (e) {}
-    for (let i = 0; i < chunks.length; i++) {
-      await fc.setDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado_" + i), { chunk: i, rows: chunks[i] });
-    }
-    await fc.setDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado"), {
-      startDate: start,
-      endDate: end,
-      chunks: chunks.length,
-      count: rows.length,
-      geradoEm: new Date().toISOString()
-    });
-    if (typeof fc.deleteDoc === "function") {
-      for (let i = chunks.length; i < old; i++) {
-        fc.deleteDoc(fc.doc(window.firebaseDb, "caucao_base", "_passado_" + i)).catch(function () {});
-      }
-    }
+    const DE = window.DadosEngenharia;
+    if (!DE) return;
+    await DE.gravarPassadoCaucao(start, end, rows);
   },
 
   async consultar(aoVivo) {
@@ -1130,12 +1101,11 @@ window.EngenhariaCaucaoApp = {
     return dia >= 1 && dia <= 5 && d.getHours() * 60 + d.getMinutes() >= 6 * 60 + 30;
   },
 
+  // _meta no Supabase: tabela caucao_base_controle (volta no formato antigo, com range {startDate, endDate}).
   async lerMetaBase() {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !window.firebaseDb) return null;
-    const snap = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", "_meta"));
-    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    return exists ? (snap.data() || null) : null;
+    const DE = window.DadosEngenharia;
+    if (!DE) return null;
+    return DE.lerMetaCaucao();
   },
 
   /** Pede ao servidor a base de hoje e espera ela ficar pronta (a leitura no Sienge leva ~40s). */
@@ -1160,8 +1130,8 @@ window.EngenhariaCaucaoApp = {
    * Antes das 06:30 e no fim de semana vale a última base gerada.
    */
   async lerBaseDoDia(start, end, opts) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !window.firebaseDb) return null;
+    const DE = window.DadosEngenharia;
+    if (!DE) return null;
     let meta = null;
     try { meta = await this.lerMetaBase(); } catch (e) { return null; }
     const hoje = this.isoToday();
@@ -1169,25 +1139,19 @@ window.EngenhariaCaucaoApp = {
     if (!atual && this.baseJaDeveriaExistir() && !(opts && opts.gerar === false)) meta = await this.gerarBaseHoje();
     if (!meta || !meta.done || !meta.range) return null;
     if (start < meta.range.startDate || end > meta.range.endDate) return null;
-    const rows = [];
-    for (let i = 0; i < (Number(meta.chunks) || 0); i++) {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", meta.date + "_" + i));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return null;
-      rows.push.apply(rows, (snap.data() || {}).rows || []);
-    }
+    // A base do dia é uma linha só em caucao_base (id = data); os chunks <data>_<n> sumiram.
+    const base = await DE.lerBaseCaucao(meta.date);
+    if (!base) return null;
+    const rows = Array.isArray(base.rows) ? base.rows : [];
     await this.aplicarAjustes(rows, meta);
     return { rows, meta };
   },
 
   /** Vencimentos alterados pela tela depois da base: valem até a próxima base. */
   async aplicarAjustes(rows, meta) {
-    const fc = window.firebaseCollections;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "caucao_base", "_ajustes"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return;
-      const map = snap.data() || {};
+      // _ajustes no Supabase: tabela caucao_base_ajustes, devolvida como o mapa { "titulo|parcela": { vencimento, at } }.
+      const map = (await window.DadosEngenharia.lerAjustesCaucao()) || {};
       const desde = String(meta.geradoEm || "");
       rows.forEach((r) => {
         const a = map[this.rowKey(r)];
@@ -1197,12 +1161,13 @@ window.EngenhariaCaucaoApp = {
   },
 
   registrarAjustes(rows) {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.setDoc || !window.firebaseDb || !rows || !rows.length) return;
+    const DE = window.DadosEngenharia;
+    if (!DE || !rows || !rows.length) return;
     const at = new Date().toISOString();
     const patch = {};
     rows.forEach((r) => { patch[this.rowKey(r)] = { vencimento: r.vencimento, at }; });
-    fc.setDoc(fc.doc(window.firebaseDb, "caucao_base", "_ajustes"), patch, { merge: true }).catch(function () {});
+    // Upsert só das chaves enviadas (como o setDoc com merge do doc _ajustes).
+    DE.registrarAjustesCaucao(patch).catch(function () {});
   },
 
   fonteHtml() {

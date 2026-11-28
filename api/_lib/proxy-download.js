@@ -13,22 +13,19 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Missing url parameter' });
   }
 
+  // Só baixa relatórios do Sienge (boleto, extrato). Esta rota não pede login, por isso não pode buscar outros sites.
+  let destino;
+  try { destino = new URL(String(url)); } catch (e) { destino = null; }
+  const host = destino ? destino.hostname.toLowerCase() : '';
+  if (!destino || destino.protocol !== 'https:' || !(host === 'sienge.com.br' || host.endsWith('.sienge.com.br'))) {
+    return res.status(400).json({ error: 'Link não permitido: só relatórios do Sienge.' });
+  }
+
   try {
-    const authHeader = req.headers['authorization'];
     const fetchOptions = {
       method: 'GET',
       headers: {}
     };
-
-    if (authHeader) {
-      fetchOptions.headers['Authorization'] = authHeader;
-    }
-
-    // Pass the session cookie if present
-    const cookieHeader = req.headers['cookie'];
-    if (cookieHeader) {
-      fetchOptions.headers['Cookie'] = cookieHeader;
-    }
 
     console.log(`[PROXY DOWNLOAD] Iniciando fetch para: ${url}`);
     

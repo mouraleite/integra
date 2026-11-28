@@ -226,7 +226,20 @@ const OrcamentoDfcApp = {
   },
 
   /* O filtro lista o plano inteiro. O empreendimento só restringe os valores da tabela. */
+  /* Lista do filtro de plano financeiro. Com o filtro de Custos e despesas ligado, some só o plano dos grupos de
+     custo/despesa desmarcados; receitas, impostos e as demais linhas continuam (antes sumiam junto). */
   planos() {
+    const lista = this.planosTodos();
+    if (!this.filtroGrupoLigado()) return lista;
+    const sel = new Set((this.selectedGrupoIds || []).map(String));
+    const grupos = new Set(this.gruposCustoDespesa().map((g) => String(g.id)));
+    return lista.filter((p) => {
+      const gid = String(this.grupoDaConta(p.id, p.name) || "");
+      return !grupos.has(gid) || sel.has(gid);
+    });
+  },
+
+  planosTodos() {
     const map = new Map();
     const add = (conta, nome) => {
       const id = this.codigoPlano(conta);
@@ -259,15 +272,9 @@ const OrcamentoDfcApp = {
         });
       });
     });
-    let lista = [...map.entries()]
+    return [...map.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
-    if (!this.filtroGrupoLigado()) return lista;
-    const sel = new Set((this.selectedGrupoIds || []).map(String));
-    return lista.filter((p) => {
-      const gid = this.grupoDaConta(p.id, p.name);
-      return !!(gid && sel.has(String(gid)));
-    });
   },
 
   async garantirCatalogoPlano() {
@@ -295,6 +302,24 @@ const OrcamentoDfcApp = {
     if (!ids.length) return true;
     const code = String(conta || "").trim();
     if (!code) return false;
+    // Vale a marcação da própria conta (ou da conta mais próxima acima dela que está na lista).
+    // Antes, a 2.04 marcada puxava a 2.04.01.01 mesmo desmarcada.
+    let cache = this._planOnCache;
+    const agora = Date.now();
+    if (!cache || cache.ids !== ids || cache.n !== ids.length || agora - cache.em > 1500) {
+      cache = this._planOnCache = {
+        ids, n: ids.length, em: agora,
+        sel: new Set(ids.map((id) => String(id || "").trim())),
+        lista: new Set(this.planosTodos().map((p) => String(p.id)))
+      };
+    }
+    let alvo = this.codigoPlano(code) || code;
+    while (alvo) {
+      if (cache.lista.has(alvo)) return cache.sel.has(alvo);
+      const p = alvo.lastIndexOf(".");
+      if (p <= 0) break;
+      alvo = alvo.slice(0, p);
+    }
     const dig = code.replace(/\D/g, "");
     return ids.some((id) => {
       const sid = String(id || "").trim();
@@ -398,7 +423,7 @@ const OrcamentoDfcApp = {
     return Array(12).fill(0);
   },
 
-  /* Primeiro mês (0 = jan) que entra como forecast. Em outubro de 2026, janeiro a setembro é realizado. */
+  /* Primeiro mês (0 = jan) que o caixa ainda trata como realizado. Em novembro de 2026, o caixa vai até outubro. */
   corteForecast() {
     const hoje = new Date();
     if (hoje.getFullYear() > 2026) return 12;
@@ -406,12 +431,55 @@ const OrcamentoDfcApp = {
     return hoje.getMonth();
   },
 
+  /* Primeiro mês que ainda é forecast. O mês fechado, com forecast já salvo, entra como realizado.
+     Em novembro de 2026 o caixa vai até outubro; novembro e dezembro vêm do forecast mais recente. */
+  inicioForecast() {
+    return this.corteForecast();
+  },
+
+  /* Só o forecast da competência mais recente daquele mês. Arquivo de competência anterior não soma de novo. */
+  arquivosDoForecast(doc) {
+    if (!doc) return [];
+    const porArq = doc.porArquivo;
+    const itens = [];
+    if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
+      Object.keys(porArq).forEach((nome) => {
+        if (porArq[nome]) itens.push({ nome: nome, arq: porArq[nome] });
+      });
+    } else if (doc.contas && Object.keys(doc.contas).length) {
+      itens.push({ nome: "", arq: doc });
+    }
+    if (!itens.length) return [];
+    const rc = window.ResultadoCaixaApp;
+    const baseDe = (item) => {
+      if (rc && typeof rc.baseForecast === "function") {
+        const b = rc.baseForecast(item.nome, item.arq);
+        if (b) return String(b);
+      }
+      const marca = item.arq && item.arq.base;
+      if (/^\d{4}-\d{2}$/.test(String(marca || ""))) return String(marca);
+      const m = String(item.nome || "").match(/^(\d{4}-\d{2})\|/);
+      return m ? m[1] : "";
+    };
+    let melhor = "";
+    itens.forEach((item) => {
+      const b = baseDe(item);
+      if (b > melhor) melhor = b;
+    });
+    return itens.filter((item) => {
+      if (melhor && baseDe(item) !== melhor) return false;
+      if (item.nome && rc && typeof rc.estaFora === "function" && rc.estaFora("fc", item.nome)) return false;
+      return true;
+    }).map((item) => item.arq);
+  },
+
   textoCorte() {
     const nomes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
     const corte = this.corteForecast();
+    const ini = this.inicioForecast();
     if (corte <= 0) return "2026 entra como forecast.";
     if (corte >= 12) return "2026 entra pelo realizado do ano.";
-    return "Até " + nomes[corte - 1] + " entra o realizado. De " + nomes[corte] + " a dezembro entra o forecast.";
+    return "Até " + nomes[ini - 1] + " entra o realizado. De " + nomes[ini] + " a dezembro entra o forecast mais recente salvo no fechamento de caixa.";
   },
 
   chaveConta(code) {
@@ -503,7 +571,9 @@ const OrcamentoDfcApp = {
       if (chave) this.somarBase(bag(ccs, gid + "|" + chave + "|" + ccId), i, v);
     };
     let arquivos = 0;
+    const ini = this.inicioForecast();
     (this._lancamentos2026 || []).forEach((c) => {
+      if (Number(c.i) >= ini) return;
       if (this.selectedCompanyIds.length && this.selectedCompanyIds.map(String).indexOf(String(c.companyId)) < 0) return;
       if (!this.ccCabe(c.cc)) return;
       if (!this.planOn(c.code)) return;
@@ -512,15 +582,11 @@ const OrcamentoDfcApp = {
     const app = window.ResultadoCaixaApp;
     const forecasts = (app && app.forecasts) || {};
     const fluxo = typeof FluxoCaixaApp !== "undefined" ? FluxoCaixaApp : null;
-    for (let i = corte; i < 12; i++) {
+    for (let i = ini; i < 12; i++) {
       const ym = "2026-" + String(i + 1).padStart(2, "0");
       const doc = forecasts[ym];
       if (!doc) continue;
-      const lista = [];
-      const porArq = doc.porArquivo;
-      if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
-        Object.keys(porArq).forEach((nome) => lista.push(porArq[nome]));
-      } else if (doc.contas) lista.push(doc);
+      const lista = this.arquivosDoForecast(doc);
       lista.forEach((arq) => {
         if (!this.empresaCabe(arq)) return;
         if (arq && (arq.empresa || arq.contas)) arquivos += 1;
@@ -595,25 +661,17 @@ const OrcamentoDfcApp = {
   },
 
   async lerRealizadoSalvo(fim, empresas, ate) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    // dfc_realizado (+ _itens) no Supabase (window.DadosFinanceiro): o doc "c<empresa>" volta no formato atual
+    // (payload = texto JSON das linhas compactas, partes = []).
+    const D = window.DadosFinanceiro;
     const out = {};
-    if (!fx || !db || !fim || typeof fx.getDoc !== "function") return out;
+    if (!D || !fim) return out;
     const lerUm = async (emp) => {
-      const snap = await fx.getDoc(fx.doc(db, "dfc_realizado", this.docRealizado(emp)));
-      if (!this.docExiste(snap)) return;
-      const x = snap.data() || {};
+      const x = await D.lerRealizadoDfc(this.docRealizado(emp).slice(1));
+      if (!x) return;
       if (String(x.fim || "") !== String(fim)) return;
       if (String(x.ate || "") !== String(ate || fim)) return;
-      let texto = x.payload || "";
-      if (Array.isArray(x.partes) && x.partes.length) {
-        const blocos = await Promise.all(x.partes.map(async (pid) => {
-          const p = await fx.getDoc(fx.doc(db, "dfc_realizado", pid));
-          return this.docExiste(p) ? String((p.data() || {}).texto || "") : null;
-        }));
-        if (blocos.some((b) => b == null)) return;
-        texto = blocos.join("");
-      }
+      const texto = x.payload || "";
       let cru = [];
       try { cru = JSON.parse(texto || "[]"); } catch (e) { cru = []; }
       if (!Array.isArray(cru)) return;
@@ -635,34 +693,12 @@ const OrcamentoDfcApp = {
   },
 
   async salvarRealizadoEmpresa(companyId, fim, rows, ate) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !companyId) return false;
+    const D = window.DadosFinanceiro;
+    if (!D || !companyId) return false;
     const compacto = (rows || []).map((r) => [r.gid, r.code, this.ccNorm(r.cc), r.i, Math.round((Number(r.v) || 0) * 100) / 100, String(r.ccn || ""), String(r.cn || "")]);
-    const texto = JSON.stringify(compacto);
-    const id = this.docRealizado(companyId);
-    const LIM = 400000;
-    const ids = [];
-    if (texto.length > LIM) {
-      for (let i = 0, n = 0; i < texto.length; i += LIM, n++) {
-        const pid = this.docRealizado(companyId, n);
-        ids.push(pid);
-        await fx.setDoc(fx.doc(db, "dfc_realizado", pid), { tipo: "parte", pai: id, texto: texto.slice(i, i + LIM) });
-      }
-    }
-    await fx.setDoc(fx.doc(db, "dfc_realizado", id), {
-      empresa: String(companyId),
-      fim: fim,
-      ate: String(ate || fim),
-      v: 3,
-      em: new Date().toISOString(),
-      n: compacto.length,
-      payload: ids.length ? "" : texto,
-      partes: ids
-    });
-    for (let n = ids.length; n < 20; n++) {
-      fx.deleteDoc(fx.doc(db, "dfc_realizado", this.docRealizado(companyId, n))).catch(function () {});
-    }
+    // RPC gravar_dfc_realizado: troca o cabeçalho "c<empresa>" e os itens numa transação (antes: setDoc do doc,
+    // das partes __pN e deleteDoc das sobras).
+    await D.gravarRealizadoDfc(this.docRealizado(companyId).slice(1), fim, String(ate || fim), compacto);
     return true;
   },
 
@@ -834,7 +870,7 @@ const OrcamentoDfcApp = {
   },
 
   itensDaCelula(row, mesIdx) {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const gids = row.drillConta ? new Set([row.drillGid]) : this.gidsDoNo(row.drillGid);
     const emp = new Set(this.selectedCompanyIds.map(String));
     const conta = this.chaveConta(row.drillConta || "");
@@ -888,7 +924,7 @@ const OrcamentoDfcApp = {
     const id = pedacos.join("||");
     const row = (this._linhasDfc || []).find((r) => r.id === id);
     if (!row) return;
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const mesIdx = mes === "t" ? null : Number(mes);
     if (mesIdx != null && (!(mesIdx >= 0) || mesIdx >= corte)) return;
     const fim = this.fimRealizado2026();
@@ -943,13 +979,15 @@ const OrcamentoDfcApp = {
     }
     let salvos = {};
     try { salvos = await this.lerRealizadoSalvo(fim, empresas, ate); } catch (e) { salvos = {}; }
-    const publicar = (aviso) => {
+    // lendo = ainda há empresa sendo buscada no caixa e banco. Sem isso, a publicação do que já estava salvo
+    // (vazio no primeiro acesso do dia) mostrava "não devolveu movimento" durante toda a leitura (27/11/2026).
+    const publicar = (aviso, lendo) => {
       const todos = [];
       empresas.forEach((id) => {
         if (Object.prototype.hasOwnProperty.call(salvos, id)) todos.push.apply(todos, salvos[id] || []);
       });
       this._lancamentos2026 = todos;
-      this._caixaEstado = todos.length ? "ok" : "vazio";
+      this._caixaEstado = todos.length ? "ok" : (lendo ? "lendo" : "vazio");
       this._caixaErro = "";
       this._caixaAviso = aviso || "";
       if (document.getElementById("orc-dfc-body")) this.paintBody();
@@ -963,7 +1001,7 @@ const OrcamentoDfcApp = {
       this._caixaChave = chave;
       return;
     }
-    if (buscar.length) publicar("O realizado salvo já está na tela.");
+    if (buscar.length) publicar("O realizado salvo já está na tela.", true);
     if (typeof fluxo.ensureCategories === "function") {
       try { await fluxo.ensureCategories(); } catch (e) {}
     }
@@ -980,9 +1018,25 @@ const OrcamentoDfcApp = {
       await new Promise((resolve) => setTimeout(resolve, 0));
       try {
         const novos = await fluxo.buscarMovimentos(inicio, ate, buscar);
+        // Várias empresas e nenhum movimento em nenhuma: é falha de leitura (ex.: login expirado, que faz o
+        // servidor recusar o Sienge), não ausência de realizado. Não grava vazio para o dia inteiro.
+        if (buscar.length >= 3 && !(novos || []).length) {
+          throw new Error("O caixa e banco não devolveu nenhum movimento para nenhuma empresa. Pode ser o login do Integra expirado: saia e entre de novo e abra a tela outra vez.");
+        }
         movs = movs.concat(novos || []);
       } catch (e) {
-        publicar((e && e.message) || "Não consegui completar a leitura. O que já estava salvo continua na tela.");
+        const bruto = String((e && e.message) || "");
+        const limite = /\b429\b|rate limit|too many/i.test(bruto);
+        const motivo = limite
+          ? "O Sienge está limitando as consultas de caixa e banco agora (muitas requisições ao mesmo tempo). Aguarde alguns minutos e abra a tela de novo."
+          : (bruto || "Não consegui completar a leitura do caixa e banco.");
+        publicar(motivo);
+        // Sem nada salvo para mostrar: aparece o motivo, e não "não devolveu movimento".
+        if (!(this._lancamentos2026 || []).length) {
+          this._caixaEstado = "erro";
+          this._caixaErro = motivo;
+          if (document.getElementById("orc-dfc-body")) this.paintBody();
+        }
         return;
       }
     }
@@ -1284,7 +1338,8 @@ const OrcamentoDfcApp = {
         alvo.cn = acc.nome;
       }
       if (!alvo.base || alvo.base.length < 12) alvo.base = Array(12).fill(0);
-      for (let i = 0; i < corte; i++) alvo.base[i] = acc.meses[i] || 0;
+      const limite = Math.min(Number(corte) || 0, this.inicioForecast());
+      for (let i = 0; i < limite; i++) alvo.base[i] = acc.meses[i] || 0;
       (acc.ccs || []).forEach((cc) => {
         let row = null;
         alvo.ccs.forEach((c) => { if (this.ccNorm(c.id) === cc.id) row = c; });
@@ -1295,7 +1350,8 @@ const OrcamentoDfcApp = {
           row.name = cc.nome;
         }
         if (!row.base || row.base.length < 12) row.base = Array(12).fill(0);
-        for (let i = 0; i < corte; i++) row.base[i] = cc.meses[i] || 0;
+        const limiteCc = Math.min(Number(corte) || 0, this.inicioForecast());
+        for (let i = 0; i < limiteCc; i++) row.base[i] = cc.meses[i] || 0;
       });
     });
   },
@@ -1662,6 +1718,7 @@ const OrcamentoDfcApp = {
       });
     }
     const empFiltro = new Set(this.selectedCompanyIds.map(String));
+    const ini = this.inicioForecast();
     (this._lancamentos2026 || []).forEach((c) => {
       const emp = String(c.companyId || "");
       if (empFiltro.size && !empFiltro.has(emp)) return;
@@ -1674,22 +1731,18 @@ const OrcamentoDfcApp = {
       const conta = String(c.code || "");
       const f = folha(c.gid, emp, cc, conta);
       const i = Number(c.i);
-      if (i >= 0 && i < 12) {
+      if (i >= 0 && i < ini) {
         f.base[i] += Number(c.v) || 0;
         g.base[i] += Number(c.v) || 0;
       }
     });
     const app = window.ResultadoCaixaApp;
     const forecasts = (app && app.forecasts) || {};
-    for (let i = corte; i < 12; i++) {
+    for (let i = ini; i < 12; i++) {
       const ym = "2026-" + String(i + 1).padStart(2, "0");
       const doc = forecasts[ym];
       if (!doc) continue;
-      const lista = [];
-      const porArq = doc.porArquivo;
-      if (porArq && typeof porArq === "object" && !Array.isArray(porArq) && Object.keys(porArq).length) {
-        Object.keys(porArq).forEach((nome) => lista.push(porArq[nome]));
-      } else if (doc.contas) lista.push(doc);
+      const lista = this.arquivosDoForecast(doc);
       lista.forEach((arq) => {
         if (!this.empresaCabe(arq)) return;
         const emp = this.empresaDoArquivo(arq);
@@ -1951,6 +2004,9 @@ const OrcamentoDfcApp = {
 
   render(root) {
     this.garantir();
+    this.selectedCompanyIds = ["1"];
+    this.varRs = false;
+    this.varPct = false;
     const src = this.origem();
     root.innerHTML = `
       <div class="orc-dfc-page">
@@ -2028,18 +2084,9 @@ const OrcamentoDfcApp = {
 
   async lerForecastsSalvos(app) {
     if (!app) return;
-    const mesesFc = ["2026-10", "2026-11", "2026-12"];
-    const jaTem = app.forecasts && mesesFc.some((ym) => {
-      const doc = app.forecasts[ym];
-      if (!doc) return false;
-      const por = doc.porArquivo;
-      return (por && typeof por === "object" && Object.keys(por).length) || (doc.contas && Object.keys(doc.contas).length);
-    });
-    if (jaTem) return;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.query !== "function" || typeof fx.where !== "function") return;
-    const snap = await fx.getDocs(fx.query(fx.collection(db, "resultado_caixa"), fx.where("tipo", "==", "forecast")));
+    // resultado_caixa no Supabase: where("tipo", "==", "forecast") com snapshot de imitação.
+    if (!window.DadosFinanceiro) return;
+    const snap = await window.DadosFinanceiro.listarResultadoCaixa({ tipo: "forecast" });
     const nuvem = {};
     snap.forEach((docSnap) => {
       const id = docSnap.id || "";
@@ -2058,7 +2105,14 @@ const OrcamentoDfcApp = {
       };
     });
     if (!Object.keys(nuvem).length) return;
-    app.forecasts = nuvem;
+    app.forecasts = app.forecasts || {};
+    Object.keys(nuvem).forEach((ym) => {
+      const local = app.forecasts[ym];
+      const novo = nuvem[ym];
+      const localEm = local && local.em ? String(local.em) : "";
+      const novoEm = novo && novo.em ? String(novo.em) : "";
+      if (!local || (novoEm && novoEm >= localEm)) app.forecasts[ym] = novo;
+    });
     if (typeof app.normalizarForecastsMemoria === "function") app.normalizarForecastsMemoria();
     if (typeof app.gravarForecastLocal === "function") app.gravarForecastLocal();
   },
@@ -2508,7 +2562,7 @@ const OrcamentoDfcApp = {
   },
 
   mesSaldo() {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     let mes = Number(this._saldoMes);
     if (!(mes >= 0) || mes >= corte) mes = 0;
     return mes;
@@ -2536,7 +2590,7 @@ const OrcamentoDfcApp = {
 
   /* Realizado: saldo das contas marcadas. Forecast e 2027: saldo final do mês anterior mais a variação de caixa do mês. */
   serieSaldos() {
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const g12 = (this._linhasDfc || []).find((r) => r.id === "g_12");
     const base = (g12 && g12.base) || [];
     const orc = (g12 && g12.months) || [];
@@ -2559,6 +2613,185 @@ const OrcamentoDfcApp = {
       y27.push({ ini: ini, fim: ini + variacao, variacao: variacao, previsto: true });
     }
     return { y26: y26, y27: y27 };
+  },
+
+  /* Janeiro parte do saldo final informado e cada mês seguinte soma a variação de caixa. */
+  serieDe(variacoes, abertura) {
+    const out = [];
+    const vars = variacoes || [];
+    for (let i = 0; i < 12; i++) {
+      const ini = i === 0 ? (Number(abertura) || 0) : out[i - 1].fim;
+      const variacao = Number(vars[i]) || 0;
+      out.push({ ini: ini, fim: ini + variacao, variacao: variacao, previsto: true });
+    }
+    return out;
+  },
+
+  /* No V1 x V2 as duas colunas de 2027 começam no mesmo saldo final de 2026. */
+  parSaldos() {
+    const serie = this.serieSaldos();
+    const fechamento = serie.y26[11].fim;
+    if (!this.modoV1xV2()) return { esq: serie.y26, dir: serie.y27, v1xv2: false, anoEsq: 2026, anoDir: 2027 };
+    const g12 = (this._linhasDfc || []).find((r) => r.id === "g_12") || {};
+    return {
+      esq: this.serieDe(g12.cmp, fechamento),
+      dir: this.serieDe(g12.months, fechamento),
+      v1xv2: true,
+      anoEsq: 2027,
+      anoDir: 2027
+    };
+  },
+
+  garantirCdi() {
+    if (!this._cdiHidratado) {
+      this._cdiHidratado = true;
+      this.lerCdiSalvo();
+    }
+    if (this._cdiPedido || this._cdiBuscou) return;
+    this._cdiBuscou = true;
+    this._cdiPedido = this.buscarCdi();
+  },
+
+  lerCdiSalvo() {
+    try {
+      const bruto = JSON.parse(localStorage.getItem("crm_dfc_cdi_4391") || "null");
+      if (!bruto || typeof bruto !== "object") return;
+      this.aplicarMapaCdi(bruto, false);
+    } catch (e) {}
+  },
+
+  taxaCdi(valor) {
+    const s = String(valor == null ? "" : valor).trim().replace("%", "").replace(/\s/g, "");
+    if (!s) return 0;
+    const n = s.indexOf(",") >= 0
+      ? Number(s.replace(/\./g, "").replace(",", "."))
+      : Number(s);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  },
+
+  /* O mês corrente da série 4391 ainda está aberto. A projeção usa o último mês fechado. */
+  aplicarMapaCdi(mapa, gravar) {
+    const fonte = mapa && typeof mapa === "object" ? mapa : {};
+    const chaves = Object.keys(fonte).filter((k) => Number(fonte[k]) > 0).sort();
+    if (!chaves.length) return false;
+    const hoje = new Date();
+    const mesAtual = hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0");
+    const fechadas = chaves.filter((k) => k < mesAtual);
+    const ref = fechadas.length ? fechadas[fechadas.length - 1] : chaves[chaves.length - 1];
+    this._cdiMes = {};
+    chaves.forEach((k) => { this._cdiMes[k] = Number(fonte[k]); });
+    this._cdiUltimoMes = ref;
+    this._cdiUltimo = Number(fonte[ref]) || 0;
+    this._cdiPronto = this._cdiUltimo > 0;
+    if (gravar && this._cdiPronto) {
+      try { localStorage.setItem("crm_dfc_cdi_4391", JSON.stringify(this._cdiMes)); } catch (e) {}
+    }
+    return this._cdiPronto;
+  },
+
+  async buscarCdi() {
+    const hoje = new Date();
+    const dataFinal = String(hoje.getDate()).padStart(2, "0") + "/" + String(hoje.getMonth() + 1).padStart(2, "0") + "/" + hoje.getFullYear();
+    const q = "code=4391&dataInicial=" + encodeURIComponent("01/01/2025") + "&dataFinal=" + encodeURIComponent(dataFinal);
+    const urls = [
+      "/api/bcb-sgs?" + q,
+      "https://api.bcb.gov.br/dados/serie/bcdata.sgs.4391/dados?formato=json&dataInicial=" + encodeURIComponent("01/01/2025") + "&dataFinal=" + encodeURIComponent(dataFinal)
+    ];
+    const mapa = {};
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const res = await fetch(urls[i]);
+        if (!res.ok) continue;
+        const json = await res.json();
+        const linhas = Array.isArray(json) ? json : (json && (json.dados || json.value || json.data));
+        if (!Array.isArray(linhas) || !linhas.length) continue;
+        linhas.forEach((r) => {
+          const s = String((r && r.data) || "").trim();
+          const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          const iso = s.match(/^(\d{4})-(\d{1,2})/);
+          const key = br
+            ? (br[3] + "-" + String(br[2]).padStart(2, "0"))
+            : (iso ? (iso[1] + "-" + String(iso[2]).padStart(2, "0")) : "");
+          if (!key) return;
+          const n = this.taxaCdi(r.valor);
+          if (n > 0) mapa[key] = n;
+        });
+        if (Object.keys(mapa).length) break;
+      } catch (e) {}
+    }
+    const ok = this.aplicarMapaCdi(mapa, true);
+    this._cdiPedido = null;
+    if (!ok && !(Number(this._cdiUltimo) > 0)) this._cdiFalhou = true;
+    this.atualizarSaldosDom();
+  },
+
+  cdiDoMes(ano, i) {
+    const key = String(ano) + "-" + String(i + 1).padStart(2, "0");
+    const mapa = this._cdiMes || {};
+    const n = Number(mapa[key]);
+    if (n > 0) return { taxa: n, projetado: false, ref: key };
+    if (Number(this._cdiUltimo) > 0) return { taxa: Number(this._cdiUltimo), projetado: true, ref: this._cdiUltimoMes || "" };
+    return null;
+  },
+
+  ehLinhaAplicacao(nome) {
+    const n = String(nome || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    if (/IR SOBRE APLIC|DESPESA FINANC|AMORTIZ/.test(n)) return false;
+    return /RENDIMENTO.*APLIC|APLICACAO FINANCEIRA|PREVISAO DE APLIC|SUGESTAO DE APLIC/.test(n);
+  },
+
+  /* Linha de aplicação que veio no arquivo do orçamento, já na visão filtrada. */
+  orcadoAplicacao() {
+    const meses = Array(12).fill(0);
+    const cmp = Array(12).fill(0);
+    let achou = false;
+    (this._linhasDfc || []).forEach((r) => {
+      if (!r || !r.isAccount || !this.ehLinhaAplicacao(r.name)) return;
+      achou = true;
+      (r.months || []).forEach((v, i) => { if (i < 12) meses[i] += Number(v) || 0; });
+      (r.cmp || []).forEach((v, i) => { if (i < 12) cmp[i] += Number(v) || 0; });
+    });
+    return achou ? { meses: meses, cmp: cmp } : null;
+  },
+
+  textoConferenciaAplicacao(sugestao, orcado, rotulo) {
+    if (!orcado) return { alerta: false, texto: "Ainda não há linha de aplicação no arquivo. Quando ela entrar, a tela compara com esta sugestão." };
+    const diffs = [];
+    let somaO = 0;
+    let somaS = 0;
+    for (let i = 0; i < 12; i++) {
+      const s = Number(sugestao[i] && sugestao[i].valor) || 0;
+      const o = Number(orcado[i]) || 0;
+      somaS += s;
+      somaO += o;
+      if (Math.abs(s - o) >= 0.5) diffs.push(this.MESES[i]);
+    }
+    const prefixo = rotulo ? (rotulo + ": ") : "";
+    if (!diffs.length) return { alerta: false, texto: prefixo + "Orçado igual à sugestão, " + this.money(somaO) + " no ano." };
+    return {
+      alerta: true,
+      texto: prefixo + "Orçado " + this.money(somaO) + " e a sugestão é " + this.money(somaS) + ". Difere em " + diffs.join(", ") + ". Altere a linha no arquivo se for necessário."
+    };
+  },
+
+  /* Rendimento previsto: 80% do CDI do mês sobre o saldo inicial. Saldo negativo não rende. */
+  rendimentoAplicacao(saldo, ano, i) {
+    const base = Number(saldo) || 0;
+    if (base <= 0.005) return { valor: 0, taxa: 0, projetado: false, ref: "", base: base };
+    const cdi = this.cdiDoMes(ano, i);
+    if (!cdi) return { valor: null, taxa: 0, projetado: false, ref: "", base: base };
+    return { valor: base * 0.8 * (cdi.taxa / 100), taxa: cdi.taxa, projetado: cdi.projetado, ref: cdi.ref, base: base };
+  },
+
+  textoCdi(info) {
+    if (!info || info.valor == null) return "CDI do mês ainda não chegou do Banco Central.";
+    const taxa = (Number(info.taxa) || 0).toFixed(2).replace(".", ",");
+    const ref = String(info.ref || "");
+    const pedaco = ref.length >= 7 ? (ref.slice(5, 7) + "/" + ref.slice(0, 4)) : "";
+    const origem = info.projetado
+      ? ("CDI de " + (pedaco || "o último mês divulgado") + " projetado, " + taxa + "% a.m.")
+      : ("CDI de " + (pedaco || "o mês") + ", " + taxa + "% a.m.");
+    return "80% de " + origem + " sobre o saldo inicial " + this.money(info.base) + ".";
   },
 
   colsVar() {
@@ -2590,7 +2823,6 @@ const OrcamentoDfcApp = {
   },
 
   htmlSaldos() {
-    if (this.modoV1xV2()) return "";
     const span = 1 + this.MESES.length + 1 + (this.MESES.length + 1) * (1 + this.colsVar());
     if (this._saldoEstado === "lendo") {
       const n = Number(this._saldoFeitos) || 0;
@@ -2605,36 +2837,96 @@ const OrcamentoDfcApp = {
       return `<tr class="orc-dfc-saldo"><td colspan="${span}">O balancete não devolveu o saldo de caixa no fim do mês.</td></tr>`;
     }
     if (this._saldoEstado !== "ok") return "";
-    const serie = this.serieSaldos();
+    const par = this.parSaldos();
     const neg = (v) => (Number(v) < -0.005 ? " orc-dfc-neg" : "");
     const linha = (nome, campo, abre) => {
-      const c26 = serie.y26.map((item, i) => {
+      const c26 = par.esq.map((item, i) => {
         const valor = item[campo];
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        if (abre && !item.previsto) {
+        if (abre && !par.v1xv2 && !item.previsto) {
           const on = this.mesSaldo() === i ? " is-on" : "";
           return `<td class="${sep.trim()}${neg(valor)}"><button type="button" class="orc-dfc-saldo-btn${on}" data-saldo-mes="${i}">${this.money(valor)}</button></td>`;
         }
         return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>`;
       }).join("");
-      const a = serie.y26[0].ini;
-      const b = serie.y26[11].fim;
+      const a = par.esq[0].ini;
+      const b = par.esq[11].fim;
       const tot = campo === "ini" ? a : (campo === "fim" ? b : b - a);
-      const a27 = serie.y27[0].ini;
-      const b27 = serie.y27[11].fim;
+      const a27 = par.dir[0].ini;
+      const b27 = par.dir[11].fim;
       const tot27 = campo === "ini" ? a27 : (campo === "fim" ? b27 : b27 - a27);
-      const c27 = serie.y27.map((item, i) => {
+      const c27 = par.dir.map((item, i) => {
         const valor = item[campo];
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>${this.htmlVars(valor, serie.y26[i][campo])}`;
-      }).join("") + `<td class="orc-dfc-sep${neg(tot27)}">${this.money(tot27)}</td>${this.htmlVars(tot27, tot)}`;
-      const label = abre
+        return `<td class="${sep.trim()}${neg(valor)}">${this.money(valor)}</td>${this.htmlVars(valor, par.esq[i][campo], par.v1xv2 ? "v1" : "")}`;
+      }).join("") + `<td class="orc-dfc-sep${neg(tot27)}">${this.money(tot27)}</td>${this.htmlVars(tot27, tot, par.v1xv2 ? "v1" : "")}`;
+      const label = abre && !par.v1xv2
         ? `<button type="button" class="orc-dfc-saldo-abre" data-saldo-abrir="1">Saldo inicial</button>`
-        : nome;
+        : (abre ? "Saldo inicial" : nome);
       return `<tr class="orc-dfc-saldo"><td>${label}</td>${c26}<td class="orc-dfc-sep${neg(tot)}">${this.money(tot)}</td>${c27}</tr>`;
     };
+    const celulaAplic = (info, sep) => {
+      if (!info) return `<td class="${sep}"></td>`;
+      const valor = info.valor;
+      const vazio = valor == null;
+      const n = Number(valor) || 0;
+      const texto = vazio ? "…" : (Math.abs(n) < 0.005 ? "0,00" : this.money(n));
+      return `<td class="${sep}${n < -0.005 ? " orc-dfc-neg" : ""}" title="${this.esc(this.textoCdi(info))}">${texto}</td>`;
+    };
+    const varAplic = () => {
+      let html = "";
+      if (this.varRs) html += `<td class="orc-dfc-vcol"></td>`;
+      if (this.varPct) html += `<td class="orc-dfc-vcol"></td>`;
+      return html;
+    };
+    /* O ano corrente e o forecast já trazem o rendimento. A linha só entra no ano orçado. */
+    if ((Number(par.anoEsq) >= 2027 || Number(par.anoDir) >= 2027) && !this._cdiPronto && !this._cdiBuscou) this.garantirCdi();
+    const ladoAplic = (serie, ano) => {
+      if (Number(ano) < 2027) return serie.map(() => null);
+      return serie.map((item, i) => this.rendimentoAplicacao(item.ini, ano, i));
+    };
+    const esqA = ladoAplic(par.esq, par.anoEsq);
+    const dirA = ladoAplic(par.dir, par.anoDir);
+    const somaA = (lista) => lista.reduce((s, info) => s + (Number(info && info.valor) || 0), 0);
+    const totE = somaA(esqA);
+    const totD = somaA(dirA);
+    const mostraE = Number(par.anoEsq) >= 2027;
+    const mostraD = Number(par.anoDir) >= 2027;
+    const cEsq = esqA.map((info, i) => celulaAplic(info, i === 0 ? "orc-dfc-sep" : "")).join("");
+    const cDir = dirA.map((info, i) => {
+      const base = esqA[i];
+      const variacao = mostraE && mostraD
+        ? this.htmlVars(info && info.valor, base && base.valor, par.v1xv2 ? "v1" : "")
+        : varAplic();
+      return celulaAplic(info, i === 0 ? "orc-dfc-sep" : "") + variacao;
+    }).join("");
+    const orcado = this.orcadoAplicacao();
+    const temSugestao = (lista) => lista.some((info) => info && info.valor != null);
+    const textoTot = (lista, tot, mostra) => {
+      if (!mostra) return "";
+      if (!temSugestao(lista)) return "…";
+      return Math.abs(tot) < 0.005 ? "0,00" : this.money(tot);
+    };
+    let textoConf = "";
+    let alertaAplic = false;
+    if ((mostraE || mostraD) && !orcado) {
+      if (temSugestao(esqA) || temSugestao(dirA)) {
+        textoConf = "Sugestão para lançar na linha de aplicação do Excel. Quando a linha entrar no arquivo, a tela compara com estes valores.";
+      } else if (this._cdiFalhou) {
+        textoConf = "Não consegui o CDI do Banco Central para calcular a sugestão.";
+      } else {
+        textoConf = "Calculando a sugestão de 80% do CDI para lançar no Excel.";
+      }
+    } else {
+      const confEsq = mostraE ? this.textoConferenciaAplicacao(esqA, orcado && orcado.cmp, par.v1xv2 ? "V1" : "") : null;
+      const confDir = mostraD ? this.textoConferenciaAplicacao(dirA, orcado && orcado.meses, par.v1xv2 ? "V2" : "") : null;
+      const partesConf = [confEsq, confDir].filter((c) => c && c.texto);
+      alertaAplic = partesConf.some((c) => c.alerta);
+      textoConf = partesConf.map((c) => c.texto).join(" ");
+    }
+    const aplic = `<tr class="orc-dfc-aplic${alertaAplic ? " is-alerta" : ""}"><td title="Sugestão de 80% do CDI sobre o saldo inicial. Estes são os valores para lançar no Excel.">Previsão de aplicação${textoConf ? `<small class="orc-dfc-aplic-aviso${alertaAplic ? " is-alerta" : ""}">${this.esc(textoConf)}</small>` : ""}</td>${cEsq}<td class="orc-dfc-sep" title="${mostraE ? "Soma da previsão" : ""}">${textoTot(esqA, totE, mostraE)}</td>${cDir}<td class="orc-dfc-sep" title="${mostraD ? "Soma da previsão" : ""}">${textoTot(dirA, totD, mostraD)}</td>${mostraE && mostraD ? this.htmlVars(totD, totE, par.v1xv2 ? "v1" : "") : varAplic()}</tr>`;
     const folga = `<tr class="orc-dfc-saldo-gap"><td colspan="${span}"></td></tr>`;
-    return folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
+    return aplic + folga + linha("", "ini", true) + linha("Saldo final", "fim", false) + linha("Variação", "variacao", false);
   },
 
   quadroSaldos() {
@@ -2719,7 +3011,7 @@ const OrcamentoDfcApp = {
 
   textoLead() {
     const comum = "O saldo final de 2026 é o saldo inicial de janeiro de 2027, e cada mês seguinte parte do saldo final do anterior. " + this.textoCorte() + " O realizado vem do caixa e banco.";
-    if (this.modoV1xV2()) return "V1 x V2: à esquerda a V1 de 2027 (base anterior), à direita a V2 (arquivo novo). Ligue Variação R$ ou % para ver, mês a mês, quanto a V2 muda em relação à V1. O saldo de caixa fica na V1 e na V2 separadas.";
+    if (this.modoV1xV2()) return "V1 x V2: à esquerda a V1 de 2027, à direita a V2. As duas começam janeiro com o saldo final de 2026. A previsão de aplicação, depois da variação de caixa, é 80% do CDI sobre o saldo inicial de cada mês. Ligue Variação R$ ou % para ver quanto a V2 muda em relação à V1.";
     if (this.comparando()) return "A V1 é a base de 2027 que já estava carregada. A V2 é o arquivo novo. A variação de cada mês de 2027 compara a V2 com a V1. " + comum;
     if (this._v2 && this.versao === "1") return "Você está na V1, a base anterior de 2027. A variação de cada mês de 2027 compara com o mesmo mês de 2026. " + comum;
     return "Janeiro a dezembro de 2026, o total, e depois janeiro a dezembro de 2027. A variação ao lado de cada mês de 2027 compara com o mesmo mês de 2026. " + comum;
@@ -2772,7 +3064,7 @@ const OrcamentoDfcApp = {
     const marca = this.modoV1xV2() ? "V1 x V2 · V2" : (this.usaV2() ? "V2" : "V1");
     const estado = this.erro
       ? " · " + this.erro
-      : (this._nuvemOk ? " · salvo no Firebase" : (this._nuvemMsg ? " · " + this._nuvemMsg : ""));
+      : (this._nuvemOk ? " · salvo na nuvem" : (this._nuvemMsg ? " · " + this._nuvemMsg : ""));
     const outra = this._v2 && this._v1
       ? (" · " + (this.usaV2() ? "V1 " + (this._v1.fileName || "base") : "V2 " + (this._v2.fileName || "arquivo")))
       : "";
@@ -3057,6 +3349,7 @@ const OrcamentoDfcApp = {
         }
       },
       toggleId: (id, on) => {
+        const tudoPlano = !this.filtroPlanoLigado();
         const sid = String(id);
         if (on) {
           if (!this.selectedGrupoIds.includes(sid)) this.selectedGrupoIds.push(sid);
@@ -3064,23 +3357,28 @@ const OrcamentoDfcApp = {
           this.selectedGrupoIds = this.selectedGrupoIds.filter((x) => x !== sid);
         }
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
       },
       selectAll: () => {
+        const tudoPlano = !this.filtroPlanoLigado();
         this.selectedGrupoIds = items.map((g) => g.id);
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
       },
       selectNone: () => {
+        const tudoPlano = !this.filtroPlanoLigado();
         this.selectedGrupoIds = [];
         this.grupoDropOpen = true;
-        this.podarPlanos();
+        // Plano financeiro em "Todos" continua em Todos depois de mudar os grupos.
+        if (tudoPlano) this.selectedPlanIds = []; else this.podarPlanos();
         this.paintGrupo();
         this.paintPlan();
         this.paintBody();
@@ -3108,15 +3406,29 @@ const OrcamentoDfcApp = {
       if (foraEl) foraEl.innerHTML = "";
       return;
     }
+    const rolagem = body.querySelector(".orc-dfc-scroll");
+    const keepTop = rolagem ? rolagem.scrollTop : 0;
+    const keepLeft = rolagem ? rolagem.scrollLeft : 0;
     const { rows, fora } = this.visao === "2" ? this.montarVisao2() : this.montar();
     this._linhasDfc = rows;
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const extras = (this.varRs ? `<th class="orc-dfc-vcol">Var R$</th>` : "") + (this.varPct ? `<th class="orc-dfc-vcol">Var %</th>` : "");
     const v1xv2 = this.modoV1xV2();
-    const h26 = this.MESES.map((m, i) => `<th${i === 0 ? " class=\"orc-dfc-sep\"" : ""} title="${v1xv2 ? "2027 · V1" : (i >= corte ? "Previsão de 2026" : "Realizado de 2026")}">${m}</th>`).join("") + `<th class="orc-dfc-sep">Total</th>`;
+    const h26 = this.MESES.map((m, i) => {
+      const fc = !v1xv2 && i >= corte;
+      const cls = [i === 0 ? "orc-dfc-sep" : "", fc ? "orc-dfc-fc" : (v1xv2 ? "" : "orc-dfc-real")].filter(Boolean).join(" ");
+      const sub = v1xv2 ? "" : `<small>${fc ? "Forecast" : "Realizado"}</small>`;
+      const title = v1xv2 ? "2027 · V1" : (fc ? "Forecast de 2026" : "Realizado de 2026");
+      return `<th class="${cls}" title="${title}">${m}${sub}</th>`;
+    }).join("") + `<th class="orc-dfc-sep">Total</th>`;
     const h27 = this.MESES.map((m, i) => `<th${i === 0 ? " class=\"orc-dfc-sep\"" : ""}>${m}</th>${extras}`).join("") + `<th class="orc-dfc-sep">Total</th>${extras}`;
     const rotulo27 = this.usaV2() ? "2027 · V2" : (this._v2 ? "2027 · V1" : "2027");
-    const h1 = `<th colspan="13" class="orc-dfc-mes">${v1xv2 ? "2027 · V1" : "2026"}</th><th colspan="${13 * (1 + this.colsVar())}" class="orc-dfc-mes is-alt">${rotulo27}</th>`;
+    const nReal = v1xv2 ? 0 : Math.max(0, Math.min(12, corte));
+    const nFc = v1xv2 ? 0 : 12 - nReal;
+    const hEsq = v1xv2
+      ? `<th colspan="13" class="orc-dfc-mes">2027 · V1</th>`
+      : `${nReal ? `<th colspan="${nReal}" class="orc-dfc-mes orc-dfc-mes-real">2026 · Realizado</th>` : ""}${nFc ? `<th colspan="${nFc}" class="orc-dfc-mes orc-dfc-mes-fc">2026 · Forecast</th>` : ""}<th class="orc-dfc-mes">Total</th>`;
+    const h1 = `${hEsq}<th colspan="${13 * (1 + this.colsVar())}" class="orc-dfc-mes is-alt">${rotulo27}</th>`;
     const h2 = h26 + h27;
     const trs = rows.map((r) => {
       const cls = [
@@ -3141,8 +3453,9 @@ const OrcamentoDfcApp = {
         const marca = chave ? ` data-orc-2026="${this.esc(chave)}"` : "";
         const neg = real < -0.005 ? " orc-dfc-neg" : "";
         const sep = i === 0 ? " orc-dfc-sep" : "";
-        const titulo = (v1xv2 ? "V1 " : (i >= corte ? "Previsão " : "Realizado ")) + this.money(real);
-        return `<td class="${(sep + neg + abre).trim()}"${marca} title="${this.esc(titulo + (chave ? " · Ver lançamentos" : ""))}">${this.money(real)}</td>`;
+        const fc = !v1xv2 && i >= corte ? " orc-dfc-fc" : "";
+        const titulo = (v1xv2 ? "V1 " : (i >= corte ? "Forecast " : "Realizado ")) + this.money(real);
+        return `<td class="${(sep + neg + abre + fc).trim()}"${marca} title="${this.esc(titulo + (chave ? " · Ver lançamentos" : ""))}">${this.money(real)}</td>`;
       }).join("");
       const baseTotal = Number(v1xv2 ? r.cmpTotal : r.baseTotal) || 0;
       const ref = this.refLinha(r);
@@ -3184,6 +3497,16 @@ const OrcamentoDfcApp = {
         </table>
       </div>
       <div id="orc-dfc-saldos">${this.quadroSaldos()}</div>`;
+    const nova = body.querySelector(".orc-dfc-scroll");
+    if (nova) {
+      const devolver = () => {
+        if (!nova.isConnected) return;
+        nova.scrollTop = keepTop;
+        nova.scrollLeft = keepLeft;
+      };
+      devolver();
+      requestAnimationFrame(devolver);
+    }
     body.querySelectorAll("[data-dfc-id]").forEach((tr) => {
       tr.addEventListener("click", () => this.toggle(tr.getAttribute("data-dfc-id")));
     });
@@ -3195,6 +3518,7 @@ const OrcamentoDfcApp = {
     });
     this.ligarSaldos(body);
     this.pedirSaldos();
+    this.garantirCdi();
     if (foraEl) {
       if (!fora.length) {
         foraEl.innerHTML = "";
@@ -3226,55 +3550,34 @@ const OrcamentoDfcApp = {
     }
   },
 
+  // dfc_orcamento (+ _linhas) está no Supabase (window.DadosFinanceiro; as funções esperam o cliente ficar pronto).
+  // O nome firebasePronto ficou por compatibilidade.
   async firebasePronto() {
-    for (let i = 0; i < 40; i++) {
-      const fx = window.firebaseCollections;
-      if (window.firebaseDb && fx && typeof fx.setDoc === "function" && typeof fx.getDoc === "function") return true;
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    return false;
+    return !!window.DadosFinanceiro;
   },
 
   async salvarOrcamentoNuvem(pack, idDoc) {
     if (!pack) return;
     const pronto = await this.firebasePronto();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!pronto || !fx || !db) {
+    const D = window.DadosFinanceiro;
+    if (!pronto || !D) {
       this._nuvemOk = false;
       this._nuvemMsg = "";
-      this.erro = "Os valores estão nesta tela, mas o Firebase não estava disponível.";
+      this.erro = "Os valores estão nesta tela, mas a nuvem não estava disponível.";
       this.paintMeta();
       if (document.getElementById("orc-dfc-body")) this.paintBody();
       return;
     }
-    const texto = JSON.stringify(pack.lines || []);
     const id = idDoc || (pack.versao === "2" ? "2027_v2" : "2027_v1");
-    const LIM = 300000;
-    const ids = [];
+    const n = (pack.lines || []).length;
+    const savedAt = pack.savedAt || Date.now();
     try {
-      if (texto.length > LIM) {
-        for (let i = 0, n = 0; i < texto.length; i += LIM, n++) {
-          const pid = id + "__p" + n;
-          ids.push(pid);
-          await fx.setDoc(fx.doc(db, "dfc_orcamento", pid), { tipo: "parte", pai: id, texto: texto.slice(i, i + LIM) });
-        }
-      }
-      await fx.setDoc(fx.doc(db, "dfc_orcamento", id), {
-        fileName: pack.fileName || "",
-        savedAt: pack.savedAt || Date.now(),
-        year: 2027,
-        n: (pack.lines || []).length,
-        payload: ids.length ? "" : texto,
-        partes: ids
-      });
-      const snap = await fx.getDoc(fx.doc(db, "dfc_orcamento", id));
-      const gravado = this.docExiste(snap) ? (snap.data() || {}) : null;
-      if (!gravado || Number(gravado.n) !== (pack.lines || []).length || Number(gravado.savedAt) !== Number(pack.savedAt)) {
-        throw new Error("o Firebase não confirmou a gravação");
-      }
-      for (let n = ids.length; n < 20; n++) {
-        fx.deleteDoc(fx.doc(db, "dfc_orcamento", id + "__p" + n)).catch(function () {});
+      // RPC gravar_dfc_orcamento: troca o cabeçalho e as linhas numa transação (antes: setDoc do doc, das partes
+      // __pN e deleteDoc das sobras). Confere a quantidade gravada e relê o savedAt, como antes.
+      const gravadas = await D.gravarOrcamentoDfc(id, { fileName: pack.fileName || "", savedAt: savedAt, year: 2027, lines: pack.lines || [] });
+      const gravado = await D.lerOrcamentoDfc(id);
+      if (Number(gravadas) !== n || !gravado || Number(gravado.savedAt) !== Number(pack.savedAt)) {
+        throw new Error("a nuvem não confirmou a gravação");
       }
       this._nuvemOk = true;
       this._nuvemMsg = "";
@@ -3282,28 +3585,19 @@ const OrcamentoDfcApp = {
     } catch (e) {
       this._nuvemOk = false;
       this._nuvemMsg = "";
-      this.erro = "Não ficou salvo no Firebase: " + ((e && e.message) || "falha na gravação") + ".";
+      this.erro = "Não ficou salvo na nuvem: " + ((e && e.message) || "falha na gravação") + ".";
     }
     this.paintMeta();
     if (document.getElementById("orc-dfc-body")) this.paintBody();
   },
 
   async lerDocOrcamento(id) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDoc !== "function") return null;
-    const snap = await fx.getDoc(fx.doc(db, "dfc_orcamento", id));
-    if (!this.docExiste(snap)) return null;
-    const x = snap.data() || {};
-    let texto = x.payload || "";
-    if (Array.isArray(x.partes) && x.partes.length) {
-      const blocos = await Promise.all(x.partes.map(async (pid) => {
-        const p = await fx.getDoc(fx.doc(db, "dfc_orcamento", pid));
-        return this.docExiste(p) ? String((p.data() || {}).texto || "") : null;
-      }));
-      if (blocos.some((b) => b == null)) return null;
-      texto = blocos.join("");
-    }
+    const D = window.DadosFinanceiro;
+    if (!D) return null;
+    // Doc no formato atual: payload = texto JSON das linhas, partes = [].
+    const x = await D.lerOrcamentoDfc(id);
+    if (!x) return null;
+    const texto = x.payload || "";
     let lines = [];
     try { lines = JSON.parse(texto || "[]"); } catch (e) { return null; }
     if (!Array.isArray(lines) || !lines.length) return null;
@@ -3331,10 +3625,7 @@ const OrcamentoDfcApp = {
     if (v2doc) {
       this._v2 = this.copiarPack(v2doc, { versao: "2" });
       this.gravarChave(this.LS_V2, this._v2);
-      if (!this._versaoEscolhida) {
-        this.versao = "2";
-        this.varRs = true;
-      }
+      if (!this._versaoEscolhida) this.versao = "2";
     }
     this._nuvemOk = true;
     this._nuvemMsg = "";
@@ -3347,8 +3638,6 @@ const OrcamentoDfcApp = {
     if (!document.getElementById("orc-dfc-body")) return;
     const lead = document.getElementById("orc-dfc-lead");
     if (lead) lead.textContent = this.textoLead();
-    const varRs = document.getElementById("orc-dfc-var-rs");
-    if (varRs && this.varRs) varRs.checked = true;
     this.paintVersao();
     this.paintMeta();
     this.paintEmp();
@@ -3373,15 +3662,12 @@ const OrcamentoDfcApp = {
       this._custom = pack;
       this._ignorarNuvem = false;
       this._nuvemOk = false;
-      this._nuvemMsg = "Salvando a V2 no Firebase…";
-      this.varRs = true;
+      this._nuvemMsg = "Salvando a V2 na nuvem…";
       this.gravarChave(this.LS_V2, pack);
     } catch (err) {
       this.erro = (err && err.message) ? err.message : "Não consegui ler esse Excel.";
     }
     this.busy = false;
-    const varRs = document.getElementById("orc-dfc-var-rs");
-    if (varRs && this.varRs) varRs.checked = true;
     const base = document.getElementById("orc-dfc-base");
     if (base) base.hidden = !this._custom;
     this.paintMeta();
@@ -3614,10 +3900,10 @@ const OrcamentoDfcApp = {
 
   preencherDfc(ws, inv, opts) {
     const rows = opts.rows || [];
-    const corte = this._corte == null ? this.corteForecast() : this._corte;
+    const corte = this.inicioForecast();
     const meses = this.MESES;
     const colunas = ["Conta"];
-    meses.forEach((m, i) => colunas.push(m + "/26" + (i >= corte ? " prev" : "")));
+    meses.forEach((m, i) => colunas.push(m + "/26" + (i >= corte ? " forecast" : " realizado")));
     colunas.push("Total 2026");
     meses.forEach((m) => {
       colunas.push(m + "/27");

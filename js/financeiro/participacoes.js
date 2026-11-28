@@ -85,6 +85,14 @@ const ParticipacoesApp = {
     return this.crmCompanies().filter((c) => this.gestaoEllencoOn(c.id));
   },
 
+  /** Nome usual da empresa (cadastro de Empresas, campo nome_usual); vazio se não houver. */
+  nomeUsual(id) {
+    const map = this.empresasCustomMap();
+    const custom = map[id] || map[String(id)] || map[Number(id)] || null;
+    const usual = custom ? String(custom.nome_usual || "").trim() : "";
+    return usual && !/^nome usual$/i.test(usual) ? usual : "";
+  },
+
   crmCompany(id) {
     return this.crmCompanies().find((c) => String(c.id) === String(id)) || null;
   },
@@ -235,7 +243,8 @@ const ParticipacoesApp = {
   },
 
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseStorage && window.firebaseCollections);
+    // Arquivos no Supabase Storage (js/nucleo/storage-supabase.js, mesmas funções do Firebase Storage).
+    return !!(window.firebaseStorage && window.firebaseCollections && window.firebaseCollections.uploadBytes);
   },
 
   cloudDocId(companyId, closing) {
@@ -253,11 +262,12 @@ const ParticipacoesApp = {
     return { url, path };
   },
 
+  // Os períodos (participacoes_periods + _expenses) estão no Supabase (window.DadosFinanceiro); o PDF continua no
+  // Storage do Firebase (uploadPdfToFirebase). Os nomes *Firebase ficaram por compatibilidade com o resto da tela.
   async savePeriodToFirebase(rec, companyId) {
-    if (!this.fbReady() || !rec || !companyId) return false;
+    if (!window.DadosFinanceiro || !rec || !companyId) return false;
     const closing = this.periodKeyOfFile(rec);
     if (!closing) return false;
-    const { doc, setDoc, serverTimestamp } = window.firebaseCollections;
     const userName = (window.AppState && AppState.currentUser && AppState.currentUser.name) || "";
     const payload = {
       companyId: String(companyId),
@@ -269,21 +279,21 @@ const ParticipacoesApp = {
       pdfPath: rec.pdfPath || "",
       cacheVer: 9,
       updatedAt: Date.now(),
-      updatedBy: userName,
-      updatedAtServer: typeof serverTimestamp === "function" ? serverTimestamp() : null
+      updatedBy: userName
+      // updatedAtServer (serverTimestamp) saiu: atualizado_em vem do servidor.
     };
-    await setDoc(doc(window.firebaseDb, "participacoes_periods", this.cloudDocId(companyId, closing)), payload, { merge: true });
+    // RPC salvar_participacoes_period (merge; as despesas são trocadas numa transação).
+    payload.id = this.cloudDocId(companyId, closing);
+    await window.DadosFinanceiro.salvarPeriodoParticipacoes(payload);
     return true;
   },
 
   async loadPeriodsFromFirebase(companyId) {
-    if (!this.fbReady() || !companyId) return [];
-    const { collection, query, where, getDocs } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, "participacoes_periods"), where("companyId", "==", String(companyId)));
-    const snap = await getDocs(q);
+    if (!window.DadosFinanceiro || !companyId) return [];
+    const lista = await window.DadosFinanceiro.listarPeriodosParticipacoes(String(companyId));
     const out = [];
-    snap.forEach((d) => {
-      const data = d.data() || {};
+    lista.forEach((d) => {
+      const data = d || {};
       if (!data.closing && !data.fileName) return;
       out.push({
         name: data.fileName || `${data.closing}.pdf`,
@@ -336,7 +346,7 @@ const ParticipacoesApp = {
       });
       this.files.sort((a, b) => String(b.closing || "").localeCompare(String(a.closing || "")) || b.name.localeCompare(a.name));
     } catch (e) {
-      console.warn("[Participacoes] Firebase períodos:", e);
+      console.warn("[Participacoes] períodos na nuvem:", e);
     }
   },
 
@@ -1107,7 +1117,7 @@ const ParticipacoesApp = {
     const map = {};
     rows.forEach((r) => {
       const k = keyFn(r) || "(em branco)";
-      if (!map[k]) map[k] = { key: k, rows: [], total: 0, _labels: [] };
+      if (!map[k]) map[k] = { key: k, groupKey: k, rows: [], total: 0, _labels: [] };
       map[k].rows.push(r);
       map[k].total += Number(r.valor) || 0;
       map[k]._labels.push(r.credor);
@@ -1287,11 +1297,9 @@ const ParticipacoesApp = {
       if (parts.length >= 3) return `${parts[0].slice(0, 3)}/${parts[2]}`;
       return lab;
     };
-    const warn = (mx.saldoChecks || []).map((c) =>
-      `${this.periodLabel(c.periodo, c.periodo)}: lido ${this.fmt(c.got)} × Saldo Total PDF ${this.fmt(c.saldo)}`
-    ).join(" · ");
+    // A conferência com o "Saldo Total" do PDF não aparece mais na tela: o saldo acumulado do PDF não bate
+    // mês a mês com a soma lida e a faixa só atrapalhava a leitura da matriz.
     return `
-      ${warn ? `<div class="part-alert is-warn"><strong>Conferência Saldo Total:</strong> ${this.esc(warn)}</div>` : ""}
       <div class="part-matrix-wrap">
         <div id="part-matrix-scroll" class="part-matrix-scroll">
           <table class="part-matrix-table">
@@ -1390,9 +1398,6 @@ const ParticipacoesApp = {
               </table>
             ` : `<div style="padding:24px;text-align:center;color:#64748b;">Nenhum lançamento neste filtro.</div>`}
           </div>
-          <footer>
-            <button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.closeMatrixDetail()">Fechar</button>
-          </footer>
         </div>
       </div>
     `;
@@ -1427,8 +1432,11 @@ const ParticipacoesApp = {
     this.companyIds = next;
     this.companyId = next.length === 1 ? next[0] : "";
     this.fileName = "";
+    // Guarda o que já foi lido antes de trocar (o PDF aberto no navegador segue válido enquanto estiver guardado).
+    this.guardarEmpresasLidas();
+    const guardadas = this._empLidas || {};
     this.files.forEach((f) => {
-      if (f.objectUrl) {
+      if (f.objectUrl && !guardadas[String(f.companyId || "")]) {
         try { URL.revokeObjectURL(f.objectUrl); } catch (e) {}
       }
     });
@@ -1444,17 +1452,32 @@ const ParticipacoesApp = {
       return;
     }
     const gen = (this._empGen = (this._empGen || 0) + 1);
+    // Empresas já lidas nesta aba (há menos de 15 minutos) entram na hora, sem buscar de novo; só as outras vão
+    // ao Firebase e ao servidor. Antes, filtrar uma empresa depois de "Todos" recarregava tudo do zero.
+    const faltam = next.filter((cid) => !this.empresaLida(cid));
+    next.filter((cid) => this.empresaLida(cid)).forEach((cid) => {
+      this.files.push(...this._empLidas[cid].files);
+    });
+    this.ordenarArquivos();
+    if (!faltam.length) {
+      this.loading = false;
+      this.parsing = false;
+      this.uploadProgress = "";
+      this.pararCarga();
+      this.render();
+      return;
+    }
     this.loading = true;
-    this.uploadProgress = next.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
+    this.uploadProgress = faltam.length > 1 ? "Buscando os períodos das empresas…" : "Buscando os períodos…";
     this._cargaPct = 18;
     this.render();
     this.iniciarCarga();
-    for (let i = 0; i < next.length; i++) {
+    for (let i = 0; i < faltam.length; i++) {
       if (gen !== this._empGen) return;
-      this.restoreCacheForCompany(next[i]);
-      await this.mergeCloudPeriods(next[i]);
-      await this.loadFilesFromServer(next[i]);
-      this._cargaPct = 18 + Math.round(40 * ((i + 1) / next.length));
+      this.restoreCacheForCompany(faltam[i]);
+      await this.mergeCloudPeriods(faltam[i]);
+      await this.loadFilesFromServer(faltam[i]);
+      this._cargaPct = 18 + Math.round(40 * ((i + 1) / faltam.length));
     }
     if (gen !== this._empGen) return;
     this.loading = false;
@@ -1468,7 +1491,43 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    this.guardarEmpresasLidas();
     this.render();
+  },
+
+  /* Empresas já lidas nesta aba: { [companyId]: { files, em } }. Vale 15 minutos; envio de PDF regrava. */
+  EMP_LIDAS_MS: 15 * 60 * 1000,
+
+  empresaLida(cid) {
+    const x = this._empLidas && this._empLidas[String(cid)];
+    return !!(x && Date.now() - x.em < this.EMP_LIDAS_MS && x.files.length);
+  },
+
+  /** Guarda os períodos já lidos (todos com despesas) de cada empresa na tela. */
+  guardarEmpresasLidas() {
+    if (!this._empLidas) this._empLidas = {};
+    if (this.loading || this.parsing) return;
+    const porEmp = {};
+    (this.files || []).forEach((f) => {
+      const cid = String((f && f.companyId) || "");
+      if (!cid) return;
+      (porEmp[cid] = porEmp[cid] || []).push(f);
+    });
+    Object.keys(porEmp).forEach((cid) => {
+      const lista = porEmp[cid];
+      if (!lista.every((f) => Array.isArray(f.expenses))) return;
+      const atual = this._empLidas[cid];
+      // Mesma lista já guardada: mantém a hora da leitura (não renova o prazo só por trocar o filtro).
+      if (atual && atual.files.length === lista.length) {
+        const ja = new Set(atual.files);
+        if (lista.every((f) => ja.has(f))) return;
+      }
+      this._empLidas[cid] = { files: lista, em: Date.now() };
+    });
+  },
+
+  ordenarArquivos() {
+    this.files.sort((a, b) => String(b.closing || "").localeCompare(String(a.closing || "")) || String(b.name || "").localeCompare(String(a.name || "")));
   },
 
   async onFile(key) {
@@ -1588,15 +1647,15 @@ const ParticipacoesApp = {
         rec.fromUpload = true;
 
         this.cloudSyncing = true;
-        this.setCarga("Salvando no Firebase…", 70 + (i / picked.length) * 18);
+        this.setCarga("Salvando na nuvem…", 70 + (i / picked.length) * 18);
         try {
           const up = await this.uploadPdfToFirebase(file, this.companyId, closing || "sem-periodo");
           rec.pdfUrl = up.url || "";
           rec.pdfPath = up.path || "";
           await this.savePeriodToFirebase(rec, this.companyId);
         } catch (cloudErr) {
-          console.warn("[Participacoes] Falha ao salvar no Firebase:", cloudErr);
-          this.hint = "Dados lidos neste navegador; falhou o envio ao Firebase: " + (cloudErr && cloudErr.message ? cloudErr.message : cloudErr);
+          console.warn("[Participacoes] Falha ao salvar na nuvem:", cloudErr);
+          this.hint = "Dados lidos neste navegador; falhou o envio à nuvem: " + (cloudErr && cloudErr.message ? cloudErr.message : cloudErr);
         }
         this.cloudSyncing = false;
         this.persistCache(rec);
@@ -1613,6 +1672,10 @@ const ParticipacoesApp = {
     this.parsing = false;
     this.uploadProgress = "";
     this.pararCarga();
+    // PDF novo: a empresa deixa de valer como "já lida" e é guardada de novo com o período enviado
+    // (se algum período ainda não foi lido, a próxima troca de filtro busca de novo).
+    if (this._empLidas) delete this._empLidas[String(this.companyId || "")];
+    this.guardarEmpresasLidas();
     if (input) input.value = "";
     this.render();
   },
@@ -1758,12 +1821,12 @@ const ParticipacoesApp = {
         };
     ws.properties.showGridLines = false;
     ws.columns = [
-      { width: 12 }, { width: 14 }, { width: 36 }, { width: 48 }, { width: 22 }, { width: 14 }, { width: 10 }
+      { width: 12 }, { width: 14 }, { width: 36 }, { width: 48 }, { width: 22 }, { width: 32 }, { width: 14 }, { width: 10 }
     ];
     ws.getCell("A1").value = `Lançamentos — ${companyLabel}`;
     paint(ws.getCell("A1"), { font: { bold: true, size: 12 }, fill: "FFFFFFFF" });
-    ws.mergeCells("A1:G1");
-    const heads = ["Data", "Período", "Credor", "Detalhe", "Categoria", "Valor", "Doc"];
+    ws.mergeCells("A1:H1");
+    const heads = ["Data", "Período", "Credor", "Detalhe", "Categoria Ellenco", "Categoria Moura Leite", "Valor", "Doc"];
     const head = ws.getRow(3);
     heads.forEach((h, i) => {
       const cell = head.getCell(i + 1);
@@ -1781,13 +1844,14 @@ const ParticipacoesApp = {
       row.getCell(3).value = r.credor || "";
       row.getCell(4).value = r.detalhe || "";
       row.getCell(5).value = r.categoria || "";
-      row.getCell(6).value = Number(r.valor) || 0;
-      row.getCell(7).value = r.doc || "";
-      for (let c = 1; c <= 7; c++) {
+      row.getCell(6).value = this.catMlDaLinha(r);
+      row.getCell(7).value = Number(r.valor) || 0;
+      row.getCell(8).value = r.doc || "";
+      for (let c = 1; c <= 8; c++) {
         paint(row.getCell(c), {
           border: true,
-          align: { horizontal: c === 6 ? "right" : "left", wrapText: c === 4 },
-          numFmt: c === 6 ? "#,##0.00" : undefined
+          align: { horizontal: c === 7 ? "right" : "left", wrapText: c === 4 },
+          numFmt: c === 7 ? "#,##0.00" : undefined
         });
       }
     });
@@ -2184,11 +2248,15 @@ const ParticipacoesApp = {
 
     const views = [
       { id: "matriz", label: "Matriz", icon: "table" },
-      { id: "periodo", label: "Por período", icon: "calendar" },
       { id: "credor", label: "Por credor", icon: "building-2" },
       { id: "categoria", label: "Por categoria", icon: "tags" },
-      { id: "data", label: "Por data", icon: "clock" }
+      { id: "socio", label: "Painel do sócio", icon: "briefcase" }
     ];
+    if (["matriz", "credor", "categoria", "socio"].indexOf(this.groupBy) < 0) this.groupBy = "matriz";
+    if (!this.painel) this.carregarPainel();
+    if (!this.catMl) this.carregarCatMl();
+    const gruposCred = this.groupBy === "credor" ? this.filtrarCredPorCat(groups) : groups;
+    this._gruposVisiveis = this.groupBy === "credor" ? gruposCred : [];
     const isMatriz = this.groupBy === "matriz";
     const mxInfo = temEmpresa && isMatriz ? this.matrixData() : null;
     const credCount = mxInfo ? mxInfo.creditors.length : 0;
@@ -2254,7 +2322,7 @@ const ParticipacoesApp = {
           <div class="ml-tabs part-tabs" role="tablist">
             ${views.map((v) => `
               <button type="button" role="tab" aria-selected="${this.groupBy === v.id}" class="ml-tab ${this.groupBy === v.id ? "is-active" : ""}"
-                onclick="ParticipacoesApp.groupBy='${v.id}';ParticipacoesApp.detail=null;ParticipacoesApp.render()"><i data-lucide="${v.icon}"></i> ${v.label}</button>
+                onclick="ParticipacoesApp.groupBy='${v.id}';ParticipacoesApp.detail=null;ParticipacoesApp.catDetalhe=null;ParticipacoesApp.render()"><i data-lucide="${v.icon}"></i> ${v.label}</button>
             `).join("")}
           </div>
           ${!ocupado && !this.files.length ? `<div class="part-empty">Nenhum PDF ainda. Use <strong>Enviar PDFs</strong>.</div>` : ""}
@@ -2262,46 +2330,1191 @@ const ParticipacoesApp = {
 
         ${ocupado ? this.cargaHtml() : ""}
         ${!ocupado && temEmpresa && this.groupBy === "matriz" ? this.matrixHtml() : ""}
-        ${!ocupado && temEmpresa && this.groupBy !== "matriz" && groups.length ? `
+        ${!ocupado && temEmpresa && this.groupBy === "credor" && groups.length ? `
+          ${this.catEstilosHtml()}
+          <style>
+            .part-credor-row{cursor:pointer;}
+            .part-credor-row td:first-child{white-space:nowrap;}
+            .part-credor-seta{display:inline-flex;vertical-align:middle;margin-right:4px;color:#105436;}
+            .part-catml-btn{display:inline-flex;align-items:center;gap:4px;max-width:100%;height:24px;padding:0 8px;border:1px dashed #94a3b8;border-radius:6px;background:#fff;color:#475569;font-size:.7rem;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            .part-catml-btn.is-set{border-style:solid;border-color:#1b8253;background:#f0fdf4;color:#105436;}
+            .part-credor-acoes{display:flex;gap:8px;margin:0 0 8px;}
+            .part-credor-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;}
+          </style>
+          <div class="part-cat-filtros">
+            <div id="part-cred-f-cats-box"></div>
+            ${this.credFiltroCats.length ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltroCred()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtro</button>` : ""}
+          </div>
+          <p class="part-cat-info">${gruposCred.length} de ${groups.length} credor(es) · <strong>${this.fmt(gruposCred.reduce((t, g) => t + g.total, 0))}</strong>${this.credFiltroCats.length ? "" : ` · ${groups.filter((g) => !this.catMlDe(g.groupKey)).length} sem categoria`}</p>
           <div class="cc-scroll part-groups" id="part-groups-scroll">
             <table class="cc-table part-expense-table">
               <colgroup>
-                <col style="width:88px">
-                ${this.groupBy === "periodo" ? "" : `<col style="width:120px">`}
-                <col style="width:26%"><col><col style="width:18%"><col style="width:120px">
+                <col style="width:88px"><col style="width:120px">
+                <col style="width:22%"><col><col style="width:14%"><col style="width:17%"><col style="width:120px">
               </colgroup>
               <thead>
                 <tr>
-                  <th>Data</th>
-                  ${this.groupBy === "periodo" ? "" : `<th>Período</th>`}
-                  <th>Credor</th><th>Detalhe</th><th>Categoria</th><th class="is-right">Valor</th>
+                  <th>Data</th><th>Período</th><th>Credor</th><th>Detalhe</th><th>Categoria Ellenco</th><th>Categoria Moura Leite</th><th class="is-right">Valor</th>
                 </tr>
               </thead>
-              ${groups.map((g) => `
+              ${gruposCred.length ? "" : `<tbody><tr><td colspan="7" style="text-align:center;padding:30px;">Nenhum credor com essa categoria.</td></tr></tbody>`}
+              ${gruposCred.map((g, gi) => {
+                const aberto = !!this.credorAberto[g.groupKey];
+                const cat = this.catMlDe(g.groupKey);
+                const rotCat = this.rotuloCatMl(cat);
+                return `
                 <tbody>
-                  <tr class="part-group-row">
-                    <td colspan="${this.groupBy === "periodo" ? 4 : 5}">${this.esc(cap(g.key))} <span>${g.rows.length} lançamento(s)</span></td>
+                  <tr class="part-group-row part-credor-row" onclick="ParticipacoesApp.alternarCredor(${gi})" title="${aberto ? "Fechar" : "Abrir"} os lançamentos">
+                    <td colspan="5"><span class="part-credor-seta"><i data-lucide="${aberto ? "chevron-down" : "chevron-right"}" style="width:14px;height:14px;"></i></span>${this.esc(cap(g.key))} <span>${g.rows.length} lançamento(s)</span></td>
+                    <td><button type="button" class="part-catml-btn${cat ? " is-set" : ""}" title="${this.esc(rotCat || "Escolher a categoria Moura Leite deste credor")}" onclick="ParticipacoesApp.escolherCatMl(${gi}, event)">${cat ? this.esc(rotCat) : `<i data-lucide="plus" style="width:12px;height:12px;"></i> Escolher`}</button></td>
                     <td class="is-right">${this.fmt(g.total)}</td>
                   </tr>
-                  ${g.rows.map((r) => `<tr>
+                  ${aberto ? g.rows.map((r) => `<tr>
                     <td>${this.esc(r.date)}</td>
-                    ${this.groupBy === "periodo" ? "" : `<td>${this.esc(cap(this.periodLabel(r.periodo, "—")))}</td>`}
+                    <td>${this.esc(cap(this.periodLabel(r.periodo, "—")))}</td>
                     <td title="${this.esc(r.credor)}">${this.esc(r.credor)}</td>
                     <td title="${this.esc(r.detalhe || "")}">${this.esc(r.detalhe || "—")}</td>
                     <td title="${this.esc(r.categoria)}">${this.esc(r.categoria)}</td>
+                    <td title="${this.esc(rotCat)}">${this.esc(rotCat || "—")}</td>
                     <td class="is-right part-valor">${r.valor ? this.fmt(r.valor) : "—"}</td>
-                  </tr>`).join("")}
-                </tbody>
-              `).join("")}
+                  </tr>`).join("") : ""}
+                </tbody>`;
+              }).join("")}
             </table>
           </div>` : ""}
-        ${!ocupado && temEmpresa && this.files.length && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
+        ${!ocupado && temEmpresa && this.groupBy === "categoria" && this.files.length ? this.categoriaHtml() : ""}
+        ${!ocupado && temEmpresa && this.groupBy === "socio" && this.files.length ? this.painelHtml() : ""}
+        ${!ocupado && temEmpresa && this.files.length && this.groupBy !== "categoria" && this.groupBy !== "socio" && !(this.groupBy === "matriz" ? this.matrixData().creditors.length : groups.length) ? `<div class="part-empty">Nenhuma linha do quadro <strong>DESPESAS PAGAS</strong> identificada neste filtro.</div>` : ""}
         ${this.detailModalHtml()}
+        ${this.groupBy === "categoria" || this.groupBy === "socio" ? this.catDetalheHtml() : ""}
       </div>
     `;
     this.paintCompany();
+    if (this.groupBy === "categoria") this.pintarFiltrosCategoria();
+    if (this.groupBy === "credor") this.pintarFiltroCred(groups);
     if (window.lucide) lucide.createIcons();
     this.restoreScroll(scroll);
+  },
+
+  /* ---------- Categoria Moura Leite por credor ----------
+     O operador escolhe, na linha do credor, um grupo de despesa do plano financeiro:
+     só contas de nível 3 que começam com 2 (ex.: 2.01.01 - TERRENOS).
+     Cada credor tem o seu registro no Supabase, na tabela participacoes_credores. */
+  CAT_ML_COL: "participacoes_credores",
+  CAT_ML_LOCAL: "crm_part_categoria_ml_v2",
+  catMl: null,
+  credorAberto: {},
+
+  /** Id do registro do credor (a chave do credor pode ter "/"; o id segue o formato antigo do Firebase). */
+  catMlDocId(credorKey) {
+    return encodeURIComponent(String(credorKey || "")).slice(0, 700) || "sem-credor";
+  },
+
+  async carregarCatMl() {
+    if (this.catMl || this._catMlCarregando) return;
+    this._catMlCarregando = true;
+    let mapa = null;
+    try { mapa = JSON.parse(localStorage.getItem(this.CAT_ML_LOCAL) || "null"); } catch (e) { mapa = null; }
+    this.catMl = mapa && typeof mapa === "object" ? mapa : {};
+    try {
+      if (window.DadosFinanceiro) {
+        const lista = await window.DadosFinanceiro.tabela(this.CAT_ML_COL).listar();
+        const remoto = {};
+        lista.forEach((d) => {
+          const v = d || {};
+          if (v.credorKey && v.categoriaMl && v.categoriaMl.id) remoto[v.credorKey] = Object.assign({}, v.categoriaMl, { por: v.por || "", em: v.em || "" });
+        });
+        this.catMl = remoto;
+        try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] categoria Moura Leite", e);
+    }
+    this._catMlCarregando = false;
+    if (this.groupBy === "credor" || this.groupBy === "categoria") this.render();
+  },
+
+  /** Código do plano no formato 2.01.01. O Sienge devolve sem ponto (20101): 1 dígito e depois pares. */
+  codigoPlano(raw) {
+    const t = String(raw == null ? "" : raw).trim().replace(/^\.+|\.+$/g, "");
+    if (!t || t.indexOf(".") >= 0 || !/^\d+$/.test(t)) return t;
+    const pares = t.slice(1).match(/.{1,2}/g) || [];
+    return [t[0]].concat(pares).join(".");
+  },
+
+  /** Contas do plano financeiro de nível 3 que começam com 2, com o grupo de nível 2 de cada uma. */
+  async carregarGruposMl() {
+    if (this.gruposMl && this.gruposMl.length) return this.gruposMl;
+    if (this._gruposPromessa) return this._gruposPromessa;
+    this._gruposPromessa = (async () => {
+      let cats = (window.PlanoFinanceiroApp && Array.isArray(PlanoFinanceiroApp.categories) && PlanoFinanceiroApp.categories.length) ? PlanoFinanceiroApp.categories : [];
+      try {
+        if (!cats.length && window.SiengeApiService && typeof SiengeApiService.getPaymentCategories === "function") {
+          cats = await SiengeApiService.getPaymentCategories() || [];
+        }
+      } catch (e) {
+        console.warn("[Prestação Ellenco] plano financeiro", e);
+        cats = [];
+      }
+      const nome = (c) => String((c && (c.name || c.description || c.financialCategoryName)) || "").trim().toUpperCase();
+      const pais = {};
+      (cats || []).forEach((c) => {
+        const cod = this.codigoPlano(c && c.id);
+        if (cod.split(".").length === 2 && cod.indexOf("2.") === 0) pais[cod] = nome(c);
+      });
+      const vistos = new Set();
+      const lista = (cats || []).map((c) => {
+        const id = this.codigoPlano(c && c.id);
+        const partes = id.split(".");
+        if (partes.length !== 3 || partes[0] !== "2" || vistos.has(id)) return null;
+        vistos.add(id);
+        const pai = partes[0] + "." + partes[1];
+        return { id, siengeId: String(c.id), label: nome(c), grupo: pai, grupoNome: pais[pai] || "" };
+      }).filter(Boolean).sort((a, b) => a.id.localeCompare(b.id, "pt-BR", { numeric: true }));
+      this.gruposMl = lista;
+      this._gruposPromessa = null;
+      return lista;
+    })();
+    return this._gruposPromessa;
+  },
+
+  /** Categoria gravada para a chave do credor (a mesma chave que agrupa o credor na tela). */
+  catMlDe(credorKey) {
+    const v = this.catMl && this.catMl[String(credorKey || "")];
+    return v && v.id ? v : null;
+  },
+
+  catMlDaLinha(r) {
+    return this.rotuloCatMl(this.catMlDe(this.credorGroupKey((r && r.credor) || "") || (r && r.credor)));
+  },
+
+  rotuloCatMl(v) {
+    return v ? v.id + " - " + v.label : "";
+  },
+
+  /** Grava (ou apaga) a categoria no registro do credor no Supabase e confere lendo de volta. Devolve true se ficou gravado. */
+  async gravarCatMl(credorKey, item, credorNome) {
+    if (!window.DadosFinanceiro) {
+      alert("O banco do Integra não está disponível agora. A categoria não foi gravada.");
+      return false;
+    }
+    const quem = (window.AppState && AppState.currentUser) || {};
+    const tab = window.DadosFinanceiro.tabela(this.CAT_ML_COL);
+    const ref = this.catMlDocId(credorKey);
+    const agora = new Date().toISOString();
+    try {
+      if (item) {
+        await tab.gravar(ref, {
+          credorKey: String(credorKey),
+          credor: String(credorNome || credorKey),
+          categoriaMl: { id: item.id, siengeId: item.siengeId || "", label: item.label },
+          por: String(quem.name || quem.email || ""),
+          em: agora
+        }, { merge: true });
+      } else {
+        await tab.excluir(ref);
+      }
+      const v = await tab.obter(ref);
+      const existe = !!v;
+      const ok = item ? !!(v && v.categoriaMl && v.categoriaMl.id === item.id) : !existe;
+      if (!ok) throw new Error("a leitura de conferência não trouxe o que foi gravado");
+    } catch (e) {
+      console.warn("[Prestação Ellenco] gravar categoria Moura Leite", e);
+      alert("Não foi possível gravar a categoria no banco do Integra (" + ((e && e.message) || e) + "). Tente de novo.");
+      return false;
+    }
+    if (!this.catMl) this.catMl = {};
+    if (item) this.catMl[credorKey] = { id: item.id, siengeId: item.siengeId || "", label: item.label, por: String(quem.name || quem.email || ""), em: agora };
+    else delete this.catMl[credorKey];
+    try { localStorage.setItem(this.CAT_ML_LOCAL, JSON.stringify(this.catMl)); } catch (e) {}
+    return true;
+  },
+
+  /* ---------- Aba "Por credor": filtro rápido pela Categoria Moura Leite ----------
+     Mesmo filtro da aba Por categoria, com "(Sem categoria)" para achar os credores que ainda falta classificar. */
+  credFiltroCats: [],
+  credFiltroAberto: false,
+  credFiltroBusca: "",
+
+  catIdDoGrupo(g) {
+    const cat = this.catMlDe(g && g.groupKey);
+    return cat ? cat.id : this.CAT_SEM;
+  },
+
+  filtrarCredPorCat(groups) {
+    const sel = this.credFiltroCats || [];
+    if (!sel.length) return groups;
+    return (groups || []).filter((g) => sel.indexOf(this.catIdDoGrupo(g)) >= 0);
+  },
+
+  pintarFiltroCred(groups) {
+    const box = document.getElementById("part-cred-f-cats-box");
+    if (!box || !window.MlEmpresaFilter) return;
+    const cont = {};
+    (groups || []).forEach((g) => {
+      const id = this.catIdDoGrupo(g);
+      if (!cont[id]) cont[id] = { id, n: 0, label: id === this.CAT_SEM ? "(Sem categoria)" : this.rotuloCatMl(this.catMlDe(g.groupKey)), order: id === this.CAT_SEM ? 0 : 1 };
+      cont[id].n += 1;
+    });
+    (this.credFiltroCats || []).forEach((id) => {
+      if (!cont[id]) cont[id] = { id, n: 0, label: id === this.CAT_SEM ? "(Sem categoria)" : id, order: id === this.CAT_SEM ? 0 : 1 };
+    });
+    const itens = Object.values(cont)
+      .sort((a, b) => a.order - b.order || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }))
+      .map((c) => ({ id: c.id, label: `${c.label} · ${c.n} credor(es)` }));
+    const id = "part-cred-f-cats";
+    const opts = {
+      id, label: "Categoria Moura Leite", items: itens, keepOrder: true, selectedIds: this.credFiltroCats,
+      open: this.credFiltroAberto, query: this.credFiltroBusca, emptyMeansAll: true,
+      nouns: { singular: "categoria", plural: "categorias", none: "Nenhuma categoria", noMatch: "Nenhuma categoria com esse nome." }
+    };
+    box.innerHTML = MlEmpresaFilter.html(opts);
+    MlEmpresaFilter.bind(id, {
+      toggleOpen: () => { this.credFiltroAberto = !this.credFiltroAberto; this.render(); },
+      close: () => { if (this.credFiltroAberto) { this.credFiltroAberto = false; this.render(); } },
+      setQuery: (q) => {
+        this.credFiltroBusca = q || "";
+        const list = document.getElementById(id + "-list");
+        if (list) list.innerHTML = MlEmpresaFilter.listHtml(Object.assign({}, opts, { query: this.credFiltroBusca, selectedIds: this.credFiltroCats }));
+      },
+      toggleId: (cid, on) => {
+        const atual = new Set(this.credFiltroCats);
+        if (on) atual.add(String(cid)); else atual.delete(String(cid));
+        this.credFiltroCats = Array.from(atual);
+        this.credFiltroAberto = true;
+        this.render();
+      },
+      selectAll: () => { this.credFiltroCats = itens.map((i) => String(i.id)); this.credFiltroAberto = true; this.render(); },
+      selectNone: () => { this.credFiltroCats = []; this.credFiltroAberto = true; this.render(); }
+    });
+    if (window.lucide) lucide.createIcons();
+  },
+
+  limparFiltroCred() {
+    this.credFiltroCats = [];
+    this.credFiltroBusca = "";
+    this.credFiltroAberto = false;
+    this.render();
+  },
+
+  /* ---------- Aba "Por categoria" ----------
+     Filtra os lançamentos pela Categoria Moura Leite do credor (várias de uma vez), por credor e por empresa (SPE).
+     Linhas: o credor e, embaixo dele, uma linha por SPE onde o gasto foi feito. Colunas: um mês cada e o total.
+     Clique no credor: meses x SPEs. Clique na SPE: lançamentos só daquela SPE. Clique na célula: só aquela célula. */
+  catFiltro: { cats: [], credores: [], empresas: [] },
+  catFiltroAberto: "",
+  catFiltroBusca: { cats: "", credores: "", empresas: "" },
+  catDetalhe: null, // { tipo: "credor" | "spe" | "celula", k, emp, m }
+  CAT_SEM: "__sem",
+
+  /** Lançamentos com mês válido, já com a chave do credor e a categoria Moura Leite. */
+  catLinhasBase() {
+    return this.filtered().map((r) => {
+      const m = this.expensePeriodKey(r);
+      if (!m || !/^\d{4}-\d{2}$/.test(m)) return null;
+      const k = this.credorGroupKey(r.credor) || r.credor || "(sem credor)";
+      const cat = this.catMlDe(k);
+      return { r, m, k, emp: String(r.companyId || ""), catId: cat ? cat.id : this.CAT_SEM, catRot: cat ? this.rotuloCatMl(cat) : "" };
+    }).filter(Boolean);
+  },
+
+  catPassa(x, ignorar) {
+    const f = this.catFiltro;
+    if (ignorar !== "cats" && f.cats.length && f.cats.indexOf(x.catId) < 0) return false;
+    if (ignorar !== "credores" && f.credores.length && f.credores.indexOf(x.k) < 0) return false;
+    if (ignorar !== "empresas" && f.empresas.length && f.empresas.indexOf(x.emp) < 0) return false;
+    return true;
+  },
+
+  catDados() {
+    const base = this.catLinhasBase();
+    return this.agregarCat(base, base.filter((x) => this.catPassa(x)));
+  },
+
+  /** Soma por credor, mês e SPE (usado em Por categoria e no Painel do sócio). */
+  agregarCat(base, linhas) {
+    const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
+    const mapa = {};
+    linhas.forEach((x) => {
+      const v = Number(x.r.valor) || 0;
+      if (!mapa[x.k]) mapa[x.k] = { k: x.k, nomes: [], catRot: x.catRot, cells: {}, total: 0, spes: {} };
+      const c = mapa[x.k];
+      c.nomes.push(x.r.credor);
+      c.cells[x.m] = (c.cells[x.m] || 0) + v;
+      c.total += v;
+      if (!c.spes[x.emp]) c.spes[x.emp] = { emp: x.emp, cells: {}, total: 0 };
+      c.spes[x.emp].cells[x.m] = (c.spes[x.emp].cells[x.m] || 0) + v;
+      c.spes[x.emp].total += v;
+    });
+    const credores = Object.values(mapa).map((c) => Object.assign(c, {
+      credor: this.pickCredorLabel(c.nomes) || c.k,
+      spes: Object.values(c.spes).sort((a, b) => b.total - a.total)
+    })).sort((a, b) => b.total - a.total || a.credor.localeCompare(b.credor, "pt-BR"));
+    const totMes = {};
+    meses.forEach((m) => { totMes[m] = credores.reduce((s, c) => s + (c.cells[m] || 0), 0); });
+    return { base, linhas, meses, credores, totMes, total: credores.reduce((s, c) => s + c.total, 0) };
+  },
+
+  mesCurto(ym) {
+    const p = String(this.periodLabel(ym, ym)).split(" ");
+    return p.length >= 3 ? p[0].slice(0, 3) + "/" + p[2] : ym;
+  },
+
+  rotuloEmpresa(id) {
+    return String(id || "—") + " - " + String(this.companyLabel(id) || "").toUpperCase();
+  },
+
+  /** Itens de cada filtro: os que existem nos lançamentos que passam nos outros dois filtros. */
+  catItensFiltro(qual, base) {
+    const vistos = {};
+    base.filter((x) => this.catPassa(x, qual)).forEach((x) => {
+      if (qual === "cats") {
+        if (!vistos[x.catId]) vistos[x.catId] = { id: x.catId, label: x.catId === this.CAT_SEM ? "(Sem categoria)" : x.catRot, order: x.catId === this.CAT_SEM ? 0 : 1 };
+      } else if (qual === "credores") {
+        if (!vistos[x.k]) vistos[x.k] = { id: x.k, nomes: [], total: 0 };
+        vistos[x.k].nomes.push(x.r.credor);
+        vistos[x.k].total += Number(x.r.valor) || 0;
+      } else if (!vistos[x.emp]) {
+        vistos[x.emp] = { id: x.emp, label: this.rotuloEmpresa(x.emp) };
+      }
+    });
+    let itens = Object.values(vistos);
+    if (qual === "cats") itens.sort((a, b) => a.order - b.order || String(a.id).localeCompare(String(b.id), "pt-BR", { numeric: true }));
+    if (qual === "credores") itens = itens.sort((a, b) => b.total - a.total).map((c) => ({ id: c.id, label: this.pickCredorLabel(c.nomes) || c.id }));
+    // Mantém marcado o que já está no filtro, mesmo que não apareça mais com os outros filtros.
+    (this.catFiltro[qual] || []).forEach((id) => {
+      if (!itens.some((i) => i.id === id)) itens.push({ id, label: qual === "empresas" ? this.rotuloEmpresa(id) : (id === this.CAT_SEM ? "(Sem categoria)" : id) });
+    });
+    return itens;
+  },
+
+  pintarFiltrosCategoria() {
+    // Empresa (SPE) não tem filtro próprio aqui: vale o filtro Empresas do topo da página.
+    this.catFiltro.empresas = [];
+    if (!window.MlEmpresaFilter) return;
+    const base = this.catLinhasBase();
+    const conf = [
+      { qual: "cats", id: "part-cat-f-cats", label: "Categoria Moura Leite", nouns: { singular: "categoria", plural: "categorias", none: "Nenhuma categoria", noMatch: "Nenhuma categoria com esse nome." } },
+      { qual: "credores", id: "part-cat-f-credores", label: "Credor", nouns: { singular: "credor", plural: "credores", none: "Nenhum credor", noMatch: "Nenhum credor com esse nome." } }
+    ];
+    conf.forEach((c) => {
+      const box = document.getElementById(c.id + "-box");
+      if (!box) return;
+      const itens = this.catItensFiltro(c.qual, base);
+      const opts = {
+        id: c.id, label: c.label, items: itens, keepOrder: true, selectedIds: this.catFiltro[c.qual],
+        open: this.catFiltroAberto === c.qual, query: this.catFiltroBusca[c.qual], emptyMeansAll: true, nouns: c.nouns
+      };
+      box.innerHTML = MlEmpresaFilter.html(opts);
+      MlEmpresaFilter.bind(c.id, {
+        toggleOpen: () => { this.catFiltroAberto = this.catFiltroAberto === c.qual ? "" : c.qual; this.render(); },
+        close: () => { if (this.catFiltroAberto === c.qual) { this.catFiltroAberto = ""; this.render(); } },
+        setQuery: (q) => {
+          this.catFiltroBusca[c.qual] = q || "";
+          const list = document.getElementById(c.id + "-list");
+          if (list) list.innerHTML = MlEmpresaFilter.listHtml(Object.assign({}, opts, { query: this.catFiltroBusca[c.qual], selectedIds: this.catFiltro[c.qual] }));
+        },
+        toggleId: (id, on) => {
+          const atual = new Set(this.catFiltro[c.qual]);
+          if (on) atual.add(String(id)); else atual.delete(String(id));
+          this.catFiltro[c.qual] = Array.from(atual);
+          this.catFiltroAberto = c.qual;
+          this.render();
+        },
+        selectAll: () => { this.catFiltro[c.qual] = itens.map((i) => String(i.id)); this.catFiltroAberto = c.qual; this.render(); },
+        selectNone: () => { this.catFiltro[c.qual] = []; this.catFiltroAberto = c.qual; this.render(); }
+      });
+    });
+    if (window.lucide) lucide.createIcons();
+  },
+
+  limparFiltrosCategoria() {
+    this.catFiltro = { cats: [], credores: [], empresas: [] };
+    this.catFiltroBusca = { cats: "", credores: "", empresas: "" };
+    this.catFiltroAberto = "";
+    this.render();
+  },
+
+  /** Estilos da aba Por categoria, usados também no Painel do sócio (nomes e valores clicáveis, tabela, filtros). */
+  catEstilosHtml() {
+    return `      <style>
+        .part-cat-filtros{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 10px;}
+        .part-cat-filtros > div{min-width:240px;}
+        .part-cat-filtros .btn{height:40px;display:inline-flex;align-items:center;gap:6px;box-sizing:border-box;}
+        .part-cat-info{font-size:.75rem;color:#64748b;margin:0 0 8px;}
+        .part-cat-tabela{table-layout:fixed;}
+        .part-cat-tabela th, .part-cat-tabela td{white-space:nowrap;padding:4px 5px;}
+        .part-cat-tabela th:not(.part-cat-fixa), .part-cat-tabela td:not(.part-cat-fixa){overflow:visible;text-overflow:clip;}
+        .part-cat-tabela .part-cat-fixa{position:sticky;left:0;z-index:1;background:inherit;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-tabela thead .part-cat-fixa{z-index:3;background:#1b8253;}
+        .part-cat-tabela tbody tr.part-cat-credor td{background:#e7f6ee;color:#105436;font-weight:700;border-top:2px solid #c9e8d6;}
+        .part-cat-tabela tbody tr.part-cat-spe td{background:#fff;}
+        .part-cat-tabela tbody tr.part-cat-spe:hover td{background:#f7faf8;}
+        .part-cat-tabela tfoot td{position:sticky;bottom:0;z-index:2;background:#105436;color:#fff;font-weight:700;padding:6px 5px;}
+        .part-cat-tabela tfoot td.part-cat-fixa{z-index:4;background:#105436;}
+        .part-cat-nome,.part-cat-nome-spe,.part-cat-val{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:inherit;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+        .part-cat-nome{font-weight:800;display:block;}
+        .part-cat-linha-credor{display:flex;align-items:center;gap:6px;min-width:0;}
+        .part-cat-nome-box{min-width:0;flex:1 1 auto;overflow:hidden;}
+        .part-cat-flag{flex:0 0 auto;width:15px;height:15px;margin:0;accent-color:#1b8253;cursor:pointer;}
+        .part-cat-nome:hover,.part-cat-nome-spe:hover,.part-cat-val:hover{text-decoration:underline;color:#0f3d27;}
+        .part-cat-credor small{display:block;font-size:.62rem;font-weight:600;color:#3f7a5a;overflow:hidden;text-overflow:ellipsis;}
+        .part-cat-nome-spe{padding-left:18px;color:#334155;}
+        .part-cat-val{font-variant-numeric:tabular-nums;}
+        .part-cat-tot{font-weight:800;}
+        .part-cat-vazio{color:#cbd5e1;}
+        .part-cat-modal table td,.part-cat-modal table th{white-space:nowrap;}
+        .part-cat-modal td.part-cat-quebra{white-space:normal;}
+        #part-cat-f-cats-box .ml-emp-filter-panel,#part-cat-f-credores-box .ml-emp-filter-panel,#part-cred-f-cats-box .ml-emp-filter-panel{width:max-content;min-width:100%;max-width:min(640px,92vw);}
+        #part-cat-f-cats-box .ml-emp-filter-item,#part-cat-f-credores-box .ml-emp-filter-item,#part-cred-f-cats-box .ml-emp-filter-item{white-space:nowrap;align-items:center;}
+      </style>`;
+  },
+
+  categoriaHtml() {
+    const d = this.catDados();
+    this._catDados = d;
+    const filtrado = this.catFiltro.cats.length || this.catFiltro.credores.length || this.catFiltro.empresas.length;
+    const cel = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
+    // Colunas condensadas: cada mês fica com a largura do maior valor dele (7px por caractere + folga).
+    const px = (txt) => Math.max(48, String(txt || "").length * 7 + 12);
+    const largMes = {};
+    d.meses.forEach((m) => {
+      let maior = this.fmt(d.totMes[m] || 0);
+      d.credores.forEach((c) => {
+        [c.cells[m]].concat(c.spes.map((s) => s.cells[m])).forEach((v) => {
+          const t = v ? this.fmt(v) : "";
+          if (t.length > maior.length) maior = t;
+        });
+      });
+      largMes[m] = px(maior);
+    });
+    const largTot = px(this.fmt(d.total)) + 4;
+    const largNome = 250;
+    const larg = largNome + d.meses.reduce((s, m) => s + largMes[m], 0) + largTot;
+    const mesCab = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
+    const corpo = d.credores.map((c, ci) => {
+      const linhaCredor = `<tr class="part-cat-credor">
+          <td class="part-cat-fixa"><div class="part-cat-linha-credor">
+            <input type="checkbox" class="part-cat-flag" ${this.painelOn(c.k) ? "checked" : ""} title="Levar para o Painel do sócio" onclick="event.stopPropagation()" onchange="ParticipacoesApp.marcarPainel(${ci}, this.checked)">
+            <div class="part-cat-nome-box"><button type="button" class="part-cat-nome" title="Ver mês a mês por SPE: ${this.esc(c.credor)}" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+            <small>${this.esc(c.catRot || "Sem categoria")}</small></div></div></td>
+          ${d.meses.map((m) => `<td class="is-right">${cel(c.cells[m], `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '', '${m}')`)}</td>`).join("")}
+          <td class="is-right part-cat-tot">${cel(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
+        </tr>`;
+      const linhasSpe = c.spes.map((s) => `<tr class="part-cat-spe">
+          <td class="part-cat-fixa"><button type="button" class="part-cat-nome-spe" title="Ver os lançamentos de ${this.esc(c.credor)} nesta SPE" onclick="ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(s.emp)}')">${this.esc(this.rotuloEmpresa(s.emp))}</button></td>
+          ${d.meses.map((m) => `<td class="is-right">${cel(s.cells[m], `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(s.emp)}', '${m}')`)}</td>`).join("")}
+          <td class="is-right part-cat-tot">${cel(s.total, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(s.emp)}')`)}</td>
+        </tr>`).join("");
+      return linhaCredor + linhasSpe;
+    }).join("");
+    return `
+      ${this.catEstilosHtml()}
+      <div class="part-cat-filtros">
+        <div id="part-cat-f-cats-box"></div>
+        <div id="part-cat-f-credores-box"></div>
+        ${filtrado ? `<button type="button" class="btn btn-outline" onclick="ParticipacoesApp.limparFiltrosCategoria()"><i data-lucide="x" style="width:16px;height:16px;"></i> Limpar filtros</button>` : ""}
+      </div>
+      <p class="part-cat-info">${d.credores.length} credor(es) · ${d.linhas.length} lançamento(s) · <strong>${this.fmt(d.total)}</strong>. Clique no credor para ver mês a mês por SPE, na SPE para ver os lançamentos dela e no valor para ver só aquela célula. Marque a caixa do credor para levá-lo ao <strong>Painel do sócio</strong> (${this.painelQtde()} marcado(s)).</p>
+      ${d.credores.length ? `
+      <div class="cc-scroll" id="part-cat-scroll" style="max-height:calc(100vh - 330px);">
+        <table class="cc-table part-cat-tabela" style="width:max(100%, ${larg}px);">
+          <colgroup><col style="width:${largNome}px">${d.meses.map((m) => `<col style="width:${largMes[m]}px">`).join("")}<col style="width:${largTot}px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor / SPE</th>${d.meses.map((m) => `<th class="is-right" title="${this.esc(this.periodLabel(m, m))}">${this.esc(mesCab(m))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+          <tbody>${corpo}</tbody>
+          <tfoot><tr><td class="part-cat-fixa">Total</td>${d.meses.map((m) => `<td class="is-right">${d.totMes[m] ? this.fmt(d.totMes[m]) : "—"}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td></tr></tfoot>
+        </table>
+      </div>` : `<div class="part-empty">Nenhum lançamento com esses filtros.${!this.catMl ? " Carregando as categorias…" : ""}</div>`}
+    `;
+  },
+
+  abrirCatDetalhe(tipo, ci, emp, m) {
+    const c = this._catDados && this._catDados.credores[ci];
+    if (!c) return;
+    this.catDetalhe = { tipo, k: c.k, credor: c.credor, emp: emp ? String(emp) : "", m: m || "" };
+    this.render();
+  },
+
+  fecharCatDetalhe() {
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  /* ---------- Painel do sócio ----------
+     Credores marcados na aba Por categoria, para avaliar com o sócio administrador da SPE se o escopo
+     justifica a cobrança. A marcação, o escopo e a avaliação ficam no Firebase (participacoes_painel),
+     um registro por credor, e valem para todos. */
+  PAINEL_COL: "participacoes_painel",
+  PAINEL_LOCAL: "crm_part_painel_socio_v1",
+  painel: null,
+  // SPEs e contas marcadas no Painel do sócio (várias de uma vez; vazio = todas).
+  painelEmps: [],
+  painelCats: [],
+  JUSTIFICA: [
+    { id: "", label: "Em análise" },
+    { id: "sim", label: "Justifica" },
+    { id: "parcial", label: "Justifica em parte" },
+    { id: "nao", label: "Não justifica" }
+  ],
+
+  async carregarPainel() {
+    if (this.painel || this._painelCarregando) return;
+    this._painelCarregando = true;
+    let mapa = null;
+    try { mapa = JSON.parse(localStorage.getItem(this.PAINEL_LOCAL) || "null"); } catch (e) { mapa = null; }
+    this.painel = mapa && typeof mapa === "object" ? mapa : {};
+    try {
+      if (window.DadosFinanceiro) {
+        const lista = await window.DadosFinanceiro.tabela(this.PAINEL_COL).listar();
+        const remoto = {};
+        (lista || []).forEach((v) => {
+          if (v && v.credorKey) remoto[v.credorKey] = v;
+        });
+        this.painel = remoto;
+        try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
+      }
+    } catch (e) {
+      console.warn("[Prestação Ellenco] painel do sócio", e);
+    }
+    this._painelCarregando = false;
+    if (this.groupBy === "categoria" || this.groupBy === "socio") this.render();
+  },
+
+  painelOn(k) {
+    if (!this.painel) this.carregarPainel();
+    const p = this.painel && this.painel[k];
+    return !!(p && p.on);
+  },
+
+  painelQtde() {
+    return Object.values(this.painel || {}).filter((p) => p && p.on).length;
+  },
+
+  async gravarPainel(k, campos) {
+    if (!this.painel) this.painel = {};
+    const user = (window.AppState && AppState.currentUser) || {};
+    const atual = Object.assign({ credorKey: k, on: false, escopo: "", justifica: "" }, this.painel[k] || {}, campos, {
+      credorKey: k,
+      por: user.name || user.email || "",
+      em: new Date().toISOString()
+    });
+    this.painel[k] = atual;
+    try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
+    if (!window.DadosFinanceiro) {
+      alert("O banco do Integra não está disponível agora. A marcação vale só neste navegador.");
+      return;
+    }
+    try {
+      const reg = Object.assign({}, atual);
+      delete reg.id;
+      await window.DadosFinanceiro.tabela(this.PAINEL_COL).gravar(this.catMlDocId(k), reg, { merge: true });
+    } catch (e) {
+      console.error("[Prestação Ellenco] gravar painel do sócio", e);
+      alert("Não consegui gravar no banco. Tente de novo.");
+    }
+  },
+
+  /** Caixa da aba Por categoria: leva o credor para o painel (ou tira, mantendo escopo e avaliação). */
+  async marcarPainel(ci, on) {
+    const c = this._catDados && this._catDados.credores[ci];
+    if (!c) return;
+    await this.gravarPainel(c.k, { on: !!on, credor: c.credor });
+    this.render();
+  },
+
+  async tirarDoPainel(ci) {
+    const c = this._painelDados && this._painelDados.credores[ci];
+    if (!c) return;
+    await this.gravarPainel(c.k, { on: false });
+    this.render();
+  },
+
+  async salvarPainelCampo(ci, campo, valor) {
+    const c = this._painelDados && this._painelDados.credores[ci];
+    if (!c || (campo !== "escopo" && campo !== "justifica")) return;
+    await this.gravarPainel(c.k, { [campo]: String(valor || "").slice(0, 2000) });
+    if (campo === "justifica") this.render();
+  },
+
+  /** Marca ou desmarca a SPE (várias de uma vez). "Todas" limpa a marcação. */
+  escolherPainelEmp(emp) {
+    const id = String(emp || "");
+    this.painelEmps = !id ? [] : (this.painelEmps.indexOf(id) >= 0 ? this.painelEmps.filter((x) => x !== id) : this.painelEmps.concat([id]));
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  /** Marca ou desmarca a conta (Categoria Moura Leite), várias de uma vez. "Todas" limpa a marcação. */
+  escolherPainelCat(cat) {
+    const id = String(cat || "");
+    this.painelCats = !id ? [] : (this.painelCats.indexOf(id) >= 0 ? this.painelCats.filter((x) => x !== id) : this.painelCats.concat([id]));
+    this.catDetalhe = null;
+    this.render();
+  },
+
+  /** Lançamentos dos credores marcados, no filtro de empresa e período do topo. Os chips de SPE e de conta se
+      combinam: o total de cada chip de SPE respeita a conta escolhida, e o de cada conta respeita a SPE. */
+  painelDados() {
+    const base = this.catLinhasBase().filter((x) => this.painelOn(x.k));
+    const somaPor = (linhas, campo) => {
+      const t = {};
+      linhas.forEach((x) => { t[x[campo]] = (t[x[campo]] || 0) + (Number(x.r.valor) || 0); });
+      return t;
+    };
+    // Marcação que não existe mais nos credores marcados (ex.: trocou a empresa do topo) sai sozinha.
+    this.painelCats = (this.painelCats || []).filter((c) => base.some((x) => x.catId === c));
+    this.painelEmps = (this.painelEmps || []).filter((e) => base.some((x) => x.emp === e));
+    const cats = new Set(this.painelCats);
+    const emps = new Set(this.painelEmps);
+    const naCat = (x) => !cats.size || cats.has(x.catId);
+    const naEmp = (x) => !emps.size || emps.has(x.emp);
+    const daCat = base.filter(naCat);
+    const daEmp = base.filter(naEmp);
+    const linhas = daCat.filter(naEmp);
+    const d = this.agregarCat(base, linhas);
+    const empsBase = somaPor(daCat, "emp");
+    d.empsBase = Object.keys(empsBase).sort((a, b) => empsBase[b] - empsBase[a]).map((e) => ({ emp: e, total: empsBase[e] }));
+    d.totalBase = daCat.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    // Contas presentes nos credores marcados (com a SPE escolhida, se houver), na ordem do plano de contas.
+    const catsTot = somaPor(daEmp, "catId");
+    const rot = {};
+    base.forEach((x) => { if (!rot[x.catId]) rot[x.catId] = x.catId === this.CAT_SEM ? "Sem categoria" : (x.catRot || x.catId); });
+    d.catsBase = Object.keys(rot)
+      .map((id) => ({ id, rot: rot[id], total: catsTot[id] || 0 }))
+      .sort((a, b) => (a.id === this.CAT_SEM) - (b.id === this.CAT_SEM) || a.rot.localeCompare(b.rot, "pt-BR", { numeric: true }));
+    d.totalCats = daEmp.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    return d;
+  },
+
+  /* Excel para o sócio administrador da SPE: os credores e lançamentos das SPEs e contas marcadas no painel, com
+     o escopo e a avaliação do Integra e duas colunas amarelas para o sócio responder (Justifica? e Considerações). */
+  async gerarExcelSocio() {
+    const d = this._painelDados || this.painelDados();
+    const spes = this._painelSpes || d.empsBase.map((e) => e.emp);
+    if (!d || !d.credores.length) {
+      alert("Não há credores no painel com essa seleção.");
+      return;
+    }
+    let ExcelJS;
+    try {
+      ExcelJS = await this.ensureExcelJS();
+    } catch (e) {
+      alert("Não foi possível carregar a biblioteca de Excel. Recarregue a página.");
+      return;
+    }
+    const VERDE = "FF105436";
+    const AMARELO = "FFFFF2CC";
+    const borda = { style: "thin", color: { argb: "FFD9E2DC" } };
+    const bordas = { top: borda, bottom: borda, left: borda, right: borda };
+    const moeda = "#,##0.00;[Red]-#,##0.00";
+    const nomeSpe = (e) => String(this.nomeUsual(e) || this.companyLabel(e) || e).trim();
+    const rotJust = (j) => ((this.JUSTIFICA.find((o) => o.id === String(j || "")) || this.JUSTIFICA[0]).label);
+    const contasSel = this.painelCats.length
+      ? d.catsBase.filter((c) => this.painelCats.indexOf(c.id) >= 0).map((c) => c.rot)
+      : ["Todas as contas"];
+    const hoje = new Date().toLocaleDateString("pt-BR");
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "CRM Moura Leite";
+    wb.created = new Date();
+
+    // Aba 1: credores, para o sócio responder.
+    const ws = wb.addWorksheet("Considerações do sócio", { properties: { showGridLines: false }, views: [{ state: "frozen", ySplit: 6, xSplit: 1 }] });
+    const nCol = 2 + spes.length + 1 + 2 + 2;
+    ws.columns = [{ width: 44 }, { width: 30 }].concat(spes.map(() => ({ width: 16 })), [{ width: 16 }, { width: 36 }, { width: 18 }, { width: 22 }, { width: 60 }]);
+    ws.getCell("A1").value = "Prestação de contas Ellenco · Painel do sócio";
+    ws.getCell("A1").font = { name: "Arial", bold: true, size: 14, color: { argb: VERDE } };
+    ws.getCell("A2").value = "SPE(s): " + spes.map((e) => e + " - " + nomeSpe(e)).join(" · ");
+    ws.getCell("A3").value = "Conta(s): " + contasSel.join(" · ") + "   ·   Gerado em " + hoje;
+    ws.getCell("A4").value = "Preencha as colunas amarelas: \"Justifica a cobrança? (sócio)\" (Sim, Em parte ou Não) e \"Considerações do sócio\".";
+    ["A2", "A3", "A4"].forEach((c) => { ws.getCell(c).font = { name: "Arial", size: 9, color: { argb: c === "A4" ? "FF9A3412" : "FF475569" }, italic: c === "A4" }; });
+    const cab = ["Credor", "Conta Moura Leite"].concat(spes.map((e) => "SPE " + e + "\n" + nomeSpe(e)), ["Acumulado", "Escopo (Integra)", "Avaliação (Integra)", "Justifica a cobrança? (sócio)", "Considerações do sócio"]);
+    const hRow = ws.getRow(6);
+    cab.forEach((t, i) => {
+      const c = hRow.getCell(i + 1);
+      c.value = t;
+      const socio = i >= nCol - 2;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: socio ? "FF7C2D12" : "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: socio ? "FFFFD966" : VERDE } };
+      c.alignment = { vertical: "middle", horizontal: i >= 2 && i < 2 + spes.length + 1 ? "right" : "left", wrapText: true };
+      c.border = bordas;
+    });
+    hRow.height = 32;
+    let r = 7;
+    const totSpe = spes.map(() => 0);
+    let totGeral = 0;
+    d.credores.forEach((cr) => {
+      const p = (this.painel && this.painel[cr.k]) || {};
+      const row = ws.getRow(r);
+      const vals = [cr.credor, cr.catRot || "Sem categoria"];
+      spes.forEach((e, i) => {
+        const x = cr.spes.find((y) => y.emp === e);
+        const v = x ? Math.round(x.total * 100) / 100 : 0;
+        totSpe[i] += v;
+        vals.push(v || null);
+      });
+      totGeral += cr.total;
+      vals.push(Math.round(cr.total * 100) / 100, p.escopo || "", rotJust(p.justifica), null, null);
+      vals.forEach((v, i) => {
+        const c = row.getCell(i + 1);
+        c.value = v;
+        const num = i >= 2 && i < 2 + spes.length + 1;
+        const socio = i >= nCol - 2;
+        c.font = { name: "Arial", size: 9, bold: i === 0 || i === 2 + spes.length };
+        c.alignment = { vertical: "top", horizontal: num ? "right" : "left", wrapText: !num };
+        if (num) c.numFmt = moeda;
+        if (socio) {
+          c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: AMARELO } };
+          c.protection = { locked: false };
+        }
+        c.border = bordas;
+      });
+      row.getCell(nCol - 1).dataValidation = { type: "list", allowBlank: true, formulae: ['"Sim,Em parte,Não"'], showErrorMessage: true, errorTitle: "Resposta", error: "Escolha Sim, Em parte ou Não." };
+      r++;
+    });
+    const tRow = ws.getRow(r);
+    const tVals = ["Total", ""].concat(totSpe.map((v) => Math.round(v * 100) / 100), [Math.round(totGeral * 100) / 100]);
+    for (let i = 1; i <= nCol; i++) {
+      const c = tRow.getCell(i);
+      c.value = i <= tVals.length ? tVals[i - 1] : null;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: VERDE } };
+      c.alignment = { horizontal: i >= 3 && i <= 2 + spes.length + 1 ? "right" : "left" };
+      if (i >= 3 && i <= 2 + spes.length + 1) c.numFmt = moeda;
+      c.border = bordas;
+    }
+    ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6, column: nCol } };
+
+    // Aba 2: lançamentos da seleção, para o sócio conferir cada valor.
+    const wl = wb.addWorksheet("Lançamentos", { properties: { showGridLines: false }, views: [{ state: "frozen", ySplit: 3 }] });
+    wl.columns = [{ width: 12 }, { width: 14 }, { width: 40 }, { width: 30 }, { width: 28 }, { width: 50 }, { width: 16 }, { width: 12 }];
+    wl.getCell("A1").value = "Lançamentos da seleção";
+    wl.getCell("A1").font = { name: "Arial", bold: true, size: 12, color: { argb: VERDE } };
+    const cabL = ["Data", "Período", "Credor", "Conta Moura Leite", "SPE", "Detalhe", "Valor", "Doc"];
+    cabL.forEach((t, i) => {
+      const c = wl.getRow(3).getCell(i + 1);
+      c.value = t;
+      c.font = { name: "Arial", bold: true, size: 9, color: { argb: "FFFFFFFF" } };
+      c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: VERDE } };
+      c.border = bordas;
+    });
+    const nomeCred = {};
+    d.credores.forEach((cr) => { nomeCred[cr.k] = cr.credor; });
+    const lanc = d.linhas.slice().sort((a, b) => String(nomeCred[a.k] || a.k).localeCompare(String(nomeCred[b.k] || b.k), "pt-BR") || String(a.m).localeCompare(String(b.m)));
+    lanc.forEach((x, idx) => {
+      const row = wl.getRow(4 + idx);
+      const vals = [x.r.date || "", this.periodLabel(x.r.periodo, x.r.periodo || x.m || ""), nomeCred[x.k] || x.r.credor || x.k, x.catRot || "Sem categoria", x.emp + " - " + nomeSpe(x.emp), x.r.detalhe || "", Number(x.r.valor) || 0, x.r.doc || ""];
+      vals.forEach((v, i) => {
+        const c = row.getCell(i + 1);
+        c.value = v;
+        c.font = { name: "Arial", size: 9 };
+        c.alignment = { vertical: "top", horizontal: i === 6 ? "right" : "left", wrapText: i === 5 };
+        if (i === 6) c.numFmt = moeda;
+        c.border = bordas;
+      });
+    });
+    wl.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: cabL.length } };
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    const nomeArq = (spes.length === 1 ? "SPE " + spes[0] + " " + nomeSpe(spes[0]) : spes.length + " SPEs").replace(/[\\/:*?"<>|]+/g, " ");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Painel do sócio - ${nomeArq} - ${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  },
+
+  painelHtml() {
+    const d = this.painelDados();
+    this._painelDados = d;
+    // O detalhe (mês a mês, SPE, célula) reaproveita o da aba Por categoria, sobre os dados do painel.
+    this._catDados = d;
+    const marcados = this.painelQtde();
+    const aval = { sim: { n: 0, v: 0 }, parcial: { n: 0, v: 0 }, nao: { n: 0, v: 0 }, "": { n: 0, v: 0 } };
+    d.credores.forEach((c) => {
+      const j = (this.painel[c.k] || {}).justifica || "";
+      const a = aval[j] || aval[""];
+      a.n += 1;
+      a.v += c.total;
+    });
+    const spes = d.empsBase.map((e) => e.emp).filter((e) => !this.painelEmps.length || this.painelEmps.indexOf(e) >= 0);
+    this._painelSpes = spes;
+    const mes = (m) => this.mesCurto(m).replace(/\/(?:19|20)(\d\d)$/, "/$1");
+    const pct = (v, t) => (t > 0 ? Math.round((v / t) * 100) : 0);
+    const valor = (v, js, sub) => (v
+      ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>${sub ? `<small class="part-soc-pct">${sub}</small>` : ""}`
+      : `<span class="part-cat-vazio">—</span>`);
+    // No chip o nome sai sem o "SPE LTDA"/"LTDA" do fim, para a linha caber no notebook; o nome inteiro fica no título.
+    // Tarja de filtros (27/11/2026, menos poluída): nomes em caixa normal, sem "SPE LTDA"/"LTDA" do fim,
+    // conta com o código em cinza; o nome inteiro fica no título (passar o mouse).
+    const MIUDAS = ["de", "da", "do", "das", "dos", "e"];
+    const caixaNormal = (t) => String(t || "").toLowerCase().split(/(\s+)/).map((p, i) => {
+      if (/^\s+$/.test(p) || !p) return p;
+      if (/^(i|ii|iii|iv|v|vi|vii|viii|ix|x|spe|ltda)$/i.test(p)) return p.toUpperCase();
+      if (i > 0 && MIUDAS.indexOf(p) >= 0) return p;
+      return p.charAt(0).toUpperCase() + p.slice(1);
+    }).join("");
+    const curto = (rot) => String(rot || "").replace(/\s+(SPE\s+)?LTDA\.?\s*$/i, "").replace(/\s+SPE\s*$/i, "");
+    const rotSpe = (id, rot) => {
+      // Nome usual do cadastro de Empresas, quando existir (menor que a razão social).
+      const usual = this.nomeUsual(id);
+      if (usual) return `<i>${this.esc(String(id))}</i>${this.esc(caixaNormal(usual))}`;
+      const m = curto(rot).match(/^(\S+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(curto(rot)));
+    };
+    const rotConta = (rot) => {
+      const m = String(rot || "").match(/^([\d.]+)\s*-\s*(.+)$/);
+      return m ? `<i>${this.esc(m[1])}</i>${this.esc(caixaNormal(m[2]))}` : this.esc(caixaNormal(rot));
+    };
+    // Chip marcado tem o check; "Todas" fica marcado quando nenhuma SPE/conta foi escolhida.
+    const marca = (on) => (on ? `<i class="part-soc-check" aria-hidden="true">✓</i>` : "");
+    const chip = (id, rot, tot) => {
+      const on = id ? this.painelEmps.indexOf(id) >= 0 : !this.painelEmps.length;
+      return `<button type="button" class="part-soc-chip${on ? " is-on" : ""}" aria-pressed="${on}" title="${this.esc(rot)}${id ? " · clique para marcar ou desmarcar" : ""}" onclick="ParticipacoesApp.escolherPainelEmp('${this.esc(id)}')">${id ? marca(on) : ""}<span>${id ? rotSpe(id, rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    };
+    const chipCat = (id, rot, tot) => {
+      const on = id ? this.painelCats.indexOf(id) >= 0 : !this.painelCats.length;
+      return `<button type="button" class="part-soc-chip${on ? " is-on" : ""}" aria-pressed="${on}" title="${this.esc(rot)}${id ? " · clique para marcar ou desmarcar" : ""}" onclick="ParticipacoesApp.escolherPainelCat('${this.esc(id)}')">${id ? marca(on) : ""}<span>${id ? rotConta(rot) : this.esc(rot)}</span><b>${this.fmt(tot)}</b></button>`;
+    };
+    const opcoes = (atual) => this.JUSTIFICA.map((o) => `<option value="${o.id}" ${String(atual || "") === o.id ? "selected" : ""}>${o.label}</option>`).join("");
+    const corpo = d.credores.map((c, ci) => {
+      const p = this.painel[c.k] || {};
+      const meses = Object.keys(c.cells).sort();
+      const n = d.linhas.filter((x) => x.k === c.k).length;
+      const periodo = meses.length ? mes(meses[0]) + (meses.length > 1 ? " a " + mes(meses[meses.length - 1]) : "") : "";
+      const just = p.justifica || "analise";
+      const celulas = spes.map((e) => {
+        const x = c.spes.find((y) => y.emp === e);
+        const v = x ? x.total : 0;
+        return `<td class="is-right">${valor(v, `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`, spes.length > 1 && v ? pct(v, c.total) + "%" : "")}</td>`;
+      }).join("");
+      return `<tr class="part-soc-row is-${this.esc(just)}">
+        <td class="part-cat-fixa part-soc-credor">
+          <button type="button" class="part-cat-nome" title="Ver mês a mês por SPE" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})">${this.esc(c.credor)}</button>
+          <span class="part-soc-meta"><span class="part-soc-cat" title="${this.esc(c.catRot || "Sem categoria")}">${this.esc(c.catRot || "Sem categoria")}</span><span>${n} lançamento(s) · ${this.esc(periodo)}</span></span>
+        </td>
+        ${celulas}
+        <td class="is-right part-cat-tot">${valor(c.total, `ParticipacoesApp.abrirCatDetalhe('credor', ${ci})`)}</td>
+        <td><textarea class="part-soc-escopo" rows="1" placeholder="Escopo que este credor atende" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'escopo', this.value)">${this.esc(p.escopo || "")}</textarea></td>
+        <td><select class="part-soc-just is-${this.esc(just)}" onchange="ParticipacoesApp.salvarPainelCampo(${ci}, 'justifica', this.value)">${opcoes(p.justifica)}</select>
+          ${p.por ? `<small class="part-soc-quem">${this.esc(p.por)}${p.em ? " · " + this.esc(new Date(p.em).toLocaleDateString("pt-BR")) : ""}</small>` : ""}</td>
+        <td class="is-center"><button type="button" class="part-soc-tirar" title="Tirar do painel (escopo e avaliação ficam guardados)" onclick="ParticipacoesApp.tirarDoPainel(${ci})"><i data-lucide="x" style="width:14px;height:14px;"></i></button></td>
+      </tr>`;
+    }).join("");
+    // Larguras pensadas para notebook a 100% (sem rolagem lateral com até 4 SPEs).
+    const larg = 230 + spes.length * 104 + 112 + 230 + 150 + 34;
+    const card = (cls, rot, val, sub) => `<div class="part-soc-card ${cls}"><label>${rot}</label><strong>${val}</strong><small>${sub}</small></div>`;
+    const totSpe = (e) => d.credores.reduce((t, c) => { const x = c.spes.find((y) => y.emp === e); return t + (x ? x.total : 0); }, 0);
+    return `${this.catEstilosHtml()}
+      <style>
+        .part-soc-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:4px 0 12px;}
+        .part-soc-card{border:1px solid #e2e8f0;border-left:4px solid #1b8253;border-radius:10px;background:#fff;padding:10px 14px;}
+        .part-soc-card.is-sim{border-left-color:#16a34a;}
+        .part-soc-card.is-nao{border-left-color:#dc2626;}
+        .part-soc-card.is-analise{border-left-color:#94a3b8;}
+        .part-soc-card label{display:block;font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;}
+        .part-soc-card strong{display:block;margin-top:2px;font-size:1.2rem;color:#105436;font-variant-numeric:tabular-nums;white-space:nowrap;}
+        .part-soc-card small{display:block;font-size:.72rem;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .part-soc-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;}
+        .part-soc-chip{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 12px;border:1px solid #cbd5e1;border-radius:999px;background:#fff;color:#334155;font-size:.74rem;font-weight:700;cursor:pointer;white-space:nowrap;}
+        .part-soc-chip:hover{border-color:#1b8253;background:#f0fdf4;}
+        .part-soc-chip b{font-variant-numeric:tabular-nums;color:#105436;}
+        .part-soc-chip.is-on{background:#105436;border-color:#105436;color:#fff;}
+        .part-soc-chip.is-on b{color:#fff;}
+        .part-soc-chips.is-contas{align-items:center;margin-top:-2px;}
+        .part-soc-chips-rot{font-size:.66rem;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#64748b;margin-right:2px;white-space:nowrap;}
+        .part-soc-chips.is-contas .part-soc-chip{height:30px;font-size:.7rem;}
+        .part-soc-tab td{vertical-align:top;padding:8px 6px;}
+        .part-soc-tab thead th{white-space:normal;line-height:1.2;vertical-align:bottom;padding:6px;}
+        .part-soc-tab thead th small{display:block;font-weight:600;opacity:.85;font-size:.62rem;}
+        .part-soc-tab td.part-soc-credor{white-space:normal;}
+        .part-soc-tab .part-cat-nome{white-space:normal;text-align:left;font-size:.78rem;line-height:1.25;color:#0f3d27;}
+        .part-soc-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin-top:4px;font-size:.64rem;color:#64748b;font-weight:600;}
+        .part-soc-cat{display:inline-block;max-width:100%;padding:1px 8px;border-radius:999px;background:#e7f6ee;color:#105436;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .part-soc-pct{display:block;font-size:.62rem;color:#94a3b8;font-weight:600;}
+        .part-soc-tab .part-cat-tot .part-cat-val{font-size:.82rem;color:#105436;}
+        .part-soc-escopo{width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:6px 8px;font:inherit;font-size:.74rem;line-height:1.35;resize:vertical;min-height:44px;white-space:normal;}
+        .part-soc-escopo:focus{outline:none;border-color:#1b8253;box-shadow:0 0 0 3px rgba(27,130,83,.15);}
+        .part-soc-just{width:100%;height:34px;border:1px solid #cbd5e1;border-radius:8px;font-size:.74rem;font-weight:700;padding:0 8px;background:#f8fafc;color:#475569;}
+        .part-soc-just.is-sim{background:#dcfce7;color:#166534;border-color:#86efac;}
+        .part-soc-just.is-parcial{background:#fef9c3;color:#854d0e;border-color:#fde047;}
+        .part-soc-just.is-nao{background:#fee2e2;color:#991b1b;border-color:#fca5a5;}
+        .part-soc-row.is-sim td.part-soc-credor{box-shadow:inset 4px 0 0 #16a34a;}
+        .part-soc-row.is-parcial td.part-soc-credor{box-shadow:inset 4px 0 0 #eab308;}
+        .part-soc-row.is-nao td.part-soc-credor{box-shadow:inset 4px 0 0 #dc2626;}
+        .part-soc-quem{display:block;margin-top:4px;font-size:.6rem;color:#94a3b8;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        .part-soc-tirar{border:0;background:transparent;color:#94a3b8;cursor:pointer;padding:6px;display:inline-flex;border-radius:6px;}
+        .part-soc-tirar:hover{background:#fee2e2;color:#b91c1c;}
+        /* 27/11/2026: compacto para notebook a 100%. */
+        .part-soc-cards{gap:8px;margin:2px 0 10px;}
+        .part-soc-card{padding:7px 12px;border-radius:8px;}
+        .part-soc-card label{font-size:.6rem;}
+        .part-soc-card strong{font-size:1.02rem;margin-top:1px;}
+        .part-soc-card small{font-size:.66rem;}
+        .part-soc-chips{gap:5px;margin:0 0 8px;}
+        .part-soc-chip{height:28px;padding:0 10px;gap:6px;font-size:.66rem;}
+        .part-soc-chips.is-contas .part-soc-chip{height:26px;font-size:.64rem;}
+        .part-soc-tab{font-size:.7rem;}
+        .part-soc-tab td{padding:5px 6px;}
+        .part-soc-tab thead th{padding:5px 6px;font-size:.66rem;}
+        .part-soc-tab thead th small{font-size:.56rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;}
+        .part-soc-tab .part-cat-nome{font-size:.72rem;}
+        .part-soc-meta{margin-top:2px;font-size:.6rem;gap:2px 6px;}
+        .part-soc-tab .part-cat-val{font-size:.7rem;}
+        .part-soc-tab .part-cat-tot .part-cat-val{font-size:.74rem;}
+        .part-soc-pct{font-size:.56rem;}
+        .part-soc-escopo{min-height:32px;padding:5px 8px;font-size:.7rem;}
+        .part-soc-just{height:30px;font-size:.68rem;padding:0 6px;}
+        .part-soc-quem{font-size:.56rem;margin-top:2px;}
+        .part-soc-tirar{padding:4px;}
+        /* Tarja de filtros: um painel, uma linha por filtro (SPE e Conta), chips sem borda. */
+        .part-soc-filtros{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;padding:4px 8px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+        .part-soc-linha{display:flex;align-items:center;gap:8px;min-width:0;}
+        .part-soc-linha + .part-soc-linha{border-top:1px solid #edf2ef;}
+        .part-soc-filtros .part-soc-chips-rot{flex:0 0 42px;margin:0;font-size:.6rem;color:#94a3b8;}
+        .part-soc-filtros .part-soc-chips{flex:1 1 auto;min-width:0;flex-wrap:nowrap;overflow-x:auto;gap:2px;margin:0;padding:3px 0;scrollbar-width:thin;}
+        .part-soc-filtros .part-soc-chip{flex:0 0 auto;height:26px;padding:0 10px;gap:6px;border:0;border-radius:7px;background:transparent;color:#334155;font-size:.68rem;font-weight:600;}
+        .part-soc-filtros .part-soc-chip:hover{background:#e7f1ec;}
+        .part-soc-filtros .part-soc-chip i{font-style:normal;color:#94a3b8;font-weight:700;margin-right:4px;}
+        .part-soc-filtros .part-soc-chip b{font-weight:700;color:#64748b;font-size:.64rem;}
+        .part-soc-filtros .part-soc-chip.is-on{background:#105436;color:#fff;}
+        .part-soc-filtros .part-soc-chip.is-on i,.part-soc-filtros .part-soc-chip.is-on b{color:#d1fae5;}
+        .part-soc-filtros .part-soc-chip i.part-soc-check{color:#fff;margin-right:0;font-size:.7rem;}
+        .part-soc-acoes{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:-2px 0 8px;flex-wrap:wrap;}
+        .part-soc-acoes span{font-size:.7rem;color:#64748b;}
+        .part-soc-acoes .btn{height:32px;display:inline-flex;align-items:center;gap:6px;font-size:.74rem;white-space:nowrap;}
+      </style>
+      <div class="part-soc-cards">
+        ${card("", "Acumulado " + (this.painelEmps.length === 1 ? "na SPE" : "dos credores"), this.fmt(d.total), (this.painelEmps.length === 1 ? this.esc(this.rotuloEmpresa(this.painelEmps[0])) : spes.length + " SPE(s) · " + d.credores.length + " credor(es)") + (this.painelCats.length ? " · " + (this.painelCats.length === 1 ? this.esc((d.catsBase.find((c) => c.id === this.painelCats[0]) || {}).rot || "") : this.painelCats.length + " contas") : ""))}
+        ${card("is-sim", "Justifica", this.fmt(aval.sim.v + aval.parcial.v), (aval.sim.n + aval.parcial.n) + " credor(es)" + (aval.parcial.n ? " · " + aval.parcial.n + " em parte" : ""))}
+        ${card("is-nao", "Não justifica", this.fmt(aval.nao.v), aval.nao.n + " credor(es)")}
+        ${card("is-analise", "Em análise", this.fmt(aval[""].v), aval[""].n + " credor(es) · " + marcados + " marcado(s)")}
+      </div>
+      ${d.empsBase.length || d.catsBase.length ? `<div class="part-soc-filtros">
+        ${d.empsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">SPE</span><div class="part-soc-chips">${chip("", "Todas", d.totalBase)}${d.empsBase.map((e) => chip(e.emp, this.rotuloEmpresa(e.emp), e.total)).join("")}</div></div>` : ""}
+        ${d.catsBase.length ? `<div class="part-soc-linha"><span class="part-soc-chips-rot">Conta</span><div class="part-soc-chips">${chipCat("", "Todas", d.totalCats)}${d.catsBase.filter((c) => c.total || this.painelCats.indexOf(c.id) >= 0).map((c) => chipCat(c.id, c.rot, c.total)).join("")}</div></div>` : ""}
+      </div>` : ""}
+      ${d.credores.length ? `
+      <div class="part-soc-acoes">
+        <span>Marque uma ou mais SPEs e contas. O Excel sai com os credores e lançamentos da seleção e colunas para o sócio responder.</span>
+        <button type="button" class="btn btn-excel" onclick="ParticipacoesApp.gerarExcelSocio()"><i data-lucide="download" style="width:14px;height:14px;"></i> Gerar Excel para o sócio</button>
+      </div>` : ""}
+      ${d.credores.length ? `
+      <div class="cc-scroll" style="max-height:max(320px, calc(100vh - 330px));">
+        <table class="cc-table part-cat-tabela part-soc-tab" style="width:max(100%, ${larg}px);">
+          <colgroup><col style="width:230px">${spes.map(() => `<col style="width:104px">`).join("")}<col style="width:112px"><col style="width:230px"><col style="width:150px"><col style="width:34px"></colgroup>
+          <thead><tr><th class="part-cat-fixa">Credor</th>${spes.map((e) => `<th class="is-right" title="${this.esc(this.rotuloEmpresa(e))}">SPE ${this.esc(String(e))}<small>${this.esc(String(this.nomeUsual(e) || this.companyLabel(e) || "").toUpperCase())}</small></th>`).join("")}<th class="is-right">Acumulado</th><th>Escopo</th><th>Justifica a cobrança?</th><th></th></tr></thead>
+          <tbody>${corpo}</tbody>
+          <tfoot><tr><td class="part-cat-fixa">Total</td>${spes.map((e) => `<td class="is-right">${this.fmt(totSpe(e))}</td>`).join("")}<td class="is-right">${this.fmt(d.total)}</td><td colspan="3"></td></tr></tfoot>
+        </table>
+      </div>` : `<div class="part-empty">Nenhum credor no painel${this.painel ? "" : " (carregando…)"}. Marque a caixa ao lado do credor na aba <strong>Por categoria</strong>.</div>`}`;
+  },
+
+  catDetalheHtml() {
+    const det = this.catDetalhe;
+    if (!det) return "";
+    const d = this._catDados || this.catDados();
+    const linhas = d.linhas.filter((x) => x.k === det.k && (!det.emp || x.emp === det.emp) && (!det.m || x.m === det.m))
+      .sort((a, b) => String(a.r.iso || a.r.date).localeCompare(String(b.r.iso || b.r.date)));
+    const total = linhas.reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+    const ci = d.credores.findIndex((c) => c.k === det.k);
+    const val = (v, js) => v ? `<button type="button" class="part-cat-val" onclick="${js}">${this.fmt(v)}</button>` : `<span class="part-cat-vazio">—</span>`;
+    let sub = "";
+    let corpo = "";
+    if (det.tipo === "credor") {
+      // Meses nas linhas e uma coluna por SPE; cada valor abre os lançamentos daquele mês e SPE.
+      const spes = Array.from(new Set(linhas.map((x) => x.emp))).sort((a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true }));
+      const meses = Array.from(new Set(linhas.map((x) => x.m))).sort();
+      const soma = (m, e) => linhas.filter((x) => (!m || x.m === m) && (!e || x.emp === e)).reduce((s, x) => s + (Number(x.r.valor) || 0), 0);
+      sub = "Mês a mês por SPE";
+      corpo = `<div class="part-catm-scroll"><table class="cc-table part-catm-tab" style="width:max(100%, ${110 + spes.length * 170 + 130}px);">
+        <colgroup><col style="width:110px">${spes.map(() => `<col style="width:170px">`).join("")}<col style="width:130px"></colgroup>
+        <thead><tr><th class="part-catm-fixa">Mês</th>${spes.map((e) => `<th class="is-right part-catm-spe" title="${this.esc(this.rotuloEmpresa(e))}">${this.esc(this.rotuloEmpresa(e))}</th>`).join("")}<th class="is-right">Total</th></tr></thead>
+        <tbody>${meses.map((m) => `<tr><td class="part-catm-fixa" title="${this.esc(this.periodLabel(m, m))}">${this.esc(this.mesCurto(m))}</td>${spes.map((e) => `<td class="is-right">${val(soma(m, e), `ParticipacoesApp.abrirCatDetalhe('celula', ${ci}, '${this.esc(e)}', '${m}')`)}</td>`).join("")}<td class="is-right"><strong>${this.fmt(soma(m, ""))}</strong></td></tr>`).join("")}</tbody>
+        <tfoot><tr><td class="part-catm-fixa">Total</td>${spes.map((e) => `<td class="is-right">${val(soma("", e), `ParticipacoesApp.abrirCatDetalhe('spe', ${ci}, '${this.esc(e)}')`)}</td>`).join("")}<td class="is-right">${this.fmt(total)}</td></tr></tfoot>
+      </table></div>`;
+    } else {
+      sub = [det.emp ? this.rotuloEmpresa(det.emp) : "Todas as SPEs", det.m ? this.mesCurto(det.m) : "Todos os meses"].join(" · ");
+      corpo = `<div class="part-catm-scroll"><table class="cc-table part-catm-tab part-catm-lanc">
+        <colgroup><col style="width:96px"><col style="width:86px"><col style="width:22%"><col><col style="width:17%"><col style="width:130px"></colgroup>
+        <thead><tr><th>Data</th><th>Mês</th><th>Empresa (SPE)</th><th>Detalhe</th><th>Categoria Ellenco</th><th class="is-right">Valor</th></tr></thead>
+        <tbody>${linhas.map((x) => `<tr>
+          <td>${this.esc(x.r.date || "")}</td>
+          <td>${this.esc(this.mesCurto(x.m))}</td>
+          <td class="part-catm-quebra">${this.esc(this.rotuloEmpresa(x.emp))}</td>
+          <td class="part-catm-quebra">${this.esc(x.r.detalhe || "—")}</td>
+          <td class="part-catm-quebra">${this.esc(x.r.categoria || "—")}</td>
+          <td class="is-right"><strong>${this.fmt(x.r.valor)}</strong></td>
+        </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;padding:30px;">Nenhum lançamento.</td></tr>`}</tbody>
+        ${linhas.length ? `<tfoot><tr><td colspan="5">Total · ${linhas.length} lançamento(s)</td><td class="is-right">${this.fmt(total)}</td></tr></tfoot>` : ""}
+      </table></div>`;
+    }
+    // Um único botão Fechar (no topo). O rodapé só aparece com a ação de voltar para o mês a mês por SPE.
+    const voltar = det.tipo !== "credor"
+      ? `<footer class="part-catm-rodape"><button type="button" class="btn btn-outline" onclick="ParticipacoesApp.abrirCatDetalhe('credor', ${ci})"><i data-lucide="arrow-left" style="width:16px;height:16px;"></i> Ver mês a mês por SPE</button></footer>` : "";
+    return `
+      <div class="part-detail-overlay" onclick="if(event.target===this)ParticipacoesApp.fecharCatDetalhe()">
+        <div class="part-detail-panel part-catm" role="dialog" aria-modal="true">
+          <header>
+            <div>
+              <h3>${this.esc(det.credor)}</h3>
+              <div class="part-catm-sub">${this.esc(sub)} · ${linhas.length} lançamento(s) · <strong>${this.fmt(total)}</strong></div>
+            </div>
+            <button type="button" class="btn btn-fechar" onclick="ParticipacoesApp.fecharCatDetalhe()">Fechar</button>
+          </header>
+          <div class="part-detail-body">${corpo}</div>
+          ${voltar}
+        </div>
+      </div>`;
+  },
+
+  alternarCredor(i) {
+    const g = (this._gruposVisiveis || [])[i];
+    if (!g) return;
+    const k = g.groupKey;
+    this.credorAberto[k] = !this.credorAberto[k];
+    this.render();
+  },
+
+  abrirTodosCredores(abrir) {
+    this.credorAberto = {};
+    if (abrir) (this._gruposVisiveis || []).forEach((g) => { this.credorAberto[g.groupKey] = true; });
+    this.render();
+  },
+
+  /** Janela para escolher o grupo de despesa (nível 3 do grupo 2 do plano financeiro). */
+  async escolherCatMl(i, ev) {
+    if (ev) ev.stopPropagation();
+    const g = (this._gruposVisiveis || [])[i];
+    if (!g) return;
+    const antigo = document.getElementById("part-catml-modal");
+    if (antigo) antigo.remove();
+    const atual = this.catMlDe(g.groupKey);
+    const contagem = {};
+    (g.rows || []).forEach((r) => { const c = r.categoria || "Outras"; contagem[c] = (contagem[c] || 0) + 1; });
+    const catEllenco = Object.keys(contagem).sort((a, b) => contagem[b] - contagem[a]).slice(0, 2).join(", ") || "—";
+    const pop = document.createElement("div");
+    pop.id = "part-catml-modal";
+    pop.innerHTML = `<style>
+        #part-catml-modal{position:fixed;inset:0;z-index:9000;background:rgba(12,41,29,.55);display:flex;align-items:center;justify-content:center;padding:16px;}
+        #part-catml-modal .pcm-card{width:min(620px,100%);max-height:88vh;display:flex;flex-direction:column;background:#fff;border-radius:12px;box-shadow:0 20px 50px rgba(15,23,42,.3);overflow:hidden;}
+        #part-catml-modal .pcm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:#105436;}
+        #part-catml-modal .pcm-head h3{margin:0;font-size:1rem;color:#fff;}
+        #part-catml-modal .pcm-x{border:0;background:transparent;color:#fff;cursor:pointer;padding:4px;display:inline-flex;}
+        #part-catml-modal .pcm-body{padding:14px 18px;display:flex;flex-direction:column;gap:10px;min-height:0;overflow:hidden;}
+        #part-catml-modal .pcm-credor{border:1px solid #e2e8f0;background:#f8fafc;border-radius:8px;padding:10px 12px;}
+        #part-catml-modal .pcm-credor strong{display:block;color:#0f172a;font-size:.88rem;}
+        #part-catml-modal .pcm-credor span{display:block;margin-top:3px;color:#64748b;font-size:.75rem;}
+        #part-catml-modal .pcm-atual{font-size:.78rem;color:#105436;font-weight:700;}
+        #part-catml-modal .pcm-busca{height:40px;border:1px solid #cbd5e1;border-radius:8px;padding:0 12px;font-size:.85rem;width:100%;box-sizing:border-box;}
+        #part-catml-modal .pcm-lista{border:1px solid #e2e8f0;border-radius:8px;overflow:auto;max-height:46vh;min-height:120px;}
+        #part-catml-modal .pcm-grupo{position:sticky;top:0;background:#e7f6ee;color:#105436;font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.03em;padding:6px 12px;}
+        #part-catml-modal .pcm-item{display:flex;align-items:center;gap:10px;width:100%;border:0;border-bottom:1px solid #f1f5f9;background:#fff;padding:9px 12px;text-align:left;cursor:pointer;font-size:.82rem;color:#1c2e24;}
+        #part-catml-modal .pcm-item:hover{background:#f0fdf4;}
+        #part-catml-modal .pcm-item.is-sel{background:#dcfce7;font-weight:700;}
+        #part-catml-modal .pcm-cod{flex:0 0 64px;font-family:ui-monospace,Consolas,monospace;color:#105436;font-size:.78rem;}
+        #part-catml-modal .pcm-ok{margin-left:auto;color:#1b8253;display:none;}
+        #part-catml-modal .pcm-item.is-sel .pcm-ok{display:inline-flex;}
+        #part-catml-modal .pcm-msg{padding:16px 12px;color:#64748b;font-size:.8rem;}
+        #part-catml-modal .pcm-msg.is-erro{color:#b91c1c;}
+        #part-catml-modal .pcm-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid #e2e8f0;background:#f8fafc;}
+        #part-catml-modal .pcm-foot .btn{height:38px;display:inline-flex;align-items:center;gap:6px;margin:0;}
+        #part-catml-modal .pcm-remover{border:0;background:transparent;color:#b91c1c;font-weight:700;font-size:.8rem;cursor:pointer;padding:0;}
+        #part-catml-modal .pcm-espaco{flex:1;}
+      </style>
+      <div class="pcm-card" role="dialog" aria-modal="true" aria-labelledby="part-catml-tit">
+        <div class="pcm-head">
+          <h3 id="part-catml-tit">Categoria Moura Leite</h3>
+          <button type="button" class="pcm-x" data-acao="fechar" aria-label="Fechar"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+        </div>
+        <div class="pcm-body">
+          <div class="pcm-credor">
+            <strong>${this.esc(g.key)}</strong>
+            <span>${(g.rows || []).length} lançamento(s) · ${this.esc(this.fmt(g.total))} · Categoria Ellenco: ${this.esc(catEllenco)}</span>
+          </div>
+          <div class="pcm-atual">${atual ? "Atual: " + this.esc(this.rotuloCatMl(atual)) : "Sem categoria Moura Leite."}</div>
+          <input type="search" class="pcm-busca" id="pcm-busca" placeholder="Buscar pelo código ou nome (ex.: 2.02.02 ou obras)" autocomplete="off" disabled>
+          <div class="pcm-lista" id="pcm-lista"><div class="pcm-msg">Carregando o plano financeiro do Sienge...</div></div>
+        </div>
+        <div class="pcm-foot">
+          ${atual ? `<button type="button" class="pcm-remover" data-acao="remover">Remover categoria</button>` : ""}
+          <span class="pcm-espaco"></span>
+          <button type="button" class="btn btn-secondary" data-acao="fechar">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="pcm-salvar" disabled><i data-lucide="check" style="width:14px;height:14px;"></i> Salvar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(pop);
+    if (window.lucide) lucide.createIcons();
+    const tecla = (e) => { if (e.key === "Escape") fechar(); };
+    const fechar = () => { document.removeEventListener("keydown", tecla); pop.remove(); };
+    document.addEventListener("keydown", tecla);
+    pop.addEventListener("click", (e) => {
+      if (e.target === pop) { fechar(); return; }
+      const b = e.target.closest("[data-acao]");
+      if (b && b.dataset.acao === "fechar") fechar();
+    });
+    const salvar = pop.querySelector("#pcm-salvar");
+    const lista = pop.querySelector("#pcm-lista");
+    const busca = pop.querySelector("#pcm-busca");
+    const remover = pop.querySelector('[data-acao="remover"]');
+    if (remover) remover.addEventListener("click", async () => {
+      remover.disabled = true;
+      remover.textContent = "Removendo...";
+      const ok = await this.gravarCatMl(g.groupKey, null, g.key);
+      if (!ok) { remover.disabled = false; remover.textContent = "Remover categoria"; return; }
+      fechar();
+      this.render();
+    });
+
+    const grupos = await this.carregarGruposMl();
+    if (!document.body.contains(pop)) return;
+    if (!grupos.length) {
+      lista.innerHTML = `<div class="pcm-msg is-erro">Não foi possível carregar o plano financeiro do Sienge. Feche e tente de novo em instantes.</div>`;
+      return;
+    }
+    let escolhido = atual ? atual.id : "";
+    const fold = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+    const pintar = () => {
+      const q = fold(busca.value).trim();
+      const qDig = q.replace(/\D/g, "");
+      const vis = grupos.filter((x) => !q || fold(x.id + " " + x.label + " " + x.grupoNome).indexOf(q) >= 0 || (qDig && x.id.replace(/\D/g, "").indexOf(qDig) === 0));
+      if (!vis.length) { lista.innerHTML = `<div class="pcm-msg">Nenhuma conta encontrada para essa busca.</div>`; return; }
+      let ultimo = "";
+      lista.innerHTML = vis.map((x) => {
+        const cab = x.grupo !== ultimo ? `<div class="pcm-grupo">${this.esc(x.grupo)}${x.grupoNome ? " - " + this.esc(x.grupoNome) : ""}</div>` : "";
+        ultimo = x.grupo;
+        return cab + `<button type="button" class="pcm-item${x.id === escolhido ? " is-sel" : ""}" data-id="${this.esc(x.id)}">
+            <span class="pcm-cod">${this.esc(x.id)}</span><span>${this.esc(x.label)}</span>
+            <span class="pcm-ok"><i data-lucide="check" style="width:16px;height:16px;"></i></span></button>`;
+      }).join("");
+      if (window.lucide) lucide.createIcons();
+    };
+    lista.addEventListener("click", (e) => {
+      const it = e.target.closest(".pcm-item");
+      if (!it) return;
+      escolhido = it.dataset.id;
+      lista.querySelectorAll(".pcm-item").forEach((el) => el.classList.toggle("is-sel", el.dataset.id === escolhido));
+      salvar.disabled = !escolhido || !!(atual && atual.id === escolhido);
+    });
+    lista.addEventListener("dblclick", (e) => { if (e.target.closest(".pcm-item") && !salvar.disabled) salvar.click(); });
+    busca.disabled = false;
+    busca.addEventListener("input", pintar);
+    pintar();
+    busca.focus();
+    const sel = lista.querySelector(".pcm-item.is-sel");
+    if (sel) sel.scrollIntoView({ block: "center" });
+    salvar.addEventListener("click", async () => {
+      const item = grupos.find((x) => x.id === escolhido);
+      if (!item) return;
+      salvar.disabled = true;
+      salvar.textContent = "Gravando...";
+      const ok = await this.gravarCatMl(g.groupKey, item, g.key);
+      if (!ok) { salvar.disabled = false; salvar.textContent = "Salvar"; return; }
+      fechar();
+      this.render();
+    });
   },
 
   companyItems() {

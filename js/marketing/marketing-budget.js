@@ -239,13 +239,24 @@ const MarketingBudgetApp = {
     return ids;
   },
 
+  // marketing_budget_config no Supabase: uma linha por CC ({ ccs, pct }) e a "_categorias" ({ ids }).
+  tabelaConfig() {
+    return window.DadosFinanceiro ? window.DadosFinanceiro.tabela(this.CONFIG_COLLECTION) : null;
+  },
+
   async carregarVerbas() {
     const lista = {};
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
+    const tab = this.tabelaConfig();
+    if (tab) {
       try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.CONFIG_COLLECTION));
-        snap.forEach((d) => { if (d.id !== this.CAT_DOC) lista[d.id] = d.data() || {}; });
+        const linhas = await tab.listar();
+        linhas.forEach((d) => {
+          const id = String(d.id);
+          if (id === this.CAT_DOC) return;
+          const data = Object.assign({}, d);
+          delete data.id;
+          lista[id] = data;
+        });
       } catch (e) {
         console.warn("[Budget] verbas", e);
       }
@@ -318,17 +329,9 @@ const MarketingBudgetApp = {
     try {
       let units = this.unitsEstoque(id);
       if (!units.length) {
-        const fc = window.firebaseCollections;
-        if (window.firebaseDb && fc && fc.getDoc && fc.doc) {
-          units = [];
-          for (let n = 0; n < 40; n++) {
-            const snap = await fc.getDoc(fc.doc(window.firebaseDb, "estoque_comercial", "cc_" + id + "_" + n));
-            const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-            if (!existe) break;
-            const data = snap.data() || {};
-            if (!Array.isArray(data.units) || !data.units.length) break;
-            units = units.concat(data.units);
-          }
+        // Estoque no Supabase (estoque_comercial: uma linha por unidade; antes docs cc_<id>_<n>).
+        if (window.DadosEngenharia) {
+          units = await window.DadosEngenharia.listarUnidadesEstoque({ enterpriseId: id });
         }
       }
       if (String(this.state.ccId) !== id) return;
@@ -342,24 +345,19 @@ const MarketingBudgetApp = {
     }
   },
 
-  /** Sem estoque nem carteira carregados nesta sessão, lê do Firebase quais empreendimentos têm unidades. */
+  /** Sem estoque nem carteira carregados nesta sessão, lê do Supabase (estoque_comercial) quais empreendimentos têm unidades. */
   async carregarUnidades() {
     const s = this.state;
     if (s.unidadesLidas || s.ccsComUnidade || this.idsComUnidade().size) return false;
-    const fc = window.firebaseCollections;
-    if (!(window.firebaseDb && fc && fc.getDocs)) return false;
+    const D = window.DadosEngenharia;
+    if (!D) return false;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "estoque_comercial"));
+      // Só id e empreendimento de cada unidade (select reduzido).
+      const units = await D.listarUnidadesEstoque({ colunas: "id, enterprise_id" });
       const ids = new Set();
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        if (d.id === "_meta") return;
-        const units = Array.isArray(data.units) ? data.units : [];
-        if (data.enterpriseId && units.length) ids.add(String(data.enterpriseId));
-        units.forEach((u) => {
-          const id = u && (u.enterpriseId || u.costCenterId);
-          if (id) ids.add(String(id));
-        });
+      units.forEach((u) => {
+        const id = u && (u.enterpriseId || u.costCenterId);
+        if (id) ids.add(String(id));
       });
       s.ccsComUnidade = [...ids];
       s.unidadesLidas = true;
@@ -421,12 +419,12 @@ const MarketingBudgetApp = {
   },
 
   async lerConfig(key) {
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    const tab = this.tabelaConfig();
+    if (tab) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.CONFIG_COLLECTION, key));
-        if (snap.exists()) {
-          const data = snap.data();
+        const data = await tab.obter(key);
+        if (data) {
+          delete data.id;
           this.salvarConfigLocal(key, data);
           return data;
         }
@@ -440,10 +438,10 @@ const MarketingBudgetApp = {
   async gravarConfig(key, data) {
     const payload = { ...data, updatedAt: new Date().toISOString(), updatedBy: (window.MarketingApp && MarketingApp.currentUserName()) || "" };
     this.salvarConfigLocal(key, payload);
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return false;
+    const tab = this.tabelaConfig();
+    if (!tab) return false;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.CONFIG_COLLECTION, key), payload, { merge: true });
+      await tab.gravar(key, payload, { merge: true });
       return true;
     } catch (e) {
       console.warn("[Budget] gravar config", key, e);
@@ -734,12 +732,9 @@ const MarketingBudgetApp = {
 
   async lerEventos(ccId) {
     let list = (window.MarketingState && MarketingState.budgets) || [];
-    if (!list.length && window.firebaseDb && window.firebaseCollections) {
+    if (!list.length && window.DadosFinanceiro) {
       try {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, "marketing_budgets"));
-        list = [];
-        snap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+        list = await window.DadosFinanceiro.tabela("marketing_budgets").listar();
       } catch (e) {
         list = [];
       }
@@ -774,24 +769,13 @@ const MarketingBudgetApp = {
     const id = String(ccId || "");
     const mem = this._cacheTitulos[id];
     if (this.cacheTitulosValido(mem)) return mem;
-    if (!window.firebaseDb || !window.firebaseCollections) return null;
+    if (!window.DadosFinanceiro) return null;
     try {
-      const { doc, getDoc } = window.firebaseCollections;
-      const snap = await getDoc(doc(window.firebaseDb, this.CACHE_TITULOS_COL, id));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!existe) return null;
-      const data = snap.data() || {};
+      // marketing_budget_titulos no Supabase: uma linha por CC com bills inteiro (sem as partes <cc>_<i>).
+      const data = await window.DadosFinanceiro.lerCacheTitulosMarketing(id);
+      if (!data) return null;
       if (Date.now() - Number(data.savedAt) > this.CACHE_TITULOS_MS) return null;
-      const n = Number(data.partes) || 0;
-      let json = "";
-      for (let i = 0; i < n; i++) {
-        const ped = await getDoc(doc(window.firebaseDb, this.CACHE_TITULOS_COL, id + "_" + i));
-        const ok = ped && (typeof ped.exists === "function" ? ped.exists() : ped.exists);
-        const pedaco = ok ? (ped.data() || {}) : {};
-        if (Number(pedaco.savedAt) !== Number(data.savedAt)) return null;
-        json += String(pedaco.texto || "");
-      }
-      const bills = JSON.parse(json || "[]");
+      const bills = data.bills;
       if (!Array.isArray(bills)) return null;
       const item = { start: String(data.start || ""), end: String(data.end || ""), savedAt: Number(data.savedAt), bills: bills };
       if (!this.cacheTitulosValido(item)) return null;
@@ -808,22 +792,9 @@ const MarketingBudgetApp = {
     const savedAt = Date.now();
     const item = { start: start, end: end, savedAt: savedAt, bills: bills || [] };
     this._cacheTitulos[id] = item;
-    if (!window.firebaseDb || !window.firebaseCollections) return;
+    if (!window.DadosFinanceiro) return;
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      const json = JSON.stringify(item.bills);
-      const pedacos = [];
-      const tamanho = 700000;
-      for (let i = 0; i < json.length; i += tamanho) pedacos.push(json.slice(i, i + tamanho));
-      if (!pedacos.length) pedacos.push("[]");
-      await setDoc(doc(window.firebaseDb, this.CACHE_TITULOS_COL, id), {
-        start: start, end: end, savedAt: savedAt, partes: pedacos.length
-      });
-      for (let i = 0; i < pedacos.length; i++) {
-        await setDoc(doc(window.firebaseDb, this.CACHE_TITULOS_COL, id + "_" + i), {
-          i: i, texto: pedacos[i], savedAt: savedAt
-        });
-      }
+      await window.DadosFinanceiro.gravarCacheTitulosMarketing(id, start, end, item.bills, savedAt);
     } catch (e) {
       console.warn("[Budget] não gravei o cache", e);
     }
@@ -1324,26 +1295,12 @@ const MarketingBudgetApp = {
     const id = String(ccId || "");
     if (this._cacheVendas[id]) return this._cacheVendas[id];
     const vazio = { meses: {} };
-    if (!id || !window.firebaseDb || !window.firebaseCollections) return vazio;
+    if (!id || !window.DadosFinanceiro) return vazio;
     try {
-      const { doc, getDoc } = window.firebaseCollections;
-      const snap = await getDoc(doc(window.firebaseDb, this.CACHE_VENDAS_COL, id));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!existe) {
-        this._cacheVendas[id] = vazio;
-        return vazio;
-      }
-      const lista = ((snap.data() || {}).meses || []).map(String).filter((ym) => /^\d{4}-\d{2}$/.test(ym));
-      const pedacos = await Promise.all(lista.map((ym) => getDoc(doc(window.firebaseDb, this.CACHE_VENDAS_COL, id + "_" + ym)).catch(() => null)));
-      pedacos.forEach((ped, i) => {
-        const ok = ped && (typeof ped.exists === "function" ? ped.exists() : ped.exists);
-        if (!ok) return;
-        const data = ped.data() || {};
-        vazio.meses[lista[i]] = {
-          vendas: Array.isArray(data.vendas) ? data.vendas : [],
-          distratos: Array.isArray(data.distratos) ? data.distratos : []
-        };
-      });
+      // marketing_budget_vendas no Supabase: uma linha por CC e mês (o doc índice "<cc>" com meses[] acabou).
+      const lido = await window.DadosFinanceiro.lerCacheVendasMarketing(id);
+      const meses = (lido && lido.meses) || {};
+      Object.keys(meses).forEach((ym) => { vazio.meses[ym] = meses[ym]; });
       this._cacheVendas[id] = vazio;
       return vazio;
     } catch (e) {
@@ -1359,25 +1316,11 @@ const MarketingBudgetApp = {
     const mem = this._cacheVendas[id] || { meses: {} };
     chaves.forEach((ym) => { mem.meses[ym] = porMes[ym]; });
     this._cacheVendas[id] = mem;
-    if (!window.firebaseDb || !window.firebaseCollections) return;
+    if (!window.DadosFinanceiro) return;
     try {
-      const { doc, getDoc, setDoc } = window.firebaseCollections;
-      const savedAt = Date.now();
-      const ref = doc(window.firebaseDb, this.CACHE_VENDAS_COL, id);
-      const snap = await getDoc(ref).catch(() => null);
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const atuais = existe ? ((snap.data() || {}).meses || []) : [];
-      const meses = [...new Set(atuais.map(String).concat(chaves))].filter((ym) => /^\d{4}-\d{2}$/.test(ym)).sort();
-      const lote = 8;
-      for (let i = 0; i < chaves.length; i += lote) {
-        const fatia = chaves.slice(i, i + lote);
-        await Promise.all(fatia.map((ym) => setDoc(doc(window.firebaseDb, this.CACHE_VENDAS_COL, id + "_" + ym), {
-          vendas: porMes[ym].vendas || [],
-          distratos: porMes[ym].distratos || [],
-          savedAt: savedAt
-        })));
-      }
-      await setDoc(ref, { meses: meses, savedAt: savedAt }, { merge: true });
+      const fatia = {};
+      chaves.forEach((ym) => { fatia[ym] = porMes[ym]; });
+      await window.DadosFinanceiro.gravarCacheVendasMarketing(id, fatia, Date.now());
     } catch (e) {
       console.warn("[Budget] não gravei as vendas", e);
     }
@@ -1643,12 +1586,12 @@ const MarketingBudgetApp = {
   },
 
   async lerPerfilCliente(id) {
-    const fc = window.firebaseCollections;
     let p = null;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    if (window.DadosCobranca) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "sienge_customers", String(id)));
-        if (snap.exists()) p = this.perfilDe(snap.data());
+        // sienge_customers está no Supabase (área cobrança).
+        const c = await window.DadosCobranca.tabela("sienge_customers").obter(String(id));
+        if (c) p = this.perfilDe(c);
       } catch (e) {}
     }
     if ((!p || p.sexo === "?" || (p.sexo !== "PJ" && !p.nasc)) && typeof window.siengeFetchWithRetry === "function") {
@@ -3515,13 +3458,19 @@ const MarketingConfigApp = {
 
   async carregarLista() {
     const B = this.B;
-    const fc = window.firebaseCollections;
+    const tab = B.tabelaConfig();
     const lista = {};
     let ok = false;
-    if (window.firebaseDb && fc && fc.getDocs) {
+    if (tab) {
       try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, B.CONFIG_COLLECTION));
-        snap.forEach((d) => { if (d.id !== B.CAT_DOC) lista[d.id] = d.data() || {}; });
+        const linhas = await tab.listar();
+        linhas.forEach((d) => {
+          const id = String(d.id);
+          if (id === B.CAT_DOC) return;
+          const data = Object.assign({}, d);
+          delete data.id;
+          lista[id] = data;
+        });
         ok = true;
       } catch (e) {
         console.warn("[Marketing Config] lista", e);
@@ -3784,7 +3733,7 @@ const MarketingConfigApp = {
       if (mudouCcs) B.state.consultado = false;
     }
     this.render();
-    if (!ok) alert("A configuração ficou salva só neste computador: não consegui gravar no Firebase. Tente salvar de novo.");
+    if (!ok) alert("A configuração ficou salva só neste computador: não consegui gravar no banco. Tente salvar de novo.");
   },
 
   editar(id) {

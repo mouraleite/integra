@@ -4,7 +4,7 @@
  * estoque com projeção e tributos do Lucro Presumido, regras de parceria (empreendedor e parceiro). */
 const test = require("node:test");
 const assert = require("node:assert");
-const A = require("../../orion-acompanhamento-calc.js");
+const A = require("../../js/orcamento/orion-acompanhamento-calc.js");
 const casos = require("./acompanhamento-ficticio/casos.json");
 
 const perto = (a, b, onde) => {
@@ -51,7 +51,7 @@ test("DFC de empreendimentos: grupos da visão, pais, fórmulas do Órion e conf
     { tipo: "OUTCOME", categoria: "Devolução distrato", gid: "g_01_04", mes: "2025-02", valor: 50 }, { tipo: "OUTCOME", categoria: "Sem grupo", gid: null, grupo: "", mes: "2025-02", valor: 20 },
     { tipo: "INCOME", categoria: "AFAC", gid: "g_01_01", mes: "2025-02", valor: 999 }],
     previsto: [{ tipo: "OUTCOME", categoria: "PIS", gid: "g_02_01", mes: "2027-03", valor: 10 }] };
-  const A = require("../../orion-acompanhamento-calc.js");
+  const A = require("../../js/orcamento/orion-acompanhamento-calc.js");
   const calc = A.calcularCentro(Object.assign({}, entrada, { hoje: "2026-11", terrenoManual: { valor: 100 }, aliquotas: {} }));
   const r = A.dfcVida({ centros: [{ entrada, calc, opts: {} }], grupos, hoje: "2026-11", lucroAcomp: calc.lucro_liq_operacional });
   const L = (c) => r.linhas.find((l) => l.codigo === c);
@@ -70,7 +70,7 @@ test("DFC de empreendimentos: projeção do estoque e visão de parceria batem c
   const entrada = { real: [{ tipo: "INCOME", categoria: "Venda", gid: "g_01_01", mes: "2026-06", valor: 5000 }, { tipo: "OUTCOME", categoria: "Obras", grupo: "OBRAS", gid: "g_04_03", mes: "2026-07", valor: 1200 }],
     previsto: [], vendas: [{ categoria: "VGV Vendido", mes: "2026-06", valor: 5000, area: 100, parcelas: 10 }, { categoria: "VGV Vendido", mes: "2026-08", valor: 6000, area: 100, parcelas: 1 }],
     unidades: { total: 5, estoque: [{ area: 100 }, { area: 120 }, { area: 80 }] } };
-  const A = require("../../orion-acompanhamento-calc.js");
+  const A = require("../../js/orcamento/orion-acompanhamento-calc.js");
   [{}, { regras: {}, multApportioned: 0.4, multDefault: 0 }].forEach((opts) => {
     const calc = A.calcularCentro(Object.assign({}, entrada, opts, { hoje: "2026-11", aliquotas: { pis: 0.65, cofins: 3 } }));
     const r = A.dfcVida({ centros: [{ entrada, calc, opts }], grupos, hoje: "2026-11", lucroAcomp: calc.lucro_liq_operacional });

@@ -8,12 +8,11 @@ window.ConstrucaoApp = {
         this.loadStages();
     },
 
+    // Estágios no Supabase: configuracoes, chave "config_stages/construction" (doc inteiro).
     async loadStages() {
-        if (!window.firebaseDb || !window.firebaseCollections) return;
+        if (!window.DadosNucleo) return;
         try {
-            const { doc, getDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, "config_stages", "construction");
-            const snapshot = await getDoc(ref);
+            const snapshot = await window.DadosNucleo.lerConfig("construction", "config_stages");
             if (snapshot.exists()) {
                 const data = snapshot.data();
                 if (data.stages && data.stages.length > 0) {
@@ -26,11 +25,9 @@ window.ConstrucaoApp = {
     },
 
     async saveStages(newStages) {
-        if (!window.firebaseDb || !window.firebaseCollections) return;
+        if (!window.DadosNucleo) return;
         try {
-            const { doc, setDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, "config_stages", "construction");
-            await setDoc(ref, { stages: newStages });
+            await window.DadosNucleo.gravarConfig("construction", { stages: newStages }, {}, "config_stages");
             this.stages = newStages;
             alert("Estágios atualizados com sucesso!");
         } catch (e) {
@@ -419,7 +416,7 @@ window.ConstrucaoApp = {
     },
 
     async uploadFile(file, customerId) {
-        if (!window.firebaseStorage || !window.firebaseCollections) throw new Error("Firebase Storage não inicializado");
+        if (!window.firebaseStorage || !window.firebaseCollections) throw new Error("Armazenamento de arquivos não inicializado");
         
         // As functions do storage não foram expostas em firebaseCollections, vamos checar firebase-config.js
         // No firebase-config.js temos storageBucket importado, mas `uploadBytes` e `getDownloadURL` estão sendo exportados?
@@ -598,39 +595,38 @@ window.loadConstrucoes = async function() {
         
     console.log('[Construção] Iniciando loadConstrucoes para cliente:', customerId, 'venda:', saleId);
     try {
-        const { collection, query, where, getDocs } = window.firebaseCollections;
+        // Supabase: customer_id/titulo são texto, então a consulta numérica de antes não é mais necessária.
+        const DE = window.DadosEngenharia;
         const querySpecs = [
-            { coll: "construction_checks", field: "customerId", id: String(customerId) },
-            { coll: "vistorias", field: "customerId", id: String(customerId) }
+            { coll: "construction_checks", col: "customer_id", id: String(customerId) },
+            { coll: "vistorias", col: "customer_id", id: String(customerId) }
         ];
-        const numId = Number(customerId);
-        if (!isNaN(numId)) {
-            querySpecs.push({ coll: "construction_checks", field: "customerId", id: numId });
-            querySpecs.push({ coll: "vistorias", field: "customerId", id: numId });
-        }
         const billId = (typeof AppState !== "undefined" && AppState.currentReceivableBillId) || saleId;
         if (billId) {
-            querySpecs.push({ coll: "vistorias", field: "tituloKey", id: String(billId) });
-            querySpecs.push({ coll: "vistorias", field: "titulo", id: String(billId) });
+            querySpecs.push({ coll: "vistorias", col: "titulo_key", id: String(billId) });
+            querySpecs.push({ coll: "vistorias", col: "titulo", id: String(billId) });
         }
 
         loading.innerHTML = 'Carregando dados do servidor (pode demorar alguns segundos)...';
         const snaps = await Promise.all(querySpecs.map(q =>
-            getDocs(query(collection(window.firebaseDb, q.coll), where(q.field || "customerId", "==", q.id)))
-                .then(snap => ({ snap, coll: q.coll }))
+            DE.tabela(q.coll).listar({ filtros: [[q.col, "eq", q.id]] })
+                .then(lista => ({ lista, coll: q.coll }))
                 .catch(err => {
-                    console.warn("[Construção] consulta Firebase ignorada:", q.coll, q.field, err);
-                    return { snap: { forEach: () => {} }, coll: q.coll };
+                    console.warn("[Construção] consulta ignorada:", q.coll, q.col, err);
+                    return { lista: [], coll: q.coll };
                 })
         ));
 
         const snapshot = [];
         const seenIds = new Set();
-        snaps.forEach(({ snap, coll }) => {
-            snap.forEach(d => {
-                if (seenIds.has(d.id)) return;
-                seenIds.add(d.id);
-                snapshot.push({ id: d.id, _collection: coll, data: () => d.data() });
+        snaps.forEach(({ lista, coll }) => {
+            lista.forEach(item => {
+                const id = String(item.id);
+                if (seenIds.has(id)) return;
+                seenIds.add(id);
+                const dados = Object.assign({}, item);
+                delete dados.id; // como o d.data() do Firestore (o id vem à parte)
+                snapshot.push({ id, _collection: coll, data: () => dados });
             });
         });
         
@@ -743,8 +739,7 @@ window.loadConstrucoes = async function() {
             const ctxFix = window.ConstrucaoApp.getActiveContractContext();
             const unitFix = ctxFix.unitName;
             const ccFix = ctxFix.costCenterId;
-            if (unitFix && window.firebaseCollections && window.firebaseCollections.updateDoc) {
-                const { updateDoc, doc } = window.firebaseCollections;
+            if (unitFix && window.DadosEngenharia) {
                 const pendingBroken = results.filter(d =>
                     d._collection === 'vistorias'
                     && pendingStatus.has(d.status)
@@ -757,7 +752,7 @@ window.loadConstrucoes = async function() {
                         patch.titulo = ctxFix.titulo;
                         patch.tituloKey = ctxFix.titulo;
                     }
-                    await updateDoc(doc(window.firebaseDb, 'vistorias', d.id), patch);
+                    await window.DadosEngenharia.tabela('vistorias').gravar(d.id, patch, { merge: true });
                     d.unidade = unitFix;
                     if (ccFix) d.costCenterId = ccFix;
                 }));
@@ -1300,15 +1295,14 @@ window.solicitarWhatsAppFromClient = async function() {
         const btn = document.getElementById('btn-solicitar-wpp-client');
         if (btn) btn.disabled = true;
 
-        const { collection, addDoc, query, where, getDocs } = window.firebaseCollections;
-        const q = query(collection(window.firebaseDb, 'vistorias'), where("contractId", "==", String(contractNumber)));
-        const snap = await getDocs(q);
-        const abertos = snap.docs.filter((d) => {
-            const st = String((d.data() || {}).status || "");
+        const tabVistorias = window.DadosEngenharia.tabela('vistorias');
+        const lista = await tabVistorias.listar({ filtros: [["contract_id", "eq", String(contractNumber)]] });
+        const abertos = lista.filter((d) => {
+            const st = String((d || {}).status || "");
             return st === "solicitada" || st === "aguardando_fotos" || st === "aguardando_validacao";
         });
         if (abertos.length) {
-            const atual = abertos[0].data() || {};
+            const atual = abertos[0] || {};
             const st = String(atual.status || "");
             if (btn) btn.disabled = false;
             if (st === "solicitada") {
@@ -1357,7 +1351,7 @@ window.solicitarWhatsAppFromClient = async function() {
             createdAt: new Date().toISOString()
         };
 
-        await addDoc(collection(window.firebaseDb, 'vistorias'), newData);
+        await tabVistorias.criar(newData);
 
         if (btn) btn.disabled = false;
         alert("Pedido registrado na Vistoria, em nome de " + (requestedBy || "você") + ". O back office dispara um único link com os pedidos pendentes.");
@@ -1536,8 +1530,8 @@ window.saveNovaVistoria = async function() {
             }
         }
 
-        const { collection, addDoc, doc, updateDoc } = window.firebaseCollections;
-        const ccId = window.ConstrucaoApp.extractCostCenterId(contractObj);
+        const DE = window.DadosEngenharia;
+        const ccId =window.ConstrucaoApp.extractCostCenterId(contractObj);
         const unitName = window.ConstrucaoApp.extractUnitName(contractObj);
         const allKeys = new Set([
             String(contractNumber),
@@ -1582,10 +1576,12 @@ window.saveNovaVistoria = async function() {
         };
 
         if (editId) {
-            const editCheck = window.ConstrucaoApp.currentChecks.find(c => c.id === editId); const collName = (editCheck && editCheck._source === 'vistoria') ? 'vistorias' : 'construction_checks'; await updateDoc(doc(window.firebaseDb, collName, editId), checkData);
+            const editCheck = window.ConstrucaoApp.currentChecks.find(c => c.id === editId); const collName = (editCheck && editCheck._source === 'vistoria') ? 'vistorias' : 'construction_checks';
+            // updateDoc -> gravar com merge. Em "vistorias", os campos sem coluna (date, responsible, stage...) vão para extra.
+            await DE.tabela(collName).gravar(editId, checkData, { merge: true });
         } else {
             checkData.createdAt = new Date().toISOString();
-            await addDoc(collection(window.firebaseDb, "construction_checks"), checkData);
+            await DE.tabela("construction_checks").criar(checkData);
         }
 
         if (typeof window.closePendingLinkVistorias === 'function') {
@@ -1644,14 +1640,13 @@ window.deleteNovaVistoria = async function(id) {
     document.getElementById('btn-confirm-del').onclick = async () => {
         document.body.removeChild(div);
         try {
-            const { doc, deleteDoc } = window.firebaseCollections;
             const check = window.ConstrucaoApp.currentChecks.find(c => c.id === id);
             if (check && window.ConstrucaoApp.isLinkVistoria(check)) {
                 alert('Vistorias feitas pelo link não podem ser excluídas nesta tela.');
                 return;
             }
             const tryDelete = async (coll) => {
-                try { await deleteDoc(doc(window.firebaseDb, coll, id)); return true; } catch (e) { return false; }
+                try { await window.DadosEngenharia.tabela(coll).excluir(id); return true; } catch (e) { return false; }
             };
             if (check && check._collection) {
                 await tryDelete(check._collection);
@@ -1694,14 +1689,9 @@ window.debugConstrucaoData = async function() {
     }
 
     try {
-        const { collection, query, where, getDocs } = window.firebaseCollections;
-        const qStr = query(collection(window.firebaseDb, 'construction_checks'), where('customerId', '==', String(customerId)));
-        const qNum = query(collection(window.firebaseDb, 'construction_checks'), where('customerId', '==', Number(customerId)));
-        const [snapStr, snapNum] = await Promise.all([getDocs(qStr), getDocs(qNum)]);
-        
-        const snapshot = [];
-        snapStr.forEach(d => snapshot.push({ id: d.id, ...d.data() }));
-        snapNum.forEach(d => { if (!snapshot.find(existing => existing.id === d.id)) snapshot.push({ id: d.id, ...d.data() }); });
+        // customer_id é texto no Supabase: uma consulta só (antes, texto e número).
+        const snapshot = await window.DadosEngenharia.tabela('construction_checks')
+            .listar({ filtros: [['customer_id', 'eq', String(customerId)]] });
         
         let validIdsStr = Array.from(new Set([String(contractNumber), String(saleId)])).join(', ');
         if (window.AnexosState && window.AnexosState.activeContract) {

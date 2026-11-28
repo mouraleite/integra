@@ -141,6 +141,7 @@ const GerarPagamentoApp = {
   },
 
   avisoFechamento() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("fechamento-pagadoria")) return;
     const u = window.AppState && window.AppState.currentUser;
     if (!this.ehAnalistaPagadoria(u)) return;
     const janela = this.janelaFechamento(new Date());
@@ -149,6 +150,13 @@ const GerarPagamentoApp = {
     const chave = "crm_pagadoria_fechamento_" + String(u.email || u.name || "op") + "_" + hoje;
     try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
     if (document.getElementById("gp-fechamento-aviso")) return;
+    this.montarAvisoFechamento(janela, () => {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    });
+  },
+
+  /** Monta o pop-up do fechamento. aoCiente roda antes de fechar (na prévia, não é passado). */
+  montarAvisoFechamento(janela, aoCiente) {
     const ini = this.dataBr(janela.start);
     const fim = this.dataBr(janela.end);
     const pagar = Number(String(janela.start).slice(8, 10));
@@ -165,10 +173,11 @@ const GerarPagamentoApp = {
     </div>`;
     document.body.appendChild(overlay);
     const fechar = () => {
-      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+      if (typeof aoCiente === "function") aoCiente();
       overlay.remove();
     };
     overlay.querySelector("#gp-fechamento-ciente").addEventListener("click", fechar);
+    return overlay;
   },
 
   perfilFold(name) {
@@ -261,10 +270,20 @@ const GerarPagamentoApp = {
   },
 
   abrirConferenciaLotes() {
+    if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("lotes")) return;
     if (!this.usuarioVeConferenciaLotes()) return;
     const hoje = this.iso(new Date());
     if (this.conferenciaJaVista(hoje)) return;
     if (document.getElementById("gp-conf-lotes")) return;
+    this.montarConferenciaLotes({
+      aoFechar: () => this.marcarConferenciaVista(hoje),
+      aoBuscar: () => this.buscarAtualizacaoLotes()
+    });
+  },
+
+  /** Monta o pop-up da situação dos lotes. Sem aoBuscar, o Buscar atualizações fica desabilitado (prévia). */
+  montarConferenciaLotes(opcoes) {
+    const op = opcoes || {};
     const overlay = document.createElement("div");
     overlay.id = "gp-conf-lotes";
     overlay.setAttribute("role", "dialog");
@@ -291,18 +310,19 @@ const GerarPagamentoApp = {
     </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector("#gp-conf-fechar").addEventListener("click", () => {
-      this.marcarConferenciaVista(hoje);
+      if (typeof op.aoFechar === "function") op.aoFechar();
       overlay.remove();
     });
-    overlay.querySelector("#gp-conf-buscar").addEventListener("click", () => this.buscarAtualizacaoLotes());
+    const buscar = overlay.querySelector("#gp-conf-buscar");
+    if (typeof op.aoBuscar === "function") buscar.addEventListener("click", op.aoBuscar);
+    else buscar.disabled = true;
+    return overlay;
   },
 
   async lerLotesGravados() {
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.LOTES_COLLECTION));
-      const list = [];
-      snap.forEach((d) => list.push(Object.assign({ id: d.id }, d.data())));
+    // pagamento_lotes (+ _itens) no Supabase: cada lote já volta no formato do app (com id, conta, sienge e itens).
+    if (window.DadosFinanceiro) {
+      const list = await window.DadosFinanceiro.listarLotes();
       return list.filter(Boolean);
     }
     return this.lotesLocal();
@@ -858,12 +878,11 @@ const GerarPagamentoApp = {
   },
 
   rootEl() {
-    const id = this.state.tela === "cartao" ? "cartao-credito-root" : "gerar-pagamento-root";
-    return document.getElementById(id);
+    return document.getElementById("gerar-pagamento-root");
   },
 
   init(tela) {
-    if (tela === "cartao" || tela === "lotes") this.state.tela = tela;
+    if (tela === "lotes") this.state.tela = tela;
     const padrao = this.periodoPadrao();
     this.state.startDate = padrao.start;
     this.state.endDate = padrao.end;
@@ -887,7 +906,7 @@ const GerarPagamentoApp = {
   /**
    * A conferência do rateio usa a Parametrização de Parceiro (quais planos entram na parceria de cada obra)
    * e a visão DFC do Plano Financeiro. Sem isso carregado, um título sem rateio num plano da parceria
-   * passava como "Não se aplica". Aqui só LÊ do Firebase; não grava nada.
+   * passava como "Não se aplica". Aqui só LÊ da nuvem; não grava nada.
    */
   async garantirDadosParceria() {
     const PP = window.ParametrizacaoParceiroApp;
@@ -899,11 +918,9 @@ const GerarPagamentoApp = {
       let local = [];
       try { local = JSON.parse(localStorage.getItem("crm_plano_visoes_v2") || "[]") || []; } catch (e) { local = []; }
       const temDfc = (lista) => Array.isArray(lista) && lista.some((v) => v && v.id === "dfc_default" && Array.isArray(v.groups) && v.groups.length);
-      if (PF && !temDfc(PF.visoes) && !temDfc(local) && window.firebaseDb && window.firebaseCollections) {
-        const { doc, getDoc } = window.firebaseCollections;
-        const snap = await getDoc(doc(window.firebaseDb, "config", "global"));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        const raw = existe ? (snap.data() || {}).crm_plano_visoes_v2 : null;
+      if (PF && !temDfc(PF.visoes) && !temDfc(local) && window.DadosNucleo) {
+        // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+        const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
         const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (temDfc(nuvem)) PF.visoes = nuvem;
       }
@@ -1090,20 +1107,32 @@ const GerarPagamentoApp = {
         ? (typeof siengeSplitDateRange === "function" ? siengeSplitDateRange(retroIni, retroFim) : [{ start: retroIni, end: retroFim }])
         : [];
       const faixas = faixasRetro.concat(faixasPeriodo);
-      const bills = [];
-      let passo = 0;
-      const total = faixas.length * alvos.length;
-      for (const faixa of faixas) {
-        for (const emp of alvos) {
+      // Duas consultas ao mesmo tempo (a fila do bulk-data do Sienge aceita duas). A ordem final não muda:
+      // cada parte entra na posição dela.
+      const pedidos = [];
+      faixas.forEach((faixa) => alvos.forEach((emp) => pedidos.push({ faixa, emp })));
+      const partes = new Array(pedidos.length);
+      const total = pedidos.length;
+      let proximo = 0;
+      let feitos = 0;
+      const worker = async () => {
+        while (proximo < pedidos.length) {
           if (gen !== s.gen) return;
-          passo += 1;
-          s.progressoPct = (passo / Math.max(1, total)) * 0.4;
-          this.pintarProgresso();
-          const parte = await api.outcomeRange(faixa.start, faixa.end, emp);
-          if (Array.isArray(parte)) bills.push.apply(bills, parte);
+          const i = proximo++;
+          const p = pedidos[i];
+          const parte = await api.outcomeRange(p.faixa.start, p.faixa.end, p.emp);
+          partes[i] = Array.isArray(parte) ? parte : [];
+          feitos += 1;
+          if (gen === s.gen) {
+            s.progressoPct = (feitos / Math.max(1, total)) * 0.4;
+            this.pintarProgresso();
+          }
         }
-      }
+      };
+      await Promise.all([worker(), worker()]);
       if (gen !== s.gen) return;
+      const bills = [];
+      partes.forEach((parte) => { if (parte) bills.push.apply(bills, parte); });
       this.montarTitulos(base, bills, parceiros);
       s.progressoPct = 0.45;
       this.pintarProgresso();
@@ -1137,6 +1166,17 @@ const GerarPagamentoApp = {
     if (nome === "PAGAMENTO" || nome.indexOf("PAGAMENTO") === 0) return true;
     if (nome === "ADIANTAMENTO" || nome.indexOf("ADIANTAMENTO") === 0) return true;
     return /BAIXA|LIQUID|QUITAC/.test(nome);
+  },
+
+  /** Abatimento de adiantamento (8) ou cancelamento (3): encerra a parcela sem pagamento em banco. */
+  baixaSemCaixa(pay) {
+    if (!pay || typeof pay !== "object") return false;
+    const id = String(pay.operationTypeId != null ? pay.operationTypeId : "").trim();
+    const nome = String(pay.operationTypeName || pay.operationName || "")
+      .normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim();
+    if (/ESTORNO|REAPROP/.test(nome)) return false;
+    if (id === "8" || id === "3") return true;
+    return /^ABATIMENTO DE ADIANTAMENTO|^CANCELAMENTO/.test(nome);
   },
 
   valorBaixa(pay) {
@@ -1293,9 +1333,18 @@ const GerarPagamentoApp = {
       });
       const original = Number(bill.originalAmount) || 0;
       let saldo = app.billBalance(bill);
+      const saldoSienge = saldo;
       const temConta = movs.length > 0;
       const quitou = temConta && original > 0.009 && quitadoPorBaixa >= original - 0.02 && temBaixa;
-      if (!temConta) {
+      // Baixa sem dinheiro saindo do banco: abatimento de adiantamento (8) ou cancelamento (3).
+      // No Sienge a parcela fica "Totalmente paga" e não entra mais em lote.
+      const semCaixa = lista(bill.payments).reduce((t, pay) => (this.baixaSemCaixa(pay) ? t + this.valorBaixa(pay) : t), 0);
+      const encerradaSemCaixa = semCaixa > 0.009 && saldoSienge != null && saldoSienge <= 0.009
+        && original > 0.009 && semCaixa + quitadoPorBaixa >= original - 0.02;
+      if (encerradaSemCaixa) {
+        pago = true;
+        saldo = 0;
+      } else if (!temConta) {
         pago = false;
         if (saldo != null && saldo <= 0.009) saldo = null;
       } else if (quitou || pago || (saldo != null && saldo <= 0.009)) {
@@ -1364,6 +1413,15 @@ const GerarPagamentoApp = {
       });
     });
     linhas.sort((a, b) => (a.vencimento || "").localeCompare(b.vencimento || "") || Number(a.titulo) - Number(b.titulo) || Number(a.parcela) - Number(b.parcela));
+    // Parcelas que o Sienge já mostra pagas na busca (antes do recorte): servem para não reler lotes antigos.
+    const pagos = new Set();
+    const abertos = new Set();
+    linhas.forEach((r) => {
+      const k = this.chaveTitulo(r.titulo, r.parcela);
+      if (r.pago && !(Number(r.aPagar) > 0.009)) pagos.add(k); else abertos.add(k);
+    });
+    abertos.forEach((k) => pagos.delete(k));
+    this._parcelasPagasBusca = pagos;
     const ini = String(this.state.startDate || "").slice(0, 10);
     const fim = String(this.state.endDate || "").slice(0, 10);
     const noRecorte = linhas.filter((r) => {
@@ -1403,12 +1461,9 @@ const GerarPagamentoApp = {
 
   async carregarLotes() {
     let list = null;
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
+    if (window.DadosFinanceiro) {
       try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.LOTES_COLLECTION));
-        list = [];
-        snap.forEach((d) => list.push({ ...d.data(), id: d.id }));
+        list = await window.DadosFinanceiro.listarLotes();
         this.salvarLotesLocal(list);
       } catch (e) {
         console.warn("[Gerar Pagamento] lotes", e);
@@ -1424,7 +1479,14 @@ const GerarPagamentoApp = {
     const s = this.state;
     if (typeof window.siengeFetchWithRetry !== "function") return;
     s.loteSiengeLidoEm = Date.now();
-    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => (l.itens || []).map((i) => String(i.titulo)));
+    // Lote já enviado ao Sienge: só relê se ainda houver parcela dele que a busca não mostrou paga.
+    // Lote todo pago não pode ter sido excluído no Sienge, então não precisa de uma consulta por título.
+    const pagasBusca = this._parcelasPagasBusca || new Set();
+    const deLotes = s.lotes.filter((l) => this.loteNoSienge(l)).flatMap((l) => {
+      const itens = l.itens || [];
+      const todosPagos = itens.length && itens.every((i) => pagasBusca.has(this.chaveTitulo(i.titulo, i.parcela)));
+      return todosPagos ? [] : itens.map((i) => String(i.titulo));
+    });
     const abertos = [...new Set(s.titulos.filter((r) => !r.pago).map((r) => r.titulo).concat(deLotes))];
     const fila = abertos.slice();
     const totalBills = fila.length;
@@ -1537,9 +1599,11 @@ const GerarPagamentoApp = {
       const BC = window.BoletoCheck;
       const lista = (res) => (Array.isArray(res) ? res : ((res && (res.results || res.data)) || []));
       cache[id] = (async () => {
+        // Com o Sienge cheio (429), uma tentativa só deixava o PIX em "atenção" e travava o título.
+        // 4 tentativas: o siengeFetchWithRetry espera entre elas quando o Sienge pede para aguardar.
         const [cad, pix] = await Promise.all([
-          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}`, 1),
-          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}/pix-informations`, 1).catch(() => null)
+          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}`, 4),
+          window.siengeFetchWithRetry(`/creditors/${encodeURIComponent(id)}/pix-informations`, 4).catch(() => null)
         ]);
         if (!cad || typeof cad !== "object") return { erro: "credor não encontrado" };
         const telefones = []
@@ -1563,7 +1627,11 @@ const GerarPagamentoApp = {
           };
         }).filter((c) => c.tipo && c.chave);
         return { id, nome: cad.name || "", doc: BC.digits(cad.cnpj || cad.cpf), telefones, emails, chaves };
-      })().catch((e) => ({ erro: (e && e.message) || "falha na consulta" }));
+      })().catch((e) => {
+        // Falha não fica guardada: a próxima conferência (ou reabrir o título) consulta de novo.
+        delete cache[id];
+        return { erro: (e && e.message) || "falha na consulta" };
+      });
     }
     return cache[id];
   },
@@ -1673,30 +1741,30 @@ const GerarPagamentoApp = {
     return "";
   },
 
-  /** Boleto cujo beneficiário não é o prestador da nota: o operador ajusta no Sienge e libera aqui. */
-  async alertarBeneficiarioBoleto(check, payment, nota, billId) {
+  /** Boleto cujo beneficiário não é o prestador da nota nem o credor do título. */
+  async alertarBeneficiarioBoleto(check, payment, nota, billId, credorDoc) {
     if (!check || !window.BoletoCheck || !BoletoCheck.ehBoleto(payment)) return;
     if (payment.kind === "boleto-concessionaria" || payment.kind === "boleto-tax") return;
     const prestador = nota && (nota.cnpjPrestador || "");
-    const docsNota = new Set(((nota && nota.cnpjs) || []).map((d) => BoletoCheck.digits(d)).filter((d) => d.length >= 11));
-    if (prestador) docsNota.add(BoletoCheck.digits(prestador));
-    if (!docsNota.size && !(nota && nota.cnpjPrestador)) return;
+    const credor = BoletoCheck.digits(credorDoc || "");
+    if (!prestador && (credor.length !== 11 && credor.length !== 14)) return;
     const prest = BoletoCheck.digits(prestador);
-    const bate = (doc) => {
-      const n = BoletoCheck.digits(doc);
-      if (n.length !== 11 && n.length !== 14) return false;
-      return prest ? n === prest : docsNota.has(n);
-    };
     let benef = this.docBeneficiarioPagamento(payment);
-    if (!bate(benef) && window.NotaFiscalCheck && typeof NotaFiscalCheck.cnpjBeneficiarioBoleto === "function") {
+    if (window.NotaFiscalCheck && typeof NotaFiscalCheck.cnpjBeneficiarioBoleto === "function") {
       let doPdf = "";
       try { doPdf = await NotaFiscalCheck.cnpjBeneficiarioBoleto(billId); } catch (e) { doPdf = ""; }
-      if (bate(doPdf) || !benef) benef = doPdf;
+      if (!benef) benef = doPdf;
     }
     if (!benef || (benef.length !== 11 && benef.length !== 14)) return;
-    const igual = bate(benef);
-    if (igual) return;
-    const msg = `Beneficiário do boleto (${BoletoCheck.docFmt(benef)}) é diferente do prestador da nota. Informe no Sienge que o beneficiário foi alterado e clique em Liberar.`;
+    const rel = (a, b) => (window.NotaFiscalCheck && typeof NotaFiscalCheck.relacaoCnpj === "function")
+      ? NotaFiscalCheck.relacaoCnpj(a, b)
+      : (a && b && a === b ? "igual" : "diferente");
+    const partes = [];
+    if ((prest.length === 11 || prest.length === 14) && rel(benef, prest) === "diferente") partes.push("prestador da nota (" + BoletoCheck.docFmt(prest) + ")");
+    if ((credor.length === 11 || credor.length === 14) && rel(benef, credor) === "diferente" && credor !== prest) partes.push("credor do título (" + BoletoCheck.docFmt(credor) + ")");
+    if ((credor.length === 11 || credor.length === 14) && rel(benef, credor) === "diferente" && credor === prest) partes.push("credor do título, que é o prestador da nota (" + BoletoCheck.docFmt(credor) + ")");
+    if (!partes.length) return;
+    const msg = "Beneficiário do boleto (" + BoletoCheck.docFmt(benef) + ") é diferente do " + partes.join(" e do ") + ". Informe no Sienge que o beneficiário foi alterado e clique em Liberar.";
     check.avisos = check.avisos || [];
     if (!check.avisos.includes(msg)) check.avisos.push(msg);
     check.beneficiarioDivergente = true;
@@ -1895,7 +1963,7 @@ const GerarPagamentoApp = {
           marcarLimite(msg);
           return { nivel: "erro", falhaConsulta: true, resumo: msg, erros: [msg], avisos: [], infos: [] };
         };
-        const fiscalP = servico ? NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor }).catch(falhaFiscal) : null;
+        const fiscalP = servico ? NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor, companyId: r.companyId }).catch(falhaFiscal) : null;
         const credorP = parecePix ? this.carregarCredor(r.credorId) : null;
         const notaP = pareceBoleto && !servico && NF ? NF.lerNota(r.titulo).catch(() => null) : null;
         let payment;
@@ -1924,7 +1992,7 @@ const GerarPagamentoApp = {
         if (gen !== s.gen) return;
         const boletoMenor = check.valorBoleto != null && check.valorBoleto > 0 && check.valorBoleto < t.aPagar - 0.01;
         if (!fiscal && NF && !NF.semRetencao(r.docId, r.docNome) && (NF.ehServico(r.docId, r.docNome) || boletoMenor)) {
-          fiscal = await NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor }).catch(falhaFiscal);
+          fiscal = await NF.analisar({ billId: r.titulo, credorId: r.credorId, bruto: t.valor, companyId: r.companyId }).catch(falhaFiscal);
           if (gen !== s.gen) return;
         }
         if (fiscal && fiscal.retidoPagamento > 0.009) check = BoletoCheck.validar(payment, Object.assign({}, ctx, { retido: fiscal.retidoPagamento }));
@@ -1934,7 +2002,7 @@ const GerarPagamentoApp = {
           notaBenef = notaP ? await notaP : await NF.lerNota(r.titulo).catch(() => null);
           if (gen !== s.gen) return;
         }
-        await this.alertarBeneficiarioBoleto(check, payment, notaBenef, r.titulo);
+        await this.alertarBeneficiarioBoleto(check, payment, notaBenef, r.titulo, fiscal && fiscal.credorDoc);
         if (gen !== s.gen) return;
         s.pagInfo[chave] = { payment, check, fiscal, tipoSienge: forma.tipo || "", falha: !!(check && check.falhaConsulta) };
         const soAntecipado = (check.antecipado || check.vencimentoPosterior) && check.nivel === "aviso" && !(check.erros || []).length
@@ -1995,36 +2063,53 @@ const GerarPagamentoApp = {
     return saida;
   },
 
+  /** "Boleto unificado" do Sienge (um boleto do fornecedor para vários títulos) ou guia unificada de impostos. */
+  nomeUnificado(item) {
+    const info = item && item.info;
+    const notas = (info && info.payment && info.payment.data && info.payment.data.notes) || "";
+    const blob = [info && info.tipoSienge, notas, info && info.check && info.check.forma].join(" ");
+    return /boleto\s*unificad/i.test(blob) ? "Boleto unificado" : "Guia unificada";
+  },
+
+  /** Boleto unificado só vale para títulos do mesmo credor. */
+  mesmoCredor(membros) {
+    const ids = new Set(membros.map((m) => String((m.r && m.r.credorId) || "")).filter(Boolean));
+    return ids.size <= 1;
+  },
+
   aplicarGuiaSomada(membros, valorGuia, fonte) {
     const s = this.state;
     const BC = window.BoletoCheck;
+    const nomeU = this.nomeUnificado(fonte);
     const partes = membros.map((m) => {
       const imposto = this.tipoImpostoGuia(m.r);
       const nome = imposto ? imposto + ", " : "";
       return `${m.r.titulo} (${nome}${BC.money(m.t.aPagar)})`;
     });
-    const info = `Guia unificada de ${BC.money(valorGuia)}. Os títulos ${partes.join(" e ")} somam o valor da guia.`;
+    const info = nomeU === "Boleto unificado"
+      ? `Boleto unificado de ${BC.money(valorGuia)} do mesmo credor. Os títulos ${partes.join(" e ")} somam o valor do boleto.`
+      : `Guia unificada de ${BC.money(valorGuia)}. Os títulos ${partes.join(" e ")} somam o valor da guia.`;
     membros.forEach((m) => {
       const atual = s.pagInfo[m.chave];
       const base = (atual && atual.check) || {
-        nivel: "ok", forma: "Guia unificada", resumo: "", erros: [], avisos: [], infos: [], desconto: false, linhaFmt: "", valorBoleto: valorGuia, vencBoleto: "", codigo: (fonte && fonte.check && fonte.check.codigo) || ""
+        nivel: "ok", forma: nomeU, resumo: "", erros: [], avisos: [], infos: [], desconto: false, linhaFmt: "", valorBoleto: valorGuia, vencBoleto: "", codigo: (fonte && fonte.check && fonte.check.codigo) || ""
       };
       base.erros = (base.erros || []).filter((e) => !/^Valor do boleto\b/.test(e));
-      base.infos = (base.infos || []).filter((e) => !/somam o valor da guia/.test(e));
+      base.infos = (base.infos || []).filter((e) => !/somam o valor d[ao] (guia|boleto)/.test(e));
       base.infos.push(info);
-      base.forma = "Guia unificada";
+      base.forma = nomeU;
       base.guiaSomada = true;
       base.valorBoleto = valorGuia;
       if (fonte && fonte.check && fonte.check.linhaFmt && !base.linhaFmt) base.linhaFmt = fonte.check.linhaFmt;
       if (base.erros.length) base.nivel = "erro";
       else if ((base.avisos || []).length) base.nivel = "aviso";
       else base.nivel = "ok";
-      base.resumo = base.erros[0] || (base.avisos || [])[0] || "Guia unificada conferida";
+      base.resumo = base.erros[0] || (base.avisos || [])[0] || nomeU + " conferido" + (nomeU === "Guia unificada" ? "a" : "");
       s.pagInfo[m.chave] = {
         payment: (atual && atual.payment) || (fonte && fonte.info && fonte.info.payment) || null,
         check: base,
         fiscal: atual ? atual.fiscal : null,
-        tipoSienge: (atual && atual.tipoSienge) || (fonte && fonte.info && fonte.info.tipoSienge) || "Guia unificada",
+        tipoSienge: (atual && atual.tipoSienge) || (fonte && fonte.info && fonte.info.tipoSienge) || nomeU,
         falha: !!(atual && atual.falha)
       };
       if (base.nivel === "ok" || base.nivel === "info") {
@@ -2046,7 +2131,8 @@ const GerarPagamentoApp = {
       if (!info || !info.check || !t) return;
       const r = t.rows[0];
       const notas = (info.payment && info.payment.data && info.payment.data.notes) || "";
-      const guiaNome = /guia\s*unificada/i.test(info.tipoSienge || "") || /guia\s*unificada/i.test(String(notas)) || /guia\s*unificada/i.test(info.check.forma || "");
+      const UNIF = /(guia|boleto)\s*unificad[ao]/i;
+      const guiaNome = UNIF.test(info.tipoSienge || "") || UNIF.test(String(notas)) || UNIF.test(info.check.forma || "");
       const imposto = this.tipoImpostoGuia(r);
       if (guiaNome && info.check.forma === "Boleto de concessionária") {
         info.check.forma = "Guia unificada";
@@ -2076,6 +2162,7 @@ const GerarPagamentoApp = {
         });
       });
       if (membros.length < 2) return;
+      if (this.nomeUnificado(c) === "Boleto unificado" && !this.mesmoCredor(membros)) return;
       const soma = somaDe(membros);
       if (!bate(soma, c.check.valorBoleto)) return;
       this.aplicarGuiaSomada(membros, c.check.valorBoleto, c);
@@ -2095,6 +2182,7 @@ const GerarPagamentoApp = {
       if (!guia && !par) return;
       if (!guia && grupo.some((c) => !c.imposto)) return;
       const membros = grupo.map((c) => ({ chave: c.chave, t: c.t, r: c.r }));
+      if (grupo.some((c) => this.nomeUnificado(c) === "Boleto unificado") && !this.mesmoCredor(membros)) return;
       const soma = somaDe(membros);
       if (!bate(soma, grupo[0].check.valorBoleto)) return;
       this.aplicarGuiaSomada(membros, grupo[0].check.valorBoleto, grupo[0]);
@@ -2128,6 +2216,7 @@ const GerarPagamentoApp = {
       const soma = Math.round(grupo.reduce((t, c) => t + valorDe(c), 0) * 100) / 100;
       if (Math.abs(soma - alvo) > 0.01) return;
       const membros = grupo.map((c) => ({ chave: c.chave, t: c.t, r: c.r }));
+      if (this.nomeUnificado(anchor) === "Boleto unificado" && !this.mesmoCredor(membros)) return;
       this.aplicarGuiaSomada(membros, alvo, anchor);
       membros.forEach((m) => usados.add(m.chave));
     });
@@ -2219,11 +2308,25 @@ const GerarPagamentoApp = {
     return this.state.lotes.find((l) => !this.loteNoSienge(l) && this.temTitulo(l, chave)) || null;
   },
 
+  /** O robô tentou o lote e o Sienge não deixou selecionar este título (X vermelho na tela do lote do Sienge). */
+  recusaSiengeDe(chave) {
+    const l = this.lotePendenteDe(chave);
+    const hist = (l && l.sienge && l.sienge.historico) || [];
+    const ultimo = hist[hist.length - 1];
+    const msg = String((ultimo && ultimo.msg) || "");
+    const pos = msg.indexOf("não deixa selecionar:");
+    if (!ultimo || ultimo.ok !== false || pos < 0) return "";
+    const it = (l.itens || []).find((i) => this.chaveTitulo(i.titulo, i.parcela) === chave);
+    if (!it) return "";
+    const lista = msg.slice(pos);
+    const ref = String(it.titulo) + "/" + String(it.parcela || 1);
+    return new RegExp("(^|[\\s;:])" + ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?=\\s|;|$)").test(lista) ? (ultimo.em || "sim") : "";
+  },
+
   /** Tira os títulos de lotes que não chegaram ao Sienge; lote que fica vazio é apagado. */
   async limparPendentes(chaves) {
     const s = this.state;
     const alvo = new Set(chaves);
-    const fc = window.firebaseCollections;
     for (const l of s.lotes.filter((x) => !this.loteNoSienge(x) && (x.itens || []).some((i) => alvo.has(this.chaveTitulo(i.titulo, i.parcela))))) {
       const resto = (l.itens || []).filter((i) => !alvo.has(this.chaveTitulo(i.titulo, i.parcela)));
       if (resto.length) {
@@ -2234,8 +2337,8 @@ const GerarPagamentoApp = {
       }
       s.lotes = s.lotes.filter((x) => x.id !== l.id);
       this.salvarLotesLocal(this.lotesLocal().filter((x) => x.id !== l.id));
-      if (window.firebaseDb && fc && fc.deleteDoc) {
-        try { await fc.deleteDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, l.id)); } catch (e) { console.warn("[Gerar Pagamento] apagar lote pendente", l.id, e); }
+      if (window.DadosFinanceiro) {
+        try { await window.DadosFinanceiro.excluirLote(l.id); } catch (e) { console.warn("[Gerar Pagamento] apagar lote pendente", l.id, e); }
       }
     }
   },
@@ -2520,11 +2623,11 @@ const GerarPagamentoApp = {
   },
 
   async lerConferenciaRemota() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "gp_conferencia"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+      // config/gp_conferencia fica inteiro em configuracoes (chave "config/gp_conferencia").
+      const snap = await window.DadosNucleo.lerConfig("gp_conferencia");
+      const existe = snap && snap.exists();
       if (!existe) return this.conferenciaVazia();
       const data = snap.data() || {};
       return { lotes: data.lotes || {}, padroes: data.padroes || {} };
@@ -2547,10 +2650,10 @@ const GerarPagamentoApp = {
     const dados = this.podarConferencia(this.juntarConferencia(remoto, this.state.conferencia));
     this.state.conferencia = dados;
     this.salvarConferenciaLocal(dados);
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "gp_conferencia"), dados, { merge: true });
+      // merge profundo atômico (trocar_configuracao), como o setDoc com merge.
+      await window.DadosNucleo.gravarConfig("gp_conferencia", dados, { merge: true });
     } catch (e) {
       console.warn("[Gerar Pagamento] gravar conferência", e);
     }
@@ -3297,7 +3400,7 @@ const GerarPagamentoApp = {
     itens.forEach((it) => { s.sel[it.selKey] = false; });
     s.gerandoLote = "";
     this.paintTitulos();
-    if (!salvoRemoto) alert("O lote foi gerado, mas ficou salvo só neste computador (não consegui gravar no Firebase).");
+    if (!salvoRemoto) alert("O lote foi gerado, mas ficou salvo só neste computador (não consegui gravar na nuvem).");
     if (opts && opts.semEnvio) return lote;
     return await this.enviarAoSienge(id);
   },
@@ -3323,10 +3426,10 @@ const GerarPagamentoApp = {
 
   async salvarLote(lote) {
     this.salvarLotesLocal(this.lotesLocal().filter((l) => l.id !== lote.id).concat([lote]));
-    const fc = window.firebaseCollections;
-    if (!(window.firebaseDb && fc && fc.setDoc)) return false;
+    if (!window.DadosFinanceiro) return false;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, lote.id), JSON.parse(JSON.stringify(lote)));
+      // RPC salvar_pagamento_lote: upsert do cabeçalho e troca dos itens numa transação (setDoc do lote inteiro).
+      await window.DadosFinanceiro.salvarLote(JSON.parse(JSON.stringify(lote)));
       return true;
     } catch (e) {
       console.warn("[Gerar Pagamento] salvar lote", e);
@@ -3503,7 +3606,7 @@ const GerarPagamentoApp = {
     }));
     let feitos;
     try { feitos = new Set(JSON.parse(localStorage.getItem(this.LOTE_AUDIT_KEY) || "[]")); } catch (e) { feitos = new Set(); }
-    const remoto = !!window.firebaseDb;
+    const remoto = !!window.DadosNucleo; // AuditService grava em auditoria_logs (Supabase)
     let novo = false;
     eventos.forEach((ev) => {
       const ms = new Date(ev.em || "").getTime();
@@ -3756,13 +3859,12 @@ const GerarPagamentoApp = {
       ? await window.mouraConfirm(`Excluir o lote ${id}? Os títulos voltam a ficar disponíveis para um novo lote.${aviso}`)
       : confirm(`Excluir o lote ${id}?`);
     if (!okConf) return;
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.deleteDoc) {
+    if (window.DadosFinanceiro) {
       try {
-        await fc.deleteDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, id));
+        await window.DadosFinanceiro.excluirLote(id); // os itens saem em cascata
       } catch (e) {
         console.warn("[Gerar Pagamento] excluir lote", e);
-        alert("Não consegui excluir o lote no Firebase.");
+        alert("Não consegui excluir o lote na nuvem.");
         return;
       }
     }
@@ -3810,67 +3912,6 @@ const GerarPagamentoApp = {
     </button>`;
   },
 
-  itensCartao(grupos, dia) {
-    const g = (grupos || []).find((x) => x.key === "__cartao");
-    const itens = g ? g.itens.filter((it) => !it.emLote) : [];
-    if (!dia) return itens;
-    return itens.filter((it) => {
-      const venc = String(it.vencimento || "").slice(0, 10);
-      const lote = this.diaDoLote(venc) || venc;
-      return lote === dia || venc === dia;
-    });
-  },
-
-  gruposCartaoEmpresa(itens) {
-    const mapa = new Map();
-    (itens || []).forEach((it) => {
-      const id = String(it.companyId || "");
-      if (!mapa.has(id)) mapa.set(id, { key: "__cartao@" + id, empresaConta: id, itens: [], conta: null });
-      mapa.get(id).itens.push(it);
-    });
-    return [...mapa.values()];
-  },
-
-  cartaoTelaHtml() {
-    const s = this.state;
-    if (s.consultando) return this.carregandoHtml();
-    if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
-    if (!s.consultado) {
-      return `<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Escolha o período e clique em <strong>Buscar títulos</strong>.</div>`;
-    }
-    const itens = this.itensCartao(this.gruposLote(), "");
-    const empresas = this.gruposCartaoEmpresa(itens);
-    const abas = this.abasEmpresaHtml(empresas, []);
-    const emp = this.state.abaEmpresa;
-    const vis = itens.filter((it) => !emp || String(it.companyId || "") === emp);
-    if (!vis.length) {
-      return `${abas}<div style="padding:22px 20px;color:#64748b;font-size:0.85rem;">Nenhum título de cartão de crédito${emp ? " nesta empresa" : ""} no período carregado.</div>`;
-    }
-    return `${abas}${this.cartaoPainelHtml(vis)}`;
-  },
-
-  cartaoPainelHtml(itens) {
-    if (!itens.length) return "";
-    const total = itens.reduce((t, it) => t + this.valorPagar(it), 0);
-    const linhas = itens.map((it) => `<tr class="gp-click" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Abrir o título">
-      <td>${this.dataBr(it.vencimento)}</td>
-      <td>${this.esc(it.titulo)}/${this.esc(it.parcela || 1)}</td>
-      <td>${this.esc(it.credor || "")}</td>
-      <td>${this.esc(it.documento || "")}</td>
-      <td style="text-align:right;">${this.money(this.valorPagar(it))}</td>
-      <td><span class="bchk bchk-info">Cartão de crédito</span></td>
-    </tr>`).join("");
-    return `<section class="gp-lotes-painel gp-cartao">
-      <p class="gp-nota">${itens.length} título(s) · ${this.money(total)}. A forma no Sienge é cartão de crédito, então não entram no lote do banco.</p>
-      <div style="overflow:auto;">
-        <table class="gp-table gp-titulos gp-card-tab">
-          <thead><tr><th>Vencimento</th><th>Título</th><th>Credor</th><th>Documento</th><th style="text-align:right;">A pagar</th><th>Pagamento</th></tr></thead>
-          <tbody>${linhas}</tbody>
-        </table>
-      </div>
-    </section>`;
-  },
-
   resumoEmLoteHtml(g) {
     const linhas = (g.itens || []).map((it) => this.linhaTituloHtml(it, it.chave)).join("");
     return `<div class="gp-lote-linhas">${linhas}</div>`;
@@ -3900,12 +3941,14 @@ const GerarPagamentoApp = {
         const tag = it.loteIntegra
           ? `<span class="gp-pill gp-ok">No lote ${this.esc(it.loteIntegra.id)}</span>`
           : (it.loteSienge ? `<span class="gp-pill gp-warn">Já em lote no Sienge${it.loteSienge !== "sim" ? " nº " + this.esc(it.loteSienge) : ""}</span>`
-            : (this.lotePendenteDe(it.chave)
+            : (this.recusaSiengeDe(it.chave)
+              ? `<span class="gp-pill gp-bad" title="Na tela do lote do Sienge este título aparece com um X vermelho e não pode ser selecionado. Passe o mouse no X (ou no código ao lado dele) no Sienge para ver o motivo, corrija o título lá e gere o lote de novo.">Sienge recusou</span><small>Ver o X vermelho no lote do Sienge</small>`
+              : (this.lotePendenteDe(it.chave)
               ? `<span class="gp-pill gp-wait" title="Está no lote ${this.esc(this.lotePendenteDe(it.chave).id)}, que não foi gerado no Sienge. Ao gerar de novo, ele sai daquele lote.">Em aberto</span><small>Lote não gerado no Sienge</small>`
-              : `<span class="gp-pill gp-wait">Em aberto</span>`));
+              : `<span class="gp-pill gp-wait">Em aberto</span>`)));
         const pagSelo = this.pagSeloDe(it);
         const retido = this.retidoDe(it);
-        return `<tr class="gp-click${it.emLote ? " gp-em-lote" : ""}${this.bloqueioVisivel(it) ? " gp-row-bad" : ""}" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Clique para ver o resumo do título">
+        return `<tr class="gp-click${it.emLote ? " gp-em-lote" : ""}${this.bloqueioVisivel(it) || (!it.emLote && this.recusaSiengeDe(it.chave)) ? " gp-row-bad" : ""}" onclick="GerarPagamentoApp.abrirResumo('${this.esc(it.chave)}')" title="Clique para ver o resumo do título">
           <td style="text-align:center;" onclick="event.stopPropagation()"><input type="checkbox" ${it.marcado ? "checked" : ""} ${sem || it.emLote || it.bloqueio || gerando ? "disabled" : ""}
             title="${this.esc(it.emLote ? "Já está em lote; não pode entrar em outro." : (it.bloqueio ? "Bloqueado: " + it.bloqueio : ""))}"
             onchange="GerarPagamentoApp.toggleItem('${this.esc(it.selKey)}')"></td>
@@ -4656,7 +4699,6 @@ const GerarPagamentoApp = {
 
   titulosHtml() {
     const s = this.state;
-    if (s.tela === "cartao") return this.cartaoTelaHtml();
     if (s.consultando) return this.carregandoHtml();
     if (s.erroTitulos) return `<div style="padding:18px 20px;color:#b91c1c;">${this.esc(s.erroTitulos)}</div>`;
     if (!s.consultado) {
@@ -4936,9 +4978,9 @@ const GerarPagamentoApp = {
         </style>
         <div class="crm-card" style="overflow:hidden;padding:0;">
           <div class="gp-busca">
-            ${s.tela === "cartao" ? "" : `<div style="flex:1 1 220px;">
+            <div style="flex:1 1 220px;">
               <h3 style="margin:0;color:var(--color-primary);font-size:1rem;">${s.visao === "lotes" ? "Lotes de pagamento" : "Programação de Pagamentos"}</h3>
-            </div>`}
+            </div>
             <div class="form-group">
               <label>Vencimento de</label>
               <input type="date" class="form-control" value="${this.esc(s.startDate)}" ${busy ? "disabled" : ""}
@@ -4953,12 +4995,12 @@ const GerarPagamentoApp = {
               style="height:38px;width:150px;justify-content:center;display:inline-flex;align-items:center;gap:6px;">
               <i data-lucide="search" style="width:14px;"></i> Buscar títulos
             </button>
-            ${s.tela === "cartao" ? "" : `<span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
+            <span id="gp-robo-msg" class="gp-robo-msg">${this.esc(s.roboMsg || "")}</span>
             <button type="button" id="gp-robo-btn" class="gp-robo-btn" ${s.roboLigando ? "disabled" : ""} onclick="GerarPagamentoApp.ligarRobo()">
               <i data-lucide="bot" style="width:16px;height:16px;"></i> Ligar robô
-            </button>`}
+            </button>
           </div>
-          ${s.tela === "cartao" ? "" : this.alertaSemContaHtml()}
+          ${this.alertaSemContaHtml()}
           <div id="gp-titulos-box">${this.titulosHtml()}</div>
         </div>`);
 
@@ -4981,7 +5023,6 @@ window.contaPagamentoDoCentroCusto = function (input) {
 document.addEventListener("tabChanged", function (e) {
   if (!e) return;
   if (e.detail === "gerar-pagamento") GerarPagamentoApp.init("lotes");
-  if (e.detail === "cartao-credito") GerarPagamentoApp.init("cartao");
 });
 
 document.addEventListener("DOMContentLoaded", function () {
@@ -4997,3 +5038,30 @@ document.addEventListener("DOMContentLoaded", function () {
   };
   setTimeout(tentar, 2000);
 });
+
+/* Prévias para a tela de alertas: os mesmos pop-ups, sem gravar ciência, sem timer e sem consultar o Sienge. */
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["fechamento-pagadoria"] = function () {
+  const app = GerarPagamentoApp;
+  if (document.getElementById("gp-fechamento-aviso")) return;
+  const agora = new Date();
+  // Último dia do mês como base: a janela do fechamento do mês corrente sempre existe.
+  const janela = app.janelaFechamento(new Date(agora.getFullYear(), agora.getMonth() + 1, 0, 12));
+  if (!janela) return;
+  app.montarAvisoFechamento(janela);
+};
+window.PopupPrevias["lotes"] = function () {
+  const app = GerarPagamentoApp;
+  if (document.getElementById("gp-conf-lotes")) return;
+  app.montarConferenciaLotes({});
+  const hoje = app.iso(new Date());
+  app.pintarConferencia("gp-conf-abertos", [
+    { titulo: "111200", parcela: "1", credor: "Fornecedor exemplo", valor: 3480.5, vencimento: hoje, baixa: hoje, lote: "", nota: "Ainda sem processamento no banco." },
+    { titulo: "110954", parcela: "2", credor: "Prestador exemplo", valor: 1250, vencimento: app.shiftIso(hoje, -2), baixa: app.shiftIso(hoje, -2), lote: "8812", nota: "Arquivo já enviado ao banco. A parcela continua em aberto." }
+  ], "Nenhum título do dia ou vencido sem processamento.");
+  app.pintarConferencia("gp-conf-recusa", [
+    { titulo: "110880", parcela: "1", credor: "Parceiro exemplo", valor: 9870, vencimento: app.shiftIso(hoje, 6), baixa: "", lote: "8790", nota: "Saiu do lote nº 8790. O banco recusou e o título ainda está para vencer." }
+  ], "Nenhum título a vencer saiu de lote por recusa do banco.");
+  const status = document.getElementById("gp-conf-status");
+  if (status) status.textContent = "Prévia com dados de exemplo. 2 sem processamento · 1 fora do lote por recusa.";
+};
