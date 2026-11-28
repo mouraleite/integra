@@ -116,6 +116,12 @@ A produção atual (crm-gestao.vercel.app, Firebase `crm-gestao-mldu`) não muda
    - **Virada** (janela combinada, ninguém usando o Integra antigo):
      1. Avisar a equipe e congelar a produção antiga (ex.: tirar o acesso ao crm-gestao.vercel.app ou pôr aviso).
      2. Export final, os quatro importadores, `copiar-storage.js --conferir --reescrever` e `conferir-contagens.js`.
+        Como foi no ensaio de 28/11 (export inteiro estoura a memória em `cfin_pagos` e dá tempo esgotado em
+        `caixa_movimentos`): exportar tudo menos essas duas com `--so <lista>`; depois
+        `node --max-old-space-size=8192 ... --so cfin_pagos --pagina 10` e `--so caixa_movimentos --pagina 50` em
+        pastas próprias e copiar os `.ndjson` para a pasta do export. Rodar os importadores com
+        `node --max-old-space-size=8192`. Na conferência, "a mais" em `webro_repasse_pendente`, `construction_checks`
+        e afins são registros apagados no Firebase depois da carga anterior ou criados no site novo: apagar no Supabase.
      3. No projeto novo: `STORAGE_FIREBASE_RESERVA=0`, `GRAPH_MAIL_ENABLED` como na produção, devolver ao
         `vercel.json` os crons da main (`/api/morning-warmup` e `/api/estoque-batimento`, `0 10 * * *`).
      4. Merge da `migracao-supabase` na `main`, Production Branch do projeto novo = `main`, domínio apontado para ele.
