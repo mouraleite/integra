@@ -86,10 +86,9 @@ const MarketingApp = {
       MarketingState.costCenters.sort((a, b) => String(a.id).localeCompare(String(b.id), 'pt-BR', { numeric: true }));
 
       let fromFb = [];
-      if (window.firebaseDb && window.firebaseCollections) {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COLLECTION));
-        snap.forEach(d => fromFb.push({ id: d.id, ...d.data() }));
+      // marketing_budgets no Supabase (uma linha por evento, id = o do app).
+      if (window.DadosFinanceiro) {
+        fromFb = await window.DadosFinanceiro.tabela(this.COLLECTION).listar();
       }
       if (fromFb.length) {
         MarketingState.budgets = fromFb;
@@ -122,26 +121,26 @@ const MarketingApp = {
 
   async persistBudget(budget) {
     this.persistLocal();
-    if (!window.firebaseDb || !window.firebaseCollections) return;
-    const { doc, setDoc, addDoc, collection } = window.firebaseCollections;
+    if (!window.DadosFinanceiro) return;
+    const tab = window.DadosFinanceiro.tabela(this.COLLECTION);
     const payload = { ...budget };
     if (budget.id && !String(budget.id).startsWith('local-')) {
-      await setDoc(doc(window.firebaseDb, this.COLLECTION, budget.id), payload, { merge: true });
+      await tab.gravar(budget.id, payload, { merge: true });
     } else {
       delete payload.id;
-      const ref = await addDoc(collection(window.firebaseDb, this.COLLECTION), payload);
-      budget.id = ref.id;
+      // Equivale ao addDoc: id gerado no app (20 caracteres, como no Firestore).
+      const novoId = await tab.criar(payload);
+      budget.id = novoId;
       const idx = MarketingState.budgets.findIndex(b => b === budget || (b.createdAt === budget.createdAt && b.eventName === budget.eventName));
-      if (idx >= 0) MarketingState.budgets[idx].id = ref.id;
+      if (idx >= 0) MarketingState.budgets[idx].id = novoId;
       this.persistLocal();
     }
   },
 
   async removeBudgetDoc(id) {
-    if (!window.firebaseDb || !window.firebaseCollections) return;
+    if (!window.DadosFinanceiro) return;
     if (String(id).startsWith('local-')) return;
-    const { doc, deleteDoc } = window.firebaseCollections;
-    await deleteDoc(doc(window.firebaseDb, this.COLLECTION, id));
+    await window.DadosFinanceiro.tabela(this.COLLECTION).excluir(id);
   },
 
   filteredBudgets() {

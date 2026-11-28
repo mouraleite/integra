@@ -220,13 +220,13 @@
       toSave[k] = { isOn: !!v.isOn, previsao: v.previsao || "" };
     });
     localStorage.setItem(OBRAS_KEY, JSON.stringify(toSave));
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, setDoc } = window.firebaseCollections;
+    if (window.DadosNucleo) {
       const userName = (window.AppState && window.AppState.currentUser && window.AppState.currentUser.name) || "";
-      setDoc(doc(window.firebaseDb, "config", "global"), {
+      // Chaves de config/global: uma linha por chave em configuracoes.
+      window.DadosNucleo.gravarConfiguracoes({
         crm_obras_andamento: JSON.stringify(toSave),
         crm_obras_andamento_meta: JSON.stringify({ updatedAt: Date.now(), updatedBy: userName })
-      }, { merge: true }).catch((err) => console.error("[Alçada Distrato] Falha ao sincronizar obras:", err));
+      }).catch((err) => console.error("[Alçada Distrato] Falha ao sincronizar obras:", err));
     }
     if (window.VerificarConstrucaoApp && typeof window.VerificarConstrucaoApp.renderTable === "function") {
       try { window.VerificarConstrucaoApp.renderTable(); } catch (e) { /* ignore */ }

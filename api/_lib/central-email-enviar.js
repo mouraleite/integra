@@ -10,8 +10,9 @@
    - registra em central_email_envios: no máximo um e-mail por régua, por cliente e título, por dia. */
 const https = require("https");
 const { graphMailConfigured, sendMail } = require("../../lib/graph-mail");
+const { dados, tabela } = require("../../lib/dados-servidor");
+const { supabaseAdmin } = require("../../lib/supabase-admin");
 
-const FS = "https://firestore.googleapis.com/v1/projects/crm-gestao-mldu/databases/(default)/documents";
 const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const MAX_ITENS = 8;
 // Mesmo número de FILA_QUEUE_GROUPS.REENVIAR_JURIDICO. Depois deste envio a fila troca a tag.
@@ -65,66 +66,40 @@ function http(url, opts, corpo, saltos) {
   });
 }
 
-/* ---------- banco (Firestore REST) ---------- */
-function deFs(v) {
-  if (!v || typeof v !== "object") return null;
-  if ("stringValue" in v) return v.stringValue;
-  if ("integerValue" in v) return Number(v.integerValue);
-  if ("doubleValue" in v) return v.doubleValue;
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("nullValue" in v) return null;
-  if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(deFs);
-  if ("mapValue" in v) {
-    const o = {};
-    const f = (v.mapValue && v.mapValue.fields) || {};
-    Object.keys(f).forEach((k) => { o[k] = deFs(f[k]); });
-    return o;
-  }
-  return null;
+/* ---------- banco (Supabase, service role) ---------- */
+async function lerTemplates() {
+  const snap = await dados().DadosNucleo.lerConfig("central_email");
+  const cfg = snap.exists() ? snap.data() : null;
+  return (cfg && Array.isArray(cfg.templates)) ? cfg.templates : [];
 }
 
-function paraFs(v) {
-  if (v === null || v === undefined) return { nullValue: null };
-  if (typeof v === "boolean") return { booleanValue: v };
-  if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
-  return { stringValue: String(v) };
+function lerEnvio(id) {
+  return tabela("central_email_envios").obter(id);
 }
 
-async function lerDoc(caminho) {
-  const r = await http(FS + "/" + caminho, { headers: { Accept: "application/json" } });
-  if (r.status !== 200) return null;
-  const j = JSON.parse(r.buffer.toString("utf8"));
-  return deFs({ mapValue: { fields: j.fields || {} } });
+function gravarEnvio(id, obj) {
+  return tabela("central_email_envios").gravar(id, obj);
 }
 
-async function gravarDoc(caminho, obj) {
-  const fields = {};
-  Object.keys(obj).forEach((k) => { fields[k] = paraFs(obj[k]); });
-  const corpo = JSON.stringify({ fields });
-  const r = await http(FS + "/" + caminho, { method: "PATCH", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  return r.status === 200;
+// Depois do e-mail da régua "Reenviar jurídico", a fila troca a tag do cliente/título (acordo_email_tag).
+function gravarAcordoTag(customerId, titulo, em) {
+  return tabela("acordo_email_tag").gravar(customerId + "_" + titulo, {
+    customerId, titulo, tag: "Acordo Judicial - Alterar p/ Sub judice Sienge", em: em || new Date().toISOString()
+  });
 }
 
-// Atualiza só os campos informados (o gravarDoc troca o documento inteiro).
+// Lê um envio pelo caminho "central_email_envios/<id>" (null se não existir).
+function lerDoc(caminho) {
+  return lerEnvio(String(caminho).split("/").pop());
+}
+
+// Atualiza só os campos informados de um envio que já existe (fusão com o que está gravado).
 async function gravarCampos(caminho, obj) {
-  const fields = {};
-  const mascara = [];
-  Object.keys(obj).forEach((k) => { fields[k] = paraFs(obj[k]); mascara.push("updateMask.fieldPaths=" + encodeURIComponent(k)); });
-  const corpo = JSON.stringify({ fields });
-  const r = await http(FS + "/" + caminho + "?" + mascara.join("&") + "&currentDocument.exists=true",
-    { method: "PATCH", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  return r.status === 200;
-}
-
-// Valor do Firestore para objetos e listas (a ocorrência tem listas vazias e textos).
-function paraFsFundo(v) {
-  if (Array.isArray(v)) return { arrayValue: { values: v.map(paraFsFundo) } };
-  if (v && typeof v === "object") {
-    const fields = {};
-    Object.keys(v).forEach((k) => { fields[k] = paraFsFundo(v[k]); });
-    return { mapValue: { fields } };
-  }
-  return paraFs(v);
+  const id = String(caminho).split("/").pop();
+  const atual = await lerEnvio(id);
+  if (!atual) return false;
+  await tabela("central_email_envios").gravar(id, obj, { merge: true });
+  return true;
 }
 
 const DIAS_RETORNO_PADRAO = 5;
@@ -133,7 +108,7 @@ const DIAS_RETORNO_PADRAO = 5;
 function diasRetornoDo(t) {
   const n = Number(t && t.diasRetorno);
   if (Number.isFinite(n) && n >= 0) return Math.min(90, Math.round(n));
-  const m = /\{\{retorno:(\d+)\}\}/.exec(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
+  const m = /{{retorno:(d+)}}/.exec(String((t && t.corpo) || "") + String((t && t.assunto) || ""));
   return m ? Math.min(90, Number(m[1])) : DIAS_RETORNO_PADRAO;
 }
 
@@ -143,93 +118,52 @@ function isoMais(diaIso, dias) {
   return d.toISOString().slice(0, 10);
 }
 
-// Mesmo registro da ficha (customer_notes_shards/chunk_N, campo = customerId), como em getCustomerNoteChunkId.
-function chunkDoCliente(customerId) {
-  let soma = 0;
-  const s = String(customerId);
-  for (let i = 0; i < s.length; i++) soma += s.charCodeAt(i);
-  return "chunk_" + (soma % 20);
-}
-
-/* Ocorrência do disparo automático em Ocorrências e Promessas. A data de retorno vai em promiseDate com
-   promiseStatus "Pendente": até lá a Agenda não põe o título na fila nova do operador. Sem iniciativa, não conta
-   como contato do operador. appendMissingElements só acrescenta (não regrava a lista) e não duplica o mesmo envio. */
-async function gravarOcorrenciaEnvio(o, colecaoTeste) {
-  // Hora fixa do envio: repetir a gravação do mesmo envio não cria outro item (appendMissingElements compara tudo).
+/* Ocorrência do disparo automático em Ocorrências e Promessas (tabela customer_notes, uma linha por nota).
+   A data de retorno vai em promise_date com promise_status "Pendente": até lá a Agenda não põe o título na fila nova
+   do operador. Sem iniciativa, não conta como contato do operador. O id fixo por envio não deixa duplicar. */
+async function gravarOcorrenciaEnvio(o) {
   o = Object.assign({ em: new Date().toISOString() }, o);
-  const nota = {
+  const linha = {
     id: "central-email-" + o.envioId,
+    customer_id: String(o.customerId),
     date: o.em,
     author: "Central de e-mail (automático)",
-    saleId: o.titulo,
-    receivableBillId: o.titulo,
-    contractId: null,
     text: ("E-MAIL AUTOMÁTICO DA RÉGUA \"" + o.templateNome + "\" ENVIADO PARA " + o.para + ". ASSUNTO: " + o.assunto
       + ". RETORNO EM " + dataBr(o.retorno) + ".").slice(0, 1500),
-    promiseDate: o.retorno,
-    promiseStatus: "Pendente",
-    reminder: "",
     canal: "E-mail automático",
     iniciativa: null,
-    origem: "central-email",
-    centralEmailEnvioId: o.envioId,
-    promisedInstallments: [],
+    reminder: "",
+    promise_status: "Pendente",
+    promise_date: o.retorno,
+    sale_id: String(o.titulo),
+    receivable_bill_id: String(o.titulo),
     pinned: false,
-    attachments: [],
-    updatedAt: o.em
+    origem: "central-email",
+    updated_at: o.em,
+    extra: { centralEmailEnvioId: o.envioId }
   };
-  const base = FS.replace("https://firestore.googleapis.com/v1/", "");
-  const corpo = JSON.stringify({
-    writes: [{
-      transform: {
-        document: base + "/" + (colecaoTeste || "customer_notes_shards") + "/" + chunkDoCliente(o.customerId),
-        fieldTransforms: [{ fieldPath: "`" + String(o.customerId).replace(/[`\\]/g, "") + "`", appendMissingElements: { values: [paraFsFundo(nota)] } }]
-      }
-    }]
-  });
-  const r = await http(FS + ":commit", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao gravar a ocorrência.");
-  return nota;
+  const r = await supabaseAdmin().from("customer_notes").upsert(linha, { onConflict: "id", ignoreDuplicates: true });
+  if (r && r.error) throw new Error("Banco não gravou a ocorrência: " + r.error.message);
+  return linha;
 }
 
 // Envios de um período (dia de/até, AAAA-MM-DD), para o acompanhamento e para casar as confirmações.
-async function enviosDoPeriodo(de, ate, limite) {
-  const corpo = JSON.stringify({
-    structuredQuery: {
-      from: [{ collectionId: "central_email_envios" }],
-      where: { compositeFilter: { op: "AND", filters: [
-        { fieldFilter: { field: { fieldPath: "dia" }, op: "GREATER_THAN_OR_EQUAL", value: { stringValue: de } } },
-        { fieldFilter: { field: { fieldPath: "dia" }, op: "LESS_THAN_OR_EQUAL", value: { stringValue: ate } } }
-      ] } },
-      limit: Math.min(Number(limite) || 3000, 5000)
-    }
+function enviosDoPeriodo(de, ate, limite) {
+  return tabela("central_email_envios").listar({
+    filtros: [["dia", "gte", de], ["dia", "lte", ate]],
+    limite: Math.min(Number(limite) || 3000, 5000)
   });
-  const r = await http(FS + ":runQuery", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao listar os envios.");
-  return JSON.parse(r.buffer.toString("utf8"))
-    .filter((x) => x && x.document)
-    .map((x) => Object.assign({ id: x.document.name.split("/").pop() }, deFs({ mapValue: { fields: x.document.fields || {} } })));
 }
 
 // Último envio feito deste template para o cliente/título antes de hoje, dentro da janela (null se não houver).
-// Só filtros de igualdade: o Firestore atende com os índices simples, sem índice composto.
 async function enviadoAntes(templateId, customerId, titulo, hoje) {
-  const igual = (campo, valor) => ({ fieldFilter: { field: { fieldPath: campo }, op: "EQUAL", value: { stringValue: String(valor) } } });
-  const corpo = JSON.stringify({
-    structuredQuery: {
-      from: [{ collectionId: "central_email_envios" }],
-      where: { compositeFilter: { op: "AND", filters: [igual("templateId", templateId), igual("customerId", customerId), igual("titulo", titulo)] } },
-      limit: 200
-    }
-  });
-  const r = await http(FS + ":runQuery", { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(corpo) } }, corpo);
-  if (r.status !== 200) throw new Error("Banco respondeu " + r.status + " ao conferir envios anteriores.");
   const limite = new Date(Date.parse(hoje + "T12:00:00Z") - DIAS_SEM_REPETIR * 86400000).toISOString().slice(0, 10);
-  const antes = JSON.parse(r.buffer.toString("utf8"))
-    .filter((x) => x && x.document)
-    .map((x) => deFs({ mapValue: { fields: x.document.fields || {} } }))
-    .filter((x) => x && x.status === "enviado" && String(x.dia || "") < hoje && String(x.dia || "") >= limite)
-    .sort((a, b) => String(b.dia).localeCompare(String(a.dia)));
+  const lista = await tabela("central_email_envios").listar({
+    filtros: [["template_id", "eq", String(templateId)], ["customer_id", "eq", String(customerId)], ["titulo", "eq", String(titulo)],
+      ["dia", "gte", limite], ["dia", "lt", hoje]],
+    limite: 200
+  });
+  const antes = lista.filter((x) => x && x.status === "enviado").sort((a, b) => String(b.dia).localeCompare(String(a.dia)));
   return antes[0] || null;
 }
 
@@ -372,8 +306,8 @@ module.exports = async function handler(req, res) {
   const itens = Array.isArray(corpo.itens) ? corpo.itens.slice(0, MAX_ITENS) : [];
   if (!itens.length) return responder(res, 400, { error: "Nada para enviar." });
 
-  const cfg = await lerDoc("config/central_email");
-  const templates = (cfg && Array.isArray(cfg.templates)) ? cfg.templates : [];
+  let templates;
+  try { templates = await lerTemplates(); } catch (e) { return responder(res, 502, { error: "Não consegui ler os templates no banco." }); }
   const { dia, hora } = agoraBrasil();
   const resultados = [];
 
@@ -387,12 +321,10 @@ module.exports = async function handler(req, res) {
       const t = templates.find((x) => x && String(x.id) === templateId);
       if (!t || t.status !== "aprovado" || !t.ativo) throw new Error("Template não aprovado ou régua desligada.");
       const id = idEnvio(dia, templateId, customerId, titulo);
-      const ja = await lerDoc("central_email_envios/" + id);
+      const ja = await lerEnvio(id);
       if (ja && ja.status === "enviado") {
         if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
-          await gravarDoc("acordo_email_tag/" + customerId + "_" + titulo, {
-            customerId, titulo, tag: "Acordo Judicial - Alterar p/ Sub judice Sienge", em: (ja.em || new Date().toISOString())
-          });
+          await gravarAcordoTag(customerId, titulo, ja.em);
         }
         r.status = "ja-enviado";
         resultados.push(r);
@@ -447,16 +379,14 @@ module.exports = async function handler(req, res) {
         console.warn("[central-email-enviar] ocorrência " + JSON.stringify({ titulo, erro: ocorrencia }));
       }
       r.retorno = retorno;
-      await gravarDoc("central_email_envios/" + id, {
+      await gravarEnvio(id, {
         dia, templateId, customerId, titulo, status: "enviado", em: new Date().toISOString(),
         de: de || "padrao", caixa, para: para.join(", "), cc: cc.join(", "), extrato: anexos.length > 0,
         assunto, html: html.slice(0, 200000), clienteNome: String(v.nome || "").slice(0, 200), templateNome: String(t.nome || "").slice(0, 200),
         confirmacoesPedidas: true, rastreio: !!pixel, retorno, ocorrencia
       });
       if (Number(t.tag) === TAG_REENVIAR_JURIDICO) {
-        await gravarDoc("acordo_email_tag/" + customerId + "_" + titulo, {
-          customerId, titulo, tag: "Acordo Judicial - Alterar p/ Sub judice Sienge", em: new Date().toISOString()
-        });
+        await gravarAcordoTag(customerId, titulo);
       }
     } catch (e) {
       r.status = "erro";
@@ -464,7 +394,7 @@ module.exports = async function handler(req, res) {
       console.warn("[central-email-enviar] " + JSON.stringify({ templateId, titulo, erro: r.erro }));
       try {
         if (templateId && customerId && titulo) {
-          await gravarDoc("central_email_envios/" + idEnvio(dia, templateId, customerId, titulo), {
+          await gravarEnvio(idEnvio(dia, templateId, customerId, titulo), {
             dia, templateId, customerId, titulo, status: "erro", em: new Date().toISOString(), erro: r.erro
           });
         }
@@ -479,7 +409,6 @@ module.exports = async function handler(req, res) {
 module.exports.montarHtml = montarHtml;
 // Para as rotas de acompanhamento (abertura e confirmações).
 module.exports.lerDoc = lerDoc;
-module.exports.gravarDoc = gravarDoc;
 module.exports.gravarCampos = gravarCampos;
 module.exports.enviosDoPeriodo = enviosDoPeriodo;
 module.exports.tokenAbertura = tokenAbertura;

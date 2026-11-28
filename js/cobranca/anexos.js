@@ -533,15 +533,28 @@ function anexosEnvioKey(contractId, tag) {
   return `${String(contractId || '').trim()}_${String(tag || '').trim().toUpperCase()}`;
 }
 
+// anexos_mapa no Supabase: uma linha por envio (id = "<enterpriseId>_<chave>", chave = chave do antigo byKey).
+// Devolve o mapa { chave: registro } no formato do antigo doc do empreendimento.
+async function anexosListarMapaEnvios(cc) {
+  const linhas = await window.DadosNucleo.tabela('anexos_mapa').listar({ filtros: [['enterprise_id', 'eq', cc]] });
+  const byKey = {};
+  linhas.forEach((l) => {
+    const r = Object.assign({}, l);
+    delete r.id;
+    const chave = String(r.chave || r.key || '');
+    if (!chave) return;
+    delete r.chave;
+    if (!r.key) r.key = chave;
+    byKey[chave] = r;
+  });
+  return byKey;
+}
+
 async function anexosLoadMapaEnvios(enterpriseId) {
   const cc = String(enterpriseId || '').trim();
-  if (!cc || !window.firebaseCollections || !window.firebaseDb) return {};
+  if (!cc || !window.DadosNucleo) return {};
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, 'anexos_mapa', cc));
-    if (!snap.exists()) return {};
-    const data = snap.data() || {};
-    return data.byKey && typeof data.byKey === 'object' ? data.byKey : {};
+    return await anexosListarMapaEnvios(cc);
   } catch (e) {
     console.warn('[Anexos] leitura anexos_mapa', e);
     return {};
@@ -581,7 +594,7 @@ async function anexosSaveMapaEnvio(record) {
   const cc = String((record && record.enterpriseId) || '').trim();
   const contractId = String((record && record.contractId) || '').trim();
   const tag = String((record && record.tag) || '').trim().toUpperCase();
-  if (!cc || !contractId || !tag || !window.firebaseCollections || !window.firebaseDb) return false;
+  if (!cc || !contractId || !tag || !window.DadosNucleo) return false;
   const key = anexosEnvioKey(contractId, tag);
   const arquivo = record._file || null;
   record = Object.assign({}, record);
@@ -596,22 +609,17 @@ async function anexosSaveMapaEnvio(record) {
     }
   }
   try {
-    const { doc, getDoc, setDoc } = window.firebaseCollections;
-    const ref = doc(window.firebaseDb, 'anexos_mapa', cc);
-    const snap = await getDoc(ref);
-    const prev = snap.exists() ? (snap.data() || {}) : {};
+    const prev = { byKey: await anexosListarMapaEnvios(cc) };
     const anterior = (prev.byKey && prev.byKey[key]) || {};
     // Mesmo termo enviado para cliente e unidade: o segundo registro mantém a cópia guardada no primeiro.
     if (!record.storagePath && anterior.storagePath && anexosTagTermo(tag)) {
       record.storagePath = anterior.storagePath;
       record.copiaIntegra = anterior.copiaIntegra || 'ok';
     }
-    const byKey = { ...(prev.byKey || {}), [key]: { ...record, tag, key, sentAt: record.sentAt || new Date().toISOString() } };
-    await setDoc(ref, {
-      enterpriseId: cc,
-      byKey,
-      updatedAt: new Date().toISOString()
-    }, { merge: true });
+    const novo = { ...record, tag, key, sentAt: record.sentAt || new Date().toISOString() };
+    const byKey = { ...(prev.byKey || {}), [key]: novo };
+    // Upsert de uma linha (o registro inteiro da chave é substituído, como antes no byKey).
+    await window.DadosNucleo.tabela('anexos_mapa').gravar(cc + '_' + key, { ...novo, enterpriseId: cc, chave: key });
     AnexosState.mapaEnvios = byKey;
     return true;
   } catch (e) {
@@ -621,12 +629,9 @@ async function anexosSaveMapaEnvio(record) {
 }
 
 async function anexosLoadTagMemory() {
-  if (!window.firebaseCollections || !window.firebaseDb) return [];
+  if (!window.DadosNucleo) return [];
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, 'anexos_tag_memory'));
-    const rows = [];
-    snap.forEach((d) => rows.push({ id: d.id, ...(d.data() || {}) }));
+    const rows = await window.DadosNucleo.tabela('anexos_tag_memory').listar();
     AnexosState.tagMemory = rows;
     return rows;
   } catch (e) {
@@ -636,12 +641,11 @@ async function anexosLoadTagMemory() {
 }
 
 async function anexosSaveTagMemory(entry) {
-  if (!entry || !window.firebaseCollections || !window.firebaseDb) return;
+  if (!entry || !window.DadosNucleo) return;
   try {
-    const { doc, setDoc } = window.firebaseCollections;
     const id = entry.id || `m_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const payload = { ...entry, id, updatedAt: new Date().toISOString() };
-    await setDoc(doc(window.firebaseDb, 'anexos_tag_memory', id), payload, { merge: true });
+    await window.DadosNucleo.tabela('anexos_tag_memory').gravar(id, payload, { merge: true });
     const list = AnexosState.tagMemory || [];
     const ix = list.findIndex((x) => x.id === id);
     if (ix >= 0) list[ix] = payload;
@@ -1894,15 +1898,20 @@ const AnexosDB = {
   storeName: 'customerAttachments',
   collectionName: 'anexos_juridicos',
 
+  // Só o Storage continua no Firebase; os metadados estão no Supabase (tabela anexos_juridicos).
   firebase() {
     const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !window.firebaseStorage || !fc
-      || !fc.collection || !fc.getDocs || !fc.query || !fc.where || !fc.doc
-      || !fc.getDoc || !fc.setDoc || !fc.deleteDoc || !fc.ref || !fc.uploadBytes
+    if (!window.firebaseStorage || !fc || !fc.ref || !fc.uploadBytes
       || !fc.getDownloadURL || !fc.deleteObject) {
-      throw new Error('Firebase indisponível para sincronizar os anexos jurídicos.');
+      throw new Error('Armazenamento indisponível para sincronizar os anexos jurídicos.');
     }
     return fc;
+  },
+
+  // anexos_juridicos no Supabase: uma linha por anexo (id = o antigo id do doc no Firestore).
+  tabela() {
+    if (!window.DadosCobranca) throw new Error('Camada de dados indisponível para sincronizar os anexos jurídicos.');
+    return window.DadosCobranca.tabela(this.collectionName);
   },
   
   async init() {
@@ -1978,7 +1987,7 @@ const AnexosDB = {
     };
     const docId = this.firebaseDocId(customerId, fileId);
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.collectionName, docId), payload);
+      await this.tabela().gravar(docId, payload);
     } catch (e) {
       try {
         await fc.deleteObject(storageRef);
@@ -1993,14 +2002,13 @@ const AnexosDB = {
   async load(customerId, options) {
     const cid = String(customerId);
     const fc = this.firebase();
-    const snapshot = await fc.getDocs(fc.query(
-      fc.collection(window.firebaseDb, this.collectionName),
-      fc.where('customerId', '==', cid)
-    ));
+    const linhas = await this.tabela().listar({ filtros: [['customer_id', 'eq', cid]] });
     const cloudFiles = [];
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data() || {};
-      cloudFiles.push({ ...data, id: String(data.fileId || docSnap.id), _docId: docSnap.id });
+    linhas.forEach((linha) => {
+      const data = Object.assign({}, linha);
+      const docId = String(data.id);
+      delete data.id;
+      cloudFiles.push({ ...data, id: String(data.fileId || docId), _docId: docId });
     });
 
     let localFiles = [];
@@ -2052,7 +2060,7 @@ const AnexosDB = {
     } catch (e) {
       await Promise.all(saved.map(async (file) => {
         try {
-          await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, file._docId));
+          await this.tabela().excluir(file._docId);
           await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
         } catch (cleanupError) {
           console.warn('[Anexos] Falha ao limpar um upload incompleto:', cleanupError);
@@ -2068,7 +2076,7 @@ const AnexosDB = {
     if (file.storagePath) {
       await fc.deleteObject(fc.ref(window.firebaseStorage, file.storagePath));
     }
-    await fc.deleteDoc(fc.doc(window.firebaseDb, this.collectionName, docId));
+    await this.tabela().excluir(docId);
   }
 };
 
@@ -2592,9 +2600,10 @@ const AnexosApp = {
     try {
       if (localStorage.getItem(seededKey) === '1') return;
     } catch (e) {}
-    if (!window.firebaseCollections || !window.firebaseDb) return;
+    if (!window.DadosNucleo) return;
     const entries = Object.keys(AnexosState.mapaMeta || {});
     const byKey = { ...(AnexosState.mapaEnvios || {}) };
+    const novos = [];
     let changed = false;
     const now = new Date().toISOString();
     entries.forEach((uid) => {
@@ -2616,16 +2625,15 @@ const AnexosApp = {
         source: 'seed_17701',
         key
       };
+      novos.push(key);
       changed = true;
     });
     if (changed) {
       try {
-        const { doc, setDoc } = window.firebaseCollections;
-        await setDoc(doc(window.firebaseDb, 'anexos_mapa', String(enterpriseId)), {
-          enterpriseId: String(enterpriseId),
-          byKey,
-          updatedAt: now
-        }, { merge: true });
+        // Uma linha por envio: grava só as chaves novas (as demais já existem).
+        const tab = window.DadosNucleo.tabela('anexos_mapa');
+        const cc = String(enterpriseId);
+        await Promise.all(novos.map((key) => tab.gravar(cc + '_' + key, { ...byKey[key], enterpriseId: cc, chave: key })));
         AnexosState.mapaEnvios = byKey;
       } catch (e) {
         console.warn('[Anexos] seed mapa batch', e);
@@ -3974,15 +3982,17 @@ const AnexosApp = {
     const signature = () => (AnexosState.tagsAtivas || []).map((t) => t.name + "|" + t.destino).join("\n");
     const before = signature();
     try {
-      if (!window.firebaseCollections || !window.firebaseDb) {
-        throw new Error("Firebase não está inicializado.");
+      if (!window.DadosNucleo) {
+        throw new Error("Banco de dados não está inicializado.");
       }
-      const col = window.firebaseCollections.collection(window.firebaseDb, "tags");
-      const querySnapshot = await window.firebaseCollections.getDocs(col);
+      // tags no Supabase (tabela tags).
+      const lista = await window.DadosNucleo.tabela("tags").listar();
       const tags = [];
       const seen = new Set();
-      querySnapshot.forEach((docSnap) => {
-        const row = this.normalizeTag(docSnap.data(), docSnap.id);
+      lista.forEach((item) => {
+        const dados = Object.assign({}, item);
+        delete dados.id;
+        const row = this.normalizeTag(dados, item.id);
         if (!row || row.status !== "Ativa") return;
         const key = row.name.toUpperCase() + "|" + row.destino;
         if (seen.has(key)) return;
@@ -4203,12 +4213,12 @@ const AnexosApp = {
   },
 
   async provaAutenticacao(codigo) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.getDoc) return null;
-    const snap = await fx.getDoc(fx.doc(db, "documentos_autenticados", codigo));
-    if (!snap || !snap.exists || !snap.exists()) return null;
-    return snap.data() || null;
+    // documentos_autenticados no Supabase (id = código).
+    if (!window.DadosNucleo) return null;
+    const doc = await window.DadosNucleo.tabela("documentos_autenticados").obter(codigo);
+    if (!doc) return null;
+    delete doc.id;
+    return doc;
   },
 
   enfileirarAuth(fileObj) {
@@ -4770,14 +4780,15 @@ const AnexosApp = {
       if (campo) campo.focus();
       return alert("Explique em uma frase para que serve a TAG (pelo menos 10 letras). Isso ajuda quem aprova a decidir.");
     }
-    if (!window.firebaseDb || !window.firebaseCollections) return alert("Sistema ainda carregando. Tente de novo em alguns segundos.");
+    if (!window.DadosEngenharia) return alert("Sistema ainda carregando. Tente de novo em alguns segundos.");
 
     const u = (window.AppState && AppState.currentUser) || {};
     const email = String(u.email || '').trim().toLowerCase();
     const nomeUsuario = typeof window.crmNomeReal === 'function' ? window.crmNomeReal() : (u.name || '');
-    const { collection, addDoc, getDocs, query, where } = window.firebaseCollections;
+    // tag_solicitacoes no Supabase (window.DadosEngenharia).
+    const tabSolic = window.DadosEngenharia.tabela('tag_solicitacoes');
     const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
-    // Sem cota no Firebase, a chamada fica tentando para sempre; corta em 15 s e avisa.
+    // Sem resposta do banco, a chamada pode ficar pendurada; corta em 15 s e avisa.
     const comPrazo = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('SEM_RESPOSTA')), 15000))]);
     const btn = document.querySelector('#modal-solicitar-tag .btn-primary');
     const btnTxt = btn ? btn.textContent : '';
@@ -4789,13 +4800,13 @@ const AnexosApp = {
       if (igual) {
         return alert(`A TAG "${igual.name}" já existe para ${type}` + (igual.status === 'Inativa' ? ', mas está inativa. Peça ao administrador para reativar.' : '. Use essa TAG.'));
       }
-      const pend = await comPrazo(getDocs(query(collection(window.firebaseDb, 'tag_solicitacoes'), where('status', '==', 'Pendente'))));
+      const pend = await comPrazo(tabSolic.listar({ filtros: [['status', 'eq', 'Pendente']] }));
       let jaPedida = null;
-      pend.forEach((d) => { const s = d.data() || {}; if (!jaPedida && s.type === type && norm(s.tag_name) === norm(nome)) jaPedida = s; });
+      pend.forEach((s) => { if (!jaPedida && s.type === type && norm(s.tag_name) === norm(nome)) jaPedida = s; });
       if (jaPedida) return alert(`A TAG "${nome}" já foi solicitada e está aguardando aprovação.`);
 
       const parecidas = typeof window.crmTagsSemelhantes === 'function' ? window.crmTagsSemelhantes(nome, tags) : [];
-      await comPrazo(addDoc(collection(window.firebaseDb, 'tag_solicitacoes'), {
+      await comPrazo(tabSolic.criar({
         tag_name: nome,
         reason: motivo,
         type: type,
@@ -4811,7 +4822,7 @@ const AnexosApp = {
       console.error('[Tags] solicitação', e);
       const msg = String((e && (e.code || e.message)) || e);
       if (msg === 'SEM_RESPOSTA' || /resource-exhausted|quota/i.test(msg)) {
-        alert("O banco de dados do CRM (Firebase) atingiu o limite de uso de hoje e não está respondendo. A solicitação não foi enviada. Tente de novo mais tarde.");
+        alert("O banco de dados do CRM não está respondendo. A solicitação não foi enviada. Tente de novo mais tarde.");
       } else {
         alert("Falha ao enviar solicitação: " + (e && e.message ? e.message : e));
       }

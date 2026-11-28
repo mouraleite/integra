@@ -557,14 +557,14 @@ const ResultadoCaixaApp = {
   },
 
   async salvarForecastNuvem(ym, doc) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !doc) return false;
+    // resultado_caixa no Supabase (window.DadosFinanceiro): setDoc do doc inteiro vira upsert da linha.
+    const D = window.DadosFinanceiro;
+    if (!D || !doc) return false;
     const por = doc.porArquivo || {};
     const nomes = {};
     const contas = {};
     Object.keys(por).forEach((nome) => this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]));
-    await fx.setDoc(fx.doc(db, "resultado_caixa", this.docForecast(ym)), {
+    await D.gravarResultadoCaixa(this.docForecast(ym), {
       tipo: "forecast",
       slot: "fc-" + ym,
       competencia: ym,
@@ -582,12 +582,12 @@ const ResultadoCaixaApp = {
   },
 
   async carregarForecasts() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.where !== "function") return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = (this._fcToken = (this._fcToken || 0) + 1);
     try {
-      const snap = await fx.getDocs(fx.query(fx.collection(db, "resultado_caixa"), fx.where("tipo", "==", "forecast")));
+      // where("tipo", "==", "forecast"): snapshot de imitação com os docs no formato antigo.
+      const snap = await D.listarResultadoCaixa({ tipo: "forecast" });
       if (this._fcToken !== token) return;
       const nuvem = {};
       const semParte = {};
@@ -1975,15 +1975,11 @@ const ResultadoCaixaApp = {
     let mapa = null;
     try { mapa = this.mapaDfc(FC); } catch (e) { mapa = null; }
     if (mapa && Object.keys(mapa.accToNode || {}).length) return mapa;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
-    if (!fx || !db || !fx.getDoc || !plano) return mapa;
+    if (!window.DadosNucleo || !plano) return mapa;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "config", "global"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return mapa;
-      const raw = (snap.data() || {}).crm_plano_visoes_v2;
+      // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+      const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
       if (!raw) return mapa;
       const visoes = JSON.parse(raw);
       if (!Array.isArray(visoes) || !visoes.length) return mapa;
@@ -2381,35 +2377,17 @@ const ResultadoCaixaApp = {
     return out.buffer;
   },
 
+  // Excel original de cada envio: no Supabase Storage (bucket "arquivos"), em resultado_caixa_orig/<id>.
+  // O nome do arquivo fica no próprio item (origNome).
+  caminhoOriginal(id) {
+    return "resultado_caixa_orig/" + String(id || "").replace(/[\\/]/g, "_");
+  },
+
   async salvarOriginal(id, nome, buf) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !id || !buf) throw new Error("A nuvem não está disponível.");
-    const b64 = await this.bufParaBase64(buf);
-    if (!b64) throw new Error("Arquivo vazio.");
-    const LIM = 400000;
-    const partes = [];
-    if (b64.length > LIM) {
-      for (let i = 0, n = 0; i < b64.length; i += LIM, n++) {
-        const pid = id + "__o" + n;
-        partes.push(pid);
-        await fx.setDoc(fx.doc(db, "resultado_caixa_orig", pid), {
-          tipo: "original-parte",
-          pai: id,
-          texto: b64.slice(i, i + LIM)
-        });
-      }
-    }
-    await fx.setDoc(fx.doc(db, "resultado_caixa_orig", id), {
-      tipo: "original",
-      nome: nome || "arquivo.xlsx",
-      texto: partes.length ? "" : b64,
-      partes: partes,
-      em: new Date().toISOString()
-    });
-    for (let n = partes.length; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id + "__o" + n)).catch(function() {});
-    }
+    const A = window.ArquivosIntegra;
+    if (!A || !id || !buf) throw new Error("A nuvem não está disponível.");
+    if (!buf.byteLength) throw new Error("Arquivo vazio.");
+    await A.uploadBytes(A.ref(null, this.caminhoOriginal(id)), buf, { contentType: "application/octet-stream" });
     if (!this._bytesOriginais) this._bytesOriginais = {};
     this._bytesOriginais[id] = buf;
     return true;
@@ -2419,40 +2397,24 @@ const ResultadoCaixaApp = {
     if (this._bytesOriginais && this._bytesOriginais[id]) {
       return { nome: "", buf: this._bytesOriginais[id] };
     }
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !id || typeof fx.getDoc !== "function") return null;
-    const snap = await fx.getDoc(fx.doc(db, "resultado_caixa_orig", id));
-    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    if (!existe) return null;
-    const x = snap.data() || {};
-    let b64 = x.texto || "";
-    if (Array.isArray(x.partes) && x.partes.length) {
-      b64 = "";
-      for (let i = 0; i < x.partes.length; i++) {
-        const p = await fx.getDoc(fx.doc(db, "resultado_caixa_orig", x.partes[i]));
-        const ok = p && (typeof p.exists === "function" ? p.exists() : p.exists);
-        if (!ok) return null;
-        b64 += String((p.data() || {}).texto || "");
-      }
-    }
-    if (!b64) return null;
-    const buf = this.base64ParaBuf(b64);
+    const A = window.ArquivosIntegra;
+    if (!A || !id) return null;
+    const url = await A.getDownloadURL(A.ref(null, this.caminhoOriginal(id)));
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (!buf.byteLength) return null;
     if (!this._bytesOriginais) this._bytesOriginais = {};
     this._bytesOriginais[id] = buf;
-    return { nome: x.nome || "", buf: buf };
+    return { nome: "", buf: buf };
   },
 
   apagarOriginal(id) {
     if (!id) return;
     if (this._bytesOriginais) delete this._bytesOriginais[id];
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) return;
-    fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id)).catch(function() {});
-    for (let n = 0; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa_orig", id + "__o" + n)).catch(function() {});
-    }
+    const A = window.ArquivosIntegra;
+    if (!A) return;
+    A.deleteObject(A.ref(null, this.caminhoOriginal(id))).catch(function() {});
   },
 
   origAindaUsado(id) {
@@ -2526,9 +2488,10 @@ const ResultadoCaixaApp = {
   },
 
   async salvarArquivoNuvem(slot, nome, arq) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !arq) return false;
+    // resultado_caixa no Supabase: o payload é aberto nas colunas jsonb (entradas, contas, contas_por_cc,
+    // planos_json) de uma linha só; as partes __pN (limite de 1 MB do Firestore) não existem mais.
+    const D = window.DadosFinanceiro;
+    if (!D || !arq) return false;
     const id = arq._doc || this.docCaixa(slot, arq.empresa, nome);
     const limpo = this.enxugarArq(arq);
     const detalhe = JSON.stringify({
@@ -2537,34 +2500,19 @@ const ResultadoCaixaApp = {
       contasPorCc: limpo.contasPorCc || {},
       planosJson: this.empacotarPlanos(limpo.planosPorCc)
     });
-    const LIM = 400000;
     const ids = [];
-    if (detalhe.length > LIM) {
-      for (let i = 0, n = 0; i < detalhe.length; i += LIM, n++) {
-        const pid = id + "__p" + n;
-        ids.push(pid);
-        await fx.setDoc(fx.doc(db, "resultado_caixa", pid), {
-          tipo: "parte",
-          pai: id,
-          texto: detalhe.slice(i, i + LIM)
-        });
-      }
-    }
     const base = {
       slot: slot,
       nome: nome,
       empresa: Number(arq.empresa) || 0,
       rotulo: arq.rotulo || "",
       em: new Date().toISOString(),
-      payload: ids.length ? "" : detalhe,
+      payload: detalhe,
       partes: ids,
       orig: arq.orig || "",
       origNome: arq.origNome || ""
     };
-    await fx.setDoc(fx.doc(db, "resultado_caixa", id), base);
-    for (let n = ids.length; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", id + "__p" + n)).catch(function() {});
-    }
+    await D.gravarResultadoCaixa(id, base);
     arq._doc = id;
     arq._partes = ids;
     arq._pendente = false;
@@ -2609,16 +2557,13 @@ const ResultadoCaixaApp = {
   },
 
   apagarNuvem(docId) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!docId || !fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!docId || !D) return;
     this._nuvemToken = (this._nuvemToken || 0) + 1;
-    fx.deleteDoc(fx.doc(db, "resultado_caixa", docId)).catch(() => {});
-    if (String(docId).indexOf("__p") >= 0 || String(docId).indexOf("fc-") === 0) return;
+    // Uma linha por arquivo/forecast (sem partes __pN para apagar).
+    D.excluirResultadoCaixa(docId).catch(() => {});
+    if (String(docId).indexOf("fc-") === 0) return;
     this.apagarOriginal(docId);
-    for (let n = 0; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", docId + "__p" + n)).catch(function() {});
-    }
   },
 
   aplicarDoc(acervo, id, x) {
@@ -2727,9 +2672,8 @@ const ResultadoCaixaApp = {
   },
 
   async carregarNuvem() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = this._nuvemToken || 0;
     const vazio = !this.temAcervo();
     if (vazio) {
@@ -2739,7 +2683,7 @@ const ResultadoCaixaApp = {
     const leituraVelha = () => (this._nuvemToken || 0) !== token;
     const forecastP = this.carregarForecasts();
     try {
-      const snap = await fx.getDocs(fx.collection(db, "resultado_caixa"));
+      const snap = await D.listarResultadoCaixa(); // snapshot de imitação (docs no formato que aplicarDoc lê)
       if (leituraVelha()) {
         if (!this._subindo) this.lendo = false;
         return;

@@ -1704,20 +1704,17 @@ const RydooApp = {
     return this.pdfDocument(pages, logo);
   },
 
+  // rydoo_meta, rydoo_arquivos e rydoo_titulos estão no Supabase (window.DadosFinanceiro).
   fb() {
-    const db = window.firebaseDb;
-    const fx = window.firebaseCollections;
-    if (!db || !fx || !fx.doc || !fx.setDoc || !fx.getDoc || !fx.getDocs || !fx.collection) return null;
-    return { db: db, fx: fx };
+    return window.DadosFinanceiro || null;
   },
 
   async lerColaboradores() {
     const fb = this.fb();
     if (!fb) return [];
     try {
-      const snap = await fb.fx.getDoc(fb.fx.doc(fb.db, "rydoo_meta", "colaboradores"));
-      if (!snap.exists()) return [];
-      const data = snap.data() || {};
+      const data = await fb.tabela("rydoo_meta").obter("colaboradores");
+      if (!data) return [];
       this._colabAt = data.updatedAt ? Date.parse(data.updatedAt) : 0;
       const items = Array.isArray(data.items) ? data.items : [];
       return items.filter((c) => this.colaborador(c));
@@ -1740,7 +1737,7 @@ const RydooApp = {
       registerNumber: c.registerNumber || "",
       active: !!c.active
     }));
-    await fb.fx.setDoc(fb.fx.doc(fb.db, "rydoo_meta", "colaboradores"), {
+    await fb.tabela("rydoo_meta").gravar("colaboradores", {
       updatedAt: new Date().toISOString(),
       count: items.length,
       items: items
@@ -1756,9 +1753,9 @@ const RydooApp = {
       return set;
     }
     try {
-      const snap = await fb.fx.getDocs(fb.fx.collection(fb.db, "rydoo_arquivos"));
-      snap.forEach((d) => {
-        const chaves = (d.data() || {}).chaves;
+      const lista = await fb.tabela("rydoo_arquivos").listar({ colunas: "id, chaves" });
+      lista.forEach((d) => {
+        const chaves = (d || {}).chaves;
         if (Array.isArray(chaves)) chaves.forEach((k) => { if (k) set.add(k); });
       });
     } catch (e) {}
@@ -1778,7 +1775,7 @@ const RydooApp = {
     });
     if (fb) {
       try {
-        await fb.fx.setDoc(fb.fx.doc(fb.db, "rydoo_arquivos", String(Date.now())), {
+        await fb.tabela("rydoo_arquivos").gravar(String(Date.now()), {
           fileName: this.state.fileName || "",
           importedAt: new Date().toISOString(),
           linhas: rows.length,
@@ -1898,15 +1895,12 @@ const RydooApp = {
       const id = this.tituloDocId(g);
       if (!id) continue;
       try {
-        const snap = await fb.fx.getDoc(fb.fx.doc(fb.db, "rydoo_titulos", id));
-        if (!snap.exists()) continue;
-        const data = snap.data() || {};
+        const data = await fb.tabela("rydoo_titulos").obter(id);
+        if (!data) continue;
         const billId = data.billId ? String(data.billId) : "";
         if (!billId) continue;
         if (await this.tituloExcluido(billId)) {
-          if (fb.fx.deleteDoc) {
-            try { await fb.fx.deleteDoc(fb.fx.doc(fb.db, "rydoo_titulos", id)); } catch (e) {}
-          }
+          try { await fb.tabela("rydoo_titulos").excluir(id); } catch (e) {}
           continue;
         }
         g.billId = billId;
@@ -2597,7 +2591,7 @@ const RydooApp = {
     if (obs) data.notes = obs;
     if (total) data.total = total;
     if (extra && extra.bankSent) data.bankSentAt = new Date().toISOString();
-    await fb.fx.setDoc(fb.fx.doc(fb.db, "rydoo_titulos", id), data, { merge: true });
+    await fb.gravarTituloRydoo(id, data, { merge: true }); // competencia sai do id
   }
 };
 

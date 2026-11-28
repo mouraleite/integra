@@ -285,11 +285,10 @@ const CartaoClaraApp = {
     this.state.carregando = true;
     let base = null;
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDoc) {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.DOC[0], this.DOC[1]));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        if (existe) base = snap.data() || null;
+      // cartao_clara/atual não tem tabela própria: fica inteiro em configuracoes (chave "cartao_clara/atual").
+      if (window.DadosNucleo) {
+        const snap = await window.DadosNucleo.lerConfig(this.DOC[1], this.DOC[0]);
+        if (snap && snap.exists()) base = snap.data() || null;
       }
     } catch (e) {
       console.warn("[Cartão Clara] leitura", e);
@@ -308,9 +307,9 @@ const CartaoClaraApp = {
     let nuvem = false;
     try {
       const tamanho = JSON.stringify(base).length;
-      const fc = window.firebaseCollections;
-      if (tamanho < 900000 && window.firebaseDb && fc && fc.setDoc) {
-        await fc.setDoc(fc.doc(window.firebaseDb, this.DOC[0], this.DOC[1]), base);
+      // setDoc sem merge: substitui o doc inteiro (limite de tamanho mantido como era no Firebase).
+      if (tamanho < 900000 && window.DadosNucleo) {
+        await window.DadosNucleo.gravarConfig(this.DOC[1], base, {}, this.DOC[0]);
         nuvem = true;
       }
     } catch (e) {

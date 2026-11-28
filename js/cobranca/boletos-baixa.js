@@ -45,14 +45,11 @@ const BoletoBaixa = {
 
   async carregar(titulo, forcar) {
     const t = String(titulo || "").trim();
-    if (!t || !window.firebaseDb || !window.firebaseCollections) return [];
+    if (!t || !window.DadosCobranca) return [];
     if (!forcar && this._cache[t]) return this._cache[t];
     if (this._carregando[t]) return this._carregando[t];
-    const { collection, query, where, getDocs } = window.firebaseCollections;
-    this._carregando[t] = getDocs(query(collection(window.firebaseDb, this.COL), where("titulo", "==", t)))
-      .then((snap) => {
-        const lista = [];
-        snap.forEach((d) => lista.push({ id: d.id, ...(d.data() || {}) }));
+    this._carregando[t] = window.DadosCobranca.tabela(this.COL).listar({ filtros: [["titulo", "eq", t]] })
+      .then((lista) => {
         this._cache[t] = lista;
         return lista;
       })
@@ -356,6 +353,7 @@ const BoletoBaixa = {
     }
   },
 
+  // O comprovante continua no Storage do Firebase (migração dos arquivos é da Fase 4); o registro vai para o Supabase.
   async salvarArquivo(file) {
     try {
       const fc = window.firebaseCollections;
@@ -379,10 +377,10 @@ const BoletoBaixa = {
       const u = (window.AppState && AppState.currentUser) || {};
       const nome = typeof window.crmNomeReal === "function" ? window.crmNomeReal() : (u.name || "");
       const arquivo = await this.salvarArquivo(this._arquivo);
-      const { collection, addDoc } = window.firebaseCollections;
+      const tab = window.DadosCobranca.tabela(this.COL);
       const agora = new Date().toISOString();
       for (const r of c.resultado) {
-        await addDoc(collection(window.firebaseDb, this.COL), {
+        await tab.criar({
           titulo: this._titulo,
           customerId: this._customerId,
           parcelas: r.grupo.parcelas.map((p) => String(p.installmentId)),

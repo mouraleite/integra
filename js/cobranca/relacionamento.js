@@ -62,10 +62,10 @@ const RelacionamentoApp = {
 
   /** Traz da nuvem os cartórios cadastrados em outros computadores sem precisar recarregar a página. */
   async atualizarCartoriosDaNuvem() {
-    const fc = window.firebaseCollections;
-    if (!fc || !fc.getDoc || !fc.doc || !window.firebaseDb || typeof window.mergeCartoriosList !== "function") return;
+    if (!window.DadosNucleo || typeof window.mergeCartoriosList !== "function") return;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+      // crm_moura_cartorios_list vem da tabela cartorios, montada no config/global pela camada de dados.
+      const snap = await window.DadosNucleo.lerConfig("global", "config", { fresco: true });
       const ok = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       const cloud = ok ? ((snap.data() || {}).crm_moura_cartorios_list || "[]") : "[]";
       const k = "crm_moura_cartorios_list";
@@ -334,14 +334,14 @@ const RelacionamentoApp = {
   async _sincronizarModeloDoc(cfg) {
     const corpoEl = document.getElementById(cfg.corpoId);
     if (corpoEl && corpoEl.value && corpoEl.value !== corpoEl.defaultValue) return;
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+    if (!window.DadosNucleo) return;
     try {
       const tipo = String(cfg.storage).replace(/^crm_docpadrao_/, "");
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "settings", "docpadrao_" + tipo));
+      // settings/docpadrao_<tipo>: linha "settings/docpadrao_<tipo>" em configuracoes.
+      const snap = await window.DadosNucleo.lerSetting("docpadrao_" + tipo);
       if (snap.exists()) localStorage.setItem(cfg.storage, JSON.stringify(snap.data()));
     } catch (e) {
-      console.warn("Modelo " + cfg.storage + " não carregado do Firebase", e);
+      console.warn("Modelo " + cfg.storage + " não carregado do banco", e);
     }
   },
 

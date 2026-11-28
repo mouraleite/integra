@@ -53,14 +53,13 @@ const FinanciamentoApp = {
     const agora = Date.now();
     if (!forcar && this._nuvemEm && agora - this._nuvemEm < 20000) return;
     if (this._nuvemLendo && typeof this._nuvemLendo.then === "function") return this._nuvemLendo;
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function" || typeof window.crmFinanciamentosMesclar !== "function") return;
+    if (!window.DadosNucleo || typeof window.crmFinanciamentosMesclar !== "function") return;
     this._nuvemEm = agora;
     const leitura = (async () => {
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const nuvem = existe ? String((snap.data() || {})[FIN_PROC_KEY] || "{}") : "{}";
+      // Só a chave do config/global que interessa (linha de configuracoes; volta como texto JSON).
+      const valor = await window.DadosNucleo.lerConfiguracao(FIN_PROC_KEY);
+      const nuvem = String(valor || "{}");
       let local = "{}";
       try { local = localStorage.getItem(FIN_PROC_KEY) || "{}"; } catch (e) {}
       const junto = window.crmFinanciamentosMesclar(local, nuvem);
@@ -1073,9 +1072,9 @@ const FinanciamentoApp = {
   },
 
   async lerBatimentoRemessa() {
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return null;
-    const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+    // Supabase: o batimento das 7h fica em configuracoes ("remessa_avulsa_batimento/atual").
+    if (!window.DadosNucleo || typeof window.DadosNucleo.lerConfig !== "function") return null;
+    const snap = await window.DadosNucleo.lerConfig("atual", "remessa_avulsa_batimento");
     const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     if (!existe) return null;
     return snap.data() || null;

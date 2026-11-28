@@ -8878,25 +8878,35 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/digidem/leaflet-side-by-side@2.0.0/leaflet-side-by-side.min.js"></script>
   <!-- Scripts de Negócio -->
-  <script type="module" src="js/nucleo/firebase-config.js?v=93185dbb31"></script>
+  <script type="module" src="js/nucleo/supabase-client.js?v=4"></script>
+  <script defer src="js/nucleo/dados-base.js?v=2"></script>
+  <script defer src="js/nucleo/storage-supabase.js?v=1"></script>
+  <script defer src="js/nucleo/mapas-nucleo.js?v=sb20261125a"></script>
+  <script defer src="js/nucleo/dados-nucleo.js?v=1"></script>
+  <script defer src="js/cobranca/mapas-cobranca.js?v=1"></script>
+  <script defer src="js/cobranca/dados-cobranca.js?v=1"></script>
+  <script defer src="js/engenharia/mapas-engenharia.js?v=1"></script>
+  <script defer src="js/engenharia/dados-engenharia.js?v=1"></script>
+  <script defer src="js/financeiro/mapas-financeiro.js?v=sb2250"></script>
+  <script defer src="js/financeiro/dados-financeiro.js?v=1"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
   <script>
       window['pdfjs-dist/build/pdf'].GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
   </script>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
   <script defer src="js/nucleo/data.js?v=2268"></script>
-  <script defer src="js/nucleo/sienge-api.js?v=fca2b9462b"></script>
+  <script defer src="js/nucleo/sienge-api.js?v=sb2256"></script>
   <script type="text/x-sob-demanda" data-grupo="consumo-api" data-src="js/nucleo/consumo-api.js?v=810a432575"></script>
   <script defer src="js/nucleo/azure-auth.js?v=ac46bd82d7"></script>
   <script defer src="js/nucleo/usuarios-online.js?v=0044ae54fb"></script>
   <script defer src="js/nucleo/alertas-popup.js?v=544512287f"></script>
   <script defer src="js/nucleo/aviso-endereco.js?v=9a3a995cc6"></script>
   <script type="text/x-sob-demanda" data-grupo="auditoria-login" data-src="js/nucleo/auditoria-login.js?v=b3d8b4a9d1"></script>
-  <script defer src="js/nucleo/app.js?v=86c833ed40"></script>
-  <script defer src="js/fiscal/followup-cnd.js?v=628ac71ef1"></script>
-  <script defer src="js/cobranca/followup-gestor.js?v=b4f1569be0"></script>
-  <script defer src="js/nucleo/central-email-sugestoes.js?v=b7d9177e41"></script>
-  <script defer src="js/nucleo/central-email.js?v=312b1f24c5"></script>
+  <script defer src="js/nucleo/app.js?v=sb2265"></script>
+  <script defer src="js/fiscal/followup-cnd.js?v=sb2249"></script>
+  <script defer src="js/cobranca/followup-gestor.js?v=sb2249"></script>
+  <script defer src="js/nucleo/central-email-sugestoes.js?v=sb2259"></script>
+  <script defer src="js/nucleo/central-email.js?v=sb2259"></script>
   <script defer src="js/juridico/fluxos-processo.js?v=44a9dee50f"></script>
   <script defer src="js/juridico/custas-judiciais.js?v=b83f59f12c"></script>
   <script defer src="js/financeiro/pagar-reembolso.js?v=720f06e7ab"></script>
@@ -8912,7 +8922,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script type="text/x-sob-demanda" data-grupo="contas-pagar" data-src="js/financeiro/contas-pagar.js?v=3f6d4ddbf5"></script>
     <script defer src="js/financeiro/boleto-check.js?v=ceef50791e"></script>
     <script defer src="js/financeiro/nota-fiscal-check.js?v=2795e63f89"></script>
-    <script defer src="js/financeiro/gerar-pagamento.js?v=9f86e5e55d"></script>
+    <script defer src="js/financeiro/gerar-pagamento.js?v=sb2266"></script>
     <script defer src="js/financeiro/cartao-clara.js?v=ee76c9124b"></script>
     <script defer src="js/contabil/contabil.js?v=508491accb"></script>
     <script defer src="js/contabil/contabil-equiv.js?v=bf21ef1b34"></script>
@@ -8943,7 +8953,7 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/cobranca/aditamento.js?v=2268"></script>
   <script defer src="js/cobranca/cessao-direitos.js?v=e878bff904"></script>
   <script defer src="js/cobranca/permuta-lote.js?v=c10be02302"></script>
-  <script defer src="js/cobranca/doc-assinatura.js?v=044ca0ee8c"></script>
+  <script defer src="js/cobranca/doc-assinatura.js?v=sb2266"></script>
   <script defer src="js/cobranca/compromissario.js?v=58c6cdf4dd"></script>
   <script defer src="js/comercial/comercial.js?v=d470ed9e13"></script>
   <script defer src="js/comercial/estoque-comercial.js?v=c3e4fd59d6"></script>
@@ -8951,8 +8961,8 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/nucleo/documentos-sienge.js?v=6b96789811"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/comercial/tabelas-vigentes.js?v=05d1844b7e"></script>
   <script defer src="js/comercial/controle-comissao.js?v=1a559ba01b"></script>
-  <script defer src="js/comercial/recebimentos-webro.js?v=570a006bf5"></script>
-  <script defer src="js/financeiro/remessa-avulsa.js?v=2840ea0a30"></script>
+  <script defer src="js/comercial/recebimentos-webro.js?v=sb2266"></script>
+  <script defer src="js/financeiro/remessa-avulsa.js?v=sb2267"></script>
   <script defer src="js/cobranca/scod.js?v=d1771ffac5"></script>
   <script defer src="js/cobranca/importar-acionamentos.js?v=44382f1307"></script>
   <script defer src="js/financeiro/centros-custo.js?v=baefd1313f"></script>
@@ -8969,17 +8979,17 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <script defer src="js/financeiro/fluxo-caixa.js?v=bfaac752df"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-2027.js?v=eceb14cc8f"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc.js?v=c9ac837d09"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc.js?v=sb2263"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-aportes.js?v=ba792d4803"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-dfc-slides.js?v=7d6dccf9d1"></script>
-  <script defer src="js/financeiro/caixa-diario.js?v=4730c8df30"></script>
+  <script defer src="js/financeiro/caixa-diario.js?v=sb2248"></script>
   <script type="text/x-sob-demanda" data-grupo="mutuo" data-src="js/financeiro/mutuo.js?v=58de946e11"></script>
-  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=12a504e49d"></script>
+  <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/financeiro/resultado-caixa.js?v=20261123sb"></script>
   <script defer src="js/cobranca/relatorio-honorarios.js?v=aa553c2b1d"></script>
   <script defer src="js/financeiro/investimento.js?v=445a591bd9"></script>
   <script defer src="js/financeiro/parametrizacao-parceiro.js?v=f40adcfbaa"></script>
   <script defer src="js/contabil/societario.js?v=fd8ed4615d"></script>
-  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=0729d75615"></script>
+  <script type="text/x-sob-demanda" data-grupo="participacoes" data-src="js/financeiro/participacoes.js?v=sb2259"></script>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=05060dfa3b"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=e6ffa3e44f"></script>
@@ -8987,12 +8997,12 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/fiscal/fiscal-enviar-nota.js?v=fbbe582aef"></script>
   <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
   <script defer src="js/nucleo/indexadores.js?v=0adcce7721"></script>
-  <script defer src="js/engenharia/verificar-construcao.js?v=533dbd2bd9"></script>
-  <script defer src="js/cobranca/financiamento.js?v=c75e3985b0"></script>
+  <script defer src="js/engenharia/verificar-construcao.js?v=sb2249"></script>
+  <script defer src="js/cobranca/financiamento.js?v=sb2266"></script>
   <script defer src="js/cobranca/financiamento-docs.js?v=e9d1459aaa"></script>
   <script src="js/cobranca/repactuacoes.js?v=e5e3956b42"></script>
   <script type="text/x-sob-demanda" data-grupo="repactuacao-lote" data-src="js/cobranca/repactuacao-lote.js?v=b4bc4b7fd2"></script>
-  <script defer src="js/cobranca/registro.js?v=30a8488b6f"></script>
+  <script defer src="js/cobranca/registro.js?v=sb2261"></script>
   
   <!-- Dashboard de Inadimplência -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>

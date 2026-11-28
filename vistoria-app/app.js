@@ -2,6 +2,7 @@
  * App de vistorias (instalável no celular).
  * - Entra com a conta Microsoft da Moura Leite (o mesmo aplicativo do Azure usado pelo Integra).
  * - Só libera quem está no cadastro de usuários do Integra, ativo e marcado como de construção.
+ * - Dados no Supabase (supabase-client.js + dados-nucleo/dados-engenharia), com o token Microsoft deste app.
  * - Mostra as vistorias atribuídas a essa pessoa em "Vistoria (app)" no Integra (campo app.responsavelEmail).
  * - "Fazer vistoria" abre a mesma página de fotos do link (vistoria.html?id=...&app=1): o Integra valida igual.
  */
@@ -38,9 +39,43 @@
     navigator.serviceWorker.register("/vistoria-app/sw.js", { scope: "/vistoria-app/" }).catch(() => {});
   }
 
-  async function esperarFirebase() {
-    for (let i = 0; i < 60 && !window.firebaseDb; i++) await new Promise((r) => setTimeout(r, 100));
-    if (!window.firebaseDb) throw new Error("Não consegui conectar ao servidor. Verifique a internet e abra o app de novo.");
+  /* Ponte para o supabase-client.js: ele pede window.MouraAuth.getIntegraToken() (ID token da Microsoft) e
+     troca em /api/supabase-token por um token do banco. Aqui o login é o MSAL do próprio app. */
+  const expiracao = (token) => {
+    try {
+      const parte = String(token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+      return Number(JSON.parse(atob(parte + "===".slice((parte.length + 3) % 4))).exp || 0) * 1000;
+    } catch (e) { return 0; }
+  };
+  window.MouraAuth = {
+    async getIntegraToken() {
+      if (!msalApp || !estado.conta) return "";
+      const pedir = async (renovar) => {
+        const r = await msalApp.acquireTokenSilent({ scopes: ["User.Read"], account: estado.conta, forceRefresh: !!renovar });
+        return (r && r.idToken) || "";
+      };
+      try {
+        let token = await pedir(false);
+        if (!token || expiracao(token) - Date.now() < 5 * 60 * 1000) token = await pedir(true);
+        return token || "";
+      } catch (e) {
+        console.warn("[vistoria-app] token Microsoft: " + ((e && e.message) || e));
+        return "";
+      }
+    },
+    getCurrentUser() {
+      return estado.conta ? { email: String(estado.conta.username || "").trim().toLowerCase() } : null;
+    }
+  };
+
+  // Camada de dados do Supabase (dados-nucleo / dados-engenharia carregam com defer, antes deste arquivo).
+  async function esperarDados() {
+    for (let i = 0; i < 100 && !(window.DadosNucleo && window.DadosEngenharia && window.sb); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!(window.DadosNucleo && window.DadosEngenharia && window.sb)) {
+      throw new Error("Não consegui conectar ao servidor. Verifique a internet e abra o app de novo.");
+    }
   }
 
   function telaEntrar(erro) {
@@ -73,6 +108,7 @@
   }
 
   async function sair() {
+    try { if (typeof window.sbLimparToken === "function") window.sbLimparToken(); } catch (e) {}
     try {
       await msalApp.logoutRedirect({ account: estado.conta, postLogoutRedirectUri: URL_APP });
     } catch (e) {
@@ -80,23 +116,26 @@
     }
   }
 
-  /** Cadastro de usuários do Integra (config/crm_users). */
+  /** Cadastro de usuários do Integra (tabela usuarios no Supabase; antes config/crm_users).
+      null = sem token do banco (não cadastrado/inativo); undefined = token ok, mas linha não encontrada. */
   async function lerUsuario(email) {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, "config", "crm_users"));
-    const dados = snap.exists() ? (snap.data() || {}) : {};
-    let lista = [];
-    try { lista = JSON.parse(dados.list || "[]") || []; } catch (e) { lista = []; }
-    return lista.find((u) => String((u && u.email) || "").trim().toLowerCase() === email) || null;
+    // O token só sai para quem está cadastrado e ATIVO (api/_lib/supabase-token.js).
+    const token = await window.sbToken();
+    if (!token) return null;
+    const usuarios = window.DadosNucleo.tabela("usuarios");
+    const doToken = typeof window.sbUsuario === "function" ? window.sbUsuario() : null;
+    // Pelo id que o servidor resolveu no token (cobre login compartilhado); senão pelo e-mail.
+    let lista = doToken && doToken.id
+      ? await usuarios.listar({ filtros: [["id", "eq", doToken.id]], limite: 1 })
+      : await usuarios.listar({ filtros: [["email", "eq", email]], limite: 1 });
+    if (!lista.length) lista = await usuarios.listar({ filtros: [["login_email", "eq", email]], limite: 1 });
+    return lista[0];
   }
 
   async function carregarVistorias() {
-    const { collection, getDocs, query, where } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, "vistorias"), where("app.responsavelEmail", "==", estado.usuario.email));
-    const snap = await getDocs(q);
-    const lista = [];
-    snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
-    estado.vistorias = lista;
+    // where("app.responsavelEmail", "==", email) -> coluna achatada app_responsavel_email (mapas-engenharia.js).
+    estado.vistorias = await window.DadosEngenharia.tabela("vistorias")
+      .listar({ filtros: [["app_responsavel_email", "eq", estado.usuario.email]] });
   }
 
   function rotuloLote(v) {
@@ -201,14 +240,14 @@
     if (!estado.conta) { telaEntrar(); return; }
     const email = String(estado.conta.username || "").trim().toLowerCase();
     try {
-      await esperarFirebase();
+      await esperarDados();
       const u = await lerUsuario(email);
       const ativo = u && (!u.status || String(u.status).toUpperCase() !== "INATIVO");
       if (!u || !ativo || !u.check_construction) {
         telaAviso("Acesso não liberado", "Seu usuário não está liberado como vistoriador no Integra. Peça ao administrador para marcar o seu cadastro como de construção.");
         return;
       }
-      estado.usuario = { email, nome: u.name || estado.conta.name || email };
+      estado.usuario = { email: String(u.email || email).toLowerCase(), nome: u.name || estado.conta.name || email };
       await carregarVistorias();
       pintar();
     } catch (e) {

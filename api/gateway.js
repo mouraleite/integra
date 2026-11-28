@@ -30,8 +30,15 @@ const rotas = {
   "remessa-avulsa-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
+  // Login Microsoft -> token do Supabase. Confere o login dentro da própria rota (sempre bloqueia).
+  "supabase-token": require("./_lib/supabase-token"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
-  "publicar": require("./_lib/publicar")
+  "publicar": require("./_lib/publicar"),
+  // Link público da vistoria (cliente sem login): fica FORA do ROTAS_COM_LOGIN de propósito.
+  // Protegido pelo id da vistoria + conferências na própria rota (status, caminho das fotos, limite por IP).
+  "vistoria-publica": require("./_lib/vistoria-publica"),
+  // Arquivos do bucket privado (link /arquivo?p=...): confere o token do Supabase (cookie) dentro da própria rota.
+  "arquivo": require("./_lib/arquivo")
 };
 
 const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/integra-auth");

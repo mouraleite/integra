@@ -30,27 +30,25 @@ const RegistroApp = {
     this.lerRemoto();
   },
 
-  /* O último arquivo fica no banco do Integra (coleção registro_cadastro), para toda a equipe e qualquer computador.
-     Fica dividido em partes de até 600 mil caracteres por causa do limite de cada documento. */
+  /* O último arquivo fica no banco do Integra (Supabase: ficha em registro_cadastro + uma linha por unidade em
+     registro_cadastro_linhas), para toda a equipe e qualquer computador. */
   COLECAO: "registro_cadastro",
 
+  /* Histórico dos envios (configuracoes "registro_cadastro_hist/..."): "historico" = lista; "arq_<data>" = linhas de cada
+     envio. O arquivo atual continua em registro_cadastro + registro_cadastro_linhas. */
+  COLECAO_HIST: "registro_cadastro_hist",
+
   async esperarBanco() {
-    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
+    for (let i = 0; i < 40 && !(window.DadosCobranca && window.DadosNucleo); i++) {
       await new Promise((r) => setTimeout(r, 250));
     }
-    const fc = window.firebaseCollections;
-    return window.firebaseDb && fc && fc.getDoc ? fc : null;
+    return window.DadosCobranca && window.DadosNucleo ? window.DadosCobranca : null;
   },
 
-  /** Linhas de uma versão gravada: partes "<base>_0..n" (base "atual" nos envios antigos, "arq_<data>" nos novos). */
-  async lerPartes(fc, base, partes) {
-    let texto = "";
-    for (let i = 0; i < (Number(partes) || 0); i++) {
-      const parte = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, base + "_" + i));
-      texto += String(((parte && parte.data && parte.data()) || {}).dados || "");
-    }
-    const linhas = JSON.parse(texto || "[]");
-    return Array.isArray(linhas) ? linhas : [];
+  async lerDocHist(id) {
+    const snap = await window.DadosNucleo.lerConfig(id, this.COLECAO_HIST);
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    return existe ? (snap.data() || {}) : null;
   },
 
   async lerRemoto() {
@@ -58,16 +56,18 @@ const RegistroApp = {
     this.state.lendoRemoto = true;
     if (!this.state.linhas.length) this.render();
     try {
-      const fc = await this.esperarBanco();
-      if (!fc) return;
-      this.lerHistorico(fc);
-      const meta = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"));
-      const existe = meta && (typeof meta.exists === "function" ? meta.exists() : meta.exists);
-      if (!existe) return;
-      const m = meta.data() || {};
+      const D = await this.esperarBanco();
+      if (!D) return;
+      await this.lerHistorico();
+      // Primeiro só a ficha, para não baixar todas as linhas quando o arquivo local já é o mais novo.
+      const m = await D.lerRegistroCadastro({ soFicha: true });
+      if (!m) return;
       if (!m.quando || (this.state.quando && String(m.quando) <= String(this.state.quando) && this.state.linhas.length)) return;
-      const linhas = await this.lerPartes(fc, m.base || "atual", m.partes);
-      if (!linhas.length) return;
+      const completo = await D.lerRegistroCadastro();
+      const linhas = completo && completo.linhas;
+      if (!Array.isArray(linhas) || !linhas.length) return;
+      const ref = (this.state.historico || []).find((x) => x.quando === m.quando);
+      m.arquivoUrl = (ref && ref.arquivoUrl) || "";
       this.state.linhas = linhas;
       this.state.arquivo = m.arquivo || "";
       this.state.quando = m.quando || "";
@@ -83,18 +83,38 @@ const RegistroApp = {
   },
 
   /* ---------- Histórico de arquivos ----------
-     Cada envio fica guardado (registro_cadastro/historico) com as linhas lidas e, quando possível, o Excel original.
+     Cada envio fica guardado (registro_cadastro_hist/historico) com as linhas lidas e, quando possível, o Excel original.
      Subir outro arquivo troca o atual; os anteriores continuam para consulta (Ver) e download (Baixar). */
-  async lerHistorico(fc) {
+  async lerHistorico() {
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "historico"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const itens = existe ? ((snap.data() || {}).itens || []) : [];
+      const d = await this.lerDocHist("historico");
+      const itens = (d && d.itens) || [];
       this.state.historico = Array.isArray(itens) ? itens : [];
       this.render();
     } catch (e) {
       console.warn("[Registro] histórico", e);
     }
+  },
+
+  /** Grava as linhas de uma versão em partes "<base>_0..n" (texto JSON) e devolve quantas partes. */
+  async gravarPartes(base, linhas) {
+    const texto = JSON.stringify(linhas || []);
+    const TAM = 600000;
+    const partes = Math.max(1, Math.ceil(texto.length / TAM));
+    for (let i = 0; i < partes; i++) {
+      await window.DadosNucleo.gravarConfig(base + "_" + i, { dados: texto.slice(i * TAM, (i + 1) * TAM) }, {}, this.COLECAO_HIST);
+    }
+    return partes;
+  },
+
+  async lerPartes(base, partes) {
+    let texto = "";
+    for (let i = 0; i < (Number(partes) || 0); i++) {
+      const d = await this.lerDocHist(base + "_" + i);
+      texto += String((d && d.dados) || "");
+    }
+    const linhas = JSON.parse(texto || "[]");
+    return Array.isArray(linhas) ? linhas : [];
   },
 
   async guardarOriginal(file, stamp) {
@@ -112,43 +132,40 @@ const RegistroApp = {
   },
 
   async gravarRemoto(file) {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return false;
+    const D = window.DadosCobranca;
+    if (!D || !window.DadosNucleo) return false;
     try {
       const stamp = Date.now();
-      // Cada envio grava em partes próprias (arq_<data>_n): o arquivo anterior continua inteiro para o histórico.
-      const base = "arq_" + stamp;
-      const texto = JSON.stringify(this.state.linhas);
-      const TAM = 600000;
-      const partes = Math.max(1, Math.ceil(texto.length / TAM));
-      for (let i = 0; i < partes; i++) {
-        await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, base + "_" + i), { dados: texto.slice(i * TAM, (i + 1) * TAM) });
-      }
-      const arquivoUrl = await this.guardarOriginal(file, stamp);
-      this.state.arquivoUrl = arquivoUrl;
-      const item = { base, arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, partes, unidades: this.state.linhas.length, arquivoUrl };
-      // Histórico: o envio anterior que ainda não estava nele (os de antes desta versão, em "atual_n") entra primeiro.
       let hist = [];
       try {
-        const h = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "historico"));
-        const existe = h && (typeof h.exists === "function" ? h.exists() : h.exists);
-        hist = existe ? ((h.data() || {}).itens || []) : [];
+        const h = await this.lerDocHist("historico");
+        hist = (h && Array.isArray(h.itens)) ? h.itens : [];
       } catch (e) { hist = []; }
+      // O arquivo atual que ainda não está no histórico (enviado antes desta versão) é guardado antes de ser trocado.
       try {
-        const ant = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"));
-        const existe = ant && (typeof ant.exists === "function" ? ant.exists() : ant.exists);
-        const a = existe ? (ant.data() || {}) : null;
-        const baseAnt = a ? (a.base || "atual") : "";
-        if (a && a.quando && !hist.some((x) => x.base === baseAnt)) {
-          hist.push({ base: baseAnt, arquivo: a.arquivo || "", quando: a.quando, por: a.por || "", partes: Number(a.partes) || 0, unidades: Number(a.unidades) || 0, arquivoUrl: a.arquivoUrl || "" });
+        const ant = await D.lerRegistroCadastro();
+        if (ant && ant.quando && Array.isArray(ant.linhas) && ant.linhas.length && !hist.some((x) => x.quando === ant.quando)) {
+          const baseAnt = "ant_" + (Date.parse(ant.quando) || stamp - 1);
+          const partesAnt = await this.gravarPartes(baseAnt, ant.linhas);
+          hist.push({ base: baseAnt, arquivo: ant.arquivo || "", quando: ant.quando, por: ant.por || "", partes: partesAnt, unidades: ant.linhas.length, arquivoUrl: "" });
         }
-      } catch (e) {}
-      hist.push(item);
+      } catch (e) {
+        console.warn("[Registro] arquivo anterior no histórico", e);
+      }
+      const base = "arq_" + stamp;
+      const partes = await this.gravarPartes(base, this.state.linhas);
+      const arquivoUrl = await this.guardarOriginal(file, stamp);
+      this.state.arquivoUrl = arquivoUrl;
+      // Ficha + linhas numa transação só (RPC substituir_registro_cadastro): se falhar, continua valendo o arquivo anterior.
+      await D.salvarRegistroCadastro(this.state.arquivo, this.state.quando, this.state.por, this.state.linhas);
+      hist.push({ base, arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, partes, unidades: this.state.linhas.length, arquivoUrl });
       hist.sort((x, y) => String(y.quando).localeCompare(String(x.quando)));
-      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "historico"), { itens: hist });
-      this.state.historico = hist;
-      // A ficha principal só é trocada no fim: se o envio parar no meio, continua valendo o arquivo anterior inteiro.
-      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, "atual"), item);
+      try {
+        await window.DadosNucleo.gravarConfig("historico", { itens: hist }, {}, this.COLECAO_HIST);
+        this.state.historico = hist;
+      } catch (e) {
+        console.warn("[Registro] gravação do histórico", e);
+      }
       return true;
     } catch (e) {
       console.warn("[Registro] gravação no banco", e);
@@ -160,12 +177,11 @@ const RegistroApp = {
   async verVersao(base) {
     const item = (this.state.historico || []).find((x) => x.base === base);
     if (!item) return;
-    const fc = await this.esperarBanco();
-    if (!fc) return;
+    if (!(await this.esperarBanco())) return;
     this.state.lendoRemoto = true;
     this.render();
     try {
-      const linhas = await this.lerPartes(fc, item.base, item.partes);
+      const linhas = await this.lerPartes(item.base, item.partes);
       if (!linhas.length) throw new Error("Este arquivo do histórico não tem linhas gravadas.");
       if (!this.state.versao) this.state.salvoAtual = { linhas: this.state.linhas, arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, arquivoUrl: this.state.arquivoUrl };
       this.state.linhas = linhas;

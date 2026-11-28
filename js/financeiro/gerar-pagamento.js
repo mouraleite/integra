@@ -320,11 +320,9 @@ const GerarPagamentoApp = {
   },
 
   async lerLotesGravados() {
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.LOTES_COLLECTION));
-      const list = [];
-      snap.forEach((d) => list.push(Object.assign({ id: d.id }, d.data())));
+    // pagamento_lotes (+ _itens) no Supabase: cada lote já volta no formato do app (com id, conta, sienge e itens).
+    if (window.DadosFinanceiro) {
+      const list = await window.DadosFinanceiro.listarLotes();
       return list.filter(Boolean);
     }
     return this.lotesLocal();
@@ -908,7 +906,7 @@ const GerarPagamentoApp = {
   /**
    * A conferência do rateio usa a Parametrização de Parceiro (quais planos entram na parceria de cada obra)
    * e a visão DFC do Plano Financeiro. Sem isso carregado, um título sem rateio num plano da parceria
-   * passava como "Não se aplica". Aqui só LÊ do Firebase; não grava nada.
+   * passava como "Não se aplica". Aqui só LÊ da nuvem; não grava nada.
    */
   async garantirDadosParceria() {
     const PP = window.ParametrizacaoParceiroApp;
@@ -920,11 +918,9 @@ const GerarPagamentoApp = {
       let local = [];
       try { local = JSON.parse(localStorage.getItem("crm_plano_visoes_v2") || "[]") || []; } catch (e) { local = []; }
       const temDfc = (lista) => Array.isArray(lista) && lista.some((v) => v && v.id === "dfc_default" && Array.isArray(v.groups) && v.groups.length);
-      if (PF && !temDfc(PF.visoes) && !temDfc(local) && window.firebaseDb && window.firebaseCollections) {
-        const { doc, getDoc } = window.firebaseCollections;
-        const snap = await getDoc(doc(window.firebaseDb, "config", "global"));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        const raw = existe ? (snap.data() || {}).crm_plano_visoes_v2 : null;
+      if (PF && !temDfc(PF.visoes) && !temDfc(local) && window.DadosNucleo) {
+        // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+        const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
         const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (temDfc(nuvem)) PF.visoes = nuvem;
       }
@@ -1465,12 +1461,9 @@ const GerarPagamentoApp = {
 
   async carregarLotes() {
     let list = null;
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
+    if (window.DadosFinanceiro) {
       try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.LOTES_COLLECTION));
-        list = [];
-        snap.forEach((d) => list.push({ ...d.data(), id: d.id }));
+        list = await window.DadosFinanceiro.listarLotes();
         this.salvarLotesLocal(list);
       } catch (e) {
         console.warn("[Gerar Pagamento] lotes", e);
@@ -2334,7 +2327,6 @@ const GerarPagamentoApp = {
   async limparPendentes(chaves) {
     const s = this.state;
     const alvo = new Set(chaves);
-    const fc = window.firebaseCollections;
     for (const l of s.lotes.filter((x) => !this.loteNoSienge(x) && (x.itens || []).some((i) => alvo.has(this.chaveTitulo(i.titulo, i.parcela))))) {
       const resto = (l.itens || []).filter((i) => !alvo.has(this.chaveTitulo(i.titulo, i.parcela)));
       if (resto.length) {
@@ -2345,8 +2337,8 @@ const GerarPagamentoApp = {
       }
       s.lotes = s.lotes.filter((x) => x.id !== l.id);
       this.salvarLotesLocal(this.lotesLocal().filter((x) => x.id !== l.id));
-      if (window.firebaseDb && fc && fc.deleteDoc) {
-        try { await fc.deleteDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, l.id)); } catch (e) { console.warn("[Gerar Pagamento] apagar lote pendente", l.id, e); }
+      if (window.DadosFinanceiro) {
+        try { await window.DadosFinanceiro.excluirLote(l.id); } catch (e) { console.warn("[Gerar Pagamento] apagar lote pendente", l.id, e); }
       }
     }
   },
@@ -2631,11 +2623,11 @@ const GerarPagamentoApp = {
   },
 
   async lerConferenciaRemota() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "gp_conferencia"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+      // config/gp_conferencia fica inteiro em configuracoes (chave "config/gp_conferencia").
+      const snap = await window.DadosNucleo.lerConfig("gp_conferencia");
+      const existe = snap && snap.exists();
       if (!existe) return this.conferenciaVazia();
       const data = snap.data() || {};
       return { lotes: data.lotes || {}, padroes: data.padroes || {} };
@@ -2658,10 +2650,10 @@ const GerarPagamentoApp = {
     const dados = this.podarConferencia(this.juntarConferencia(remoto, this.state.conferencia));
     this.state.conferencia = dados;
     this.salvarConferenciaLocal(dados);
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "gp_conferencia"), dados, { merge: true });
+      // merge profundo atômico (trocar_configuracao), como o setDoc com merge.
+      await window.DadosNucleo.gravarConfig("gp_conferencia", dados, { merge: true });
     } catch (e) {
       console.warn("[Gerar Pagamento] gravar conferência", e);
     }
@@ -3408,7 +3400,7 @@ const GerarPagamentoApp = {
     itens.forEach((it) => { s.sel[it.selKey] = false; });
     s.gerandoLote = "";
     this.paintTitulos();
-    if (!salvoRemoto) alert("O lote foi gerado, mas ficou salvo só neste computador (não consegui gravar no Firebase).");
+    if (!salvoRemoto) alert("O lote foi gerado, mas ficou salvo só neste computador (não consegui gravar na nuvem).");
     if (opts && opts.semEnvio) return lote;
     return await this.enviarAoSienge(id);
   },
@@ -3434,10 +3426,10 @@ const GerarPagamentoApp = {
 
   async salvarLote(lote) {
     this.salvarLotesLocal(this.lotesLocal().filter((l) => l.id !== lote.id).concat([lote]));
-    const fc = window.firebaseCollections;
-    if (!(window.firebaseDb && fc && fc.setDoc)) return false;
+    if (!window.DadosFinanceiro) return false;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, lote.id), JSON.parse(JSON.stringify(lote)));
+      // RPC salvar_pagamento_lote: upsert do cabeçalho e troca dos itens numa transação (setDoc do lote inteiro).
+      await window.DadosFinanceiro.salvarLote(JSON.parse(JSON.stringify(lote)));
       return true;
     } catch (e) {
       console.warn("[Gerar Pagamento] salvar lote", e);
@@ -3614,7 +3606,7 @@ const GerarPagamentoApp = {
     }));
     let feitos;
     try { feitos = new Set(JSON.parse(localStorage.getItem(this.LOTE_AUDIT_KEY) || "[]")); } catch (e) { feitos = new Set(); }
-    const remoto = !!window.firebaseDb;
+    const remoto = !!window.DadosNucleo; // AuditService grava em auditoria_logs (Supabase)
     let novo = false;
     eventos.forEach((ev) => {
       const ms = new Date(ev.em || "").getTime();
@@ -3867,13 +3859,12 @@ const GerarPagamentoApp = {
       ? await window.mouraConfirm(`Excluir o lote ${id}? Os títulos voltam a ficar disponíveis para um novo lote.${aviso}`)
       : confirm(`Excluir o lote ${id}?`);
     if (!okConf) return;
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.deleteDoc) {
+    if (window.DadosFinanceiro) {
       try {
-        await fc.deleteDoc(fc.doc(window.firebaseDb, this.LOTES_COLLECTION, id));
+        await window.DadosFinanceiro.excluirLote(id); // os itens saem em cascata
       } catch (e) {
         console.warn("[Gerar Pagamento] excluir lote", e);
-        alert("Não consegui excluir o lote no Firebase.");
+        alert("Não consegui excluir o lote na nuvem.");
         return;
       }
     }

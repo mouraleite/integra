@@ -55,7 +55,14 @@
   <div id="raiz"><div class="carregando"><div class="giro"></div>Carregando…</div></div>
 
   <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
-  <script type="module" src="/js/nucleo/firebase-config.js"></script>
-  <script src="/vistoria-app/app.js"></script>
+  <!-- Dados no Supabase: cliente + camada de dados (mesma ordem do index.html do Integra). app.js cria o
+       window.MouraAuth com o login MSAL deste app; defer/module rodam em ordem, depois do HTML. -->
+  <script type="module" src="/js/nucleo/supabase-client.js?v=3"></script>
+  <script defer src="/js/nucleo/dados-base.js?v=2"></script>
+  <script defer src="/js/nucleo/mapas-nucleo.js?v=1"></script>
+  <script defer src="/js/nucleo/dados-nucleo.js?v=1"></script>
+  <script defer src="/js/engenharia/mapas-engenharia.js?v=1"></script>
+  <script defer src="/js/engenharia/dados-engenharia.js?v=1"></script>
+  <script defer src="/vistoria-app/app.js?v=2"></script>
 </body>
 </html>

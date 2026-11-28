@@ -360,10 +360,10 @@ const CentralEmailApp = {
   },
 
   async lerRemoto() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    // Supabase: config/central_email é montado a partir da tabela central_email_templates.
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "central_email"));
+      const snap = await window.DadosNucleo.lerConfig("central_email");
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe) return null;
       return this.normalizar((snap.data() || {}).templates);
@@ -384,10 +384,9 @@ const CentralEmailApp = {
   async gravar() {
     const dados = { templates: this.state.templates };
     try { localStorage.setItem("crm_central_email", JSON.stringify(dados)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "central_email"), dados, { merge: true });
+      await window.DadosNucleo.gravarConfig("central_email", dados, { merge: true });
     } catch (e) {
       console.warn("[Central e-mail] gravação", e);
     }
@@ -435,17 +434,16 @@ const CentralEmailApp = {
 
   async carregarAcompanhamento() {
     const a = this.acomp();
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.query || !fc.where) { a.msg = "O banco ainda não respondeu. Tente de novo em instantes."; this.render(); return; }
+    if (!window.DadosNucleo) { a.msg = "O banco ainda não respondeu. Tente de novo em instantes."; this.render(); return; }
     a.carregando = true;
     this.render();
     try {
       const de = a.de <= a.ate ? a.de : a.ate;
       const ate = a.de <= a.ate ? a.ate : a.de;
-      const snap = await fc.getDocs(fc.query(fc.collection(window.firebaseDb, "central_email_envios"), fc.where("dia", ">=", de), fc.where("dia", "<=", ate)));
-      const lista = [];
-      snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data() || {})));
-      lista.sort((x, y) => String(y.em || "").localeCompare(String(x.em || "")));
+      const lista = await window.DadosNucleo.tabela("central_email_envios").listar({ filtros: [["dia", "gte", de], ["dia", "lte", ate]] });
+      // "em" vem do banco em milissegundos (mapa "ms").
+      const ms = (v) => (typeof v === "number" ? v : Date.parse(v) || 0);
+      lista.sort((x, y) => ms(y.em) - ms(x.em));
       a.lista = lista;
       a.msg = "";
     } catch (e) {
@@ -792,7 +790,7 @@ const CentralEmailApp = {
         <td title="${this.esc(c.customerName || "")}">${this.esc(c.customerName || "—")}</td>
         <td>${this.esc(c.unitName || "—")}</td>
         <td class="cem-para">${this.esc(this.destinatarios(t, c).para.join(", ") || (t.destino === "fixo" ? "—" : "E-mail do cliente no Sienge"))}</td>
-        <td>${(() => { const e = this.envioDe(t, c); if (!e) return `<span class="cem-env">Aguardando</span>`; if (e.status === "enviado") return `<span class="cem-env ok" title="${this.esc(e.para || "")}">Enviado ${this.esc(String(e.em || "").slice(11, 16))}</span>`; return `<span class="cem-env erro" title="${this.esc(e.erro || "")}">Erro</span>`; })()}</td>
+        <td>${(() => { const e = this.envioDe(t, c); if (!e) return `<span class="cem-env">Aguardando</span>`; if (e.status === "enviado") return `<span class="cem-env ok" title="${this.esc(e.para || "")}">Enviado ${this.esc(this.dataHora(e.em).slice(-5))}</span>`; return `<span class="cem-env erro" title="${this.esc(e.erro || "")}">Erro</span>`; })()}</td>
         <td class="is-right cem-acoes"><button type="button" class="tvig-ico" title="Ver e-mail" onclick="CentralEmailApp.verCliente('${this.esc(t.id)}', ${i})"><i data-lucide="eye" style="width:15px;height:15px;"></i></button></td>
       </tr>`).join("");
       return `<section class="cem-bloco">
@@ -1516,13 +1514,11 @@ const CentralEmailApp = {
   },
 
   async lerEnviosDoDia() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.query || !fc.where) return {};
+    if (!window.DadosNucleo) return {};
     const mapa = {};
     try {
-      const snap = await fc.getDocs(fc.query(fc.collection(window.firebaseDb, "central_email_envios"), fc.where("dia", "==", this.hojeIso())));
-      snap.forEach((d) => {
-        const v = d.data() || {};
+      const envios = await window.DadosNucleo.tabela("central_email_envios").listar({ filtros: [["dia", "eq", this.hojeIso()]] });
+      envios.forEach((v) => {
         mapa[v.templateId + "|" + v.customerId + "|" + v.titulo] = v;
       });
     } catch (e) {
@@ -1751,10 +1747,9 @@ const CentralEmailApp = {
     window.acordoEmailTags = window.acordoEmailTags || {};
     window.acordoEmailTags[k] = true;
     this.gravarCacheTags();
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "acordo_email_tag", k), {
+      await window.DadosNucleo.tabela("acordo_email_tag").gravar(k, {
         customerId: String(customerId || ""),
         titulo: String(titulo || ""),
         tag: "Acordo Judicial - Alterar p/ Sub judice Sienge",
@@ -1766,13 +1761,12 @@ const CentralEmailApp = {
   },
 
   async sincronizarTags() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs) return;
+    if (!window.DadosNucleo) return;
     window.acordoEmailTags = window.acordoEmailTags || {};
     const antes = Object.keys(window.acordoEmailTags).length;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "acordo_email_tag"));
-      snap.forEach((d) => { window.acordoEmailTags[d.id] = true; });
+      const linhas = await window.DadosNucleo.tabela("acordo_email_tag").listar({ colunas: "id" });
+      linhas.forEach((d) => { if (d && d.id) window.acordoEmailTags[d.id] = true; });
     } catch (e) {
       console.warn("[Central e-mail] leitura da tag", e);
       return;

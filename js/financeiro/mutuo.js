@@ -301,11 +301,9 @@ window.MutuoApp = {
   },
 
   // ---------- numeração das Notas de Débito ----------
+  // mutuo_meta e mutuo_execucoes (+ _centros) estão no Supabase (window.DadosFinanceiro).
   fb() {
-    const db = window.firebaseDb;
-    const fx = window.firebaseCollections;
-    if (!db || !fx || !fx.doc || !fx.setDoc || !fx.getDoc || !fx.getDocs || !fx.collection) return null;
-    return { db, fx };
+    return window.DadosFinanceiro || null;
   },
 
   async ultimaNdSienge() {
@@ -330,9 +328,7 @@ window.MutuoApp = {
     const fb = this.fb();
     if (!fb) return 0;
     try {
-      const snap = await fb.fx.getDoc(fb.fx.doc(fb.db, "mutuo_meta", "notas_debito"));
-      const d = snap && typeof snap.exists === "function" && snap.exists() ? snap.data() : null;
-      return Number(d && d.ultima) || 0;
+      return await fb.lerUltimaNotaDebito();
     } catch (e) {
       return 0;
     }
@@ -345,14 +341,11 @@ window.MutuoApp = {
 
   async gravarUltimaNd(numero) {
     const fb = this.fb();
-    if (!fb) throw new Error("O banco do Integra (Firebase) não está disponível para registrar a numeração.");
+    if (!fb) throw new Error("O banco do Integra (Supabase) não está disponível para registrar a numeração.");
     const atual = await this.ultimaNdIntegra();
     if (numero <= atual) return;
-    await fb.fx.setDoc(fb.fx.doc(fb.db, "mutuo_meta", "notas_debito"), {
-      ultima: numero,
-      atualizadoEm: new Date().toISOString(),
-      por: this.usuarioEmail()
-    }, { merge: true });
+    // RPC registrar_nota_debito_mutuo: só avança (atômico; atualizado_em vem do servidor).
+    await fb.registrarNotaDebito(numero, this.usuarioEmail());
   },
 
   usuarioEmail() {
@@ -672,7 +665,7 @@ window.MutuoApp = {
     this.render();
   },
 
-  // ---------- histórico (Firestore + Storage) ----------
+  // ---------- histórico (Supabase + Storage do Firebase) ----------
   idHistorico(comp) {
     return (this.ehMutuo() ? "MUTUO" : "ACERTO") + "_" + comp.aaaamm;
   },
@@ -681,8 +674,7 @@ window.MutuoApp = {
     const fb = this.fb();
     if (!fb) return null;
     try {
-      const snap = await fb.fx.getDoc(fb.fx.doc(fb.db, "mutuo_execucoes", id));
-      return snap && typeof snap.exists === "function" && snap.exists() ? snap.data() : null;
+      return await fb.lerExecucaoMutuo(id);
     } catch (e) {
       return null;
     }
@@ -690,14 +682,13 @@ window.MutuoApp = {
 
   async gravarHistorico(id, comp, chave, dados) {
     const fb = this.fb();
-    if (!fb) throw new Error("O banco do Integra (Firebase) não está disponível.");
-    const patch = {
+    if (!fb) throw new Error("O banco do Integra (Supabase) não está disponível.");
+    // Antes: setDoc({ operacao, competencia, atualizadoEm, centros: { [chave]: dados } }, { merge: true }).
+    // O centro é fundido com o que já existe; atualizado_em vem do gatilho.
+    await fb.gravarExecucaoMutuo(id, {
       operacao: this.ehMutuo() ? "MUTUO" : "ACERTO_DESPESA",
-      competencia: comp.aaaamm,
-      atualizadoEm: new Date().toISOString(),
-      centros: { [chave]: dados }
-    };
-    await fb.fx.setDoc(fb.fx.doc(fb.db, "mutuo_execucoes", id), patch, { merge: true });
+      competencia: comp.aaaamm
+    }, chave, dados);
   },
 
   async subirArquivo(caminho, bytes, tipo) {
@@ -714,9 +705,7 @@ window.MutuoApp = {
     this.historicoCarregado = true;
     if (!fb) { this.historico = []; this.render(); return; }
     try {
-      const snap = await fb.fx.getDocs(fb.fx.collection(fb.db, "mutuo_execucoes"));
-      const lista = [];
-      snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+      const lista = await fb.listarExecucoesMutuo(); // já vem com id e centros
       lista.sort((a, b) => String(b.competencia || "").localeCompare(String(a.competencia || "")) || String(a.operacao).localeCompare(String(b.operacao)));
       this.historico = lista;
     } catch (e) {

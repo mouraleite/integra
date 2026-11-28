@@ -61,26 +61,28 @@ const AlertaPonto = {
     return !imp;
   },
 
-  /* O ciente também fica no banco, para valer depois do Ctrl+F5 e em outro computador. */
+  /* O ciente também fica no banco (Supabase, tabela alertas_ciente: uma linha por alerta/tipo/dia),
+     para valer depois do Ctrl+F5 e em outro computador. */
   COLECAO: "alertas_ciente",
   DOC: "ponto_israel",
 
-  async firebasePronto() {
-    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
+  async bancoPronto() {
+    for (let i = 0; i < 40 && !window.DadosNucleo; i++) {
       await new Promise((r) => setTimeout(r, 250));
     }
-    const fc = window.firebaseCollections;
-    return window.firebaseDb && fc && fc.getDoc && fc.setDoc ? fc : null;
+    if (!window.DadosNucleo) return null;
+    await window.DadosNucleo.pronto;
+    return window.sb || null;
   },
 
   async lerRemoto() {
     try {
-      const fc = await this.firebasePronto();
-      if (!fc) return;
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.COLECAO, this.DOC));
-      const dados = snap && snap.exists() ? (snap.data() || {}) : {};
-      Object.keys(dados).forEach((k) => {
-        if (dados[k] === "ciente") this._visto[k.replace("_", ":")] = true;
+      const sb = await this.bancoPronto();
+      if (!sb) return;
+      const r = await sb.from(this.COLECAO).select("tipo, dia").eq("alerta", this.DOC);
+      if (r.error) throw r.error;
+      (r.data || []).forEach((l) => {
+        this._visto[(l.tipo + "_" + l.dia).replace("_", ":")] = true;
       });
     } catch (e) {
       console.warn("[AlertaPonto] não leu o ciente no banco", e);
@@ -89,9 +91,14 @@ const AlertaPonto = {
 
   async gravarRemoto(tipo, dia) {
     try {
-      const fc = await this.firebasePronto();
-      if (!fc) return;
-      await fc.setDoc(fc.doc(window.firebaseDb, this.COLECAO, this.DOC), { [tipo + "_" + dia]: "ciente" }, { merge: true });
+      const sb = await this.bancoPronto();
+      if (!sb) return;
+      const conta = this.contaReal();
+      const r = await sb.from(this.COLECAO).upsert(
+        { alerta: this.DOC, tipo, dia, usuario_email: String((conta && conta.email) || this.EMAIL).toLowerCase() },
+        { onConflict: "alerta,tipo,dia" }
+      );
+      if (r.error) throw r.error;
     } catch (e) {
       console.warn("[AlertaPonto] não gravou o ciente no banco", e);
     }

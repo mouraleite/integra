@@ -250,7 +250,7 @@
   }
 
   // ===== Alternador para os desenvolvedores (não administradores) =====
-  // Quem entra numa bolha fica registrado em Firestore (ambientes_dev/<e-mail>). Assim, na produção,
+  // Quem entra numa bolha fica registrado no Supabase (ambientes_dev: uma linha por e-mail e bolha). Assim, na produção,
   // essa pessoa também vê a bolha "Produção | Teste X" para ir e voltar na mesma tela.
   const DEV_COLECAO = "ambientes_dev";
   let meusAmbientes = null; // lista de chaves; null = ainda não consultado
@@ -270,28 +270,32 @@
 
   async function sincronizarDev() {
     const email = emailReal();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!email || !fx || !db) return;
+    if (!email || !window.DadosNucleo) return;
+    await window.DadosNucleo.pronto;
+    const sb = window.sb;
+    if (!sb) return;
     const atual = ambienteAtual();
-    if (atual && !registrouDev && typeof fx.setDoc === "function") {
+    if (atual && !registrouDev) {
       registrouDev = true;
       try {
-        await fx.setDoc(fx.doc(db, DEV_COLECAO, email), { email, ambientes: { [atual.chave]: Date.now() } }, { merge: true });
+        const r = await sb.from(DEV_COLECAO).upsert(
+          { email, ambiente: atual.chave, acessado_em: new Date().toISOString() },
+          { onConflict: "email,ambiente" }
+        );
+        if (r.error) throw r.error;
       } catch (e) {
         console.warn("[Ambientes de teste] Não foi possível registrar o acesso à bolha:", e);
       }
     }
-    if (meusAmbientes !== null || typeof fx.getDoc !== "function") return;
+    if (meusAmbientes !== null) return;
     const cache = ler("integra_meus_ambientes", sessionStorage);
     if (cache) {
       try { meusAmbientes = JSON.parse(cache); return; } catch (e) {}
     }
     try {
-      const snap = await fx.getDoc(fx.doc(db, DEV_COLECAO, email));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-      const d = existe ? snap.data() : null;
-      meusAmbientes = Object.keys((d && d.ambientes) || {}).filter((k) => AMBIENTES.some((a) => a.chave === k));
+      const r = await sb.from(DEV_COLECAO).select("ambiente").eq("email", email);
+      if (r.error) throw r.error;
+      meusAmbientes = (r.data || []).map((l) => l.ambiente).filter((k) => AMBIENTES.some((a) => a.chave === k));
       gravar("integra_meus_ambientes", JSON.stringify(meusAmbientes), sessionStorage);
     } catch (e) {
       meusAmbientes = [];
@@ -483,7 +487,7 @@
 
   // ===== Solicitações de envio para a produção =====
   // O desenvolvedor, no ambiente de teste, clica em "Encaminhar para produção": grava um pedido em
-  // Firestore (coleção solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
+  // Supabase (tabela solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
   // (não quem está em "Ver como administrador") recebe um pop-up com o pedido e aprova ou recusa.
   // Aprovar só registra a decisão: a publicação continua sendo "juntar <branch> na main" + deploy.bat.
   const SOLIC = "solicitacoes_producao";
@@ -492,10 +496,11 @@
   let minhaSolic = null;
   let ouvindoSolic = false;
 
+  // Solicitações no Supabase (tabela solicitacoes_producao, via window.DadosEngenharia). solicitante {email, nome}
+  // é achatado em solicitante_email / solicitante_nome (filtros usam o nome da coluna).
   function fb() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    return fx && db ? { fx, db } : null;
+    const DE = window.DadosEngenharia;
+    return DE ? { tab: DE.tabela(SOLIC) } : null;
   }
 
   function adminReal() {
@@ -685,9 +690,11 @@
     return { topicos, resto: resto.join("\n") };
   }
 
-  // Só mostra imagem guardada no Firebase Storage do Integra.
+  // Só mostra imagem guardada no Storage do Integra (link /arquivo?p=...; o link antigo do Firebase ainda vale até a virada).
   function printSeguro(u) {
-    return /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(String(u || ""));
+    const s = String(u || "");
+    return /^\/arquivo\?p=[^"'<>\s]+$/.test(s)
+      || /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(s);
   }
 
   function htmlPrints(lista, editavel, sha) {
@@ -879,10 +886,9 @@
     const f = fb();
     if (!amb || !f) return;
     try {
-      const snap = await f.fx.getDocs(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("ambiente", "==", amb.chave)));
+      const lista = await f.tab.listar({ filtros: [["ambiente", "eq", amb.chave]] });
       let ultima = null;
-      snap.forEach((d) => {
-        const v = Object.assign({ id: d.id }, d.data());
+      lista.forEach((v) => {
         if (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm)) ultima = v;
       });
       minhaSolic = ultima;
@@ -958,8 +964,8 @@
         prints: {}
       }, r);
       try {
-        if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
-        else await f.fx.addDoc(f.fx.collection(f.db, SOLIC), pedido);
+        if (atualizando) await f.tab.gravar(minhaSolic.id, pedido, { merge: true });
+        else await f.tab.criar(pedido);
       } catch (e) {
         console.warn("[Encaminhar para produção] Falha ao gravar:", e);
         alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
@@ -982,14 +988,13 @@
   function ouvirMinhasDecisoes() {
     const email = emailReal();
     const f = fb();
-    if (ouvindoMinhas || !email || !f || typeof f.fx.onSnapshot !== "function") return;
+    if (ouvindoMinhas || !email || !f) return;
     ouvindoMinhas = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("solicitante.email", "==", email)), (snap) => {
+      f.tab.ouvir(({ docs }) => {
         const novas = [];
         let ultima = null;
-        snap.forEach((d) => {
-          const v = Object.assign({ id: d.id }, d.data());
+        docs.forEach((v) => {
           if (v.status !== "pendente" && v.avisoVisto === false) novas.push(v);
           const amb = ambienteAtual();
           if (amb && v.ambiente === amb.chave && (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm))) ultima = v;
@@ -999,9 +1004,12 @@
         try { fechadas = JSON.parse(ler(AVISO_FECHADO, sessionStorage) || "[]"); } catch (e) { fechadas = []; }
         const mostrar = novas.filter((v) => fechadas.indexOf(v.id + ":" + v.status) < 0);
         if (mostrar.length && !document.getElementById("avsol-dev-aviso")) avisarDev(mostrar);
-      }, (e) => {
-        console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
-        ouvindoMinhas = false;
+      }, {
+        filtros: [["solicitante_email", "eq", email]],
+        aoErro: (e) => {
+          console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
+          ouvindoMinhas = false;
+        }
       });
     } catch (e) {
       ouvindoMinhas = false;
@@ -1056,7 +1064,7 @@
       const f = fb();
       if (!f) return;
       for (const s of lista) {
-        try { await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), { avisoVisto: true, avisoVistoEm: Date.now() }); } catch (e) {}
+        try { await f.tab.gravar(s.id, { avisoVisto: true, avisoVistoEm: Date.now() }, { merge: true }); } catch (e) {}
       }
     };
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(fundo);
@@ -1096,21 +1104,23 @@
   function ouvirPendentes() {
     if (ouvindoSolic || !adminReal()) return;
     const f = fb();
-    if (!f || typeof f.fx.onSnapshot !== "function") return;
+    if (!f) return;
     ouvindoSolic = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("status", "==", "pendente")), (snap) => {
-        const lista = [];
-        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+      f.tab.ouvir(({ docs }) => {
+        const lista = docs.slice();
         lista.sort((a, b) => Number(a.criadoEm) - Number(b.criadoEm));
         solicPendentes = lista;
         pintar();
         const vistos = vistas();
         const novas = lista.filter((s) => vistos.indexOf(s.id + ":" + s.criadoEm) < 0);
         if (novas.length && adminReal() && !document.getElementById("avsol-admin")) abrirSolicitacoes();
-      }, (e) => {
-        console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
-        ouvindoSolic = false;
+      }, {
+        filtros: [["status", "eq", "pendente"]],
+        aoErro: (e) => {
+          console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
+          ouvindoSolic = false;
+        }
       });
     } catch (e) {
       ouvindoSolic = false;
@@ -1224,11 +1234,11 @@
         const resto = (s.commits || []).slice(0, escolha.k);
         const parte = { versao: resultado.versao, ate: escolha.ate, em: Date.now(), por: quem.nome || quem.email, quantas: (s.commits || []).length - escolha.k };
         try {
-          await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), {
+          await f.tab.gravar(s.id, {
             commits: resto,
             totais: Object.assign({}, s.totais || {}, { commits: resto.length }),
             publicacoesParciais: (s.publicacoesParciais || []).concat(parte)
-          });
+          }, { merge: true });
         } catch (e) {
           console.warn("[Solicitações de envio] Falha ao gravar a publicação parcial:", e);
         }
@@ -1254,7 +1264,7 @@
       }
     }
     try {
-      await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), Object.assign({ status }, registro));
+      await f.tab.gravar(s.id, Object.assign({ status }, registro), { merge: true });
     } catch (e) {
       console.warn("[Solicitações de envio] Falha ao gravar a decisão:", e);
       if (status !== "publicado") {

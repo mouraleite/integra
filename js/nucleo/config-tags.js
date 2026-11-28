@@ -4,11 +4,12 @@ const ConfigTagsApp = {
   currentTags: [],
   _loading: false,
 
-  waitFirebase(maxMs = 8000) {
+  // As TAGs estão no Supabase (tabela tags), via window.DadosNucleo.
+  waitDados(maxMs = 8000) {
     return new Promise((resolve) => {
       const started = Date.now();
       const tick = () => {
-        if (window.firebaseDb && window.firebaseCollections) {
+        if (window.DadosNucleo) {
           resolve(true);
           return;
         }
@@ -40,14 +41,14 @@ const ConfigTagsApp = {
     `);
 
     try {
-      const ready = await this.waitFirebase();
-      if (!ready) throw new Error("Firebase não inicializado. Recarregue a página (Ctrl+F5).");
+      const ready = await this.waitDados();
+      if (!ready) throw new Error("Banco de dados não inicializado. Recarregue a página (Ctrl+F5).");
 
-      const col = window.firebaseCollections.collection(window.firebaseDb, "tags");
-      const querySnapshot = await window.firebaseCollections.getDocs(col);
+      const linhas = await window.DadosNucleo.tabela("tags").listar();
       const tags = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data() || {};
+      linhas.forEach((docSnap) => {
+        const data = Object.assign({}, docSnap);
+        delete data.id;
         tags.push({
           id: docSnap.id,
           name: String(data.name || data.nome || data.tag || "").trim(),
@@ -238,19 +239,16 @@ const ConfigTagsApp = {
         || "");
 
     try {
-      const ready = await this.waitFirebase(3000);
-      if (!ready) throw new Error("Firebase não inicializado.");
+      const ready = await this.waitDados(3000);
+      if (!ready) throw new Error("Banco de dados não inicializado.");
 
       const tagData = { name: nome, destino, status, created_by: email };
 
       if (id) {
-        const docRef = window.firebaseCollections.doc(window.firebaseDb, "tags", String(id));
-        await window.firebaseCollections.updateDoc(docRef, tagData);
+        // updateDoc: só os campos de tagData mudam (merge sobre a linha atual).
+        await window.DadosNucleo.tabela("tags").gravar(String(id), tagData, { merge: true });
       } else {
-        await window.firebaseCollections.addDoc(
-          window.firebaseCollections.collection(window.firebaseDb, "tags"),
-          tagData
-        );
+        await window.DadosNucleo.tabela("tags").criar(tagData);
       }
 
       const overlay = document.getElementById("tag-modal-overlay");
@@ -267,10 +265,9 @@ const ConfigTagsApp = {
   async deleteTag(id) {
     if (!confirm("Tem certeza que deseja excluir esta TAG? Esta ação não pode ser desfeita.")) return;
     try {
-      const ready = await this.waitFirebase(3000);
-      if (!ready) throw new Error("Firebase não inicializado.");
-      const docRef = window.firebaseCollections.doc(window.firebaseDb, "tags", String(id));
-      await window.firebaseCollections.deleteDoc(docRef);
+      const ready = await this.waitDados(3000);
+      if (!ready) throw new Error("Banco de dados não inicializado.");
+      await window.DadosNucleo.tabela("tags").excluir(String(id));
       this.loadTags();
     } catch (e) {
       alert("Erro ao excluir TAG: " + e.message);
@@ -452,12 +449,12 @@ window.crmTagFiltrarTodas = function(el) {
 
 /** Todas as TAGs (ativas e inativas), para comparar. */
 window.crmTagsTodas = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections) return [];
-  const { collection, getDocs } = window.firebaseCollections;
-  const snap = await getDocs(collection(window.firebaseDb, "tags"));
+  // TAGs no Supabase (tabela tags).
+  if (!window.DadosNucleo) return [];
+  const linhas = await window.DadosNucleo.tabela("tags").listar();
   const tags = [];
-  snap.forEach((d) => {
-    const data = d.data() || {};
+  linhas.forEach((d) => {
+    const data = d;
     const name = String(data.name || data.nome || data.tag || "").trim();
     if (!name) return;
     const dest = String(data.destino || data.type || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -523,6 +520,12 @@ window.crmTagsTodas = async function() {
 const CrmTagSolicitacoes = {
   COL: "tag_solicitacoes",
   _unsub: null,
+  _avisadas: new Set(), // solicitações já avisadas nesta sessão (o aviso_visto chega ao banco um pouco depois)
+
+  // Solicitações no Supabase (tabela tag_solicitacoes, via window.DadosEngenharia).
+  tab() {
+    return window.DadosEngenharia ? window.DadosEngenharia.tabela(this.COL) : null;
+  },
   _timer: null,
   _pendentes: [],
   _adiadas: new Set(),
@@ -548,19 +551,16 @@ const CrmTagSolicitacoes = {
   },
 
   verificar() {
-    if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return;
+    if (!this.tab()) return;
     if (!(window.AppState && AppState.currentUser)) return;
     this.ouvirMinhas();
     if (this._unsub || !this.podeAprovar()) return;
-    const { collection, query, where, onSnapshot } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, this.COL), where("status", "==", "Pendente"));
-    this._unsub = onSnapshot(q, (snap) => {
-      const lista = [];
-      snap.forEach((d) => lista.push({ id: d.id, ...(d.data() || {}) }));
+    this._unsub = this.tab().ouvir(({ docs }) => {
+      const lista = docs.slice();
       lista.sort((a, b) => String(a.criado_em || "").localeCompare(String(b.criado_em || "")));
       this._pendentes = lista;
       this.abrir(false);
-    }, (err) => console.warn("[Tags] solicitações", err));
+    }, { filtros: [["status", "eq", "Pendente"]], aoErro: (err) => console.warn("[Tags] solicitações", err) });
   },
 
   /** Avisa quem pediu quando a TAG for aprovada ou recusada. */
@@ -568,19 +568,18 @@ const CrmTagSolicitacoes = {
     if (this._unsubMinhas) return;
     const { email } = this.usuario();
     if (!email) return;
-    const { collection, query, where, onSnapshot, doc, updateDoc } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, this.COL), where("solicitado_por_email", "==", email));
-    this._unsubMinhas = onSnapshot(q, (snap) => {
-      snap.forEach((d) => {
-        const s = d.data() || {};
-        if (s.status === "Pendente" || s.aviso_visto) return;
-        updateDoc(doc(window.firebaseDb, this.COL, d.id), { aviso_visto: true }).catch(() => {});
+    const tab = this.tab();
+    this._unsubMinhas = tab.ouvir(({ docs }) => {
+      docs.forEach((s) => {
+        if (s.status === "Pendente" || s.aviso_visto || this._avisadas.has(s.id)) return;
+        this._avisadas.add(s.id);
+        tab.gravar(s.id, { aviso_visto: true }, { merge: true }).catch(() => {});
         const msg = s.status === "Aprovada"
           ? `Sua solicitação de TAG foi aprovada. A TAG "${s.tag_criada || s.tag_name}" já está disponível.`
           : `Sua solicitação da TAG "${s.tag_name}" não foi aprovada.` + (s.motivo_decisao ? `\nMotivo: ${s.motivo_decisao}` : "");
         setTimeout(() => alert(msg), 300);
       });
-    }, (err) => console.warn("[Tags] minhas solicitações", err));
+    }, { filtros: [["solicitado_por_email", "eq", email]], aoErro: (err) => console.warn("[Tags] minhas solicitações", err) });
   },
 
   async abrir(forcar) {
@@ -731,14 +730,14 @@ const CrmTagSolicitacoes = {
       // As TAGs parecidas já aparecem na lista do cartão: quem aprova decidiu ao clicar (sem pop-up repetindo o aviso).
 
       const { email, nome: quem } = this.usuario();
-      const { collection, addDoc, doc, updateDoc } = window.firebaseCollections;
-      await addDoc(collection(window.firebaseDb, "tags"), {
+      // A TAG (tags) e a solicitação (tag_solicitacoes) estão no Supabase.
+      await window.DadosNucleo.tabela("tags").criar({
         name: nome, destino, status: "Ativa", created_by: email, solicitacao_id: id
       });
-      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+      await this.tab().gravar(id, {
         status: "Aprovada", tag_criada: nome, destino_final: destino,
         decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
-      });
+      }, { merge: true });
       if (window.AnexosApp && typeof AnexosApp.loadTagsAtivas === "function") AnexosApp.loadTagsAtivas(true);
       const telaTags = document.getElementById("tab-config-tags");
       if (telaTags && telaTags.classList.contains("active") && window.ConfigTagsApp) ConfigTagsApp.loadTags();
@@ -760,11 +759,10 @@ const CrmTagSolicitacoes = {
     }
     try {
       const { email, nome: quem } = this.usuario();
-      const { doc, updateDoc } = window.firebaseCollections;
-      await updateDoc(doc(window.firebaseDb, this.COL, id), {
+      await this.tab().gravar(id, {
         status: "Recusada", motivo_decisao: String(motivo).trim(),
         decidido_por_email: email, decidido_por_nome: quem, decidido_em: new Date().toISOString()
-      });
+      }, { merge: true });
       this.avisoRapido("Solicitação recusada. Quem pediu vai receber o motivo.");
     } catch (e) {
       this.msg(id, "Não foi possível recusar: " + (e && e.message ? e.message : e), "erro");

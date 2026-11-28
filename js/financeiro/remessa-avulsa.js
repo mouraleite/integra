@@ -156,11 +156,11 @@ const RemessaAvulsaApp = {
       quando = hoje.split("-").reverse().join("/") + " 07:02";
     } else {
       // O banco pode ainda não estar pronto logo depois do login.
-      for (let i = 0; i < 20 && !(window.firebaseDb && window.firebaseCollections); i++) await new Promise((r) => setTimeout(r, 1000));
-      const fc = window.firebaseCollections;
-      if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+      for (let i = 0; i < 20 && !(window.DadosNucleo && typeof window.DadosNucleo.lerConfig === "function"); i++) await new Promise((r) => setTimeout(r, 1000));
+      if (!window.DadosNucleo || typeof window.DadosNucleo.lerConfig !== "function") return;
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+        // Supabase: o batimento das 7h fica em configuracoes (remessa_avulsa_batimento/atual).
+        const snap = await window.DadosNucleo.lerConfig("atual", "remessa_avulsa_batimento");
         const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
         if (!existe) return;
         const d = snap.data() || {};
@@ -642,11 +642,11 @@ const RemessaAvulsaApp = {
 
   async carregarBatimento() {
     if (this.state.analisou || this.state.loading) return;
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function") return;
+    // Supabase: o batimento das 7h fica em configuracoes ("remessa_avulsa_batimento/atual").
+    if (!window.DadosNucleo || typeof window.DadosNucleo.lerConfig !== "function") return;
     const mes = this.mesCorrente();
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "remessa_avulsa_batimento", "atual"));
+      const snap = await window.DadosNucleo.lerConfig("atual", "remessa_avulsa_batimento");
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe || this.state.analisou || this.state.loading) return;
       const data = snap.data() || {};
@@ -888,14 +888,17 @@ const RemessaAvulsaApp = {
   },
 
   async carregarEnvios() {
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDocs !== "function" || typeof fc.query !== "function") return;
+    // Supabase: cada envio fica em configuracoes (remessa_avulsa_envios/<título>_<parcela>), gravado pelo servidor.
+    if (!window.DadosNucleo || typeof window.DadosNucleo.listarDocs !== "function") return;
     try {
-      const q = fc.query(fc.collection(window.firebaseDb, "remessa_avulsa_envios"),
-        fc.where("vencimento", ">=", this.state.de), fc.where("vencimento", "<=", this.state.ate));
-      const snap = await fc.getDocs(q);
+      const snap = await window.DadosNucleo.listarDocs("remessa_avulsa_envios");
       const mapa = {};
-      snap.forEach((d) => { mapa[d.id] = d.data() || {}; });
+      snap.forEach((d) => {
+        const v = d.data() || {};
+        const venc = String(v.vencimento || "");
+        if (venc && (venc < this.state.de || venc > this.state.ate)) return;
+        mapa[d.id] = v;
+      });
       // Mantém o que acabou de ser enviado nesta tela e ainda não voltou da leitura.
       Object.keys(this.state.envios).forEach((k) => { if (!mapa[k] && this.state.envios[k].status !== "enviando") mapa[k] = this.state.envios[k]; });
       this.state.envios = mapa;
@@ -984,13 +987,12 @@ const RemessaAvulsaApp = {
 
   /* ---------- Configurações do e-mail ---------- */
   async carregarConfig() {
-    const fc = window.firebaseCollections;
     let salvo = null;
     try {
-      if (fc && window.firebaseDb && typeof fc.getDoc === "function") {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "remessa_avulsa_email"));
-        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-        if (existe) salvo = snap.data() || null;
+      // Supabase: config/remessa_avulsa_email em configuracoes (a mesma chave que o servidor lê no envio).
+      if (window.DadosNucleo && typeof window.DadosNucleo.lerConfig === "function") {
+        const snap = await window.DadosNucleo.lerConfig("remessa_avulsa_email");
+        if (snap && snap.exists()) salvo = snap.data() || null;
       }
     } catch (e) {
       console.warn("[Remessa avulsa] configuração", e);
@@ -1093,13 +1095,12 @@ const RemessaAvulsaApp = {
       atualizadoPor: String(u.name || u.email || ""),
       atualizadoEm: new Date().toISOString()
     };
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.setDoc !== "function") {
+    if (!window.DadosNucleo || typeof window.DadosNucleo.gravarConfig !== "function") {
       alert("O banco não está disponível agora. Tente de novo em instantes.");
       return;
     }
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "remessa_avulsa_email"), dados, { merge: true });
+      await window.DadosNucleo.gravarConfig("remessa_avulsa_email", dados, { merge: true });
       this.state.cfg = Object.assign({}, this.CFG_PADRAO, dados);
       if (typeof window.showToast === "function") window.showToast("Configuração do e-mail salva.", "success");
       this.render();

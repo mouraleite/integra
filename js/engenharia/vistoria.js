@@ -24,20 +24,34 @@ const files = { file1: null, file2: null, file3: null };
 let loadedVistorias = [];
 let watchId = null;
 
-// Aguardar o firebaseDb estar disponível
+// Dados da vistoria: rota do servidor /api/vistoria-publica (o banco Supabase não aceita acesso sem login).
+// As fotos vão para o Storage do Supabase por link de upload assinado que a mesma rota gera
+// (js/nucleo/storage-supabase.js com window.STORAGE_SEM_LOGIN, ver vistoria.html).
+const API_VISTORIA = '/api/vistoria-publica';
+
+// Aguardar o módulo de arquivos estar disponível (só para o upload das fotos)
 async function waitForFirebase() {
-    let retries = 20;
-    while (!window.firebaseDb && retries > 0) {
+    let retries = 50;
+    while (!window.firebaseStorage && retries > 0) {
         await new Promise(r => setTimeout(r, 100));
         retries--;
     }
-    if (!window.firebaseDb) throw new Error("Falha ao inicializar o Firebase. Verifique sua conexão.");
+    if (!window.firebaseStorage) throw new Error("Falha ao inicializar o envio de fotos. Verifique sua conexão.");
+}
+
+async function lerRespostaApi(r) {
+    let dados = null;
+    try { dados = await r.json(); } catch (e) { dados = null; }
+    if (!r.ok) {
+        const err = new Error((dados && dados.error) || ("Erro " + r.status));
+        err.status = r.status;
+        throw err;
+    }
+    return dados || {};
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
     try {
-        await waitForFirebase();
-        
         const urlParams = new URLSearchParams(window.location.search);
         const idParam = urlParams.get('id');
         const idsParam = urlParams.get('ids');
@@ -54,16 +68,14 @@ document.addEventListener("DOMContentLoaded", async () => {
             return;
         }
         
-        const { getDoc, doc } = window.firebaseCollections;
-        
-        // Carregar todas as vistorias
+        // Carregar todas as vistorias (o servidor devolve só os campos que a página usa)
         loadedVistorias = [];
-        for (const vId of idsToLoad) {
-            const docRef = doc(window.firebaseDb, 'vistorias', vId);
-            const snap = await getDoc(docRef);
-            if (snap.exists()) {
-                loadedVistorias.push({ id: vId, ...snap.data() });
-            }
+        try {
+            const r = await fetch(API_VISTORIA + '?ids=' + encodeURIComponent(idsToLoad.join(',')), { cache: 'no-store' });
+            const dados = await lerRespostaApi(r);
+            loadedVistorias = Array.isArray(dados.vistorias) ? dados.vistorias : [];
+        } catch (e) {
+            if (e.status !== 404) throw e;
         }
         
         if (loadedVistorias.length === 0) {
@@ -221,65 +233,9 @@ async function buscarCoordenadasLote() {
     try {
         setStatus("Buscando coordenadas...", "wait");
         
-        const empId = currentVistoriaDoc.costCenterId;
-        if (!empId) {
-            liberarVistoriaSemReferencia();
-            return;
-        }
-
-        const { doc, getDoc } = window.firebaseCollections;
-        const kmzRef = doc(window.firebaseDb, 'kmz_coordinates', String(empId));
-        
-        let foundLiveCoords = null;
-        try {
-            const docSnap = await getDoc(kmzRef);
-            if (docSnap.exists()) {
-                const list = docSnap.data().placemarks || [];
-                const unitNameRaw = String(currentVistoriaDoc.unidade).toLowerCase().replace(/[^a-z0-9]/g, '');
-                const empIdRaw = String(currentVistoriaDoc.costCenterId || '').replace(/\D/g, '');
-                const normalizedUnit = String(currentVistoriaDoc.unidade || '').trim();
-                const candidateNames = new Set([
-                    normalizedUnit,
-                    normalizedUnit.toUpperCase(),
-                    normalizedUnit.toLowerCase(),
-                    normalizedUnit.replace(/-/g, ''),
-                    `${empIdRaw}-${normalizedUnit}`,
-                    `${empIdRaw}${normalizedUnit}`,
-                    `${empIdRaw}-${normalizedUnit.toUpperCase()}`,
-                    `${empIdRaw}${normalizedUnit.toUpperCase()}`
-                ]);
-
-                let found = null;
-                for (let item of list) {
-                    const itemName = String(item.name || '').trim();
-                    const itemNameRaw = itemName.toLowerCase().replace(/[^a-z0-9]/g, '');
-                    const matches = Array.from(candidateNames).some(candidate => {
-                        const candidateNorm = String(candidate).toLowerCase().replace(/[^a-z0-9]/g, '');
-                        return itemNameRaw === candidateNorm || itemNameRaw.includes(candidateNorm) || candidateNorm.includes(itemNameRaw) || itemName.toUpperCase().includes(String(candidate).toUpperCase());
-                    });
-                    if (matches) {
-                        found = item;
-                        break;
-                    }
-                    if (itemNameRaw === unitNameRaw || itemNameRaw.includes(unitNameRaw) || unitNameRaw.includes(itemNameRaw)) {
-                        found = item;
-                        break;
-                    }
-                }
-                
-                if (found) {
-                    const coordsStr = found.coords.trim().split(' ')[0];
-                    const coordsArr = coordsStr.split(',');
-                    const lng = parseFloat(coordsArr[0]);
-                    const lat = parseFloat(coordsArr[1]);
-                    if (coordsArr && coordsArr.length >= 2 && Number.isFinite(lat) && Number.isFinite(lng)) {
-                        foundLiveCoords = { lng, lat };
-                    }
-                }
-            }
-        } catch(e) {
-            console.warn("Falha ao buscar KMZ em tempo real. Tentando cache local.", e);
-        }
+        // O servidor já casou a unidade com o KMZ do empreendimento (GET /api/vistoria-publica).
+        const c = currentVistoriaDoc.loteCoords;
+        const foundLiveCoords = (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) ? { lat: c.lat, lng: c.lng } : null;
 
         if (foundLiveCoords) {
             loteCoords = foundLiveCoords;
@@ -540,8 +496,10 @@ window.enviarVistoria = async function() {
     btn.textContent = 'Enviando... (Aguarde)';
     
     try {
-        const { ref, uploadBytes, getDownloadURL, doc, updateDoc, serverTimestamp } = window.firebaseCollections;
-        
+        await waitForFirebase();
+        const { ref, uploadBytes } = window.firebaseCollections;
+
+        // Guarda o caminho do objeto no Storage (o banco grava o caminho, não a URL)
         let url1 = null, url2 = null, url3 = null;
 
         const uploadWithTimeout = (ref, file, timeoutMs = 60000) => {
@@ -555,21 +513,21 @@ window.enviarVistoria = async function() {
         if (files.file1) {
             const ref1 = ref(window.firebaseStorage, `vistorias/${currentVistoriaId}/frente_${Date.now()}.jpeg`);
             await uploadWithTimeout(ref1, files.file1);
-            url1 = await getDownloadURL(ref1);
+            url1 = ref1.fullPath;
         }
         
         // Upload 2
         if (files.file2) {
             const ref2 = ref(window.firebaseStorage, `vistorias/${currentVistoriaId}/meio_fundo_${Date.now()}.jpeg`);
             await uploadWithTimeout(ref2, files.file2);
-            url2 = await getDownloadURL(ref2);
+            url2 = ref2.fullPath;
         }
         
         // Upload 3
         if (files.file3) {
             const ref3 = ref(window.firebaseStorage, `vistorias/${currentVistoriaId}/fundo_frente_${Date.now()}.jpeg`);
             await uploadWithTimeout(ref3, files.file3);
-            url3 = await getDownloadURL(ref3);
+            url3 = ref3.fullPath;
         }
         
         const respostas = {
@@ -581,16 +539,20 @@ window.enviarVistoria = async function() {
             observacoes: document.getElementById('q-obs') ? document.getElementById('q-obs').value : ""
         };
         
-        // Update Firestore
-        const docRef = doc(window.firebaseDb, 'vistorias', currentVistoriaId);
-        await updateDoc(docRef, {
-            status: 'aguardando_validacao',
-            respostasFormulario: respostas,
-            fotoFrente: url1,
-            fotoMeioFundo: url2,
-            fotoFundoFrente: url3,
-            enviadoEm: serverTimestamp()
+        // Grava no banco pelo servidor (confere a vistoria e chama enviar_vistoria)
+        const resp = await fetch(API_VISTORIA, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: currentVistoriaId,
+                respostas,
+                fotoFrente: url1,
+                fotoMeioFundo: url2,
+                fotoFundoFrente: url3
+            })
         });
+        await lerRespostaApi(resp);
+        if (currentVistoriaDoc) currentVistoriaDoc.status = 'aguardando_validacao';
         
         if (watchId) navigator.geolocation.clearWatch(watchId);
         

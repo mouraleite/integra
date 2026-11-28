@@ -59,22 +59,21 @@ const DashboardInadimplencia = (function() {
 
   async function carregarDados() {
     try {
-      if (window.firebaseCollections && window.firebaseDb) {
-        const snapRef = window.firebaseCollections.collection(window.firebaseDb, 'inadimplencia_snapshots');
-        const q = window.firebaseCollections.query(snapRef, window.firebaseCollections.orderBy("date", "asc"));
-        const fbDocs = await window.firebaseCollections.getDocs(q);
+      if (window.DadosCobranca) {
+        // Supabase: tabela inadimplencia_snapshots (data_json já vem como objeto).
+        const lista = await window.DadosCobranca.tabela('inadimplencia_snapshots').listar({ ordem: ["date", "asc"] });
         snapshots = [];
-        fbDocs.forEach(d => {
-          const data = d.data();
+        lista.forEach(data => {
+          delete data.id; // o d.data() do Firestore não trazia o id
           if (data.total_value > 1000) {
             snapshots.push(data);
           }
         });
       } else {
-        console.warn('Firebase não inicializado para carregar snapshots');
+        console.warn('Camada de dados não inicializada para carregar snapshots');
       }
     } catch (e) {
-      console.error('Falha na requisição dos snapshots do Firebase', e);
+      console.error('Falha na requisição dos snapshots do Supabase', e);
     }
   }
 
@@ -267,14 +266,14 @@ const DashboardInadimplencia = (function() {
       ? listOrMetrics
       : sprintCarteiraMetrics(listOrMetrics);
     if (!metrics || (!metrics.clients && !metrics.titles)) return;
-    if (!window.firebaseCollections || !window.firebaseDb) return;
+    if (!window.DadosCobranca) return;
     const fonte = origem === "relatorio" ? "relatorio" : "fila";
     const dateStr = todayIsoLocal();
-    const docRef = window.firebaseCollections.doc(window.firebaseDb, "inadimplencia_snapshots", dateStr);
+    const tabSnap = window.DadosCobranca.tabela("inadimplencia_snapshots");
     try {
-      const existing = await window.firebaseCollections.getDoc(docRef);
-      if (existing && existing.exists()) {
-        const prev = existing.data() || {};
+      const existing = await tabSnap.obter(dateStr);
+      if (existing) {
+        const prev = existing || {};
         const temSprint = prev.sprint_value != null && prev.sprint_titles != null;
         if (temSprint && fonte !== "relatorio") {
           console.warn(`[Sprint] Base ${dateStr} mantida. A montagem da fila não substitui a carteira já gravada.`);
@@ -309,7 +308,7 @@ const DashboardInadimplencia = (function() {
       total_count: metrics.titles,
       source_count: metrics.titles
     };
-    await window.firebaseCollections.setDoc(docRef, payload, { merge: true });
+    await tabSnap.gravar(dateStr, payload, { merge: true });
   }
 
   function clientDelay(c) {
@@ -1930,11 +1929,11 @@ const DashboardInadimplencia = (function() {
   async function empresasQueResponderam() {
     if (Array.isArray(window._filaEmpresasRespondidas) && window._filaEmpresasRespondidas.length) return window._filaEmpresasRespondidas;
     try {
-      const fc = window.firebaseCollections;
-      if (!window.firebaseDb || !fc || !fc.doc || !fc.getDoc) return null;
+      // Supabase: ficha do dia na sienge_defaulters_history (companyIds = empresas que responderam na carga).
+      if (!window.DadosCobranca || typeof window.DadosCobranca.lerCacheDia !== "function") return null;
       const hoje = typeof window.localDateStr === "function" ? window.localDateStr(new Date()) : new Date().toISOString().slice(0, 10);
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "sienge_defaulters_history", hoje));
-      const ids = snap && snap.exists() ? (snap.data() || {}).companyIds : null;
+      const ficha = await window.DadosCobranca.lerCacheDia(hoje);
+      const ids = ficha ? ficha.companyIds : null;
       return Array.isArray(ids) && ids.length ? ids.map(Number) : null;
     } catch (e) {
       return null;

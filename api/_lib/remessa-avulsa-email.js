@@ -8,7 +8,21 @@
    - grava o envio em remessa_avulsa_envios/<título>_<parcela>. A mesma parcela não sai duas vezes, salvo "reenviar". */
 
 const { graphMailConfigured, sendMail } = require("../../lib/graph-mail");
-const { lerDoc, gravarDoc } = require("./central-email-enviar");
+const { dados } = require("../../lib/dados-servidor");
+
+/* Supabase: a configuração (config/remessa_avulsa_email) e cada envio (remessa_avulsa_envios/<título>_<parcela>)
+   ficam em configuracoes, pela mesma camada da tela (DadosNucleo.lerConfig/gravarConfig, service role). */
+async function lerDoc(caminho) {
+  const [colecao, id] = String(caminho).split("/");
+  const snap = await dados().DadosNucleo.lerConfig(id, colecao, { fresco: true });
+  return snap && snap.exists() ? snap.data() : null;
+}
+
+async function gravarDoc(caminho, obj) {
+  const [colecao, id] = String(caminho).split("/");
+  await dados().DadosNucleo.gravarConfig(id, obj, null, colecao);
+  return true;
+}
 
 const SIENGE = "https://api.sienge.com.br/mouraleite/public/api/v1";
 const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

@@ -1,11 +1,10 @@
 // FINANCEIRO > CONTAS A RECEBER > ANTECIPAÇÕES
 // Títulos em que o cliente pagou parcela antes do vencimento (jan/2024 em diante).
-// A tela lê só o Firebase (antecipacoes_mes); quem consulta o Sienge é o batimento das 7h
+// A tela lê só o Supabase (antecipacoes_mes); quem consulta o Sienge é o batimento das 7h
 // (últimos 7 dias) e a carga do histórico. Um evento = título + data do pagamento.
 // Desconto de juros = VF - VP (VP = VF / (1+taxa)^meses até o vencimento); desconto comercial = VP - recebido.
 
 (function () {
-  const COL = "antecipacoes_mes";
   const INICIO = "2024-01";
   const MESES_NOME = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
@@ -95,31 +94,14 @@
       await this.carregar(false);
     },
 
-    fb() {
-      const fx = window.firebaseCollections;
-      const db = window.firebaseDb;
-      return fx && db && typeof fx.getDoc === "function" ? { fx, db } : null;
-    },
-
+    // antecipacoes_mes (+ antecipacoes_mes_eventos) está no Supabase (window.DadosFinanceiro): as partes __pN com o
+    // texto JSON viraram uma linha por evento.
     async lerMes(mes, forcar) {
       if (!forcar && this._cache[mes]) return this._cache[mes];
-      const f = this.fb();
-      if (!f) throw new Error("Firebase não inicializado. Recarregue a página (Ctrl+F5).");
-      const meta = await f.fx.getDoc(f.fx.doc(f.db, COL, mes));
-      if (!meta.exists()) {
-        this._cache[mes] = { eventos: [], atualizadoEm: "", vazio: true };
-        return this._cache[mes];
-      }
-      const md = meta.data() || {};
-      const n = Number(md.partes) || 0;
-      let texto = "";
-      for (let i = 0; i < n; i++) {
-        const p = await f.fx.getDoc(f.fx.doc(f.db, COL, mes + "__p" + i));
-        if (p.exists()) texto += String((p.data() || {}).texto || "");
-      }
-      let eventos = [];
-      try { eventos = JSON.parse(texto || "[]"); } catch (e) { eventos = []; }
-      this._cache[mes] = { eventos: Array.isArray(eventos) ? eventos : [], atualizadoEm: md.atualizadoEm || "" };
+      if (!window.DadosFinanceiro) throw new Error("Supabase não inicializado. Recarregue a página (Ctrl+F5).");
+      // { eventos, atualizadoEm, fonte } ou { eventos: [], atualizadoEm: "", vazio: true } se o mês não existe.
+      const r = await window.DadosFinanceiro.lerMesAntecipacoes(mes);
+      this._cache[mes] = r.vazio ? r : { eventos: Array.isArray(r.eventos) ? r.eventos : [], atualizadoEm: r.atualizadoEm || "" };
       return this._cache[mes];
     },
 

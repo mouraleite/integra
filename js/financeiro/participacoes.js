@@ -243,7 +243,8 @@ const ParticipacoesApp = {
   },
 
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseStorage && window.firebaseCollections);
+    // Arquivos no Supabase Storage (js/nucleo/storage-supabase.js, mesmas funções do Firebase Storage).
+    return !!(window.firebaseStorage && window.firebaseCollections && window.firebaseCollections.uploadBytes);
   },
 
   cloudDocId(companyId, closing) {
@@ -261,11 +262,12 @@ const ParticipacoesApp = {
     return { url, path };
   },
 
+  // Os períodos (participacoes_periods + _expenses) estão no Supabase (window.DadosFinanceiro); o PDF continua no
+  // Storage do Firebase (uploadPdfToFirebase). Os nomes *Firebase ficaram por compatibilidade com o resto da tela.
   async savePeriodToFirebase(rec, companyId) {
-    if (!this.fbReady() || !rec || !companyId) return false;
+    if (!window.DadosFinanceiro || !rec || !companyId) return false;
     const closing = this.periodKeyOfFile(rec);
     if (!closing) return false;
-    const { doc, setDoc, serverTimestamp } = window.firebaseCollections;
     const userName = (window.AppState && AppState.currentUser && AppState.currentUser.name) || "";
     const payload = {
       companyId: String(companyId),
@@ -277,21 +279,21 @@ const ParticipacoesApp = {
       pdfPath: rec.pdfPath || "",
       cacheVer: 9,
       updatedAt: Date.now(),
-      updatedBy: userName,
-      updatedAtServer: typeof serverTimestamp === "function" ? serverTimestamp() : null
+      updatedBy: userName
+      // updatedAtServer (serverTimestamp) saiu: atualizado_em vem do servidor.
     };
-    await setDoc(doc(window.firebaseDb, "participacoes_periods", this.cloudDocId(companyId, closing)), payload, { merge: true });
+    // RPC salvar_participacoes_period (merge; as despesas são trocadas numa transação).
+    payload.id = this.cloudDocId(companyId, closing);
+    await window.DadosFinanceiro.salvarPeriodoParticipacoes(payload);
     return true;
   },
 
   async loadPeriodsFromFirebase(companyId) {
-    if (!this.fbReady() || !companyId) return [];
-    const { collection, query, where, getDocs } = window.firebaseCollections;
-    const q = query(collection(window.firebaseDb, "participacoes_periods"), where("companyId", "==", String(companyId)));
-    const snap = await getDocs(q);
+    if (!window.DadosFinanceiro || !companyId) return [];
+    const lista = await window.DadosFinanceiro.listarPeriodosParticipacoes(String(companyId));
     const out = [];
-    snap.forEach((d) => {
-      const data = d.data() || {};
+    lista.forEach((d) => {
+      const data = d || {};
       if (!data.closing && !data.fileName) return;
       out.push({
         name: data.fileName || `${data.closing}.pdf`,
@@ -344,7 +346,7 @@ const ParticipacoesApp = {
       });
       this.files.sort((a, b) => String(b.closing || "").localeCompare(String(a.closing || "")) || b.name.localeCompare(a.name));
     } catch (e) {
-      console.warn("[Participacoes] Firebase períodos:", e);
+      console.warn("[Participacoes] períodos na nuvem:", e);
     }
   },
 
@@ -1645,15 +1647,15 @@ const ParticipacoesApp = {
         rec.fromUpload = true;
 
         this.cloudSyncing = true;
-        this.setCarga("Salvando no Firebase…", 70 + (i / picked.length) * 18);
+        this.setCarga("Salvando na nuvem…", 70 + (i / picked.length) * 18);
         try {
           const up = await this.uploadPdfToFirebase(file, this.companyId, closing || "sem-periodo");
           rec.pdfUrl = up.url || "";
           rec.pdfPath = up.path || "";
           await this.savePeriodToFirebase(rec, this.companyId);
         } catch (cloudErr) {
-          console.warn("[Participacoes] Falha ao salvar no Firebase:", cloudErr);
-          this.hint = "Dados lidos neste navegador; falhou o envio ao Firebase: " + (cloudErr && cloudErr.message ? cloudErr.message : cloudErr);
+          console.warn("[Participacoes] Falha ao salvar na nuvem:", cloudErr);
+          this.hint = "Dados lidos neste navegador; falhou o envio à nuvem: " + (cloudErr && cloudErr.message ? cloudErr.message : cloudErr);
         }
         this.cloudSyncing = false;
         this.persistCache(rec);
@@ -2397,13 +2399,13 @@ const ParticipacoesApp = {
   /* ---------- Categoria Moura Leite por credor ----------
      O operador escolhe, na linha do credor, um grupo de despesa do plano financeiro:
      só contas de nível 3 que começam com 2 (ex.: 2.01.01 - TERRENOS).
-     Cada credor tem o seu registro no Firebase, na coleção participacoes_credores. */
+     Cada credor tem o seu registro no Supabase, na tabela participacoes_credores. */
   CAT_ML_COL: "participacoes_credores",
   CAT_ML_LOCAL: "crm_part_categoria_ml_v2",
   catMl: null,
   credorAberto: {},
 
-  /** Id do registro do credor no Firebase (a chave do credor pode ter "/", que o Firebase não aceita no id). */
+  /** Id do registro do credor (a chave do credor pode ter "/"; o id segue o formato antigo do Firebase). */
   catMlDocId(credorKey) {
     return encodeURIComponent(String(credorKey || "")).slice(0, 700) || "sem-credor";
   },
@@ -2415,12 +2417,11 @@ const ParticipacoesApp = {
     try { mapa = JSON.parse(localStorage.getItem(this.CAT_ML_LOCAL) || "null"); } catch (e) { mapa = null; }
     this.catMl = mapa && typeof mapa === "object" ? mapa : {};
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDocs && fc.collection) {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.CAT_ML_COL));
+      if (window.DadosFinanceiro) {
+        const lista = await window.DadosFinanceiro.tabela(this.CAT_ML_COL).listar();
         const remoto = {};
-        snap.forEach((d) => {
-          const v = d.data() || {};
+        lista.forEach((d) => {
+          const v = d || {};
           if (v.credorKey && v.categoriaMl && v.categoriaMl.id) remoto[v.credorKey] = Object.assign({}, v.categoriaMl, { por: v.por || "", em: v.em || "" });
         });
         this.catMl = remoto;
@@ -2491,31 +2492,30 @@ const ParticipacoesApp = {
     return v ? v.id + " - " + v.label : "";
   },
 
-  /** Grava (ou apaga) a categoria no registro do credor no Firebase e confere lendo de volta. Devolve true se ficou gravado. */
+  /** Grava (ou apaga) a categoria no registro do credor no Supabase e confere lendo de volta. Devolve true se ficou gravado. */
   async gravarCatMl(credorKey, item, credorNome) {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.doc || !fc.setDoc || !fc.getDoc) {
+    if (!window.DadosFinanceiro) {
       alert("O banco do Integra não está disponível agora. A categoria não foi gravada.");
       return false;
     }
     const quem = (window.AppState && AppState.currentUser) || {};
-    const ref = fc.doc(window.firebaseDb, this.CAT_ML_COL, this.catMlDocId(credorKey));
+    const tab = window.DadosFinanceiro.tabela(this.CAT_ML_COL);
+    const ref = this.catMlDocId(credorKey);
     const agora = new Date().toISOString();
     try {
       if (item) {
-        await fc.setDoc(ref, {
+        await tab.gravar(ref, {
           credorKey: String(credorKey),
           credor: String(credorNome || credorKey),
           categoriaMl: { id: item.id, siengeId: item.siengeId || "", label: item.label },
           por: String(quem.name || quem.email || ""),
           em: agora
         }, { merge: true });
-      } else if (fc.deleteDoc) {
-        await fc.deleteDoc(ref);
+      } else {
+        await tab.excluir(ref);
       }
-      const snap = await fc.getDoc(ref);
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const v = existe ? (snap.data() || {}) : null;
+      const v = await tab.obter(ref);
+      const existe = !!v;
       const ok = item ? !!(v && v.categoriaMl && v.categoriaMl.id === item.id) : !existe;
       if (!ok) throw new Error("a leitura de conferência não trouxe o que foi gravado");
     } catch (e) {
@@ -2864,13 +2864,11 @@ const ParticipacoesApp = {
     try { mapa = JSON.parse(localStorage.getItem(this.PAINEL_LOCAL) || "null"); } catch (e) { mapa = null; }
     this.painel = mapa && typeof mapa === "object" ? mapa : {};
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDocs && fc.collection) {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.PAINEL_COL));
+      if (window.DadosFinanceiro) {
+        const lista = await window.DadosFinanceiro.tabela(this.PAINEL_COL).listar();
         const remoto = {};
-        snap.forEach((d) => {
-          const v = d.data() || {};
-          if (v.credorKey) remoto[v.credorKey] = v;
+        (lista || []).forEach((v) => {
+          if (v && v.credorKey) remoto[v.credorKey] = v;
         });
         this.painel = remoto;
         try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
@@ -2902,16 +2900,17 @@ const ParticipacoesApp = {
     });
     this.painel[k] = atual;
     try { localStorage.setItem(this.PAINEL_LOCAL, JSON.stringify(this.painel)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc || !fc.doc) {
-      alert("O Firebase não está disponível. A marcação vale só neste navegador.");
+    if (!window.DadosFinanceiro) {
+      alert("O banco do Integra não está disponível agora. A marcação vale só neste navegador.");
       return;
     }
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, this.PAINEL_COL, this.catMlDocId(k)), atual, { merge: true });
+      const reg = Object.assign({}, atual);
+      delete reg.id;
+      await window.DadosFinanceiro.tabela(this.PAINEL_COL).gravar(this.catMlDocId(k), reg, { merge: true });
     } catch (e) {
       console.error("[Prestação Ellenco] gravar painel do sócio", e);
-      alert("Não consegui gravar no Firebase. Tente de novo.");
+      alert("Não consegui gravar no banco. Tente de novo.");
     }
   },
 

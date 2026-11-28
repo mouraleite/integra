@@ -36,7 +36,7 @@ const ConsumoApiApp = {
         : [];
       if (!this.selected) this.selected = this.today();
     } catch (e) {
-      this.error = "Não foi possível ler o consumo no Firebase.";
+      this.error = "Não foi possível ler o consumo no banco.";
       this.days = [];
     }
     this.loading = false;

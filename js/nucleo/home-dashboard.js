@@ -1155,13 +1155,12 @@ const HomeDashboard = {
     if (this._opSnapshotsPromise) return this._opSnapshotsPromise;
     this._opSnapshotsPromise = (async () => {
       try {
-        if (!window.firebaseCollections || !window.firebaseDb) return [];
-        const snapRef = window.firebaseCollections.collection(window.firebaseDb, 'inadimplencia_snapshots');
-        const q = window.firebaseCollections.query(snapRef, window.firebaseCollections.orderBy('date', 'asc'));
-        const fbDocs = await window.firebaseCollections.getDocs(q);
+        if (!window.DadosCobranca) return [];
+        // Supabase: tabela inadimplencia_snapshots (área cobrança).
+        const docs = await window.DadosCobranca.tabela('inadimplencia_snapshots').listar({ ordem: ['date', 'asc'] });
         const list = [];
-        fbDocs.forEach(d => {
-          const data = d.data();
+        docs.forEach(data => {
+          delete data.id; // o d.data() do Firestore não trazia o id
           if (data.total_value > 1000) list.push(data);
         });
         this._opSnapshots = list;

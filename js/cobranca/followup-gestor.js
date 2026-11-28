@@ -47,8 +47,9 @@
         ? window.crypto.randomUUID()
         : Date.now() + "-" + Math.random().toString(36).slice(2);
     },
+    // Supabase: tabela followup_gestor (mapa em js/nucleo/mapas-nucleo.js).
     fb() {
-      return window.firebaseDb && window.firebaseCollections ? window.firebaseCollections : null;
+      return window.DadosNucleo && typeof window.DadosNucleo.tabela === "function" ? window.DadosNucleo.tabela(COL) : null;
     },
     aviso(msg, tipo) {
       let el = document.getElementById("fg-toast");
@@ -424,7 +425,7 @@
       if (btn) { btn.disabled = true; btn.textContent = "Enviando…"; }
       const agora = new Date().toISOString();
       const autor = this.nomeReal();
-      const ref = fb.doc(fb.collection(window.firebaseDb, COL));
+      const ref = { id: this.novoId() };
       const nota = {
         id: this.novoId(),
         date: agora,
@@ -470,7 +471,7 @@
         nota: nota
       };
       try {
-        await fb.setDoc(ref, pedido);
+        await fb.gravar(ref.id, pedido);
       } catch (e) {
         console.error("[followup-gestor] pedido", e);
         if (btn) { btn.disabled = false; btn.textContent = "Enviar ao operador"; }
@@ -507,17 +508,15 @@
     iniciar() {
       if (this._escuta) return;
       const fb = this.fb();
-      if (!fb || typeof fb.onSnapshot !== "function") return;
+      if (!fb || typeof fb.ouvir !== "function") return;
       try {
-        const q = fb.query(fb.collection(window.firebaseDb, COL), fb.where("status", "==", "aguardando"));
-        this._escuta = fb.onSnapshot(q, (snap) => {
-          const lista = [];
-          snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data() || {})));
+        this._escuta = fb.ouvir((r) => {
+          const lista = (r.docs || []).slice();
           lista.sort((a, b) => String(a.criadoEm || "").localeCompare(String(b.criadoEm || "")));
           this.pendentes = lista;
           this.avisarOperador();
           this.atualizarHome();
-        }, (err) => console.warn("[followup-gestor] escuta", err));
+        }, { filtros: [["status", "eq", "aguardando"]], aoErro: (err) => console.warn("[followup-gestor] escuta", err) });
       } catch (e) {
         console.warn("[followup-gestor] início", e);
       }
@@ -653,7 +652,7 @@
       const fb = this.fb();
       if (!fb) return;
       try {
-        await fb.updateDoc(fb.doc(window.firebaseDb, COL, p.id), { vistoEm: new Date().toISOString() });
+        await fb.gravar(p.id, { vistoEm: new Date().toISOString() }, { merge: true });
       } catch (e) {}
     },
     depois(id) {
@@ -675,12 +674,12 @@
       const user = this.usuario();
       const autor = (user && user.name) || "Operador";
       try {
-        await fb.updateDoc(fb.doc(window.firebaseDb, COL, p.id), {
+        await fb.gravar(p.id, {
           status: "respondido",
           resposta: texto,
           respondidoEm: agora,
           respondidoPor: autor
-        });
+        }, { merge: true });
       } catch (e) {
         console.error("[followup-gestor] resposta", e);
         if (btn) { btn.disabled = false; btn.textContent = "Enviar resposta"; }
@@ -737,9 +736,7 @@
       if (!fb) { this.lista = []; return; }
       this.carregandoLista = true;
       try {
-        const snap = await fb.getDocs(fb.collection(window.firebaseDb, COL));
-        const lista = [];
-        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data() || {})));
+        const lista = await fb.listar();
         lista.sort((a, b) => String(b.criadoEm || "").localeCompare(String(a.criadoEm || "")));
         this.lista = lista;
       } catch (e) {

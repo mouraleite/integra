@@ -1,11 +1,12 @@
 /**
  * Segurança · Auditoria do Login Sienge
- * Lê o relatório "Auditoria do Login" do Sienge (Excel), grava no Firebase e mostra quem segura
+ * Lê o relatório "Auditoria do Login" do Sienge (Excel), grava no Supabase e mostra quem segura
  * licença parado: sessão expirada = 10 minutos sem uso até o Sienge derrubar.
  */
 const AuditoriaLoginApp = {
   COL_REL: "auditoria_login_relatorios",
-  COL_PARTES: "auditoria_login_partes",
+  // Supabase: as antigas partes (shards) viraram uma linha por acesso em auditoria_login_linhas.
+  COL_LINHAS: "auditoria_login_linhas",
   TIMEOUT_MIN: 10,
   OCIOSO_NORMAL: 0.1,
   ESCRITORIO: { ini: 8 * 60, fim: 18 * 60 },
@@ -30,10 +31,32 @@ const AuditoriaLoginApp = {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
+  // Acesso ao Supabase: relatórios pelo DadosNucleo; linhas direto no window.sb (tabela sem mapa).
   fb() {
-    const db = window.firebaseDb;
-    const f = window.firebaseCollections;
-    return db && f && f.getDocs && f.collection ? { db, f } : null;
+    const D = window.DadosNucleo;
+    return D && D.tabela ? { rel: D.tabela(this.COL_REL), pronto: D.pronto } : null;
+  },
+
+  // "AAAA-MM-DD HH:MM" (hora local do Sienge, America/Sao_Paulo, -03:00) <-> timestamptz.
+  horaParaBanco(s) {
+    return s ? new Date(String(s).replace(" ", "T") + ":00-03:00").toISOString() : null;
+  },
+
+  horaDoBanco(v) {
+    const t = v ? Date.parse(v) : NaN;
+    return isNaN(t) ? "" : new Date(t - 3 * 3600000).toISOString().slice(0, 16).replace("T", " ");
+  },
+
+  // Linha do banco -> tupla compacta [usuario, ip, ok, entrada, saida, modo, motivo] (mesmo formato de compactar).
+  tuplaDaLinha(r) {
+    return [r.usuario, r.ip, r.sucesso ? 1 : 0, this.horaDoBanco(r.entrada), this.horaDoBanco(r.saida), r.modo || "", r.motivo || ""];
+  },
+
+  async lerLinhasBanco() {
+    await window.DadosNucleo.pronto;
+    return window.DadosBase.lerTudo(() => window.sb.from(this.COL_LINHAS)
+      .select("relatorio_id, ordem, usuario, ip, sucesso, entrada, saida, modo, motivo")
+      .order("relatorio_id", { ascending: true }).order("ordem", { ascending: true }));
   },
 
   usuarioAtual() {
@@ -179,36 +202,26 @@ const AuditoriaLoginApp = {
     if (this.carregando || (this.carregado && !forcar)) return;
     const fb = this.fb();
     if (!fb) {
-      this.erro = "Firebase indisponível. Atualize a página.";
+      this.erro = "Banco de dados indisponível. Atualize a página.";
       this.render();
       return;
     }
     this.carregando = true;
     this.render();
     try {
-      const [rels, partes] = await Promise.all([
-        fb.f.getDocs(fb.f.collection(fb.db, this.COL_REL)),
-        fb.f.getDocs(fb.f.collection(fb.db, this.COL_PARTES))
-      ]);
-      const relatorios = [];
-      rels.forEach((d) => relatorios.push(Object.assign({ id: d.id }, d.data())));
+      const [relatorios, banco] = await Promise.all([fb.rel.listar(), this.lerLinhasBanco()]);
       const validos = new Set(relatorios.map((r) => r.id));
       const vistos = new Set();
       const linhas = [];
-      const lista = [];
-      partes.forEach((d) => lista.push(d.data()));
-      lista.sort((a, b) => String(a.relatorioId).localeCompare(String(b.relatorioId)) || (a.n || 0) - (b.n || 0));
-      lista.forEach((p) => {
-        if (!validos.has(p.relatorioId)) return;
-        let arr = [];
-        try { arr = JSON.parse(p.linhas || "[]"); } catch (e) { arr = []; }
-        arr.forEach((a) => {
-          const chave = a.slice(0, 5).join("|");
-          if (vistos.has(chave)) return;
-          vistos.add(chave);
-          const l = this.expandir(a);
-          if (l.ent != null) linhas.push(l);
-        });
+      // Já vem ordenado por relatório e ordem (antes: por relatorioId e n da parte).
+      banco.forEach((r) => {
+        if (!validos.has(r.relatorio_id)) return;
+        const a = this.tuplaDaLinha(r);
+        const chave = a.slice(0, 5).join("|");
+        if (vistos.has(chave)) return;
+        vistos.add(chave);
+        const l = this.expandir(a);
+        if (l.ent != null) linhas.push(l);
       });
       this.relatorios = relatorios.sort((a, b) => String(b.periodoAte || "").localeCompare(String(a.periodoAte || "")));
       this.linhas = linhas;
@@ -220,7 +233,7 @@ const AuditoriaLoginApp = {
       }
     } catch (e) {
       console.warn("[auditoria-login] leitura:", e);
-      this.erro = "Não foi possível ler os relatórios no Firebase.";
+      this.erro = "Não foi possível ler os relatórios no banco de dados.";
     }
     this.carregando = false;
     this.render();
@@ -235,7 +248,7 @@ const AuditoriaLoginApp = {
     if (!file) return;
     const fb = this.fb();
     if (!fb) {
-      this.erro = "Firebase indisponível. Atualize a página.";
+      this.erro = "Banco de dados indisponível. Atualize a página.";
       this.render();
       return;
     }
@@ -259,19 +272,18 @@ const AuditoriaLoginApp = {
         }
         this.enviando = "Removendo o relatório anterior…";
         this.render();
-        await this.apagarNoFirebase(mesmo.id);
+        await this.apagarRelatorio(mesmo.id);
       }
-      this.enviando = "Salvando no Firebase…";
+      this.enviando = "Salvando no banco de dados…";
       this.render();
       const id = "rel_" + Date.now();
       const quem = this.usuarioAtual();
       const comp = lido.linhas.map((l) => this.compactar(l));
       const partes = [];
       for (let i = 0; i < comp.length; i += this.LINHAS_POR_PARTE) partes.push(comp.slice(i, i + this.LINHAS_POR_PARTE));
-      for (let n = 0; n < partes.length; n++) {
-        await fb.f.setDoc(fb.f.doc(fb.db, this.COL_PARTES, `${id}_p${n}`), { relatorioId: id, n, linhas: JSON.stringify(partes[n]) });
-      }
-      await fb.f.setDoc(fb.f.doc(fb.db, this.COL_REL, id), {
+      // O relatório vai primeiro (as linhas apontam para ele); se alguma linha falhar, apaga o relatório
+      // (o cascade leva as linhas), como antes as partes sem relatório eram ignoradas.
+      await fb.rel.gravar(id, {
         arquivo: file.name,
         periodoDe: lido.periodoDe,
         periodoAte: lido.periodoAte,
@@ -283,6 +295,19 @@ const AuditoriaLoginApp = {
         enviadoPorEmail: quem.email,
         enviadoEm: new Date().toISOString()
       });
+      try {
+        for (let n = 0; n < partes.length; n++) {
+          const linhasBanco = partes[n].map((t, i) => ({
+            relatorio_id: id, ordem: n * this.LINHAS_POR_PARTE + i, usuario: t[0], ip: t[1], sucesso: !!t[2],
+            entrada: this.horaParaBanco(t[3]), saida: this.horaParaBanco(t[4]), modo: t[5] || null, motivo: t[6] || null
+          }));
+          const r = await window.sb.from(this.COL_LINHAS).insert(linhasBanco);
+          if (r.error) throw r.error;
+        }
+      } catch (e) {
+        try { await fb.rel.excluir(id); } catch (e2) {}
+        throw e;
+      }
       this.filtro.de = lido.periodoDe;
       this.filtro.ate = lido.periodoAte;
       this.enviando = "";
@@ -296,13 +321,10 @@ const AuditoriaLoginApp = {
     }
   },
 
-  async apagarNoFirebase(id) {
+  // Apaga no Supabase (FK on delete cascade leva as linhas).
+  async apagarRelatorio(id) {
     const fb = this.fb();
-    const partes = await fb.f.getDocs(fb.f.query(fb.f.collection(fb.db, this.COL_PARTES), fb.f.where("relatorioId", "==", id)));
-    const dels = [];
-    partes.forEach((d) => dels.push(fb.f.deleteDoc(fb.f.doc(fb.db, this.COL_PARTES, d.id))));
-    await Promise.all(dels);
-    await fb.f.deleteDoc(fb.f.doc(fb.db, this.COL_REL, id));
+    await fb.rel.excluir(id);
   },
 
   async excluir(id) {
@@ -312,7 +334,7 @@ const AuditoriaLoginApp = {
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
     if (!ok) return;
     try {
-      await this.apagarNoFirebase(id);
+      await this.apagarRelatorio(id);
       await this.carregar(true);
     } catch (e) {
       console.warn("[auditoria-login] exclusão:", e);

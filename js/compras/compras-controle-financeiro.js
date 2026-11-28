@@ -855,12 +855,10 @@ ComprasControleApp.baseCobre = function (chunks, start, end, companyIds) {
 };
 
 ComprasControleApp.lerMetaBase = async function () {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || typeof fx.getDoc !== "function" || typeof fx.doc !== "function") return null;
-  const snap = await fx.getDoc(fx.doc(db, "sienge_defaulters_history", "_cfin_meta"));
-  if (!snap || !snap.exists || !snap.exists()) return null;
-  const meta = snap.data() || {};
+  // sienge_defaulters_history está no Supabase (área cobrança).
+  if (!window.DadosCobranca) return null;
+  const meta = await window.DadosCobranca.lerCacheDia("_cfin_meta");
+  if (!meta) return null;
   if (!meta.ready || !meta.start || !meta.end || !Array.isArray(meta.chunks) || !meta.chunks.length) return null;
   return meta;
 };
@@ -869,12 +867,11 @@ ComprasControleApp.lerBlocoBase = async function (id) {
   if (!id) return [];
   this._cfinBlocos = this._cfinBlocos || {};
   if (this._cfinBlocos[id]) return this._cfinBlocos[id];
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  const snap = await fx.getDoc(fx.doc(db, "sienge_defaulters_history", id));
+  // comoTexto: data volta como texto JSON, como no Firestore.
+  const doc = await window.DadosCobranca.lerCacheDia(id, { comoTexto: true });
   let bills = [];
-  if (snap && snap.exists && snap.exists()) {
-    try { bills = JSON.parse((snap.data() || {}).data || "[]"); } catch (e) { bills = []; }
+  if (doc) {
+    try { bills = JSON.parse(doc.data || "[]"); } catch (e) { bills = []; }
   }
   if (!Array.isArray(bills)) bills = [];
   this._cfinBlocos[id] = bills;
@@ -989,7 +986,7 @@ ComprasControleApp.fetchOutcome = async function (start, end) {
 ComprasControleApp._cfinHistDe = "2017-01-01";
 ComprasControleApp.apiDias = 60;
 
-// Até 60 dias atrás a consulta lê o Firebase. Os últimos 60 dias, e o que vence depois, saem do Sienge.
+// Até 60 dias atrás a consulta lê o Supabase (cfin_pagos). Os últimos 60 dias, e o que vence depois, saem do Sienge.
 // A rotina das 7h grava de 01/01/2026 até esse corte e avança um dia por manhã.
 ComprasControleApp.histAte = function () {
   return this.isoShiftDay(this.hojeIso(), -this.apiDias);
@@ -1051,66 +1048,23 @@ ComprasControleApp._fimMes = function (ym) {
 };
 
 ComprasControleApp._lerMesPago = async function (companyId, ym) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.getDoc) return null;
-  const id = String(companyId || "todas") + "_" + ym;
+  // cfin_pagos (+ cfin_pagos_bills) no Supabase: os pedaços <id>_p<n> viraram uma linha por título.
+  const D = window.DadosFinanceiro;
+  if (!D) return null;
   try {
-    const snap = await fx.getDoc(fx.doc(db, "cfin_pagos", id));
-    if (!snap || typeof snap.exists !== "function" || !snap.exists()) return null;
-    const data = snap.data() || {};
-    const partes = Math.max(1, Number(data.partes) || 1);
-    let bills = Array.isArray(data.bills) ? data.bills.slice() : [];
-    for (let i = 2; i <= partes; i++) {
-      const pedaco = await fx.getDoc(fx.doc(db, "cfin_pagos", id + "_p" + i));
-      if (pedaco && typeof pedaco.exists === "function" && pedaco.exists()) {
-        const extra = pedaco.data() || {};
-        if (Array.isArray(extra.bills)) bills = bills.concat(extra.bills);
-      }
-    }
-    return bills;
+    return await D.lerMesPago(companyId, ym); // lista na ordem gravada, ou null se o mês não foi gravado
   } catch (e) {
     return null;
   }
 };
 
 ComprasControleApp._gravarMesPago = async function (companyId, ym, bills) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.setDoc || !companyId) return;
+  const D = window.DadosFinanceiro;
+  if (!D || !companyId) return;
   if (ym > this.histAte().slice(0, 7)) return;
   const lista = Array.isArray(bills) ? bills : [];
-  const fatias = [];
-  let atual = [];
-  let tamanho = 2;
-  lista.forEach((row) => {
-    const pedaco = JSON.stringify(row || {});
-    if (atual.length && tamanho + pedaco.length > 700000) {
-      fatias.push(atual);
-      atual = [];
-      tamanho = 2;
-    }
-    atual.push(row);
-    tamanho += pedaco.length + 1;
-  });
-  if (atual.length || !fatias.length) fatias.push(atual);
-  const id = String(companyId || "todas") + "_" + ym;
-  await fx.setDoc(fx.doc(db, "cfin_pagos", id), {
-    companyId: String(companyId || "todas"),
-    ym: ym,
-    n: lista.length,
-    partes: fatias.length,
-    em: new Date().toISOString(),
-    bills: fatias[0] || []
-  });
-  for (let i = 1; i < fatias.length; i++) {
-    await fx.setDoc(fx.doc(db, "cfin_pagos", id + "_p" + (i + 1)), {
-      companyId: String(companyId || "todas"),
-      ym: ym,
-      parte: i + 1,
-      bills: fatias[i]
-    });
-  }
+  // RPC gravar_cfin_pagos_mes: troca o mês inteiro numa transação (antes: setDoc do doc + dos pedaços _p<n>).
+  await D.gravarMesPago(companyId, ym, lista);
 };
 
 ComprasControleApp._billNoPeriodo = function (bill, start, end) {
@@ -1222,7 +1176,7 @@ ComprasControleApp.contasHistoricas = async function (start, end) {
         }
         await new Promise((r) => setTimeout(r, 400));
       } else if (step === 1 || step % 6 === 0) {
-        this.noteProgress("Lendo contas até " + rotulo + " no Firebase · empresa " + companyId + " · " + ym, step / total);
+        this.noteProgress("Lendo contas até " + rotulo + " na nuvem · empresa " + companyId + " · " + ym, step / total);
       }
       if (!this._cfinMesMem) this._cfinMesMem = {};
       this._cfinMesMem[chave] = bills || [];
@@ -1281,7 +1235,7 @@ ComprasControleApp.consultar = async function () {
     const ate = this.histAte();
     const vivoDe = this.histVivoDe();
     if (start <= ate) {
-      this.state.loadingMsg = "Lendo contas até " + this.fmtDataBr(ate) + " no Firebase…";
+      this.state.loadingMsg = "Lendo contas até " + this.fmtDataBr(ate) + " na nuvem…";
       this.noteProgress(this.state.loadingMsg, 0);
       const hist = await this.contasHistoricas(start, end < ate ? end : ate);
       contas.push.apply(contas, hist);
@@ -1290,10 +1244,10 @@ ComprasControleApp.consultar = async function () {
       const faltam = this._cfinFalhasBase || [];
       const avisos = [];
       if (faltam.length) {
-        avisos.push("O Firebase ainda não tem " + faltam.length + " mês(es) até " + this.fmtDataBr(ate) + ". A rotina das 7h grava de 01/01/2026 até essa data e avança um dia por manhã.");
+        avisos.push("A nuvem ainda não tem " + faltam.length + " mês(es) até " + this.fmtDataBr(ate) + ". A rotina das 7h grava de 01/01/2026 até essa data e avança um dia por manhã.");
       }
       if (falhas.length) {
-        avisos.push("O Sienge não devolveu " + falhas.length + " mês(es) anteriores a 2026. O que já foi gravado continua no Firebase. Consulte de novo para completar. " + falhas.slice(0, 4).join(", ") + (falhas.length > 4 ? "…" : ""));
+        avisos.push("O Sienge não devolveu " + falhas.length + " mês(es) anteriores a 2026. O que já foi gravado continua na nuvem. Consulte de novo para completar. " + falhas.slice(0, 4).join(", ") + (falhas.length > 4 ? "…" : ""));
       }
       this.state.falhaHist = avisos.join(" ");
     }

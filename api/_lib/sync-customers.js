@@ -1,5 +1,4 @@
-const { initializeApp } = require('firebase/app');
-const { getFirestore, doc, setDoc } = require('firebase/firestore');
+const { tabela } = require('../../lib/dados-servidor');
 
 // Configuração Sienge
 const SIENGE_DOMAIN = "mouraleite";
@@ -9,18 +8,8 @@ const SIENGE_PASS = process.env.SIENGE_API_PASSWORD || "";
 const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toString('base64');
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
 
-// Configuração Firebase (usando a mesma chave pública do frontend)
-const firebaseConfig = {
-  apiKey: "AIzaSyBlBCaXn4y3sJDENW0GXw3ck_D2h3qknHc",
-  authDomain: "crm-gestao-mldu.firebaseapp.com",
-  projectId: "crm-gestao-mldu",
-  storageBucket: "crm-gestao-mldu.firebasestorage.app",
-  messagingSenderId: "1040392341069",
-  appId: "1:1040392341069:web:6acf1beb34af663cfffe04"
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+// Banco: tabela sienge_customers no Supabase (service role), com o mesmo mapa das telas.
+const clientes = () => tabela('sienge_customers');
 
 // Helper para formatar data (YYYY-MM-DD)
 function formatDate(date) {
@@ -89,7 +78,7 @@ async function gravarClientes(customers) {
         const customer = customers[i];
         if (!customer || customer.id == null || customer.id === "") continue;
         try {
-            await setDoc(doc(db, "sienge_customers", String(customer.id)), customer, { merge: true });
+            await clientes().gravar(String(customer.id), customer, { merge: true });
             gravados++;
         } catch (e) {
             console.warn("[SYNC] cliente " + customer.id + " não gravou:", e.message);
