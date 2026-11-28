@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" href="assets/integra/arvore.png">
 
   <!-- CSS Principal -->
-  <link rel="stylesheet" href="css/style.css?v=ff9bdd0479">
+  <link rel="stylesheet" href="css/style.css?v=viab1">
 
   <style>
     /* Padronização de campos de dados (Ref: Endereço Residencial) */
@@ -987,6 +987,9 @@
             <li data-tab="projetos-landbank" data-module="mod_projetos">
               <a onclick="switchTab('projetos-landbank', 'Landbank')">Landbank</a>
             </li>
+            <li data-tab="orion-viabilidades" data-module="mod_projetos">
+              <a onclick="switchTab('orion-viabilidades', 'Viabilidade')">Viabilidade</a>
+            </li>
           </ul>
         </li>
 
@@ -1420,6 +1423,9 @@
             </li>
             <li data-tab="indexadores" data-module="sub_cfg_apoio_indexadores_acessar">
               <a onclick="switchTab('indexadores', 'Indexadores')">Indexadores</a>
+            </li>
+            <li data-tab="orion-premissas" data-module="sub_cfg_apoio_premissas_viabilidade_acessar">
+              <a onclick="switchTab('orion-premissas', 'Premissas da viabilidade')">Premissas da viabilidade</a>
             </li>
             <li data-tab="motivos-cancelamento" data-module="sub_cfg_apoio_motivos_cancelamento_acessar">
               <a onclick="switchTab('motivos-cancelamento', 'Motivos de cancelamento')">Motivos de cancelamento</a>
@@ -3805,6 +3811,14 @@ Promitente comprador(a)</textarea>
            </div>
         </div>
 
+      </section>
+
+      <section id="tab-orion-viabilidades" class="tab-pane" style="display: none;">
+        <div id="orion-viabilidades-root" style="padding: 16px;"></div>
+      </section>
+
+      <section id="tab-orion-premissas" class="tab-pane" style="display: none;">
+        <div id="orion-premissas-root" style="padding: 16px;"></div>
       </section>
 
       <section id="tab-projetos-landbank" class="tab-pane" style="display: none;">
@@ -8993,6 +9007,19 @@ RG: {{TESTEMUNHA_2_RG}}</textarea>
   <script defer src="js/fiscal/fiscal.js?v=51cb4836fd"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-estimativas.js?v=05060dfa3b"></script>
   <script type="text/x-sob-demanda" data-grupo="orcamento" data-src="js/orcamento/orcamento-forecast.js?v=41df866642"></script>
+  <!-- Viabilidade (vinda do Órion): grava em configuracoes pelo orion-banco.js -->
+  <script defer src="js/orcamento/indices-mercado-calc.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-banco.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-store.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-premissas-calc.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-premissas.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-calc.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidades.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-edicao.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-fotos.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-documentos.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-tela.js?v=viab1"></script>
+  <script defer src="js/orcamento/orion-viabilidade-tela2.js?v=viab1"></script>
   <script defer src="js/fiscal/fiscal-inserir-nota.js?v=a21f49f1c3"></script>
   <script defer src="js/fiscal/fiscal-enviar-nota.js?v=cae3411087"></script>
   <script defer src="js/fiscal/fiscal-rastrear-pedido.js?v=faee274af1"></script>
