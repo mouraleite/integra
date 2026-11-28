@@ -119,13 +119,10 @@ const FluxosProcesso = {
     };
     const app = window.ProcessoContraApp;
     if (app && Array.isArray(app.itens) && app.itens.some(bate)) return true;
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.collection) return false;
+    if (!window.DadosCobranca) return false;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "processos_contra"));
-      let usado = false;
-      snap.forEach((d) => { if (!usado && bate(d.data())) usado = true; });
-      return usado;
+      const lista = await window.DadosCobranca.tabela("processos_contra").listar();
+      return lista.some(bate);
     } catch (e) {
       return false;
     }
@@ -235,10 +232,10 @@ const FluxosProcesso = {
   },
 
   async lerRemoto() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDoc) return null;
+    if (!window.DadosNucleo) return null;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "fluxos_processo"));
+      // config/fluxos_processo: fluxos vêm da tabela fluxos_processo; excluidos/seq de configuracoes.
+      const snap = await window.DadosNucleo.lerConfig("fluxos_processo");
       const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!existe) return null;
       const data = snap.data() || {};
@@ -319,15 +316,15 @@ const FluxosProcesso = {
   },
 
   enviarNuvem() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     if (this._enviando) return;
     const dados = this._pendenteNuvem;
     if (!dados) return;
     this._pendenteNuvem = null;
     this._enviando = true;
     const falha = dados;
-    fc.setDoc(fc.doc(window.firebaseDb, "config", "fluxos_processo"), dados, { merge: true }).catch((e) => {
+    // Upsert de cada fluxo + exclusão dos ids em "excluidos"; excluidos/seq/updatedAt sem perder gravação de outro.
+    window.DadosNucleo.gravarConfig("fluxos_processo", dados, { merge: true }).catch((e) => {
       console.warn("[Fluxos] gravação", e);
       if (!this._pendenteNuvem) this._pendenteNuvem = falha;
     }).then(() => {
@@ -780,16 +777,15 @@ const FluxosProcesso = {
         if (mudouLista && typeof app.pintarLista === "function") app.pintarLista();
       }
     }
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.collection || !fc.doc || !fc.setDoc) return;
+    if (!window.DadosCobranca) return;
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "processos_contra"));
+      const tab = window.DadosCobranca.tabela("processos_contra");
+      const lista = await tab.listar({ filtros: [["motivo_id", "eq", String(fluxo.id)]] });
       const jobs = [];
-      snap.forEach((d) => {
-        const data = d.data() || {};
+      lista.forEach((data) => {
         if (String(data.motivoId) !== String(fluxo.id)) return;
         if (String(data.motivo || "") === nome) return;
-        jobs.push(fc.setDoc(fc.doc(window.firebaseDb, "processos_contra", d.id), { motivo: nome }, { merge: true }));
+        jobs.push(tab.gravar(data.id, { motivo: nome }, { merge: true }));
       });
       if (jobs.length) await Promise.all(jobs);
     } catch (e) {

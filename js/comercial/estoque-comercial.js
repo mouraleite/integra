@@ -639,8 +639,17 @@ const EstoqueComercialApp = {
     return true;
   },
 
+  // O estoque (estoque_comercial + controle _meta/_batimento_state/_conferencia_geral) está no Supabase
+  // (window.DadosEngenharia; cada função já espera o cliente ficar pronto). Os nomes fb*/Firebase ficaram por
+  // compatibilidade com o resto da tela.
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.doc);
+    return !!window.DadosEngenharia;
+  },
+
+  // Unidades de um empreendimento com o nome preenchido (antes ia no doc cc_*; agora vai em cada linha).
+  unidadesComNome(list, cc) {
+    const empName = (list[0] && list[0].enterpriseName) || this.empName(cc) || "";
+    return list.map((u) => (u && !u.enterpriseName && empName ? { ...u, enterpriseName: empName } : u));
   },
 
   async waitFirebase(ms) {
@@ -664,15 +673,15 @@ const EstoqueComercialApp = {
 
   async loadFirebase() {
     if (!this.fbReady()) return null;
-    const { doc, getDoc, getDocs, collection } = window.firebaseCollections;
     try {
-      const metaSnap = await getDoc(doc(window.firebaseDb, this.FB_COL, "_meta"));
-      const colSnap = await getDocs(collection(window.firebaseDb, this.FB_COL));
+      // Um doc cc_<cc>_0 por empreendimento (montado das linhas por unidade) + os docs de controle.
+      const colSnap = await window.DadosEngenharia.lerEstoqueDocs();
       const byId = new Map();
       const ccDone = [];
       let confServidor = null;
+      let metaSnap = null;
       colSnap.forEach(d => {
-        if (d.id === "_meta") return;
+        if (d.id === "_meta") { metaSnap = d; return; }
         const data = d.data() || {};
         if (d.id === "_conferencia_geral") {
           confServidor = data;
@@ -692,7 +701,7 @@ const EstoqueComercialApp = {
       this.adotarConferenciaServidor(confServidor);
       const units = [...byId.values()].map((x) => x.u);
       if (!units.length) return null;
-      const meta = metaSnap.exists() ? metaSnap.data() : {};
+      const meta = metaSnap && metaSnap.exists() ? metaSnap.data() : {};
       return {
         units,
         ccDone: [...new Set(ccDone.concat(meta.ccDone || []))],
@@ -714,7 +723,7 @@ const EstoqueComercialApp = {
 
   async saveFirebase() {
     if (!this.fbReady()) return false;
-    const { doc, setDoc, getDocs, collection, deleteDoc } = window.firebaseCollections;
+    const D = window.DadosEngenharia;
     try {
       if (!this._skipFinanceGuard) {
         const existing = await this.loadFirebase();
@@ -733,29 +742,14 @@ const EstoqueComercialApp = {
         grouped[cc].push(u);
       });
 
-      const keep = new Set(["_meta", "_batimento_state", "_conferencia_geral"]);
-      const writes = [];
+      // Uma RPC por empreendimento (5 de cada vez) troca as unidades do CC; os empreendimentos que saíram da lista
+      // são apagados (antes: setDoc dos cc_<cc>_<n> + deleteDoc das sobras). Os docs de controle ficam à parte.
+      const todas = [];
       Object.keys(grouped).forEach(cc => {
-        const list = grouped[cc];
-        const empName = (list[0] && list[0].enterpriseName) || this.empName(cc);
-        this.fbChunks(list).forEach((units, n) => {
-          const id = `cc_${cc}_${n}`;
-          keep.add(id);
-          writes.push(() => setDoc(doc(window.firebaseDb, this.FB_COL, id), {
-            enterpriseId: cc,
-            enterpriseName: empName || "",
-            chunk: n,
-            units: this.fbClean(units),
-            updatedAt: new Date().toISOString(),
-            date: this.todayStr()
-          }));
-        });
+        todas.push(...this.unidadesComNome(grouped[cc], cc));
       });
-      // Uns 70 documentos de ~300 KB de uma vez estouram a fila de escrita do SDK; vai de 5 em 5.
-      for (let i = 0; i < writes.length; i += 5) {
-        await Promise.all(writes.slice(i, i + 5).map((w) => w()));
-      }
-      await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+      await D.salvarEstoqueTudo(todas);
+      await D.mesclarControleEstoque("_meta", this.fbClean({
         date: this.todayStr(),
         ccDone: this.state.ccDone || [],
         complete: !!this.state.complete,
@@ -768,14 +762,7 @@ const EstoqueComercialApp = {
         unitsSavedDate: this.todayStr(),
         unitCount: this.state.units.length,
         updatedAt: new Date().toISOString()
-      }), { merge: true });
-
-      const existing = await getDocs(collection(window.firebaseDb, this.FB_COL));
-      const leftovers = [];
-      existing.forEach(d => {
-        if (!keep.has(d.id)) leftovers.push(deleteDoc(d.ref));
-      });
-      if (leftovers.length) await Promise.all(leftovers);
+      })); // merge (como o setDoc merge)
       this.state.firebaseOk = true;
       this.state.fbSaveError = null;
       return true;
@@ -815,7 +802,7 @@ const EstoqueComercialApp = {
           console.warn("[Estoque] unidades não gravaram no Firebase; o dia não fica marcado como concluído.", this.state.fbSaveError);
           return today;
         }
-        const { doc, setDoc } = window.firebaseCollections;
+        const D = window.DadosEngenharia;
         const meta = {
           date: today,
           batimentoAt: new Date().toISOString(),
@@ -825,16 +812,17 @@ const EstoqueComercialApp = {
           updatedAt: new Date().toISOString()
         };
         if (markDone) meta.batimentoDone = true;
-        await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), meta, { merge: true });
+        await D.mesclarControleEstoque("_meta", this.fbClean(meta)); // merge
         if (markDone) {
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_batimento_state"), {
+          // setDoc sem merge: substitui o doc inteiro.
+          await D.mesclarControleEstoque("_batimento_state", {
             date: today,
             cursor: 999999,
             processed: this.state.units.filter(u => this.isFinanceUnit(u)).length,
             skippedSettled: this.state.units.filter(u => this.isSettledUnit(u)).length,
             done: true,
             source: "manual"
-          });
+          }, { substituir: true });
         }
       } catch (e) {
         console.warn("[Estoque] meta do batimento do dia", e);
@@ -852,29 +840,14 @@ const EstoqueComercialApp = {
 
   async saveFirebaseCc(ccId) {
     if (!this.fbReady()) return false;
-    const { doc, setDoc, deleteDoc } = window.firebaseCollections;
+    const D = window.DadosEngenharia;
     const cc = String(ccId);
     const list = this.state.units.filter(u => String(u.enterpriseId) === cc);
     try {
-      const empName = (list[0] && list[0].enterpriseName) || this.empName(cc);
-      const chunks = this.fbChunks(list);
-      const writes = chunks.map((units, n) => setDoc(doc(window.firebaseDb, this.FB_COL, `cc_${cc}_${n}`), {
-        enterpriseId: cc,
-        enterpriseName: empName || "",
-        chunk: n,
-        units: this.fbClean(units),
-        updatedAt: new Date().toISOString(),
-        date: this.todayStr()
-      }));
-      await Promise.all(writes);
-      if (typeof deleteDoc === "function") {
-        const stale = [];
-        for (let n = chunks.length; n < chunks.length + 4; n++) {
-          stale.push(deleteDoc(doc(window.firebaseDb, this.FB_COL, `cc_${cc}_${n}`)).catch(() => {}));
-        }
-        await Promise.all(stale);
-      }
-      await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+      // Troca as unidades do empreendimento numa RPC (as que não vieram são apagadas; antes: setDoc dos
+      // cc_<cc>_<n> + deleteDoc dos pedaços que sobraram).
+      await D.salvarEstoqueCc(cc, this.unidadesComNome(list, cc));
+      await D.mesclarControleEstoque("_meta", this.fbClean({
         date: this.todayStr(),
         ccDone: this.state.ccDone || [],
         complete: !!this.state.complete,
@@ -883,7 +856,7 @@ const EstoqueComercialApp = {
         fetchedAt: this.state.fetchedAt || new Date().toISOString(),
         unitCount: this.state.units.length,
         updatedAt: new Date().toISOString()
-      }), { merge: true });
+      })); // merge
       this.state.firebaseOk = true;
       return true;
     } catch (e) {
@@ -946,7 +919,7 @@ const EstoqueComercialApp = {
         this.setProgress("Carregando a última classificação financeira…");
       }
     } else {
-      this.setProgress("Carregando a última atualização do Firebase…");
+      this.setProgress("Carregando a última atualização do banco…");
     }
 
     this.fillEnterprisesFromUnits();
@@ -985,8 +958,8 @@ const EstoqueComercialApp = {
     if (!this.fbReady()) return;
     this._pedidoBatimento = true;
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today), {
+      // Cache diário da carteira no Supabase (área cobrança).
+      await window.DadosCobranca.gravarCacheDia(today, {
         batimentoPedidoEm: new Date().toISOString()
       }, { merge: true });
       fetch("/api/estoque-batimento?pedido=1", { method: "GET", keepalive: true }).catch(() => {});
@@ -1092,9 +1065,7 @@ const EstoqueComercialApp = {
     try {
       await this.waitFirebase(2000);
       if (!this.fbReady()) return null;
-      const { doc, getDoc } = window.firebaseCollections;
-      const metaSnap = await getDoc(doc(window.firebaseDb, this.FB_COL, "_meta"));
-      const meta = metaSnap.exists() ? metaSnap.data() : {};
+      const meta = (await window.DadosEngenharia.lerControleEstoque("_meta")) || {};
       const batimentoDate = meta.batimentoDate || null;
       const batimentoAt = meta.batimentoAt || meta.snapshotAt || meta.fetchedAt || null;
       const batimentoDone = meta.batimentoDone === true || meta.batimentoDone === "true";
@@ -1608,9 +1579,9 @@ const EstoqueComercialApp = {
       ? `Forçando o que falta… ${falta} empreendimento(s) na conferência, e a posição do dia no servidor.`
       : "Forçando a posição do dia no servidor…");
     try {
-      if (this.fbReady()) {
-        const { doc, setDoc } = window.firebaseCollections;
-        await setDoc(doc(window.firebaseDb, "sienge_defaulters_history", today), {
+      if (window.DadosCobranca) {
+        // Cache diário da carteira no Supabase (área cobrança).
+        await window.DadosCobranca.gravarCacheDia(today, {
           batimentoPedidoEm: new Date().toISOString()
         }, { merge: true });
       }
@@ -1784,7 +1755,10 @@ const EstoqueComercialApp = {
   resumoFila(rows) {
     if (!this.filaCarregada()) return null;
     const idx = this.ensureDefaulterIndex();
-    if (this.filaRecorteAberto()) {
+    // Fila inteira só quando a lista é a carteira inteira. Na conferência de um empreendimento (e no batimento do
+    // servidor, sem tela e sem filtros) cada obra somava a Fila toda: 4,35 mi x 99 obras = 430 mi de "em atraso".
+    const carteiraInteira = (rows || []).length >= (this.state.units || []).length;
+    if (carteiraInteira && this.filaRecorteAberto()) {
       let total = 0;
       idx.bills.forEach((b) => { total += Number(b.val) || 0; });
       return { n: idx.bills.size, total };
@@ -1815,11 +1789,10 @@ const EstoqueComercialApp = {
       if (!open || open.skip) return 0;
       return Number(open.value) || 0;
     }
-    const interest = Number(b.interest || b.interestValue || 0);
-    const fine = Number(b.fine || b.fineValue || 0);
-    const principal = Number(b.overdueValue != null ? b.overdueValue : b.value) || 0;
-    if (interest + fine > 0.009) return principal + interest + fine;
-    const insts = b.defaulterInstallments || [];
+    // Sem a função da tela (batimento no servidor): soma as parcelas vencidas com juros e multa, como a Fila.
+    // O value do título no cache não é o vencido: somado com interest e fine dava ~4,76 mi contra 4,35 mi.
+    const hojeIso = this.todayStr();
+    const insts = (b.defaulterInstallments || []).filter((inst) => !inst.dueDate || String(inst.dueDate).slice(0, 10) <= hojeIso);
     if (insts.length) {
       return insts.reduce((s, inst) => {
         if (inst.correctedValueWithAdditions != null) return s + Number(inst.correctedValueWithAdditions || 0);
@@ -1827,7 +1800,10 @@ const EstoqueComercialApp = {
           + Number(inst.interest || 0) + Number(inst.fine || 0);
       }, 0);
     }
-    return principal;
+    const interest = Number(b.interest || b.interestValue || 0);
+    const fine = Number(b.fine || b.fineValue || 0);
+    const principal = Number(b.overdueValue != null ? b.overdueValue : b.value) || 0;
+    return principal + interest + fine;
   },
 
   overdueValue(u) {
@@ -1962,7 +1938,9 @@ const EstoqueComercialApp = {
         quitados += 1;
         return;
       }
-      const key = (this.filaCarregada() && this.filaBillKey(u)) || this.contractKey(u);
+      // Agrupa pelo título da unidade (o mesmo do batimento no servidor). A chave da fila casava o número do contrato
+      // (1, 2, 3…) com títulos de outros empreendimentos e juntava contratos diferentes: o card ficava ~22 mi abaixo.
+      const key = this.contractKey(u);
       const bal = this.unitBalance(u);
       const saldo = bal == null || Number.isNaN(Number(bal)) ? null : Number(bal) || 0;
       const at = String(u.siengeConferidoEm || u.finAt || "");
@@ -1979,7 +1957,10 @@ const EstoqueComercialApp = {
       slot.at = at;
       slot.ov = ov;
       slot.kpiAVencer = u.kpiAVencer != null && Number.isFinite(Number(u.kpiAVencer)) ? Number(u.kpiAVencer) : null;
+      // Vencido com juros e multa do Contas a Receber (currentBalanceWithAddition), gravado pela conferência.
+      slot.kpiVencidas = u.kpiVencidas != null && Number.isFinite(Number(u.kpiVencidas)) ? Number(u.kpiVencidas) : null;
     });
+    let emAtraso = 0;
     seen.forEach((slot) => {
       ativos += 1;
       if (slot.saldo == null) {
@@ -1995,14 +1976,22 @@ const EstoqueComercialApp = {
       // "Em atraso" traz juros e multa; o a vencer e o vencido saem do principal (saldo − parcelas ainda no prazo).
       const noPrazo = slot.kpiAVencer != null ? Math.min(slot.saldo, Math.max(0, slot.kpiAVencer)) : Math.max(0, slot.saldo - ov);
       aVencer += noPrazo;
-      vencido += slot.saldo - noPrazo;
+      const vencSaldo = slot.saldo - noPrazo;
+      vencido += vencSaldo;
+      // Com a Fila carregada, o atraso com juros e multa é o da Fila (mesma conta do relatório do Sienge).
+      // O currentBalanceWithAddition da ficha soma acréscimo diferente e deixava o total ~124 mil acima.
+      const comAcrescimo = this.filaCarregada() ? ov : (slot.kpiVencidas != null ? slot.kpiVencidas : ov);
+      if (vencSaldo > 0.009) emAtraso += Math.max(vencSaldo, comAcrescimo);
     });
     const fila = this.resumoFila(rows);
+    const filaAtraso = fila ? fila.total : null;
     if (fila) {
       atraso = fila.total;
       inadimplentes = fila.n;
     }
-    return { aReceber, atraso, vencido, aVencer, ativos, quitados, distratados, inadimplentes, semSaldo };
+    // Como o relatório Contas a Receber do Sienge (coluna Total): saldo a vencer + vencido com juros e multa.
+    const aReceberTotal = aVencer + emAtraso;
+    return { aReceber, aReceberTotal, emAtraso, filaAtraso, atraso, vencido, aVencer, ativos, quitados, distratados, inadimplentes, semSaldo };
   },
 
   selectedUnits() {
@@ -2030,12 +2019,16 @@ const EstoqueComercialApp = {
       const falta = p.semSaldo
         ? `<small>${p.semSaldo} contrato(s) ativo(s) ainda sem saldo</small>`
         : `<small>${p.ativos} contrato(s) ativo(s) · ${p.inadimplentes} em atraso</small>`;
+      // Cards com ícone e faixa de cor; o detalhe fica em linhas curtas ("Saldo …", "Juros e multa …").
+      const ico = (n) => `<span class="est-fin-ico"><i data-lucide="${n}"></i></span>`;
+      const linha = (rot, val) => `<span><em>${rot}</em> ${val}</span>`;
       finEl.innerHTML = `
-        <div class="est-fin-card"><label>A receber</label><strong>${this.money(p.aReceber)}</strong>${falta}</div>
-        <div class="est-fin-card is-warn"><label>Em atraso</label><strong>${this.money(p.atraso)}</strong><small>Principal, juros e multa</small></div>
-        <div class="est-fin-card"><label>A vencer</label><strong>${this.money(p.aVencer)}</strong><small>Saldo ainda no prazo</small></div>
-        <div class="est-fin-card is-ok"><label>Quitados</label><strong>${p.quitados}</strong><small>Fora do saldo a receber</small></div>
+        <div class="est-fin-card is-receber">${ico("wallet")}<div><label>A receber com juros e multa</label><strong>${this.money(p.aReceberTotal)}</strong><small>${linha("Saldo", this.money(p.aReceber))}${linha("Juros e multa", this.money(p.aReceberTotal - p.aReceber))}${p.semSaldo ? `<span class="est-fin-alerta">${p.semSaldo} contrato(s) ativo(s) ainda sem saldo</span>` : ""}</small></div></div>
+        <div class="est-fin-card is-warn">${ico("alert-triangle")}<div><label>Em atraso</label><strong>${this.money(p.emAtraso)}</strong><small>${linha("Principal, juros e multa", "")}${p.filaAtraso != null ? linha("Na Fila de cobrança", this.money(p.filaAtraso)) : ""}</small></div></div>
+        <div class="est-fin-card is-vencer">${ico("calendar-clock")}<div><label>A vencer</label><strong>${this.money(p.aVencer)}</strong><small>${linha("Saldo ainda no prazo", "")}</small></div></div>
+        <div class="est-fin-card is-ok">${ico("check-circle-2")}<div><label>Quitados</label><strong>${Number(p.quitados || 0).toLocaleString("pt-BR")}</strong><small>${linha("Contratos fora do saldo a receber", "")}</small></div></div>
       `;
+      if (window.lucide && lucide.createIcons) lucide.createIcons();
       let conf = document.getElementById("est-conferencia");
       if (!conf) {
         conf = document.createElement("div");
@@ -2341,7 +2334,11 @@ const EstoqueComercialApp = {
   async loadLastCaixaOverlay() {
     if (!window.CaixaPosicaoStore || typeof CaixaPosicaoStore.listDates !== "function") return [];
     try {
-      if (!this.fbReady()) await this.waitFirebase(8000);
+      // A posição de caixa (caixa_posicao) continua no Firebase: espera o SDK do Firebase, não o Supabase.
+      const t0 = Date.now();
+      while (typeof CaixaPosicaoStore.fbReady === "function" && !CaixaPosicaoStore.fbReady() && Date.now() - t0 < 8000) {
+        await this.sleep(120);
+      }
       const dates = await CaixaPosicaoStore.listDates();
       if (!dates.length) return [];
       return await CaixaPosicaoStore.loadDate(dates[0]);
@@ -3685,8 +3682,31 @@ const EstoqueComercialApp = {
         }));
       });
       abertas.sort((x, y) => x.due.localeCompare(y.due));
+      // Juros e multa como no relatório Contas a Receber: o valor do título na Fila do dia (multa 2% + juros 1% a.m.
+      // pro rata desde o vencimento). Fora da Fila, a mesma regra calculada aqui. O currentBalanceWithAddition
+      // do Sienge soma outro acréscimo e não fecha com o relatório.
+      if (vencido > 0.009) {
+        const naFila = this.filaCarregada() ? Number(this.ensureDefaulterIndex().byRb.get(String(b.id))) || 0 : 0;
+        vencidoComAcrescimo = naFila > 0.009 ? Math.max(naFila, vencido) : this.vencidoComRegraRelatorio(b.parcelas, hoje);
+      }
       return { ...b, aberto, vencido, vencidoComAcrescimo, recebido, ultimaBaixa, porDia, nParcelas: Object.keys(b.parcelas).length, abertas: abertas.slice(0, 24) };
     });
+  },
+
+  /** Vencido com acréscimo pela regra do relatório Contas a Receber: multa 2% + juros 1% a.m. pro rata dia. */
+  vencidoComRegraRelatorio(parcelas, hoje) {
+    const dia = (iso) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10));
+    const ate = dia(String(hoje).slice(0, 10));
+    let total = 0;
+    Object.values(parcelas || {}).forEach((partes) => {
+      const ps = Object.values(partes);
+      const saldo = ps.reduce((t, p) => t + (Number(p.currentBalance) || 0), 0);
+      const due = String((ps[0] && ps[0].dueDate) || "").slice(0, 10);
+      if (!(saldo > 0.009) || !due || due >= hoje) return;
+      const dias = Math.max(0, Math.round((ate - dia(due)) / 86400000));
+      total += saldo + Math.round(saldo * 2) / 100 + Math.round(saldo * dias / 30) / 100;
+    });
+    return total;
   },
 
   /**
@@ -3878,8 +3898,8 @@ const EstoqueComercialApp = {
           }
         }
         if (this._confTituloTesteSuja && this.state.conferenciaGeral) {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_conferencia_geral"), this.fbClean(this.state.conferenciaGeral));
+          // setDoc sem merge: substitui o doc inteiro.
+          await window.DadosEngenharia.mesclarControleEstoque("_conferencia_geral", this.fbClean(this.state.conferenciaGeral), { substituir: true });
           this._confTituloTesteSuja = false;
         }
       } catch (e) {
@@ -4167,7 +4187,7 @@ const EstoqueComercialApp = {
         clientes: new Set(comSaldo.map((b) => String((b.cliente && b.cliente.id) || b.id))).size,
         quitados: vivos.filter((b) => b.aberto <= 0.009 && b.recebido > 0.009).length
       },
-      integra: { aReceber: p.aReceber, atraso: p.atraso, vencido: p.vencido, inadimplentes: p.inadimplentes, ativos: p.ativos, quitados: p.quitados, semSaldo: p.semSaldo },
+      integra: { aReceber: p.aReceber, aReceberTotal: p.aReceberTotal, emAtraso: p.emAtraso, atraso: p.atraso, vencido: p.vencido, inadimplentes: p.inadimplentes, ativos: p.ativos, quitados: p.quitados, semSaldo: p.semSaldo },
       semUnidade: comSaldo.filter((b) => !usados.has(b.id)).map((b) => ({
         titulo: b.id, cliente: (b.cliente && b.cliente.name) || "", unidades: b.units.map((x) => x.name).join(", "), aberto: b.aberto,
         ...this.motivoTituloSemUnidade(b, ccId)
@@ -4312,6 +4332,10 @@ const EstoqueComercialApp = {
       integra: soma((c) => c.integra.aReceber),
       siengeAtraso: soma((c) => c.sienge.vencidoAdd),
       integraAtraso: soma((c) => c.integra.atraso),
+      // Total com juros e multa (coluna Total do relatório Contas a Receber): saldo + acréscimo das parcelas vencidas.
+      siengeTotal: soma((c) => (Number(c.sienge.aReceber) || 0) + Math.max(0, (Number(c.sienge.vencidoAdd) || 0) - (Number(c.sienge.vencido) || 0))),
+      integraTotal: soma((c) => c.integra.aReceberTotal != null ? c.integra.aReceberTotal
+        : (Number(c.integra.aReceber) || 0) + Math.max(0, (Number(c.integra.atraso) || 0) - (Number(c.integra.vencido) || 0))),
       siengeTitVenc: soma((c) => c.sienge.titulosVencidos),
       integraInad: soma((c) => c.integra.inadimplentes),
       semUnidN: soma((c) => c.semUnidade.n),
@@ -4405,8 +4429,8 @@ const EstoqueComercialApp = {
         ${(g.rodando || bate) ? "" : `<button type="button" class="est-forcar-falta" onclick="EstoqueComercialApp.forcarOQueFalta()">Forçar o que falta</button>`}
       </div>
       <div class="est-conf-grid">
-        <div><label>Sienge · a receber</label><b>${this.money(tot.sienge)}</b><small>Em atraso com juros e multa ${this.money(tot.siengeAtraso)} em ${tot.siengeTitVenc} título(s)</small></div>
-        <div><label>Integra · a receber</label><b>${this.money(tot.integra)}</b><small>Em atraso ${this.money(tot.integraAtraso)} em ${tot.integraInad} contrato(s)</small></div>
+        <div><label>Sienge · a receber com juros e multa</label><b>${this.money(tot.siengeTotal)}</b><small>Saldo ${this.money(tot.sienge)} · em atraso com juros e multa ${this.money(tot.siengeAtraso)} em ${tot.siengeTitVenc} título(s)</small></div>
+        <div><label>Integra · a receber com juros e multa</label><b>${this.money(tot.integraTotal)}</b><small>Saldo ${this.money(tot.integra)} · em atraso ${this.money(tot.integraAtraso)} em ${tot.integraInad} contrato(s)</small></div>
         <div><label>Diferença</label><b>${g.rodando ? "Conferindo" : (bate ? "Bate" : (g.interrompido ? "Incompleta" : this.money(dif)))}</b><small>${g.rodando ? "A conferência está percorrendo os empreendimentos. O total cresce a cada um que termina." : (g.interrompido ? `Parou em ${g.ccs.length} empreendimento(s). Forçar o que falta continua dos que ainda não entraram.` : (tot.semUnidN ? `${tot.semUnidN} título(s) com saldo no Sienge sem unidade ativa no Integra: ${this.money(tot.semUnidV)}` : "Todo título com saldo tem unidade no Integra"))}${!g.rodando && !g.interrompido && tot.semTitulo ? ` · ${tot.semTitulo} unidade(s) ativa(s) sem título no Sienge` : ""}</small></div>
       </div>
       ${acertarHtml}
@@ -4832,14 +4856,13 @@ const EstoqueComercialApp = {
       this.saveCache();
       if (!empSel && this.fbReady()) {
         try {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, this.FB_COL, "_meta"), this.fbClean({
+          await window.DadosEngenharia.mesclarControleEstoque("_meta", this.fbClean({ // merge
             complete: !!this.state.complete,
             ccDone: this.state.ccDone || [],
             unitCount: this.state.units.length,
             fetchedAt: this.state.fetchedAt || new Date().toISOString(),
             updatedAt: new Date().toISOString()
-          }), { merge: true });
+          }));
         } catch (e) {
           console.warn("[Estoque] meta da carga", e);
         }

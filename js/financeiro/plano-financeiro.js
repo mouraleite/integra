@@ -35,13 +35,10 @@ window.PlanoReembolsavel = {
 
   load(force) {
     if (this._loading && !force) return this._loading;
-    const db = window.firebaseDb;
-    const f = window.firebaseCollections;
-    if (!db || !f || !f.getDoc || !f.doc) return Promise.resolve(this.cached());
-    this._loading = f.getDoc(f.doc(db, 'config', 'global')).then((snap) => {
-      const ok = snap && (typeof snap.exists === 'function' ? snap.exists() : snap.exists);
-      const data = ok ? (snap.data() || {}) : {};
-      const raw = data[this.FIELD];
+    const D = window.DadosNucleo;
+    if (!D) return Promise.resolve(this.cached());
+    // Chave crm_plano_reembolsaveis da tabela configuracoes (já volta como objeto).
+    this._loading = D.lerConfiguracao(this.FIELD).then((raw) => {
       this.remember(raw && typeof raw === 'object' ? raw : {});
       return this.map;
     }).catch((e) => {
@@ -55,10 +52,9 @@ window.PlanoReembolsavel = {
   async set(code, on) {
     const k = this.key(code);
     if (!k) return;
-    const db = window.firebaseDb;
-    const f = window.firebaseCollections;
-    if (!db || !f || !f.setDoc || !f.doc) throw new Error('Firebase indisponível');
-    await f.setDoc(f.doc(db, 'config', 'global'), { [this.FIELD]: { [k]: !!on } }, { merge: true });
+    if (!window.DadosNucleo) throw new Error('Supabase indisponível');
+    // RPC mesclar_configuracao: fusão rasa atômica (antes setDoc com merge em config/global).
+    await window.DadosNucleo.mesclarConfiguracao(this.FIELD, { [k]: !!on });
     const next = Object.assign({}, this.cached());
     next[k] = !!on;
     this.remember(next);
@@ -1221,7 +1217,7 @@ const PlanoFinanceiroApp = {
     } catch (e) {
       console.warn('[Plano Financeiro] reembolsável:', e);
       if (input) input.checked = !on;
-      alert('Não foi possível salvar no Firebase. Tente de novo.');
+      alert('Não foi possível salvar na nuvem. Tente de novo.');
     } finally {
       if (input) input.disabled = false;
     }
@@ -1261,21 +1257,19 @@ const PlanoFinanceiroApp = {
   },
 
   async pushVisoesToCloud() {
-    if (!window.firebaseDb || !window.firebaseCollections) return;
-    const { doc, setDoc } = window.firebaseCollections;
-    const docRef = doc(window.firebaseDb, "config", "global");
+    if (!window.DadosNucleo) return;
     const local = localStorage.getItem(this.STORAGE_KEY) || "[]";
-    // Após arraste/edição do operador, o local é a fonte da verdade.
-    await setDoc(docRef, { crm_plano_visoes_v2: local }, { merge: true });
+    // Após arraste/edição do operador, o local é a fonte da verdade (chave crm_plano_visoes_v2 de configuracoes).
+    await window.DadosNucleo.gravarConfiguracoes({ crm_plano_visoes_v2: local });
   },
 
   async syncVisoesWithCloud() {
     try {
-      if (!window.firebaseDb || !window.firebaseCollections) return;
-      const { doc, getDoc, setDoc } = window.firebaseCollections;
-      const docRef = doc(window.firebaseDb, "config", "global");
-      const snap = await getDoc(docRef);
-      const cloud = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists) ? (snap.data() || {}) : {};
+      const D = window.DadosNucleo;
+      if (!D) return;
+      // Só a chave crm_plano_visoes_v2 (texto JSON, como no config/global).
+      const valorNuvem = await D.lerConfiguracao("crm_plano_visoes_v2");
+      const cloud = valorNuvem !== undefined ? { crm_plano_visoes_v2: valorNuvem } : {};
       const local = localStorage.getItem(this.STORAGE_KEY) || "[]";
       const merged = (typeof window.mergePlanoVisoes === "function")
         ? window.mergePlanoVisoes(local, cloud.crm_plano_visoes_v2)
@@ -1292,7 +1286,7 @@ const PlanoFinanceiroApp = {
         else this.renderTable();
       }
       if (next !== (cloud.crm_plano_visoes_v2 || "")) {
-        await setDoc(docRef, { crm_plano_visoes_v2: next }, { merge: true });
+        await D.gravarConfiguracoes({ crm_plano_visoes_v2: next });
       }
     } catch (e) {
       console.warn("[Plano Financeiro] Sync visões:", e);

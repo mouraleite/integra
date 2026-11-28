@@ -226,7 +226,7 @@ const ComprasDashboardApp = {
   CACHE: "compras_dashboard_cache",
   LOOKBACK: 400,
 
-  /* Últimos 30 dias saem da API. O que é anterior já está no Firebase. */
+  /* Últimos 30 dias saem da API. O que é anterior já está na nuvem. */
   corte() {
     const today = this.isoToday();
     const apiFrom = this.addDays(today, -29);
@@ -260,19 +260,20 @@ const ComprasDashboardApp = {
     };
   },
 
+  /* O cache (compras_dashboard_cache) não tem tabela própria: cada doc (<AAAA-MM> e _meta) fica inteiro em
+     configuracoes, na chave "compras_dashboard_cache/<id>" (DadosNucleo.lerConfig/gravarConfig). Sem o limite de
+     1 MB do Firestore, o mês vai num doc só (sem as partes <mes>~<n>). */
   fb() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDocs !== "function" || typeof fx.setDoc !== "function") return null;
-    return { fx, db };
+    return window.DadosNucleo || null;
   },
 
   async lerTudo() {
     const fb = this.fb();
     if (!fb) return null;
-    const snap = await fb.fx.getDocs(fb.fx.collection(fb.db, this.CACHE));
+    // Uma leitura só: todos os docs "compras_dashboard_cache/<id>" de configuracoes.
+    const snaps = await fb.listarDocs(this.CACHE);
     const docs = {};
-    snap.forEach((d) => { docs[d.id] = d.data() || {}; });
+    snaps.forEach((d) => { if (d.exists()) docs[d.id] = d.data() || {}; });
     const meta = docs._meta || {};
     const meses = {};
     Object.keys(docs).forEach((id) => {
@@ -295,31 +296,23 @@ const ComprasDashboardApp = {
     const fb = this.fb();
     if (!fb) return;
     const texto = JSON.stringify((rows || []).map((r) => this.compactar(r)));
-    const LIM = 350000;
-    const partes = [];
-    if (texto.length > LIM) {
-      for (let i = 0, n = 0; i < texto.length; i += LIM, n++) {
-        const pid = mes + "~" + n;
-        partes.push(pid);
-        await fb.fx.setDoc(fb.fx.doc(fb.db, this.CACHE, pid), { tipo: "parte", mes, texto: texto.slice(i, i + LIM) });
-      }
-    }
-    await fb.fx.setDoc(fb.fx.doc(fb.db, this.CACHE, mes), {
+    // setDoc sem merge: substitui o doc do mês.
+    await fb.gravarConfig(mes, {
       mes,
       em: new Date().toISOString(),
       n: (rows || []).length,
-      partes: partes.length,
-      payload: partes.length ? "" : texto
-    });
+      partes: 0,
+      payload: texto
+    }, {}, this.CACHE);
   },
 
   async salvarMeta(cobertoAte) {
     const fb = this.fb();
     if (!fb) return;
-    await fb.fx.setDoc(fb.fx.doc(fb.db, this.CACHE, "_meta"), {
+    await fb.gravarConfig("_meta", {
       cobertoAte: cobertoAte,
       em: new Date().toISOString()
-    }, { merge: true });
+    }, { merge: true }, this.CACHE);
   },
 
   async mesclar(rows, desde, ate) {
@@ -395,7 +388,7 @@ const ComprasDashboardApp = {
     this.state.loading = true;
     this.state.error = "";
     this.state.aviso = "";
-    this.state.etapa = "Lendo o histórico no Firebase…";
+    this.state.etapa = "Lendo o histórico na nuvem…";
     this.state.pct = 8;
     this.render();
     const corte = this.corte();
@@ -418,7 +411,7 @@ const ComprasDashboardApp = {
           : "Buscando o restante de 2026 no Sienge…";
         const bag = await this.buscarIntervalo(this.addDays(gapIni, -this.LOOKBACK), corte.histEnd, rotulo);
         const novos = this.dedupe(bag).filter((r) => r.registered >= gapIni && r.registered <= corte.histEnd);
-        this.state.etapa = "Salvando o histórico no Firebase…";
+        this.state.etapa = "Salvando o histórico na nuvem…";
         this.state.pct = 94;
         this.render();
         try {
@@ -426,7 +419,7 @@ const ComprasDashboardApp = {
           await this.salvarMeta(corte.histEnd);
         } catch (e) {
           console.warn("[Dashboard] histórico", e);
-          this.state.aviso = "Consultei o Sienge, mas não consegui gravar o histórico no Firebase.";
+          this.state.aviso = "Consultei o Sienge, mas não consegui gravar o histórico na nuvem.";
         }
         historico = historico.filter((r) => r.registered < gapIni).concat(novos);
       }
@@ -437,7 +430,7 @@ const ComprasDashboardApp = {
       try {
         const bag = await this.buscarIntervalo(this.addDays(corte.apiFrom, -this.LOOKBACK), corte.today, "Buscando os últimos 30 dias…");
         frescos = this.dedupe(bag).filter((r) => r.registered >= corte.apiFrom && r.registered <= corte.today);
-        this.state.etapa = "Salvando os últimos 30 dias no Firebase…";
+        this.state.etapa = "Salvando os últimos 30 dias na nuvem…";
         this.state.pct = 98;
         this.render();
         await this.mesclar(frescos, corte.apiFrom, corte.today);
@@ -594,7 +587,7 @@ const ComprasDashboardApp = {
         + '<div class="cdash-kpi"><span>Documentos inseridos</span><strong>' + this.fmtInt(this.documentos(hist)) + "</strong><em>" + this.fmtBr(win.histStart) + " a " + this.fmtBr(win.today) + "</em></div>"
         + '<div class="cdash-kpi"><span>NFe</span><strong>' + this.fmtInt(this.documentos(nfe)) + "</strong><em>Prazo médio " + this.fmtDays(this.pmp(nfe)) + " dias</em></div>"
         + '<div class="cdash-kpi"><span>NFS</span><strong>' + this.fmtInt(this.documentos(nfs)) + "</strong><em>Prazo médio " + this.fmtDays(this.pmp(nfs)) + " dias</em></div></div>"
-        + '<p class="cdash-cap">Prazo: vencimento menos a emissão, ponderado pelo valor. Até ' + this.fmtBr(this.corte().histEnd) + ' a leitura é do Firebase. Os últimos 30 dias vêm do Sienge.</p>'
+        + '<p class="cdash-cap">Prazo: vencimento menos a emissão, ponderado pelo valor. Até ' + this.fmtBr(this.corte().histEnd) + ' a leitura é da nuvem. Os últimos 30 dias vêm do Sienge.</p>'
         + (this.state.aviso ? '<p class="cdash-cap">' + this.esc(this.state.aviso) + "</p>" : "")
         + this.tabelaHtml(hist);
     }

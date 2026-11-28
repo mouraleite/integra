@@ -145,8 +145,7 @@ const HonorariosReport = {
   sync: null,
 
   async record(ctx) {
-    if (!window.firebaseDb || !window.firebaseCollections) return;
-    const { doc, setDoc } = window.firebaseCollections;
+    if (!window.DadosCobranca) return;
     const st = rhonAppState();
     const insts = (st && st.currentContractInstallments) || [];
     const now = new Date();
@@ -217,7 +216,7 @@ const HonorariosReport = {
         honorarios: sum("honorarios")
       }
     };
-    await setDoc(doc(window.firebaseDb, this.COLLECTION, id), rec);
+    await window.DadosCobranca.tabela(this.COLLECTION).gravar(id, rec);
   },
 
   init() {
@@ -229,26 +228,22 @@ const HonorariosReport = {
   },
 
   async loadRecords(comp) {
-    const { collection, getDocs, query, where } = window.firebaseCollections;
-    const snap = await getDocs(query(collection(window.firebaseDb, this.COLLECTION), where("competencia", "==", comp)));
-    const out = [];
-    snap.forEach((d) => out.push(d.data() || {}));
-    return out;
+    return window.DadosCobranca.tabela(this.COLLECTION).listar({ filtros: [["competencia", "eq", comp]] });
   },
 
   /** Boletos gerados antes do registro próprio: reconstruídos pela auditoria (BOLETO_GERADO). */
   async loadAuditRecords(comp, knownKeys) {
-    const { collection, getDocs, query, where } = window.firebaseCollections;
     let snap;
     try {
-      snap = await getDocs(query(collection(window.firebaseDb, "auditoria_logs"), where("action", "==", "BOLETO_GERADO")));
+      // auditoria_logs é tabela do núcleo no Supabase (user -> user_name é convertido pelo mapa).
+      snap = await window.DadosNucleo.tabela("auditoria_logs").listar({ filtros: [["action", "eq", "BOLETO_GERADO"]] });
     } catch (e) {
       console.warn("[Honorários] auditoria", e);
       return [];
     }
     const out = [];
     snap.forEach((d) => {
-      const a = d.data() || {};
+      const a = d || {};
       if (String(a.status || "ok") === "erro") return;
       const genDate = rhonIso(a.timestamp);
       if (!genDate || genDate.slice(0, 7) !== comp) return;
@@ -350,12 +345,11 @@ const HonorariosReport = {
   },
 
   async loadPayCache(comp) {
-    const { collection, getDocs, query, where } = window.firebaseCollections;
     const map = {};
     try {
-      const snap = await getDocs(query(collection(window.firebaseDb, this.PAY_COLLECTION), where("competencia", "==", comp)));
-      snap.forEach((d) => {
-        const x = d.data() || {};
+      const lista = await window.DadosCobranca.tabela(this.PAY_COLLECTION).listar({ filtros: [["competencia", "eq", comp]] });
+      lista.forEach((x) => {
+        delete x.id; // o d.data() do Firestore não trazia o id (o doc é gravado de volta sem ele)
         if (x.recId) map[x.recId] = x;
       });
     } catch (e) {
@@ -367,14 +361,14 @@ const HonorariosReport = {
   /** Devolve quantos não foram salvos. */
   async savePayCache(docs) {
     if (!docs.length) return 0;
-    const { doc, setDoc } = window.firebaseCollections;
+    const tab = window.DadosCobranca.tabela(this.PAY_COLLECTION);
     let i = 0;
     let failed = 0;
     const worker = async () => {
       while (i < docs.length) {
         const d = docs[i++];
         try {
-          await setDoc(doc(window.firebaseDb, this.PAY_COLLECTION, String(d.recId).replace(/\//g, "_")), d);
+          await tab.gravar(String(d.recId).replace(/\//g, "_"), d);
         } catch (e) {
           failed += 1;
           console.warn("[Honorários] salvar pagamento", d.recId, e);
@@ -534,8 +528,8 @@ const HonorariosReport = {
   /** force: reconsulta hoje os boletos ainda em aberto (pagos nunca voltam ao Sienge). */
   async load(force) {
     if (this.loading || !this.comp) return;
-    if (!window.firebaseDb || !window.firebaseCollections) {
-      this.error = "Firebase indisponível. Atualize a página.";
+    if (!window.DadosCobranca || !window.DadosNucleo) {
+      this.error = "Banco de dados indisponível. Atualize a página.";
       this.render();
       return;
     }
@@ -855,7 +849,7 @@ const HonorariosReport = {
       `${s.pagos} de ${s.total} já pagos e salvos`
     ];
     if (s.falhas) parts.push(`${s.falhas} sem resposta do Sienge`);
-    if (s.naoSalvos) parts.push(`${s.naoSalvos} não foram salvos no Firebase`);
+    if (s.naoSalvos) parts.push(`${s.naoSalvos} não foram salvos no banco`);
     return `<div class="rhon-sync${s.falhas || s.naoSalvos ? " rhon-sync-warn" : ""}"><i data-lucide="database" style="width:13px;height:13px;"></i> ${parts.join(" · ")}</div>`;
   },
 
@@ -1968,9 +1962,9 @@ window.saveHonorariosInternosPct = async function () {
   }
   if (status) status.textContent = "Salvando…";
   try {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.doc || !fc.setDoc) throw new Error("Firebase indisponível");
-    await fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), { crm_honorarios_internos_pct: raw }, { merge: true });
+    if (!window.DadosNucleo) throw new Error("Camada de dados indisponível");
+    // Chave de config/global: agora uma linha em configuracoes.
+    await window.DadosNucleo.gravarConfiguracoes({ crm_honorarios_internos_pct: raw });
     if (status) status.textContent = "Salvo. Cobrança " + pct.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "% · back office " + pctBack.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "%.";
   } catch (e) {
     if (status) status.textContent = "Salvo neste computador. A nuvem não confirmou o envio.";

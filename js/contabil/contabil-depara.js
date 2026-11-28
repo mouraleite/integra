@@ -91,10 +91,10 @@ const ContabilDepara = {
     let local = {};
     try { local = JSON.parse(localStorage.getItem("crm_depara_parceiro") || "{}") || {}; } catch (e) { local = {}; }
     let remoto = null;
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    // config/depara_parceiro no Supabase (configuracoes, chave "config/depara_parceiro").
+    if (window.DadosNucleo) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "depara_parceiro"));
+        const snap = await window.DadosNucleo.lerConfig("depara_parceiro");
         const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
         if (existe) remoto = (snap.data() || {}).mapa || null;
       } catch (e) {}
@@ -388,10 +388,9 @@ const ContabilDepara = {
   async salvar() {
     const dados = { mapa: this.state.mapa };
     try { localStorage.setItem("crm_depara_parceiro", JSON.stringify(dados)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", "depara_parceiro"), dados, { merge: true });
+      await window.DadosNucleo.gravarConfig("depara_parceiro", dados, { merge: true });
     } catch (e) {
       console.warn("[De-para] gravação", e);
     }

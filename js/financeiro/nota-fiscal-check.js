@@ -2,7 +2,7 @@
    Impostos: GET /bills/{id}/taxes. Nota: anexo PDF (DANFSe e layouts municipais com texto) ou XML, lido no navegador.
    CNAE e Simples Nacional: cadastro público do CNPJ (BrasilAPI). As regras de retenção por atividade só geram "atenção". */
 window.NotaFiscalCheck = {
-  CACHE_KEY: "crm_nf_check_v3",
+  CACHE_KEY: "crm_nf_check_v4",
   CNPJ_KEY: "crm_cnpj_receita_v1",
   TTL: 12 * 3600 * 1000,
   CNPJ_TTL: 30 * 86400 * 1000,
@@ -469,6 +469,7 @@ window.NotaFiscalCheck = {
     if (n.simples == null && /simples nacional na data de compet[eê]ncia[\s\S]{0,60}\bn[aã]o\b/i.test(texto)) n.simples = "nao";
     n.cnpjs = [...new Set((texto.match(/\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g) || []).map((c) => this.digits(c)))];
     n.cnpjPrestador = this.cnpjApos(texto, /prestador de servi[cç]os?|dados do prestador|(?:^|\n)\s*prestador\b|emitente/i);
+    n.cnpjTomador = this.cnpjApos(texto, /tomador\s*\/\s*adquirente|tomador do servi[cç]o/i);
     this.completarRetencoes(n, texto);
     const naColuna = this.valorNaColuna(itens, /^valor l[ií]quido( da nfs-?e| da nota)?( \(r\$\))?$/i);
     if (naColuna != null && naColuna > 0 && !(n.liquido > 0.004)) n.liquido = naColuna;
@@ -490,12 +491,12 @@ window.NotaFiscalCheck = {
   },
 
   /**
-   * Beneficiário impresso no boleto. "Agência / Código do Beneficiário" não é o nome,
-   * e o CNPJ que vem depois de Pagador é de quem paga — não entra na comparação.
+   * Beneficiário e pagador impressos no boleto.
+   * "Agência / Código do Beneficiário" não é o nome. O CNPJ depois de Pagador é de quem paga.
    */
-  cnpjBeneficiarioNoTexto(texto) {
+  partesBoleto(texto) {
     const t = String(texto || "");
-    if (!t) return "";
+    if (!t) return { beneficiario: "", pagador: "" };
     const pagadorEm = (() => {
       const re = /\bpagador\b|\bsacado\b/gi;
       let m;
@@ -513,12 +514,22 @@ window.NotaFiscalCheck = {
     const doPagador = pagadorEm >= 0 ? docs.find((d) => d.i >= pagadorEm && d.i < pagadorEm + 500) : null;
     const serve = (doc) => doc && (!doPagador || doc !== doPagador.doc);
     const limpo = t.replace(/c[oó]digo do benefici[aá]rio/gi, " ");
+    let beneficiario = "";
     const apos = this.cnpjApos(limpo, /benefici[aá]rio|cedente/i);
-    if (serve(apos)) return apos;
-    const flex = limpo.match(/(?:benefici[aá]rio|cedente)[\s\S]{0,400}?(\d{2}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*\/\s*\d{4}\s*-\s*\d{2}|\d{3}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*-\s*\d{2})/i);
-    if (flex && serve(this.digits(flex[1]))) return this.digits(flex[1]);
-    const antes = (pagadorEm > 0 ? docs.filter((d) => d.i < pagadorEm) : docs).find((d) => serve(d.doc));
-    return antes ? antes.doc : "";
+    if (serve(apos)) beneficiario = apos;
+    if (!beneficiario) {
+      const flex = limpo.match(/(?:benefici[aá]rio|cedente)[\s\S]{0,400}?(\d{2}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*\/\s*\d{4}\s*-\s*\d{2}|\d{3}\s*\.\s*\d{3}\s*\.\s*\d{3}\s*-\s*\d{2})/i);
+      if (flex && serve(this.digits(flex[1]))) beneficiario = this.digits(flex[1]);
+    }
+    if (!beneficiario) {
+      const antes = (pagadorEm > 0 ? docs.filter((d) => d.i < pagadorEm) : docs).find((d) => serve(d.doc));
+      if (antes) beneficiario = antes.doc;
+    }
+    return { beneficiario: beneficiario || "", pagador: doPagador ? doPagador.doc : "" };
+  },
+
+  cnpjBeneficiarioNoTexto(texto) {
+    return this.partesBoleto(texto).beneficiario;
   },
 
   /**
@@ -644,13 +655,14 @@ window.NotaFiscalCheck = {
     return linhas.map((l) => l.itens.sort((a, b) => a.x - b.x).map((i) => i.s).join(" ")).join("\n");
   },
 
-  /** CPF/CNPJ do beneficiário impresso no boleto anexado ao título. */
-  async cnpjBeneficiarioBoleto(billId) {
+  /** CPF/CNPJ do beneficiário e do pagador impressos no boleto anexado ao título. */
+  async lerBoletoAnexado(billId) {
     const id = String(billId || "");
-    if (!id) return "";
-    this._boletoBenef = this._boletoBenef || {};
-    if (this._boletoBenef[id] != null) return this._boletoBenef[id];
-    let doc = "";
+    const vazio = { beneficiario: "", pagador: "" };
+    if (!id) return vazio;
+    this._boletoLido = this._boletoLido || {};
+    if (this._boletoLido[id]) return this._boletoLido[id];
+    const achado = { beneficiario: "", pagador: "" };
     try {
       const anexos = await this.anexos(id);
       const boletos = (anexos || []).filter((a) => /boleto/.test(this.fold(`${a.description} ${a.name}`)) && !/comprovante/.test(this.fold(`${a.description} ${a.name}`)));
@@ -659,14 +671,19 @@ window.NotaFiscalCheck = {
         const inicio = new TextDecoder("latin1").decode(new Uint8Array(buf.slice(0, 64))).trim();
         if (!/^%PDF/.test(inicio)) continue;
         const texto = this.textoPdf(await this.itensDoPdf(buf));
-        doc = this.cnpjBeneficiarioNoTexto(texto);
-        if (doc) break;
+        const partes = this.partesBoleto(texto);
+        if (!achado.beneficiario && partes.beneficiario) achado.beneficiario = partes.beneficiario;
+        if (!achado.pagador && partes.pagador) achado.pagador = partes.pagador;
+        if (achado.beneficiario && achado.pagador) break;
       }
-    } catch (e) {
-      doc = "";
-    }
-    this._boletoBenef[id] = doc || "";
-    return this._boletoBenef[id];
+    } catch (e) {}
+    this._boletoLido[id] = achado;
+    return achado;
+  },
+
+  async cnpjBeneficiarioBoleto(billId) {
+    const lido = await this.lerBoletoAnexado(billId);
+    return (lido && lido.beneficiario) || "";
   },
 
   lerSimples(t) {
@@ -695,7 +712,9 @@ window.NotaFiscalCheck = {
     const opNac = tag("opSimpNac");
     const opAbrasf = tag("OptanteSimplesNacional");
     const prest = doc.getElementsByTagNameNS("*", "prest")[0] || doc.getElementsByTagNameNS("*", "emit")[0] || doc.getElementsByTagNameNS("*", "Prestador")[0];
+    const toma = doc.getElementsByTagNameNS("*", "toma")[0] || doc.getElementsByTagNameNS("*", "Tomador")[0];
     const cnpjPrest = prest ? ((prest.getElementsByTagNameNS("*", "CNPJ")[0] || {}).textContent || "") : (tag("CNPJ") || "");
+    const cnpjToma = toma ? ((toma.getElementsByTagNameNS("*", "CNPJ")[0] || {}).textContent || "") : "";
     const pis = num("vPis", "ValorPis");
     const cofins = num("vCofins", "ValorCofins");
     const tpPisCofins = tag("tpRetPisCofins");
@@ -718,7 +737,9 @@ window.NotaFiscalCheck = {
       numero: tag("nNFSe", "Numero"),
       simplesTexto: opNac ? ({ 1: "Não optante", 2: "MEI", 3: "Optante ME/EPP" }[opNac] || opNac) : (opAbrasf ? (opAbrasf === "1" ? "Optante" : "Não optante") : ""),
       simples: opNac ? ({ 1: "nao", 2: "mei", 3: "sim" }[opNac] || null) : (opAbrasf ? (opAbrasf === "1" ? "sim" : "nao") : null),
-      cnpjs: [this.digits(cnpjPrest)].filter((c) => c.length === 14)
+      cnpjs: [this.digits(cnpjPrest), this.digits(cnpjToma)].filter((c) => c.length === 14),
+      cnpjPrestador: this.digits(cnpjPrest),
+      cnpjTomador: this.digits(cnpjToma)
     };
     this.completarRetencoes(n, `${n.descricao || ""}\n${xml}`);
     return n;
@@ -754,10 +775,100 @@ window.NotaFiscalCheck = {
     return this._voo[key];
   },
 
-  /** opts: { billId, credorId, bruto (valor do título/parcela), anexos? } */
+  /** opts: { billId, credorId, bruto, anexos?, companyId?, payment? } */
   async analisar(opts) {
-    const d = await this.coletar(opts.billId, opts.credorId, opts.anexos);
-    return this.avaliar(d, opts);
+    const o = opts || {};
+    const d = await this.coletar(o.billId, o.credorId, o.anexos);
+    let ident = null;
+    try { ident = await this.identificar(o); } catch (e) { ident = null; }
+    return this.avaliar(d, Object.assign({}, o, { _ident: ident }));
+  },
+
+  docDoPagamento(payment) {
+    const d = (payment && payment.data) || {};
+    const keys = ["beneficiaryCNPJNumber", "beneficiaryCPFNumber", "boletoBeneficiaryCNPJNumber", "boletoBeneficiaryCPFNumber"];
+    for (let i = 0; i < keys.length; i++) {
+      const n = this.digits(d[keys[i]]);
+      if (n.length === 11 || n.length === 14) return n;
+    }
+    return "";
+  },
+
+  async empresaDoSienge(companyId) {
+    const id = String(companyId || "").trim();
+    if (!id || typeof window.siengeFetchWithRetry !== "function") return null;
+    this._empresas = this._empresas || {};
+    if (this._empresas[id]) return this._empresas[id];
+    const c = await window.siengeFetchWithRetry("/companies/" + encodeURIComponent(id), 1);
+    const out = {
+      cnpj: this.digits(c && (c.cnpj || c.cpfCnpj || c.documentNumber)),
+      nome: (c && (c.tradeName || c.name)) || ""
+    };
+    this._empresas[id] = out;
+    return out;
+  },
+
+  /** CNPJ da empresa do título, do beneficiário e do pagador do boleto. */
+  async identificar(opts) {
+    const o = opts || {};
+    const companyId = String(o.companyId || "").trim();
+    const [empresa, boleto] = await Promise.all([
+      companyId ? this.empresaDoSienge(companyId).catch(() => null) : Promise.resolve(null),
+      this.lerBoletoAnexado(o.billId).catch(() => ({ beneficiario: "", pagador: "" }))
+    ]);
+    const doForm = this.docDoPagamento(o.payment);
+    return {
+      empresaCnpj: (empresa && empresa.cnpj) || "",
+      empresaNome: (empresa && empresa.nome) || "",
+      beneficiario: doForm || (boleto && boleto.beneficiario) || "",
+      beneficiarioPdf: (boleto && boleto.beneficiario) || "",
+      pagador: (boleto && boleto.pagador) || ""
+    };
+  },
+
+  /** Mesmo número, ou matriz e filial do mesmo CNPJ (os 8 primeiros dígitos). */
+  relacaoCnpj(a, b) {
+    const x = this.digits(a);
+    const y = this.digits(b);
+    const ok = (d) => d.length === 11 || d.length === 14;
+    if (!ok(x) || !ok(y)) return "";
+    if (x === y) return "igual";
+    if (x.length === 14 && y.length === 14 && x.slice(0, 8) === y.slice(0, 8)) return "filial";
+    return "diferente";
+  },
+
+  /**
+   * Prestador da nota, beneficiário do boleto e credor do título precisam ser o mesmo CNPJ.
+   * O tomador da nota e o pagador do boleto precisam ser a empresa do título.
+   */
+  conferirCnpjs(r, d, ident) {
+    const i = ident || {};
+    const n = d.nota && !d.nota.semAnexo && !d.nota.ilegivel ? d.nota : null;
+    const credor = this.digits(d.credorDoc);
+    const prest = n ? this.digits(n.cnpjPrestador) : "";
+    const tomador = n ? this.digits(n.cnpjTomador) : "";
+    const benef = this.digits(i.beneficiario);
+    const benefPdf = this.digits(i.beneficiarioPdf);
+    const pagador = this.digits(i.pagador);
+    const empresa = this.digits(i.empresaCnpj);
+    const nomeEmp = i.empresaNome ? " (" + i.empresaNome + ")" : "";
+    const dizer = (rel, quem, docA, docB, extra) => {
+      const suf = extra || "";
+      if (rel === "igual") r.infos.push(quem + " são o mesmo CNPJ (" + this.docFmt(docA) + suf + ").");
+      else if (rel === "filial") r.infos.push(quem + " são matriz e filial do mesmo CNPJ (" + this.docFmt(docA) + " e " + this.docFmt(docB) + ").");
+      else if (rel === "diferente") r.erros.push(quem + " não batem: " + this.docFmt(docA) + " e " + this.docFmt(docB) + suf + ".");
+    };
+    if (n && prest && credor) dizer(this.relacaoCnpj(prest, credor), "O CNPJ do prestador da nota e o do credor do título", prest, credor);
+    else if (n && credor && !prest && n.cnpjs && n.cnpjs.length && n.cnpjs.indexOf(credor) < 0) {
+      r.erros.push("Não li o CNPJ do prestador na nota, e o CNPJ do credor do título (" + this.docFmt(credor) + ") não aparece no arquivo.");
+    }
+    if (benef && credor) dizer(this.relacaoCnpj(benef, credor), "O CNPJ do beneficiário do boleto e o do credor do título", benef, credor);
+    if (benef && prest) dizer(this.relacaoCnpj(benef, prest), "O CNPJ do beneficiário do boleto e o do prestador da nota", benef, prest);
+    if (benef && benefPdf && benef !== benefPdf) {
+      r.erros.push("O beneficiário gravado no pagamento do Sienge é " + this.docFmt(benef) + ", e o impresso no boleto é " + this.docFmt(benefPdf) + ".");
+    }
+    if (tomador && empresa) dizer(this.relacaoCnpj(tomador, empresa), "O CNPJ do tomador da nota e o da empresa do título", tomador, empresa, nomeEmp);
+    if (pagador && empresa) dizer(this.relacaoCnpj(pagador, empresa), "O CNPJ do pagador do boleto e o da empresa do título", pagador, empresa, nomeEmp);
   },
 
   /** "07.11.02 / -", "071102", "7.11" → subitem 07.11 da LC 116 com a atividade correspondente. */
@@ -914,9 +1025,6 @@ window.NotaFiscalCheck = {
       if (n.liquido != null && r.liquido != null && this.difere(n.liquido, r.liquido) && !this.difere(n.valorServico, r.bruto)) {
         r.erros.push(`Valor líquido da nota ${this.money(n.liquido)} diferente do líquido do título (${this.money(r.bruto)} − ${this.money(r.retido)} = ${this.money(r.liquido)}).`);
       }
-      if (d.credorDoc && d.credorDoc.length === 14 && n.cnpjs && n.cnpjs.length && !n.cnpjs.includes(d.credorDoc)) {
-        r.avisos.push(`A nota anexada não traz o CNPJ do credor (${this.docFmt(d.credorDoc)}): pode ser nota de outro fornecedor.`);
-      }
       if (n.aliquotaIss != null && n.aliquotaIss > 0 && (n.aliquotaIss < 2 - 0.001 || n.aliquotaIss > 5 + 0.001)) {
         r.avisos.push(`Alíquota de ISS ${this.pct(n.aliquotaIss)} fora do intervalo legal de 2% a 5% (LC 116).`);
       }
@@ -933,6 +1041,7 @@ window.NotaFiscalCheck = {
     r.retidoPagamento = d.impostos ? r.retido : (r.retidoNota || 0);
 
     this.avaliarAtividade(r, d, n);
+    this.conferirCnpjs(r, d, opts && opts._ident);
 
     if (r.erros.length) r.nivel = "erro";
     else if (r.avisos.length) r.nivel = "aviso";

@@ -157,10 +157,11 @@ const CondicoesPagamentoApp = {
   },
 
   async readCloudFlagsRaw() {
-    if (!window.firebaseDb || !window.firebaseCollections) return "";
-    const { doc, getDoc } = window.firebaseCollections;
+    // Supabase: config/condicoes_pagamento e global.crm_moura_condicoes_pagamento saem da mesma tabela condicoes_pagamento.
+    const D = window.DadosNucleo;
+    if (!D) return "";
     try {
-      const dedicated = await getDoc(doc(window.firebaseDb, "config", "condicoes_pagamento"));
+      const dedicated = await D.lerConfig("condicoes_pagamento");
       const existsD = dedicated && (typeof dedicated.exists === "function" ? dedicated.exists() : dedicated.exists);
       if (existsD) {
         const data = dedicated.data() || {};
@@ -170,7 +171,7 @@ const CondicoesPagamentoApp = {
       }
     } catch (e) {}
     try {
-      const snap = await getDoc(doc(window.firebaseDb, "config", "global"));
+      const snap = await D.lerConfig("global");
       const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
       if (!exists) return "";
       const data = snap.data() || {};
@@ -279,11 +280,10 @@ const CondicoesPagamentoApp = {
         const json = JSON.stringify(payload);
         localOk = this.writeLocalJson(json) || localOk;
 
-        if (window.firebaseDb && window.firebaseCollections) {
-          const { doc, setDoc } = window.firebaseCollections;
+        if (window.DadosNucleo) {
           window._cpagWritingCloud = true;
-          await setDoc(doc(window.firebaseDb, "config", "condicoes_pagamento"), payload, { merge: false });
-          await setDoc(doc(window.firebaseDb, "config", "global"), { [this.STORAGE_KEY]: json }, { merge: true });
+          // Uma gravação basta: a chave global.crm_moura_condicoes_pagamento é montada da mesma tabela.
+          await window.DadosNucleo.gravarConfig("condicoes_pagamento", payload, { merge: false });
           if (seq === this._persistSeq) {
             cloudOk = true;
             this._flagsDirty = false;
@@ -306,7 +306,7 @@ const CondicoesPagamentoApp = {
       this.saveMsg = "Salvo";
       this.error = "";
     } else if (localOk) {
-      this.saveMsg = "Salvo neste navegador (Firebase indisponível)";
+      this.saveMsg = "Salvo neste navegador (banco indisponível)";
       this.error = "";
     } else {
       this.saveMsg = "";

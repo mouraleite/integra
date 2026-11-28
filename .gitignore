@@ -8,3 +8,6 @@ antigravity.db
 scripts-antigos/
 .vercel
 .env*
+
+# Relatórios do Power BI (dados da empresa)
+*.pbix

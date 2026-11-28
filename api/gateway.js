@@ -2,6 +2,13 @@
    continuam no mesmo endereço; o rewrite manda tudo para cá. O código fica em api/_lib. */
 const rotas = {
   "sienge-proxy": require("./_lib/sienge-proxy"),
+  "sienge-upload": require("./_lib/sienge-upload"),
+  "github-leitura": require("./_lib/github-leitura"),
+  "central-email-enviar": require("./_lib/central-email-enviar"),
+  "remessa-avulsa-email": require("./_lib/remessa-avulsa-email"),
+  "central-email-confirmacoes": require("./_lib/central-email-confirmacoes"),
+  // Imagem de rastreio de abertura: pública (leitor de e-mail do cliente), protegida pela assinatura do id.
+  "email-aberto": require("./_lib/email-aberto"),
   "sienge-builder-proxy": require("./_lib/sienge-builder-proxy"),
   "sync-customers": require("./_lib/sync-customers"),
   "sync-creditors": require("./_lib/sync-creditors"),
@@ -19,19 +26,30 @@ const rotas = {
   "valor-receber": require("./_lib/morning-warmup"),
   "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "reembolso-batimento": require("./_lib/morning-warmup"),
+  "antecipacoes-batimento": require("./_lib/morning-warmup"),
+  "remessa-avulsa-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
+  // Login Microsoft -> token do Supabase. Confere o login dentro da própria rota (sempre bloqueia).
+  "supabase-token": require("./_lib/supabase-token"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
-  "publicar": require("./_lib/publicar")
+  "publicar": require("./_lib/publicar"),
+  // Link público da vistoria (cliente sem login): fica FORA do ROTAS_COM_LOGIN de propósito.
+  // Protegido pelo id da vistoria + conferências na própria rota (status, caminho das fotos, limite por IP).
+  "vistoria-publica": require("./_lib/vistoria-publica"),
+  // Arquivos do bucket privado (link /arquivo?p=...): confere o token do Supabase (cookie) dentro da própria rota.
+  "arquivo": require("./_lib/arquivo")
 };
 
-const { conferirAcesso, modoBloqueio } = require("../lib/integra-auth");
+const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/integra-auth");
 
 // Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
 // As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
+// proxy-download fica fora: o boleto/extrato abre numa aba nova, que não leva o login. Ele só aceita
+// links do próprio Sienge (que já trazem a chave do relatório), então não serve de passagem para outros sites.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-builder-proxy", "sync-customers", "sync-creditors",
-  "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
+  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "central-email-confirmacoes", "remessa-avulsa-email", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "cvcrm-proxy", "scod-proxy", "clicksign",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
 
@@ -74,7 +92,14 @@ module.exports = async function handler(req, res) {
 
   if (ROTAS_COM_LOGIN.has(nome) && String(req.method || "").toUpperCase() !== "OPTIONS") {
     const acesso = await conferirAcesso(req);
+    // Com o bloqueio ligado, não basta ser conta Microsoft da empresa: precisa estar cadastrado e ativo no Integra.
+    if (acesso.ok && acesso.motivo === "ok" && modoBloqueio()) {
+      const ativo = await usuarioAtivoIntegra(acesso.email);
+      if (ativo === false) Object.assign(acesso, { ok: false, motivo: "nao-cadastrado-ou-inativo" });
+    }
     try { res.setHeader("X-Integra-Auth", acesso.motivo); } catch (e) {}
+    // Quem fez o pedido (para o registro de quem enviou); só vale quando o login foi confirmado.
+    req.integraEmail = acesso.ok ? String(acesso.email || "") : "";
     if (!acesso.ok) {
       const bloquear = modoBloqueio();
       console.warn("[integra-auth] " + JSON.stringify({
@@ -89,9 +114,11 @@ module.exports = async function handler(req, res) {
         navegador: String(req.headers["user-agent"] || "").slice(0, 120)
       }));
       if (bloquear) {
-        res.statusCode = 401;
+        res.statusCode = acesso.motivo === "nao-cadastrado-ou-inativo" ? 403 : 401;
         res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ error: "Faça login no Integra para acessar este recurso." }));
+        res.end(JSON.stringify({ error: acesso.motivo === "nao-cadastrado-ou-inativo"
+          ? "Seu usuário não está cadastrado ou está inativo no Integra."
+          : "Faça login no Integra para acessar este recurso." }));
         return;
       }
     }

@@ -10,7 +10,7 @@ const RegistroApp = {
     linhas: [],
     arquivo: "",
     quando: "",
-    ano: "ambos",
+    por: "",
     empresas: [],
     empOpen: false,
     empQuery: "",
@@ -27,6 +27,215 @@ const RegistroApp = {
     }
     this.render();
     this.carregarPosicao();
+    this.lerRemoto();
+  },
+
+  /* O último arquivo fica no banco do Integra (Supabase: ficha em registro_cadastro + uma linha por unidade em
+     registro_cadastro_linhas), para toda a equipe e qualquer computador. */
+  COLECAO: "registro_cadastro",
+
+  /* Histórico dos envios (configuracoes "registro_cadastro_hist/..."): "historico" = lista; "arq_<data>" = linhas de cada
+     envio. O arquivo atual continua em registro_cadastro + registro_cadastro_linhas. */
+  COLECAO_HIST: "registro_cadastro_hist",
+
+  async esperarBanco() {
+    for (let i = 0; i < 40 && !(window.DadosCobranca && window.DadosNucleo); i++) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return window.DadosCobranca && window.DadosNucleo ? window.DadosCobranca : null;
+  },
+
+  async lerDocHist(id) {
+    const snap = await window.DadosNucleo.lerConfig(id, this.COLECAO_HIST);
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    return existe ? (snap.data() || {}) : null;
+  },
+
+  async lerRemoto() {
+    // Enquanto lê o banco, a tela avisa que está carregando (antes mostrava "Nenhum arquivo enviado").
+    this.state.lendoRemoto = true;
+    if (!this.state.linhas.length) this.render();
+    try {
+      const D = await this.esperarBanco();
+      if (!D) return;
+      await this.lerHistorico();
+      // Primeiro só a ficha, para não baixar todas as linhas quando o arquivo local já é o mais novo.
+      const m = await D.lerRegistroCadastro({ soFicha: true });
+      if (!m) return;
+      if (!m.quando || (this.state.quando && String(m.quando) <= String(this.state.quando) && this.state.linhas.length)) return;
+      const completo = await D.lerRegistroCadastro();
+      const linhas = completo && completo.linhas;
+      if (!Array.isArray(linhas) || !linhas.length) return;
+      const ref = (this.state.historico || []).find((x) => x.quando === m.quando);
+      m.arquivoUrl = (ref && ref.arquivoUrl) || "";
+      this.state.linhas = linhas;
+      this.state.arquivo = m.arquivo || "";
+      this.state.quando = m.quando || "";
+      this.state.por = m.por || "";
+      this.state.arquivoUrl = m.arquivoUrl || "";
+      this.gravarLocal();
+    } catch (e) {
+      console.warn("[Registro] leitura do banco", e);
+    } finally {
+      this.state.lendoRemoto = false;
+      this.render();
+    }
+  },
+
+  /* ---------- Histórico de arquivos ----------
+     Cada envio fica guardado (registro_cadastro_hist/historico) com as linhas lidas e, quando possível, o Excel original.
+     Subir outro arquivo troca o atual; os anteriores continuam para consulta (Ver) e download (Baixar). */
+  async lerHistorico() {
+    try {
+      const d = await this.lerDocHist("historico");
+      const itens = (d && d.itens) || [];
+      this.state.historico = Array.isArray(itens) ? itens : [];
+      this.render();
+    } catch (e) {
+      console.warn("[Registro] histórico", e);
+    }
+  },
+
+  /** Grava as linhas de uma versão em partes "<base>_0..n" (texto JSON) e devolve quantas partes. */
+  async gravarPartes(base, linhas) {
+    const texto = JSON.stringify(linhas || []);
+    const TAM = 600000;
+    const partes = Math.max(1, Math.ceil(texto.length / TAM));
+    for (let i = 0; i < partes; i++) {
+      await window.DadosNucleo.gravarConfig(base + "_" + i, { dados: texto.slice(i * TAM, (i + 1) * TAM) }, {}, this.COLECAO_HIST);
+    }
+    return partes;
+  },
+
+  async lerPartes(base, partes) {
+    let texto = "";
+    for (let i = 0; i < (Number(partes) || 0); i++) {
+      const d = await this.lerDocHist(base + "_" + i);
+      texto += String((d && d.dados) || "");
+    }
+    const linhas = JSON.parse(texto || "[]");
+    return Array.isArray(linhas) ? linhas : [];
+  },
+
+  async guardarOriginal(file, stamp) {
+    const fc = window.firebaseCollections;
+    if (!file || !window.firebaseStorage || !fc || typeof fc.ref !== "function" || typeof fc.uploadBytes !== "function" || typeof fc.getDownloadURL !== "function") return "";
+    try {
+      const nome = String(file.name || "unidades.xlsx").replace(/[^\w.\-()+ ]+/g, "_");
+      const ref = fc.ref(window.firebaseStorage, "registro_cadastro/" + stamp + "_" + nome);
+      await fc.uploadBytes(ref, file, { contentType: file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      return await fc.getDownloadURL(ref);
+    } catch (e) {
+      console.warn("[Registro] Excel original", e);
+      return "";
+    }
+  },
+
+  async gravarRemoto(file) {
+    const D = window.DadosCobranca;
+    if (!D || !window.DadosNucleo) return false;
+    try {
+      const stamp = Date.now();
+      let hist = [];
+      try {
+        const h = await this.lerDocHist("historico");
+        hist = (h && Array.isArray(h.itens)) ? h.itens : [];
+      } catch (e) { hist = []; }
+      // O arquivo atual que ainda não está no histórico (enviado antes desta versão) é guardado antes de ser trocado.
+      try {
+        const ant = await D.lerRegistroCadastro();
+        if (ant && ant.quando && Array.isArray(ant.linhas) && ant.linhas.length && !hist.some((x) => x.quando === ant.quando)) {
+          const baseAnt = "ant_" + (Date.parse(ant.quando) || stamp - 1);
+          const partesAnt = await this.gravarPartes(baseAnt, ant.linhas);
+          hist.push({ base: baseAnt, arquivo: ant.arquivo || "", quando: ant.quando, por: ant.por || "", partes: partesAnt, unidades: ant.linhas.length, arquivoUrl: "" });
+        }
+      } catch (e) {
+        console.warn("[Registro] arquivo anterior no histórico", e);
+      }
+      const base = "arq_" + stamp;
+      const partes = await this.gravarPartes(base, this.state.linhas);
+      const arquivoUrl = await this.guardarOriginal(file, stamp);
+      this.state.arquivoUrl = arquivoUrl;
+      // Ficha + linhas numa transação só (RPC substituir_registro_cadastro): se falhar, continua valendo o arquivo anterior.
+      await D.salvarRegistroCadastro(this.state.arquivo, this.state.quando, this.state.por, this.state.linhas);
+      hist.push({ base, arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, partes, unidades: this.state.linhas.length, arquivoUrl });
+      hist.sort((x, y) => String(y.quando).localeCompare(String(x.quando)));
+      try {
+        await window.DadosNucleo.gravarConfig("historico", { itens: hist }, {}, this.COLECAO_HIST);
+        this.state.historico = hist;
+      } catch (e) {
+        console.warn("[Registro] gravação do histórico", e);
+      }
+      return true;
+    } catch (e) {
+      console.warn("[Registro] gravação no banco", e);
+      return false;
+    }
+  },
+
+  /** Abre um arquivo do histórico só para consulta (não troca o atual). */
+  async verVersao(base) {
+    const item = (this.state.historico || []).find((x) => x.base === base);
+    if (!item) return;
+    if (!(await this.esperarBanco())) return;
+    this.state.lendoRemoto = true;
+    this.render();
+    try {
+      const linhas = await this.lerPartes(item.base, item.partes);
+      if (!linhas.length) throw new Error("Este arquivo do histórico não tem linhas gravadas.");
+      if (!this.state.versao) this.state.salvoAtual = { linhas: this.state.linhas, arquivo: this.state.arquivo, quando: this.state.quando, por: this.state.por, arquivoUrl: this.state.arquivoUrl };
+      this.state.linhas = linhas;
+      this.state.arquivo = item.arquivo;
+      this.state.quando = item.quando;
+      this.state.por = item.por;
+      this.state.arquivoUrl = item.arquivoUrl || "";
+      this.state.versao = item.base;
+      this.state.abertos = {};
+    } catch (e) {
+      alert(e.message || String(e));
+    } finally {
+      this.state.lendoRemoto = false;
+      this.render();
+    }
+  },
+
+  voltarAtual() {
+    const s = this.state.salvoAtual;
+    if (s) Object.assign(this.state, { linhas: s.linhas, arquivo: s.arquivo, quando: s.quando, por: s.por, arquivoUrl: s.arquivoUrl });
+    this.state.versao = "";
+    this.state.salvoAtual = null;
+    this.state.abertos = {};
+    this.render();
+  },
+
+  historicoHtml() {
+    const h = this.state.historico || [];
+    if (!h.length) return "";
+    const atual = (this.state.salvoAtual && this.state.salvoAtual.quando) || this.state.quando;
+    const linhas = h.map((x) => {
+      const d = new Date(x.quando);
+      const quando = isNaN(d.getTime()) ? "—" : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      const eAtual = x.quando === atual;
+      const vendo = this.state.versao === x.base;
+      return `<tr${vendo ? ' class="reg-hist-vendo"' : ""}>
+        <td>${this.esc(quando)}${eAtual ? ' <span class="reg-hist-tag">atual</span>' : ""}</td>
+        <td title="${this.esc(x.arquivo)}">${this.esc(x.arquivo || "—")}</td>
+        <td>${this.esc(x.por || "—")}</td>
+        <td class="is-right">${this.n(x.unidades || 0)}</td>
+        <td class="is-center">${eAtual && !this.state.versao ? "" : `<button type="button" class="reg-hist-btn" onclick="RegistroApp.verVersao('${this.esc(x.base)}')">${vendo ? "Vendo" : "Ver"}</button>`}
+          ${x.arquivoUrl ? `<a class="reg-hist-btn" href="${this.esc(x.arquivoUrl)}" target="_blank" rel="noopener">Baixar</a>` : ""}</td>
+      </tr>`;
+    }).join("");
+    return `<details class="reg-hist"${this.state.versao ? " open" : ""}>
+      <summary>Histórico de arquivos enviados (${h.length})</summary>
+      <div class="cc-scroll" style="max-height:260px;margin-top:8px;">
+        <table class="cc-table">
+          <colgroup><col style="width:190px"><col><col style="width:220px"><col style="width:90px"><col style="width:140px"></colgroup>
+          <thead><tr><th>Enviado em</th><th>Arquivo</th><th>Por</th><th class="is-right">Unidades</th><th class="is-center">Consultar</th></tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>
+    </details>`;
   },
 
   /** A posição gravada no Firebase entra nesta aba. Não depende de a tela de estoque ter sido aberta aqui. */
@@ -67,21 +276,26 @@ const RegistroApp = {
       this.state.linhas = raw.linhas;
       this.state.arquivo = raw.arquivo || "";
       this.state.quando = raw.quando || "";
+      this.state.por = raw.por || "";
     } catch (e) {}
   },
 
-  gravar() {
+  async gravar(file) {
+    this.gravarLocal();
+    const ok = await this.gravarRemoto(file);
+    if (!ok) this.state.avisoGravacao = "O arquivo ficou só neste navegador: não consegui gravar no banco do Integra.";
+  },
+
+  gravarLocal() {
     const payload = {
       arquivo: this.state.arquivo,
       quando: this.state.quando,
+      por: this.state.por,
       linhas: this.state.linhas
     };
     try {
       localStorage.setItem(this.CHAVE, JSON.stringify(payload));
-      this.state.avisoGravacao = "";
-    } catch (e) {
-      this.state.avisoGravacao = "O arquivo ficou só nesta sessão: o navegador não teve espaço para guardá-lo.";
-    }
+    } catch (e) {}
   },
 
   esc(s) {
@@ -225,35 +439,20 @@ const RegistroApp = {
     return { units: [], meta: null };
   },
 
-  anosAtivos() {
-    if (this.state.ano === "2025") return ["2025"];
-    if (this.state.ano === "2026") return ["2026"];
-    return ["2025", "2026"];
-  },
-
   /**
-   * Cruza lotes quitados da posição de estoque com a letra do cadastro.
-   * Sem data de quitação o lote não entra no ano: o batimento ainda não fechou essa data.
+   * Cruza todos os lotes quitados da posição de estoque com a letra do cadastro (sem separar por ano).
    */
-  cruzar(linhas, units, anos) {
+  cruzar(linhas, units) {
     const mapa = new Map();
     (linhas || []).forEach((l) => {
       mapa.set(this.chaveUnidade(l.obraId, l.unidade), l);
     });
     const grupos = new Map();
-    let semData = 0;
-    const aceita = new Set(anos || []);
     (units || []).forEach((u) => {
       if (!u) return;
       if (u.relFin === "distratado") return;
       if (!(u.quitado || u.relFin === "quitado")) return;
       const iso = String(u.quitacaoDate || "").slice(0, 10);
-      const ano = iso.slice(0, 4);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
-        semData += 1;
-        return;
-      }
-      if (aceita.size && !aceita.has(ano)) return;
       const obraId = String(u.enterpriseId || "").replace(/\D/g, "");
       const hit = mapa.get(this.chaveUnidade(obraId, u.name));
       const letra = hit ? hit.letra : "";
@@ -299,7 +498,41 @@ const RegistroApp = {
         origem: origem
       });
     });
-    return { grupos: [...grupos.values()], semData: semData };
+    return { grupos: [...grupos.values()] };
+  },
+
+  /**
+   * Origem da quitação por título (para as Antecipações): mesma regra do cruzamento acima.
+   * Devolve { mapa: Map(título -> { origem: fin|prop|conf, data, unidade, letra }), temRegistro, temPosicao }.
+   */
+  origemPorTitulo() {
+    const linhas = this.state.linhas || [];
+    const units = this.posicao().units || [];
+    const cad = new Map();
+    linhas.forEach((l) => cad.set(this.chaveUnidade(l.obraId, l.unidade), l));
+    const out = new Map();
+    units.forEach((u) => {
+      if (!u || u.relFin === "distratado" || !(u.quitado || u.relFin === "quitado")) return;
+      const obraId = String(u.enterpriseId || "").replace(/\D/g, "");
+      const hit = cad.get(this.chaveUnidade(obraId, u.name));
+      const letra = hit ? hit.letra : "";
+      const rec = this.recebidoNaQuitacao(u);
+      const info = { origem: letra === "F" ? (rec.volume ? "fin" : "conf") : "prop", data: String(u.quitacaoDate || "").slice(0, 10), unidade: u.name || "", letra };
+      [u.receivableBillId, u.contractNumber].forEach((id) => {
+        const k = String(id == null ? "" : id).replace(/\D/g, "");
+        if (k) out.set(k, info);
+      });
+    });
+    return { mapa: out, temRegistro: linhas.length > 0, temPosicao: units.length > 0 };
+  },
+
+  /** Garante o cadastro (último arquivo) e a Posição de estoque em memória, sem abrir a tela do Registro. */
+  async garantirDados() {
+    if (!this.state.linhas.length) {
+      this.lerLocal();
+      if (!this.state.linhas.length) await this.lerRemoto();
+    }
+    if (!(this.posicao().units || []).length) await this.carregarPosicao();
   },
 
   /** Valor recebido na data da quitação (gravado pelo batimento do estoque) e a fração do total recebido. */
@@ -345,12 +578,6 @@ const RegistroApp = {
     this.render();
   },
 
-  setAno(ano) {
-    this.state.ano = ano;
-    this.state.abertos = {};
-    this.render();
-  },
-
   toggleGrupo(key) {
     const k = decodeURIComponent(String(key || ""));
     this.state.abertos[k] = !this.state.abertos[k];
@@ -378,8 +605,13 @@ const RegistroApp = {
       this.state.linhas = linhas;
       this.state.arquivo = file.name;
       this.state.quando = new Date().toISOString();
+      const quem = (window.AppState && window.AppState.currentUser) || {};
+      this.state.por = String(quem.name || "").trim();
       this.state.abertos = {};
-      this.gravar();
+      this.state.avisoGravacao = "";
+      this.state.versao = "";
+      this.state.salvoAtual = null;
+      await this.gravar(file);
     } catch (e) {
       alert(e.message || String(e));
     }
@@ -405,19 +637,6 @@ const RegistroApp = {
 
   n(v) {
     return Number(v || 0).toLocaleString("pt-BR");
-  },
-
-  abasHtml() {
-    const tabs = [
-      { id: "2025", label: "2025", icon: "calendar" },
-      { id: "2026", label: "2026", icon: "calendar" },
-      { id: "ambos", label: "2025 e 2026", icon: "calendar-range" }
-    ];
-    const atual = this.state.ano || "ambos";
-    return `<div class="ml-tabs" role="tablist" style="margin:0 0 12px;">${tabs.map((t) => `
-      <button type="button" role="tab" class="ml-tab${atual === t.id ? " is-active" : ""}" aria-selected="${atual === t.id}" onclick="RegistroApp.setAno('${t.id}')">
-        <i data-lucide="${t.icon}"></i> ${t.label}
-      </button>`).join("")}</div>`;
   },
 
   itensEmpresa(grupos) {
@@ -511,8 +730,7 @@ const RegistroApp = {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Registro");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(unid), "Unidades");
-    const anos = this.anosAtivos().join("-");
-    XLSX.writeFile(wb, "registro-quitados-" + anos + ".xlsx");
+    XLSX.writeFile(wb, "registro-quitados.xlsx");
   },
 
   render() {
@@ -520,7 +738,7 @@ const RegistroApp = {
     if (!root) return;
     const linhas = this.state.linhas || [];
     const pos = linhas.length ? this.posicao() : { units: [], meta: null };
-    const cruz = linhas.length ? this.cruzar(linhas, pos.units, this.anosAtivos()) : { grupos: [], semData: 0 };
+    const cruz = linhas.length ? this.cruzar(linhas, pos.units) : { grupos: [] };
     let grupos = cruz.grupos;
     const itens = this.itensEmpresa(grupos);
     const sel = (this.state.empresas || []).map(String);
@@ -539,7 +757,12 @@ const RegistroApp = {
     }, { quitados: 0, f: 0, m: 0, vazio: 0, fora: 0, fin: 0, prop: 0, conf: 0 });
     const pctMin = Math.round(this.VOLUME_MIN * 100);
     const obrasArq = new Set(linhas.map((l) => l.obraId)).size;
-    const quando = this.state.quando ? this.dataBr(this.state.quando.slice(0, 10)) : "";
+    let quando = "";
+    if (this.state.quando) {
+      const d = new Date(this.state.quando);
+      quando = isNaN(d.getTime()) ? this.dataBr(this.state.quando.slice(0, 10))
+        : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
     const meta = pos.meta || {};
     const posData = this.dataBr(String(meta.batimentoDate || meta.date || "").slice(0, 10));
     const filtro = window.MlEmpresaFilter && itens.length
@@ -557,14 +780,13 @@ const RegistroApp = {
       : (this.state.carregandoPos
         ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#f8fafc;color:#334155;font-size:0.85rem;">Lendo a Posição de estoque gravada…</p>`
         : (!pos.units.length
-        ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">O cadastro foi lido, mas a Posição de estoque ainda não está neste navegador. Abra Posição de estoque e conclua o batimento para contar os quitados de 2025 e 2026.</p>`
-        : (cruz.semData
-          ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">${this.n(cruz.semData)} lote(s) quitado(s) na Posição de estoque estão sem data de quitação e ficam de fora de 2025 e 2026. O batimento precisa gravar essa data.</p>`
-          : "")));
+        ? `<p style="margin:0 0 12px;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;font-size:0.85rem;">O cadastro foi lido, mas a Posição de estoque ainda não está neste navegador. Abra Posição de estoque e conclua o batimento para contar os quitados.</p>`
+        : ""));
     const corpo = !linhas.length
-      ? `<p style="color:#64748b;padding:8px 0 0;">Nenhum arquivo enviado.</p>`
+      ? (this.state.lendoRemoto
+        ? `<div class="ml-load"><div class="loading-spinner" aria-hidden="true"></div><div class="loading-status-text">Carregando o último arquivo enviado…</div></div>`
+        : `<p style="color:#64748b;padding:8px 0 0;">Nenhum arquivo enviado.</p>`)
       : (!pos.units.length ? "" : `
-        ${this.abasHtml()}
         <div class="est-stock-finance" style="margin-bottom:12px;">
           <div class="est-fin-card is-ok"><label>Quitados</label><strong>${this.n(tot.quitados)}</strong><small>Posição de estoque${posData !== "—" ? " · " + posData : ""}</small></div>
           <div class="est-fin-card"><label>Financiado</label><strong>${this.n(tot.f)}</strong><small>Letra F no número do registro</small></div>
@@ -609,7 +831,9 @@ const RegistroApp = {
             </button>
           </div>
         </div>
-        ${linhas.length ? `<p style="margin:-4px 0 12px;font-size:0.8rem;color:#334155;">${this.esc(this.state.arquivo)} · ${this.n(linhas.length)} unidades · ${this.n(obrasArq)} empreendimentos${quando ? " · enviado em " + quando : ""}</p>` : ""}
+        ${this.state.versao ? `<div class="reg-versao"><span><i data-lucide="history" style="width:14px;height:14px;"></i> Você está vendo um arquivo do histórico (${quando || "—"}). O arquivo atual não mudou.</span><button type="button" class="btn btn-primary" onclick="RegistroApp.voltarAtual()">Voltar ao arquivo atual</button></div>` : ""}
+        ${linhas.length ? `<p style="margin:-4px 0 8px;font-size:0.8rem;color:#334155;"><strong>${this.state.versao ? "Arquivo do histórico" : "Última atualização"}:</strong> ${quando || "—"}${this.state.por ? " por " + this.esc(this.state.por) : ""} · ${this.esc(this.state.arquivo)} · ${this.n(linhas.length)} unidades · ${this.n(obrasArq)} empreendimentos${this.state.arquivoUrl ? ` · <a href="${this.esc(this.state.arquivoUrl)}" target="_blank" rel="noopener">baixar o Excel enviado</a>` : ""}</p>` : ""}
+        ${this.historicoHtml()}
         ${this.state.avisoGravacao ? `<p style="margin:0 0 12px;font-size:0.8rem;color:#9a3412;">${this.esc(this.state.avisoGravacao)}</p>` : ""}
         ${avisoPos}
         ${corpo}

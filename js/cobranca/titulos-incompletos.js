@@ -461,13 +461,9 @@ const TitulosIncompletosAviso = {
   },
 
   async ler() {
-    const fc = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fc || !db || typeof fc.getDoc !== "function" || typeof fc.doc !== "function") return null;
-    const snap = await fc.getDoc(fc.doc(db, "titulos_incompletos_batimento", "atual"));
-    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    if (!existe) return null;
-    return snap.data() || null;
+    // titulos_incompletos_batimento no Supabase: doc "atual" (primeiros em texto JSON, como antes) ou null.
+    if (!window.DadosFinanceiro) return null;
+    return (await window.DadosFinanceiro.lerTitulosIncompletos()) || null;
   },
 
   textoDias(n) {
@@ -477,7 +473,10 @@ const TitulosIncompletosAviso = {
     return "";
   },
 
-  abrir(rows, user, dia) {
+  /** opcoes.previa: abre igual, mas o Ciente só fecha (não grava ciência nem agenda o próximo batimento). */
+  abrir(rows, user, dia, opcoes) {
+    const previa = !!(opcoes && opcoes.previa);
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("titulos-incompletos")) return;
     if (document.getElementById("tin-batimento-aviso")) return;
     const lista = (rows || []).slice().sort((a, b) => {
       const d = (Number(b.diasCiente) || 0) - (Number(a.diasCiente) || 0);
@@ -513,6 +512,10 @@ const TitulosIncompletosAviso = {
     document.body.appendChild(overlay);
     const btn = overlay.querySelector("#tin-batimento-ciente");
     if (btn) btn.addEventListener("click", () => {
+      if (previa) {
+        overlay.remove();
+        return;
+      }
       this.marcar(user, dia);
       overlay.remove();
       this.agendarDepois(true);
@@ -563,6 +566,24 @@ const TitulosIncompletosAviso = {
 };
 
 window.TitulosIncompletosAviso = TitulosIncompletosAviso;
+
+/* Prévia para a tela de alertas: mesmo pop-up, sem gravar ciência, sem timer e sem ler o batimento. */
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["titulos-incompletos"] = function () {
+  const aviso = TitulosIncompletosAviso;
+  // O aviso real já está na tela: não mexe nele.
+  if (document.getElementById("tin-batimento-aviso")) return;
+  const hoje = aviso.hoje();
+  const dia = (n) => TitulosIncompletosApp.isoShift(hoje, n);
+  const memoria = TitulosIncompletosApp.state && Array.isArray(TitulosIncompletosApp.state.rows)
+    ? TitulosIncompletosApp.state.rows.slice(0, 20)
+    : [];
+  const rows = memoria.length ? memoria : [
+    { titulo: "90441", tipo: "NF", documento: "1822", credor: "Fornecedor exemplo", empresa: "Empresa exemplo", vencimento: dia(5), legenda: "Incompleto", valor: 4850.9, diasCiente: 1 },
+    { titulo: "91002", tipo: "NF", documento: "1900", credor: "Construtora exemplo", empresa: "Empresa exemplo", vencimento: dia(10), legenda: "Em inclusão", valor: 12300 }
+  ];
+  aviso.abrir(rows, aviso.usuario(), hoje, { previa: true });
+};
 
 document.addEventListener("DOMContentLoaded", function () {
   let tentativas = 0;

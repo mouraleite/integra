@@ -19,7 +19,7 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          URL="https://crm-gestao.vercel.app/api/estoque-batimento"
+          URL="https://integra-mouraleite.vercel.app/api/estoque-batimento"
           AUTH=()
           if [ -n "$CRON_SECRET" ]; then
             AUTH=(-H "Authorization: Bearer $CRON_SECRET")

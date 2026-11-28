@@ -130,8 +130,10 @@ const CaixaPosicaoStore = {
   FB: "caixa_posicao",
   CHUNK: 120,
 
+  // caixa_posicao está no Supabase (window.DadosFinanceiro): uma linha por unidade por dia (os chunks <dia>_<n> e o
+  // _meta sumiram). Os nomes fb*/FB ficaram por compatibilidade.
   fbReady() {
-    return !!(window.firebaseDb && window.firebaseCollections);
+    return !!window.DadosFinanceiro;
   },
 
   async loadEstoqueUnits() {
@@ -139,65 +141,33 @@ const CaixaPosicaoStore = {
       if (!EstoqueComercialApp.state.units.length) await EstoqueComercialApp.init();
       if (EstoqueComercialApp.state.units.length) return EstoqueComercialApp.state.units;
     }
-    if (!this.fbReady()) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "estoque_comercial"));
-    const units = [];
-    snap.forEach((d) => {
-      if (d.id === "_meta" || d.id === "_batimento_state") return;
-      const data = d.data() || {};
-      if (Array.isArray(data.units)) units.push(...data.units);
-    });
-    return units;
+    // Estoque no Supabase (estoque_comercial: uma linha por unidade).
+    if (!window.DadosEngenharia) return [];
+    return window.DadosEngenharia.listarUnidadesEstoque();
   },
 
   async saveFromUnits(units, date) {
-    if (!this.fbReady()) throw new Error("Firebase indisponível.");
-    const { doc, setDoc } = window.firebaseCollections;
+    if (!this.fbReady()) throw new Error("Supabase indisponível.");
     const rows = (units || [])
       .filter((u) => {
         const code = String(u.commercialStock || "").toUpperCase();
         return code === "V" || code === "O" || u.contractId || u.contractNumber;
       })
       .map((u) => caixaSlim(u, date));
-    const nChunks = Math.max(1, Math.ceil(rows.length / this.CHUNK) || 1);
-    const writes = [];
-    for (let c = 0; c < nChunks; c++) {
-      writes.push(setDoc(doc(window.firebaseDb, this.FB, `${date}_${c}`), {
-        date, chunk: c, rows: rows.slice(c * this.CHUNK, (c + 1) * this.CHUNK), updatedAt: new Date().toISOString()
-      }));
-    }
-    writes.push(setDoc(doc(window.firebaseDb, this.FB, "_meta"), {
-      lastDate: date, chunks: nChunks, count: rows.length, updatedAt: new Date().toISOString()
-    }, { merge: true }));
-    await Promise.all(writes);
+    // RPC gravar_caixa_posicao: apaga o dia e insere as linhas numa transação (antes: setDoc dos chunks + _meta).
+    await window.DadosFinanceiro.gravarCaixaPosicao(date, rows);
     return rows;
   },
 
   async loadDate(date) {
     if (!this.fbReady() || !date) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, this.FB));
-    const rows = [];
-    snap.forEach((d) => {
-      if (d.id === "_meta") return;
-      const data = d.data() || {};
-      if (String(data.date) === String(date) && Array.isArray(data.rows)) rows.push(...data.rows);
-    });
-    return rows;
+    return window.DadosFinanceiro.lerCaixaPosicao(date);
   },
 
   async listDates() {
     if (!this.fbReady()) return [];
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, this.FB));
-    const set = new Set();
-    snap.forEach((d) => {
-      if (d.id === "_meta") return;
-      const data = d.data() || {};
-      if (data.date) set.add(String(data.date));
-    });
-    return [...set].sort().reverse();
+    // Da mais recente para a mais antiga (como o sort().reverse() de antes).
+    return window.DadosFinanceiro.listarDatasCaixaPosicao();
   }
 };
 
@@ -408,14 +378,15 @@ const FluxoCaixaDiarioApp = {
     try { local = JSON.parse(localStorage.getItem("cxd_radar_" + id) || "null"); } catch (e) { local = null; }
     if (this.radarDocId() !== pedido) return;
     this.radar = local && local.ym === this.mesRadar() ? local : null;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.getDoc) return;
+    // caixa_radar no Supabase (window.DadosFinanceiro).
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_radar", id));
+      const lido = await D.tabela("caixa_radar").obter(id);
       if (this.radarDocId() !== pedido) return;
-      if (snap && typeof snap.exists === "function" && snap.exists()) {
-        const nuvem = snap.data() || null;
+      if (lido) {
+        const nuvem = Object.assign({}, lido);
+        delete nuvem.id;
         if (nuvem && (!this.radar || String(nuvem.em || "") >= String(this.radar.em || ""))) this.radar = nuvem;
       }
     } catch (e) {}
@@ -443,13 +414,11 @@ const FluxoCaixaDiarioApp = {
     };
     this.radar = doc;
     try { localStorage.setItem("cxd_radar_" + this.radarDocId(), JSON.stringify(doc)); } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (fx && db && fx.setDoc) {
+    if (window.DadosFinanceiro) {
       try {
-        await fx.setDoc(fx.doc(db, "caixa_radar", this.radarDocId()), doc);
+        await window.DadosFinanceiro.tabela("caixa_radar").gravar(this.radarDocId(), doc); // setDoc sem merge
       } catch (e) {
-        alert("O radar ficou gravado neste navegador. O Firebase não guardou esta cópia.");
+        alert("O radar ficou gravado neste navegador. A nuvem não guardou esta cópia.");
       }
     }
     this.render();
@@ -475,9 +444,10 @@ const FluxoCaixaDiarioApp = {
     if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return false;
     if (!m.conta) return true;
     const key = this.accountKey({ companyId: m.companyId, number: m.conta });
-    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key);
+    const norm = this.normNum(m.conta);
+    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm));
     if (acc) return this.accountIncluded(acc);
-    return !(this._bloq && this._bloq.has(this.normNum(m.conta))) && this.flags[key] !== false;
+    return !(this._bloq && this._bloq.has(norm)) && this.flags[key] !== false;
   },
 
   async carregarHistorico() {
@@ -636,19 +606,20 @@ const FluxoCaixaDiarioApp = {
 
   /** Lê o que o batimento (ou a última atualização manual) gravou. */
   async carregarVr() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    // caixa_valor_receber (+ _itens) no Supabase: o snapshot de imitação traz os docs emp_<empresa> com itens em
+    // texto JSON, como antes (o _estado do cron não vem).
+    const D = window.DadosFinanceiro;
     const token = {};
     this._vrToken = token;
     this.vr = Object.assign({}, this.vr || {}, { carregando: true, erro: "" });
     if (this.aba === "receber") this.render();
-    if (!fx || !db || typeof fx.getDocs !== "function") {
-      this.vr = { carregando: false, erro: "O Firebase não está disponível.", docs: {} };
+    if (!D) {
+      this.vr = { carregando: false, erro: "O Supabase não está disponível.", docs: {} };
       if (this.aba === "receber") this.render();
       return;
     }
     try {
-      const snap = await fx.getDocs(fx.collection(db, this.VR_COL));
+      const snap = await D.listarValorReceber();
       if (this._vrToken !== token) return;
       const docs = {};
       snap.forEach((d) => {
@@ -672,8 +643,7 @@ const FluxoCaixaDiarioApp = {
   /** Botão Atualizar: busca no Sienge as empresas da tela e grava o resultado para todos. */
   async atualizarVr() {
     if (this.vr && this.vr.atualizando) return;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    const D = window.DadosFinanceiro;
     if (typeof window.siengeFetchWithRetry !== "function") { alert("A conexão com o Sienge não está disponível."); return; }
     const empresas = this.vrEmpresasAlvo();
     if (!empresas.length) { alert("Nenhuma empresa gerida pelo grupo para atualizar."); return; }
@@ -733,8 +703,9 @@ const FluxoCaixaDiarioApp = {
       const docs = Object.assign({}, (this.vr && this.vr.docs) || {});
       docs[String(cid)] = Object.assign({}, registro, { itens });
       this.vr.docs = docs;
-      if (fx && db && typeof fx.setDoc === "function") {
-        try { await fx.setDoc(fx.doc(db, this.VR_COL, "emp_" + cid), registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
+      if (D) {
+        // RPC gravar_caixa_valor_receber: troca o cabeçalho emp_<empresa> e os itens numa transação.
+        try { await D.gravarValorReceber(registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
       }
     }
     this.vr.atualizando = false;
@@ -1042,21 +1013,20 @@ const FluxoCaixaDiarioApp = {
   },
 
   /**
-   * Contas ligadas/desligadas, tipo e empreendimentos fora do caixa ficam no Firebase.
-   * Relê a cada consulta (outro operador pode ter mudado) e espera o Firebase subir; sem isso, abrir a
-   * tela logo após o login mostrava todas as contas ligadas.
+   * Contas ligadas/desligadas, tipo e empreendimentos fora do caixa ficam no Supabase
+   * (caixa_diario_config_contas / _cc_excluidos, montados no formato do doc saldo_inicial).
+   * Relê a cada consulta (outro operador pode ter mudado) e espera o Supabase subir (as funções da camada esperam
+   * o cliente); sem isso, abrir a tela logo após o login mostrava todas as contas ligadas.
    */
   async loadFlags() {
-    for (let i = 0; i < 40 && !(window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc); i++) {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDoc !== "function") return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "caixa_diario_config", "saldo_inicial"));
-      const data = snap.exists() ? (snap.data() || {}) : {};
-      this.flags = Object.assign({}, data.contas || {}, this._flagsPendentes || {});
+      const data = (await D.lerConfigCaixa()) || {};
+      // Contas ligadas: o que está gravado é o padrão de todos; o liga/desliga sem gravar vale só nesta tela.
+      this.flags = Object.assign({}, data.contas || {}, this._flagsTeste || {});
+      this._padraoContas = data.contas || {};
+      this._padraoInfo = { por: data.contasGravadoPor || data.updatedBy || "", em: data.contasGravadoEm || data.updatedAt || "" };
       this.tipos = Object.assign({}, data.tipos || {}, this._tiposPendentes || {});
       this.ccExcl = Object.assign({}, data.empreendimentosExcluidos || {}, this._ccPendentes || {});
       this._flagsLoaded = true;
@@ -1066,27 +1036,26 @@ const FluxoCaixaDiarioApp = {
   },
 
   async saveConfig(patch, erroMsg) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.setDoc !== "function") {
-      alert("O Firebase não está disponível. A alteração vale só nesta consulta.");
+    const D = window.DadosFinanceiro;
+    if (!D) {
+      alert("O Supabase não está disponível. A alteração vale só nesta consulta.");
       return false;
     }
     const user = (window.AppState && AppState.currentUser) || {};
     try {
-      await fx.setDoc(fx.doc(db, "caixa_diario_config", "saldo_inicial"), Object.assign({}, patch, {
-        updatedAt: new Date().toISOString(),
+      // Merge por chave (antes setDoc com merge): só as linhas do patch; atualizado_em vem do servidor.
+      await D.gravarConfigCaixa(Object.assign({}, patch, {
         updatedBy: user.name || user.email || ""
-      }), { merge: true });
+      }));
       return true;
     } catch (e) {
       console.error("[Caixa diário] gravar configuração", e);
-      alert(erroMsg || "Não consegui gravar a alteração no Firebase.");
+      alert(erroMsg || "Não consegui gravar a alteração na nuvem.");
       return false;
     }
   },
 
-  /** Enquanto a gravação não confirma, a mudança vale sobre o que vier do Firebase. */
+  /** Enquanto a gravação não confirma, a mudança vale sobre o que vier da nuvem. */
   async _salvarPendente(bucket, key, value, patch, erroMsg) {
     this[bucket] = this[bucket] || {};
     this[bucket][key] = value;
@@ -1152,6 +1121,48 @@ const FluxoCaixaDiarioApp = {
     return d === "993916" || d === "0993916";
   },
 
+  /** Credores parceiros de Avaré: Agua do Burrinho e Lalim Participações. */
+  ehParceiroAvare(credor) {
+    const n = String(credor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    return /BURRINHO/.test(n) || /LALIM/.test(n);
+  },
+
+  /**
+   * Conta bancária de saída para os parceiros de Avaré (Agua do Burrinho e Lalim):
+   * - Centros de custo 13700 e 13800 (Fase 1): conta 99466-6
+   * - Centros de custo 13900 e 14000 (Fase 2): conta 98746-2
+   */
+  contaSaidaParceiroAvare(item) {
+    if (!item) return null;
+    const credor = item.credor || item.party || item.favorecido || "";
+    if (!this.ehParceiroAvare(credor)) return null;
+
+    const ccs = [];
+    if (item.ccId) ccs.push(String(item.ccId));
+    if (item.cc) ccs.push(String(item.cc));
+    if (Array.isArray(item.shares)) {
+      item.shares.forEach((s) => { if (s && s.cc) ccs.push(String(s.cc)); });
+    }
+    const txt = [item.ccNome, item.historico, item.documento, item.plano, item.departamento].filter(Boolean).join(" ");
+
+    // Centro de custo 13700 e 13800 -> conta 99466-6
+    if (ccs.some((c) => c === "13700" || c === "13800" || c === "13701" || c === "13801") ||
+        /\b13700\b|\b13800\b/i.test(txt)) {
+      return "99466-6";
+    }
+
+    // Centro de custo 13900 e 14000 (Fase 2) -> conta 98746-2
+    if (ccs.some((c) => c === "13900" || c === "14000" || c === "13901" || c === "14001") ||
+        /\b13900\b|\b14000\b/i.test(txt)) {
+      return "98746-2";
+    }
+
+    if (/FASE\s*(?:I\b|1\b)/i.test(txt)) return "99466-6";
+    if (/FASE\s*(?:II\b|2\b)/i.test(txt)) return "98746-2";
+
+    return null;
+  },
+
   ehRepasse(item) {
     const nomes = [];
     if (item && item.plano) nomes.push(item.plano);
@@ -1172,11 +1183,15 @@ const FluxoCaixaDiarioApp = {
     const ccs = new Set(lista.map((x) => String(x.cc)));
     if (item && item.ccId) ccs.add(String(item.ccId));
     const empresa1 = !item || item.companyId == null || item.companyId === "" || String(item.companyId) === "1";
-    if (empresa1 && this.ehRepasse(item) && [...ccs].some((cc) => this.ccBaseAvare(cc))) return 1;
+    if (empresa1 && this.ehRepasse(item) && [...ccs].some((cc) => this.ccBaseAvare(cc))) {
+      if (this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
+      return 1;
+    }
     const rateio = this.paresAvare().some(([a, b]) => ccs.has(a) && ccs.has(b));
     return lista.reduce((s, x) => {
       const cc = String(x.cc || "");
       if (!excl.has(cc)) return s;
+      if (empresa1 && this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
       // Pago pela conta final 1-6, mas o centro é da parceria de Avaré.
       // O dinheiro saiu da conta que está no caixa. A transferência da conta da parceria
       // para a 1-6 entra no mesmo caixa e zera essa dívida. Não tirar só o pagamento.
@@ -1210,7 +1225,7 @@ const FluxoCaixaDiarioApp = {
     this.ccExcl[co] = ids.map(String);
     this.rebuild();
     this.render();
-    await this._salvarPendente("_ccPendentes", co, this.ccExcl[co], { empreendimentosExcluidos: { [co]: this.ccExcl[co] } }, "Não consegui gravar os empreendimentos no Firebase.");
+    await this._salvarPendente("_ccPendentes", co, this.ccExcl[co], { empreendimentosExcluidos: { [co]: this.ccExcl[co] } }, "Não consegui gravar os empreendimentos na nuvem.");
   },
 
   accountKey(a) {
@@ -1236,18 +1251,78 @@ const FluxoCaixaDiarioApp = {
       .reduce((s, a) => s + this.saldoBase(a), 0);
   },
 
-  async setFlag(key, on) {
+  /** Liga/desliga sem gravar: vale só nesta tela até clicar em "Gravar disponível". */
+  setFlag(key, on) {
+    this._flagsTeste = this._flagsTeste || {};
+    const gravado = (this._padraoContas || {})[key] !== false;
+    if (!!on === gravado) delete this._flagsTeste[key];
+    else this._flagsTeste[key] = !!on;
     this.flags[key] = !!on;
     this.rebuild();
     this.render();
-    await this._salvarPendente("_flagsPendentes", key, !!on, { contas: { [key]: !!on } }, "Não consegui gravar a marcação da conta no Firebase.");
+  },
+
+  qtdeDisponivelAlterado() {
+    return Object.keys(this._flagsTeste || {}).length;
+  },
+
+  /** Grava as contas ligadas como o padrão do disponível para todos. */
+  async gravarDisponivel() {
+    const mud = Object.assign({}, this._flagsTeste || {});
+    const n = Object.keys(mud).length;
+    if (!n) { alert("Nenhuma conta foi ligada ou desligada desde o último padrão gravado."); return; }
+    const pergunta = "Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.";
+    const segue = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!segue) return;
+    const user = (window.AppState && AppState.currentUser) || {};
+    const ok = await this.saveConfig({
+      contas: mud,
+      contasGravadoPor: user.name || user.email || "",
+      contasGravadoEm: new Date().toISOString()
+    }, "Não consegui gravar as contas do disponível no Firebase.");
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.rebuild();
+    this.render();
+  },
+
+  /** Desfaz o liga/desliga não gravado e volta às contas do padrão gravado. */
+  async restaurarDisponivel() {
+    const n = this.qtdeDisponivelAlterado();
+    if (!n) { alert("As contas já estão no padrão gravado."); return; }
+    const pergunta = "Desfazer " + n + " alteração(ões) e voltar às contas do padrão gravado?";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.flags = Object.assign({}, this._padraoContas || {});
+    this.rebuild();
+    this.render();
+  },
+
+  disponivelBarHtml() {
+    const n = this.qtdeDisponivelAlterado();
+    const info = this._padraoInfo || {};
+    const quando = info.em ? caixaFmtDate(String(info.em).slice(0, 10)) : "";
+    const padrao = info.por || quando ? `Padrão gravado${info.por ? " por " + caixaEsc(info.por) : ""}${quando ? " em " + caixaEsc(quando) : ""}` : "";
+    return `<div class="cxd-disp-bar">
+      <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
+      ${n ? `<span class="cxd-disp-aviso" title="O liga/desliga vale só nesta tela até gravar">${n} alteração(ões) não gravada(s)</span>` : (padrao ? `<span class="cxd-disp-info">${padrao}</span>` : "")}
+      <button type="button" class="btn btn-secondary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.restaurarDisponivel()" title="Volta às contas do padrão gravado">
+        <i data-lucide="rotate-ccw" style="width:14px;height:14px;"></i> Restaurar padrão
+      </button>
+      <button type="button" class="btn btn-primary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.gravarDisponivel()" title="Grava as contas ligadas como padrão para todos">
+        <i data-lucide="save" style="width:14px;height:14px;"></i> Gravar disponível
+      </button>
+    </div>`;
   },
 
   async setTipo(key, tipo) {
     this.tipos[key] = tipo;
     this.accounts.forEach((a) => { if (this.accountKey(a) === key) a.tipo = tipo; });
     this.render();
-    await this._salvarPendente("_tiposPendentes", key, tipo, { tipos: { [key]: tipo } }, "Não consegui gravar o tipo da conta no Firebase.");
+    await this._salvarPendente("_tiposPendentes", key, tipo, { tipos: { [key]: tipo } }, "Não consegui gravar o tipo da conta na nuvem.");
   },
 
   async loadAccountTypes(companyId) {
@@ -1741,9 +1816,13 @@ const FluxoCaixaDiarioApp = {
       const valor = Number.isFinite(saldo) && saldo > 0 ? saldo : (Number(r.valor) || 0);
       if (!(valor > 0)) return;
       const rateio = rateios[r.titulo + "|" + (r.parcela || "")];
+      const shares = rateio && rateio.length ? rateio : (r.ccId ? [{ cc: String(r.ccId), share: 1 }] : []);
+      const contaParceiro = this.contaSaidaParceiroAvare(Object.assign({}, r, { shares }));
+      const conta = contaParceiro || r.conta || "";
+      const cid = (contaParceiro && "1") || r.companyId || "";
       pay.push({
         key,
-        shares: rateio && rateio.length ? rateio : (r.ccId ? [{ cc: String(r.ccId), share: 1 }] : []),
+        shares,
         date: pagamento,
         vencimento: due,
         deslocadoDe: pagamento !== due ? due : "",
@@ -1754,14 +1833,14 @@ const FluxoCaixaDiarioApp = {
         documento: r.documento || "",
         docId: r.docId || "",
         docNome: r.docNome || "",
-        companyId: r.companyId || "",
+        companyId: cid,
         plano: r.plano || "",
         departamento: r.departamento || "",
         ccId: r.ccId || "",
         ccNome: r.ccNome || "",
         natureza: r.natureza,
         tipoBaixa: r.tipoBaixa || "",
-        conta: r.conta || "",
+        conta,
         operacao: r.operacao || ""
       });
     });
@@ -1911,11 +1990,17 @@ const FluxoCaixaDiarioApp = {
     this.movs.forEach((m) => {
       const day = byDay[m.date];
       if (!day || !day.real) return;
+      const contaParceiro = this.contaSaidaParceiroAvare(m);
+      if (contaParceiro && !m.conta) {
+        m.conta = contaParceiro;
+        m.companyId = "1";
+      }
       if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return;
       if (m.conta) {
         const key = this.accountKey({ companyId: m.companyId, number: m.conta });
-        const acc = accByKey[key];
-        const ok = acc ? this.accountIncluded(acc) : (!this._bloq.has(this.normNum(m.conta)) && this.flags[key] !== false);
+        const norm = this.normNum(m.conta);
+        const acc = accByKey[key] || (this.accounts || []).find((a) => String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm);
+        const ok = acc ? this.accountIncluded(acc) : (!this._bloq.has(norm) && this.flags[key] !== false);
         if (!ok) return;
       }
       const fora = this.shareFora(m.shares, excl, m);
@@ -1940,6 +2025,7 @@ const FluxoCaixaDiarioApp = {
     this.payItems.forEach((p) => {
       const day = byDay[p.date];
       if (!day || day.real) return;
+      if (p.conta && !this.movContaEntra(p)) return;
       const fora = this.shareFora(p.shares, excl, p);
       const v = p.valor * (1 - fora);
       if (v < 0.005) return;
@@ -2433,6 +2519,7 @@ const FluxoCaixaDiarioApp = {
           <div><span style="color:#64748b;">Situação</span><div>${situacao}</div></div>
           <div><span style="color:#64748b;">Centro de custo</span><div>${caixaEsc(item.ccNome || "—")}</div></div>
           <div><span style="color:#64748b;">Plano financeiro</span><div>${caixaEsc(item.plano || "—")}</div></div>
+          ${item.conta ? `<div><span style="color:#64748b;">Conta de saída</span><div style="font-weight:700;color:#c2410c;">${caixaEsc(this.contaLabel(item))}</div></div>` : ""}
         </div>
         ${bill.notes ? `<p style="margin:12px 0 0;font-size:0.84rem;"><strong>Observação:</strong> ${caixaEsc(bill.notes)}</p>` : ""}
         <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Forma de pagamento</h4>
@@ -2472,8 +2559,9 @@ const FluxoCaixaDiarioApp = {
     if (it && it.conta) {
       const bank = this.bankInfo(it.companyId, it.conta);
       const key = this.accountKey({ companyId: it.companyId || "", number: it.conta });
-      const acc = (this.accounts || []).find((a) => this.accountKey(a) === key);
-      const nome = acc && acc.name && this.normNum(acc.name) !== this.normNum(it.conta) ? acc.name : "";
+      const norm = this.normNum(it.conta);
+      const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(it.companyId || "") && this.normNum(a.number) === norm));
+      const nome = acc && acc.name && this.normNum(acc.name) !== norm ? acc.name : "";
       const tipo = (it.tipoConta || this.ladoConta(it.companyId, it.conta)) === "investimento" ? "Investimento" : "Conta corrente";
       return [tipo, it.conta, nome, bank.bancoLabel].filter(Boolean).join(" · ");
     }
@@ -2525,13 +2613,14 @@ const FluxoCaixaDiarioApp = {
 
   /** Vencimento original, PMP de 3 meses e o motivo da data no caixa. */
   dicaLinha(it) {
-    if (!it || this.ehPagar(it)) return "";
+    if (!it) return "";
+    const ehPagar = this.ehPagar(it);
     const linhas = [];
     if (it.vencimento) linhas.push("<b>Vencimento original</b> " + caixaEsc(caixaFmtDate(it.vencimento)));
-    if (it.unidades && it.unidades.length > 1) {
+    if (!ehPagar && it.unidades && it.unidades.length > 1) {
       linhas.push("<b>Mesmo título</b> nas unidades " + caixaEsc(it.unidades.join(" e ")) + ". A parcela entra uma vez no caixa.");
     }
-    if (!it.real && !it.outra) {
+    if (!it.real && !it.outra && !ehPagar) {
       const pmp = Number(it.pmp) || 0;
       const quando = pmp > 0 ? pmp + " dia(s) depois do vencimento" : (pmp < 0 ? Math.abs(pmp) + " dia(s) antes do vencimento" : "no próprio vencimento");
       linhas.push("<b>PMP</b> " + caixaEsc(String(pmp)) + " dia(s) · média de 3 meses, paga " + caixaEsc(quando));
@@ -2548,6 +2637,9 @@ const FluxoCaixaDiarioApp = {
       linhas.push(it.deslocadoDe
         ? caixaEsc("O pagamento foi para o dia útil " + caixaFmtDate(it.date) + ".")
         : caixaEsc("Pagamento previsto em " + caixaFmtDate(it.date) + "."));
+    }
+    if (it.conta) {
+      linhas.push(`<b>Conta ${ehPagar ? "de saída" : "de entrada"} prevista:</b> ` + caixaEsc(this.contaLabel(it)));
     }
     return linhas.join("<br>");
   },
@@ -3213,8 +3305,9 @@ const FluxoCaixaDiarioApp = {
 
   linhaDetalhe(it, cls, click) {
     const dica = this.dicaLinha(it);
+    const tagConta = it && it.conta ? `<span class="cxd-extra">C/C ${caixaEsc(it.conta)}</span>` : "";
     return `<tr class="${cls}${click ? " cxd-click" : ""}" ${click || ""}>
-      <td class="cxd-desc cxd-tip">${caixaEsc(this.resumoLinha(it))}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
+      <td class="cxd-desc cxd-tip">${caixaEsc(this.resumoLinha(it))}${tagConta}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
       <td class="cxd-num">${caixaMoney(it.valor)}</td>
     </tr>`;
   },
@@ -3497,6 +3590,11 @@ const FluxoCaixaDiarioApp = {
         #fluxo-caixa-diario-root .cxd-wrap { border:1px solid #e2e8f0; border-radius:8px; overflow-x:auto; overflow-y:hidden; background:#fff; margin-bottom:14px; }
         #fluxo-caixa-diario-root .cxd-title { margin:0 0 6px; font-size:.78rem; font-weight:700; color:#105436; letter-spacing:.03em; }
         #fluxo-caixa-diario-root .cxd-title span { font-weight:500; color:#64748b; letter-spacing:0; }
+        #fluxo-caixa-diario-root .cxd-disp-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px; }
+        #fluxo-caixa-diario-root .cxd-disp-bar .cxd-title { margin:0; flex:1 1 auto; }
+        #fluxo-caixa-diario-root .cxd-disp-aviso { font-size:.76rem; font-weight:700; color:#9a3412; background:#fff7ed; border:1px solid #fed7aa; border-radius:999px; padding:3px 10px; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-info { font-size:.74rem; color:#64748b; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-btn { height:40px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
         #fluxo-caixa-diario-root .cxd-vazio { padding:16px; color:#64748b; background:#fff; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:10px; font-size:.84rem; }
         #fluxo-caixa-diario-root .cxd-contas-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(520px, 1fr)); gap:12px; margin-bottom:10px; align-items:start; }
         #fluxo-caixa-diario-root .cxd-gbox { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
@@ -3683,7 +3781,7 @@ const FluxoCaixaDiarioApp = {
           ${this.error ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(this.error)}</div>` : ""}
           ${this.aba === "receber" ? this.valorAReceberHtml() : ""}
           <div class="cxd-miolo-mov" ${this.aba === "receber" ? "hidden" : ""}>
-          <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
+          ${this.disponivelBarHtml()}
           ${this.contasHtml()}
           <div class="cxd-saldo-ini"><span>${iniLabel}</span><span>${caixaMoney(saldoInicial)}</span></div>
           ${avisoAplicacao}

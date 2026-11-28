@@ -324,7 +324,7 @@ window.BoletoCheck = {
       out.resumo = "Cartão de crédito. Este título não entra no lote de pagamento do banco.";
       return out;
     }
-    if (payment.kind === "pix") return this.validarPix(payment, ctx.credor, out);
+    if (payment.kind === "pix") return this.validarPix(payment, ctx.credor, out, ctx);
     if (!this.ehBoleto(payment)) {
       out.nivel = "info";
       out.forma = payment.kind === "pix" ? "PIX" : (payment.kind === "bank-transfer" ? "Transferência" : String(payment.kind));
@@ -462,7 +462,82 @@ window.BoletoCheck = {
   },
 
   /* ---------- PIX: a chave tem de ser do credor do título ---------- */
-  TIPOS_PIX: { C: "CPF/CNPJ", E: "E-mail", T: "Telefone", A: "Aleatória" },
+  TIPOS_PIX: { C: "CPF/CNPJ", E: "E-mail", T: "Telefone", A: "Aleatória", Q: "QR Code" },
+
+  /** Lê o "PIX copia e cola" (BR Code, padrão EMV): campos de 2 dígitos de id + 2 de tamanho + valor. */
+  lerBrCode(txt) {
+    const s = String(txt || "").trim();
+    const campos = (str) => {
+      const out = {};
+      let i = 0;
+      while (i + 4 <= str.length) {
+        const id = str.slice(i, i + 2);
+        const n = Number(str.slice(i + 2, i + 4));
+        if (!/^\d{2}$/.test(id) || !Number.isFinite(n) || i + 4 + n > str.length) return null;
+        out[id] = str.slice(i + 4, i + 4 + n);
+        i += 4 + n;
+      }
+      return i === str.length ? out : null;
+    };
+    const raiz = campos(s);
+    if (!raiz || raiz["00"] !== "01" || !raiz["63"]) return null;
+    // Conta PIX: id 26 (ou 26 a 51) com o GUI br.gov.bcb.pix
+    let conta = null;
+    for (let k = 26; k <= 51; k++) {
+      const v = raiz[String(k)];
+      const sub = v ? campos(v) : null;
+      if (sub && String(sub["00"] || "").toLowerCase() === "br.gov.bcb.pix") { conta = sub; break; }
+    }
+    // CRC16-CCITT (polinômio 0x1021, início 0xFFFF) de tudo até o "6304", inclusive.
+    const base = s.slice(0, s.length - 4);
+    let crc = 0xFFFF;
+    for (let i = 0; i < base.length; i++) {
+      crc ^= base.charCodeAt(i) << 8;
+      for (let b = 0; b < 8; b++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+    }
+    const crcOk = crc.toString(16).toUpperCase().padStart(4, "0") === String(raiz["63"]).toUpperCase();
+    return {
+      pix: !!conta,
+      crcOk,
+      chave: conta ? String(conta["01"] || "") : "",
+      url: conta ? String(conta["25"] || "") : "",
+      valor: raiz["54"] != null && raiz["54"] !== "" ? Number(raiz["54"]) : null,
+      recebedor: String(raiz["59"] || "").trim(),
+      cidade: String(raiz["60"] || "").trim()
+    };
+  },
+
+  /** PIX QR Code: o código é do recebedor da cobrança (guia, boleto PIX), não necessariamente do credor. */
+  validarPixQr(chave, ctx, out) {
+    out.forma = "PIX QR Code";
+    const qr = this.lerBrCode(chave);
+    out.pix.qr = qr;
+    if (!qr) {
+      out.erros.push("O QR Code PIX gravado no Sienge não está no formato do PIX copia e cola.");
+    } else if (!qr.pix) {
+      out.erros.push("O código gravado não é de PIX (falta o identificador br.gov.bcb.pix).");
+    } else if (!qr.crcOk) {
+      out.erros.push("O dígito verificador do PIX copia e cola não confere: o código foi copiado incompleto ou alterado.");
+    } else {
+      if (qr.recebedor) out.pix.titular = `QR Code de ${qr.recebedor}${qr.cidade ? " (" + qr.cidade + ")" : ""}.`;
+      const valor = Number(ctx && ctx.valor);
+      const retido = Number(ctx && ctx.retido) || 0;
+      const aPagar = retido > 0.009 ? Math.round((valor - retido) * 100) / 100 : valor;
+      if (qr.valor != null && qr.valor > 0 && Number.isFinite(aPagar) && aPagar > 0) {
+        if (Math.abs(qr.valor - aPagar) > 0.01) {
+          const dif = qr.valor - aPagar;
+          out.erros.push(`Valor do QR Code ${this.money(qr.valor)} diferente do valor a pagar ${this.money(aPagar)} (${dif > 0 ? "+" : "−"}${this.money(Math.abs(dif))}).`);
+        }
+      } else if (qr.url) {
+        out.infos.push("QR Code dinâmico: o valor vem da cobrança do recebedor na hora do pagamento.");
+      }
+    }
+    if (out.erros.length) out.nivel = "erro";
+    else if (out.avisos.length) out.nivel = "aviso";
+    else out.nivel = "ok";
+    out.resumo = out.erros[0] || out.avisos[0] || (out.pix.titular ? "PIX QR Code conferido · " + out.pix.titular : "PIX QR Code conferido");
+    return out;
+  },
 
   cpfValido(c) {
     if (!/^\d{11}$/.test(c) || /^(\d)\1{10}$/.test(c)) return false;
@@ -511,7 +586,7 @@ window.BoletoCheck = {
    * Sem consulta ao DICT do Banco Central: o titular de chave telefone, e-mail ou aleatória é conferido
    * pelas chaves PIX cadastradas no credor do Sienge (que têm o CPF/CNPJ do credor).
    */
-  validarPix(payment, credor, out) {
+  validarPix(payment, credor, out, ctx) {
     const d = payment.data || {};
     out.forma = "PIX";
     let tipo = String(d.keyPixType || "").trim().toUpperCase();
@@ -527,6 +602,7 @@ window.BoletoCheck = {
     }
     const tipoNome = this.TIPOS_PIX[tipo] || (tipo ? `Tipo ${tipo}` : "—");
     out.pix = { tipo, tipoNome, chave, beneficiario: String(d.beneficiaryName || "").trim(), benefDoc: this.digits(d.beneficiaryCNPJNumber || d.beneficiaryCPFNumber), credDoc, credNome: lido ? credor.nome : "", titular: "" };
+    if (tipo === "Q" && chave) return this.validarPixQr(chave, ctx, out);
 
     if (credor && credor.erro) out.avisos.push(`Não consegui ler o cadastro do credor no Sienge para conferir o titular da chave (${credor.erro}).`);
     else if (lido && !credDoc) out.avisos.push("O credor não tem CPF/CNPJ no cadastro do Sienge: não há como conferir o titular da chave.");
@@ -576,8 +652,11 @@ window.BoletoCheck = {
   pixHtml(v) {
     const p = v.pix || {};
     const lista = (itens, cor, ic) => itens.map((t) => `<p style="margin:4px 0 0;color:${cor};">${ic} ${this.esc(t)}</p>`).join("");
-    return `<p><strong>Forma:</strong> PIX</p>
-      <p><strong>Chave (${this.esc(p.tipoNome || "—")}):</strong> ${this.esc(p.chave || "—")}</p>
+    const qr = p.qr;
+    return `<p><strong>Forma:</strong> ${this.esc(v.forma || "PIX")}</p>
+      ${qr ? `<p><strong>Recebedor do QR Code:</strong> ${this.esc(qr.recebedor || "—")}${qr.cidade ? ` · ${this.esc(qr.cidade)}` : ""}</p>
+      <p><strong>Valor no QR Code:</strong> ${qr.valor != null && qr.valor > 0 ? this.esc(this.money(qr.valor)) : "definido pela cobrança na hora do pagamento"}</p>
+      <p style="word-break:break-all;"><strong>PIX copia e cola:</strong> ${this.esc(p.chave || "—")}</p>` : `<p><strong>Chave (${this.esc(p.tipoNome || "—")}):</strong> ${this.esc(p.chave || "—")}</p>`}
       ${p.beneficiario || p.benefDoc ? `<p><strong>Beneficiário:</strong> ${this.esc(p.beneficiario || "—")}${p.benefDoc ? ` · ${this.esc(this.docFmt(p.benefDoc))}` : ""}</p>` : ""}
       ${p.credDoc ? `<p><strong>Credor do título:</strong> ${this.esc(p.credNome || "—")} · ${this.esc(this.docFmt(p.credDoc))}</p>` : ""}
       ${v.nivel === "ok" && p.titular ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ ${this.esc(p.titular)}</p>` : ""}
@@ -603,7 +682,7 @@ window.BoletoCheck = {
     const lista = (itens, cor, ic) => itens.map((t) => `<p style="margin:4px 0 0;color:${cor};">${ic} ${this.esc(t)}</p>`).join("");
     const cab = v.nivel === "ok"
       ? (v.guiaSomada
-        ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ Guia unificada conferida: o código soma os títulos desta guia.</p>`
+        ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ ${v.forma === "Boleto unificado" ? "Boleto unificado conferido: o boleto soma os títulos do mesmo credor." : "Guia unificada conferida: o código soma os títulos desta guia."}</p>`
         : `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ Código de barras conferido: dígitos, valor${v.retidoAplicado ? " líquido" : ""}${v.vencBoleto ? " e vencimento" : ""} batem com o título.</p>`)
       : "";
     return `<p><strong>Forma:</strong> ${this.esc(v.forma)}</p>

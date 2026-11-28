@@ -171,14 +171,28 @@ window.persistLargeCacheIfRoom = function(key, value) {
           if (profile) this.setRequestHeader("X-Crm-Profile", profile);
         }
       } catch (e) {}
+      let precisaRenovar = false;
       try {
         const auth = window.MouraAuth;
-        const token = crmIsOwnApiUrl(this._crmApiUrl) && auth && typeof auth.getIntegraTokenSync === "function"
+        const propria = crmIsOwnApiUrl(this._crmApiUrl);
+        const token = propria && auth && typeof auth.getIntegraTokenSync === "function"
           ? auth.getIntegraTokenSync()
           : "";
         if (token) this.setRequestHeader("X-Integra-Token", token);
+        // Login guardado vencido (página parada muito tempo): renova antes de enviar,
+        // senão o servidor recusa a chamada quando o bloqueio sem login estiver ligado.
+        else if (propria && auth && typeof auth.getIntegraToken === "function") precisaRenovar = true;
       } catch (e) {}
-      return _xhrSend.apply(this, arguments);
+      if (!precisaRenovar) return _xhrSend.apply(this, arguments);
+      const xhr = this;
+      const args = arguments;
+      Promise.resolve()
+        .then(() => window.MouraAuth.getIntegraToken())
+        .catch(() => "")
+        .then((novo) => {
+          try { if (novo) xhr.setRequestHeader("X-Integra-Token", novo); } catch (e) {}
+          _xhrSend.apply(xhr, args);
+        });
     };
   }
 })();
@@ -655,9 +669,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (typeof window.updateOperatorTabsUI === "function") window.updateOperatorTabsUI();
     if (typeof window.syncWebroHideToggleUI === "function") window.syncWebroHideToggleUI();
     setTimeout(() => {
-      if (typeof window.ensureAllNexCleared === "function") window.ensureAllNexCleared();
-      if (typeof window.ensureNexTodayPurged === "function") window.ensureNexTodayPurged();
-      if (typeof window.ensureNexTitulo12753Removed === "function") window.ensureNexTitulo12753Removed();
+      // As limpezas de NEX de agosto (todas as NEX, as de 27/08 e as do título 12753) já rodaram e
+      // não são mais chamadas: com a trava do Firebase fora do ar, a limpeza geral apagava tudo de novo (19/11).
       if (typeof window.ensureBoletoNotesTitulo4868Removed === "function") window.ensureBoletoNotesTitulo4868Removed();
     }, 1500);
 });
@@ -788,19 +801,19 @@ window.startCustomerBackgroundSync = async function(force = false, quiet = false
     };
     
     if (!window.GlobalCustomerCache.data || window.GlobalCustomerCache.data.length === 0) {
-        setDynamicFieldsState(true, "Carregando base do Firebase...");
+        setDynamicFieldsState(true, "Carregando base...");
     }
     
     try {
         if (textEl && progEl) {
-            textEl.innerText = `Buscando no Firebase...`;
+            textEl.innerText = `Buscando no banco...`;
             progEl.style.width = `10%`;
         }
 
         // Se for force manual (clicou no botão), primeiro chama o worker para buscar Sienge -> Firebase
         if (force && !quiet) {
             if (textEl && progEl) {
-                textEl.innerText = `Sincronizando Sienge -> Firebase...`;
+                textEl.innerText = `Sincronizando Sienge -> banco...`;
                 progEl.style.width = `30%`;
             }
             try {
@@ -810,8 +823,8 @@ window.startCustomerBackgroundSync = async function(force = false, quiet = false
             }
         }
         
-        if (!window.firebaseDb || !window.firebaseCollections) {
-            throw new Error("Firebase SDK não inicializado.");
+        if (!window.DadosCobranca) {
+            throw new Error("Supabase não inicializado.");
         }
 
         if (textEl && progEl) {
@@ -819,13 +832,14 @@ window.startCustomerBackgroundSync = async function(force = false, quiet = false
             progEl.style.width = `60%`;
         }
 
-        // Baixa a base completa do Firebase (rápido e não depende da lentidão do Sienge)
-        const colRef = window.firebaseCollections.collection(window.firebaseDb, 'sienge_customers');
-        const snapshot = await window.firebaseCollections.getDocs(colRef);
-        
+        // Baixa a base completa do espelho no Supabase (rápido e não depende da lentidão do Sienge).
+        // Só as colunas usadas na busca; campos sem coluna (phone, cpfCnpj...) voltam do extra.
+        const clientes = await window.DadosCobranca.tabela('sienge_customers').listar({
+            colunas: 'id, name, cpf, cnpj, birth_date, email, phones, extra'
+        });
+
         let tempData = [];
-        snapshot.forEach(doc => {
-            const c = doc.data();
+        clientes.forEach(c => {
             tempData.push({
                 id: c.id || c.customerId,
                 name: c.name || c.customerName || c.clientName || 'Sem Nome',
@@ -2950,6 +2964,70 @@ window.baseCorrigidaParcela = function(inst) {
   return base;
 };
 
+/* Saldo em aberto menor que o original: houve baixa e a parcela não quitou. */
+window.parcelaBaixaParcial = function(inst) {
+  if (!inst || Number(inst.installmentSituation) === 2) return null;
+  const face = Number(inst.originalValue != null ? inst.originalValue : inst.value);
+  const saldo = Number(inst.cb != null ? inst.cb : inst.currentBalance);
+  if (!(face > 1) || !(saldo > 0.009) || !(saldo + 1 < face)) return null;
+  let pago = 0;
+  let data = "";
+  (Array.isArray(inst.receipts) ? inst.receipts : []).forEach(function(r) {
+    if (!r) return;
+    if (typeof window.isWriteOffReceipt === "function" && window.isWriteOffReceipt(r)) return;
+    const v = Number(r.receiptValue != null ? r.receiptValue : (r.netAmount != null ? r.netAmount : (r.netReceiptValue != null ? r.netReceiptValue : r.value)));
+    if (!(v > 0.009)) return;
+    pago += v;
+    const dt = String(r.paymentDate || r.receiptDate || r.date || "").slice(0, 10);
+    if (dt && dt > data) data = dt;
+  });
+  if (!(pago > 0.009) && String(inst.receiptTypeStr || "") === "Recebimento") {
+    pago = Number(inst.receiptValue) || 0;
+    data = String(inst.receiptDate || "").slice(0, 10);
+  }
+  if (pago > 0.05 && pago + 0.05 >= face) return null;
+  return {
+    parcela: inst.installmentNumber || inst.installmentId || "",
+    pago: pago,
+    data: data,
+    saldo: saldo,
+    face: face
+  };
+};
+
+window.renderAlertaBaixaParcial = function(lista) {
+  const box = document.getElementById("simulador-alerta-parcial");
+  if (!box) return;
+  const money = function(n) {
+    return (Number(n) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  };
+  const dataBr = function(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    return p.length === 3 ? (p[2] + "/" + p[1] + "/" + p[0]) : "";
+  };
+  const itens = [];
+  (lista || []).forEach(function(inst) {
+    const info = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+    if (info) itens.push(info);
+  });
+  if (!itens.length) {
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+  const linhas = itens.map(function(info) {
+    const quando = dataBr(info.data);
+    const baixa = info.pago > 0.009
+      ? (" Baixa de " + money(info.pago) + (quando ? (" em " + quando) : "") + ".")
+      : "";
+    return "<li><b>Parcela " + info.parcela + "</b> tem baixa parcial." + baixa
+      + " O valor em aberto é " + money(info.saldo) + ", e o original era " + money(info.face) + ".</li>";
+  }).join("");
+  box.innerHTML = "<b>Há parcela com baixa parcial.</b> O corrigido não é o valor original da parcela."
+    + "<ul style=\"margin: 6px 0 0 18px; padding: 0;\">" + linhas + "</ul>";
+  box.style.display = "block";
+};
+
 /** Se o extrato já traz o valor atualizado do Sienge e ele é maior que a mora
  *  recalculada, usa esse total. A multa continua 2% e o restante fica em juros. */
 window.encargosParcelaSienge = function(inst, base, dias, taxa) {
@@ -3730,7 +3808,8 @@ window.bootEngenhariaCaucao = function () {
     "participacoes": "participacoes", "mutuo": "mutuo", "contas-pagar": "contas-pagar",
     "auditoria-login": "auditoria-login", "consumo-api": "consumo-api", "repactuacao-lote": "repactuacao-lote",
     "engenharia-custo-obra": "custo-obra", "engenharia-acompanhamento": "acompanhamento-obra",
-    "relacionamento_obras": "previsao-obras"
+    "relacionamento_obras": "previsao-obras", "consultar-titulo": "consultar-titulo",
+    "antecipacoes": "antecipacoes"
   };
   var grupoPronto = {};
   var grupoEmCurso = {};
@@ -3995,6 +4074,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "processo-contra": "Novo processo",
     "reintegracao-posse": "Reintegração de posse",
     "titulos-incompletos": "Títulos incompletos",
+    "consultar-titulo": "Consultar título",
+    "antecipacoes": "Antecipações",
     "config-tags": "Configuração de TAGs",
     "motivos-cancelamento": "Motivos de cancelamento",
     "config-users": "Configuração de Usuários",
@@ -4010,6 +4091,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "Fluxo de caixa diário",
     mutuo: "Mútuo",
     "relatorios-cr": "Relatórios",
+    "remessa-avulsa": "Remessa avulsa",
     "importar-acionamentos": "Importar acionamentos",
     "resultado-caixa": "Resultado de caixa",
     "orcamento-novo": "Novo orçamento",
@@ -4026,7 +4108,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "parametrizacoes": "Gestão de Empresas",
     "centros-custo": "Gestão de Centros de Custo",
     "followup-cnd": "Follow-up CND",
-    "kmz": "Upload de Mapeamento (KMZ)",
+    "followup-cobranca": "Follow-up Cobrança",
+    "kmz":"Upload de Mapeamento (KMZ)",
     "upload-kmz": "Upload de KMZ",
     "imagem-satelite": "Imagem de Satélite",
     "upload-mapa": "Upload de Projeto Urbanístico",
@@ -4096,6 +4179,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "processo-contra": "scale",
     "reintegracao-posse": "key",
     "titulos-incompletos": "file-warning",
+    "consultar-titulo": "file-search",
+    "antecipacoes": "fast-forward",
     "config-tags": "tags",
     "motivos-cancelamento": "list",
     "config-users": "users",
@@ -4109,6 +4194,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     "fluxo-caixa-diario": "calendar-clock",
     mutuo: "handshake",
     "relatorios-cr": "file-bar-chart",
+    "remessa-avulsa": "file-spreadsheet",
     "resultado-caixa": "scale",
     "orcamento-novo": "file-plus",
     "orcamento-forecast": "line-chart",
@@ -4263,6 +4349,8 @@ function switchTab(tabId, titleOverride, showLoader = false) {
     loadCentrosCustoTab();
   } else if (tabId === "followup-cnd") {
     if (window.FollowupCndApp && typeof FollowupCndApp.abrir === "function") FollowupCndApp.abrir();
+  } else if (tabId === "followup-cobranca") {
+    if (window.FollowupGestor && typeof window.FollowupGestor.abrir === "function") window.FollowupGestor.abrir();
   } else if (tabId === "central-email") {
     if (window.CentralEmailApp && typeof CentralEmailApp.abrir === "function") CentralEmailApp.abrir();
   } else if (tabId === "doc-padrao") {
@@ -4411,7 +4499,7 @@ function switchTab(tabId, titleOverride, showLoader = false) {
   } else if (tabId === "gerar-pagamento") {
     if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("lotes");
   } else if (tabId === "cartao-credito") {
-    if (typeof GerarPagamentoApp !== "undefined") GerarPagamentoApp.init("cartao");
+    if (window.CartaoClaraApp && typeof CartaoClaraApp.init === "function") CartaoClaraApp.init();
   } else if (tabId === "parametrizacao-parceiro") {
     if (typeof ParametrizacaoParceiroApp !== "undefined") ParametrizacaoParceiroApp.init();
   } else if (tabId === "estrutura-societaria") {
@@ -4672,13 +4760,12 @@ function auditRowsFromNotes() {
 
 async function auditCollectNoteRows(fromCloud) {
   const localRows = auditRowsFromNotes();
-  if (!fromCloud || !window.firebaseDb || !window.firebaseCollections) return localRows;
+  if (!fromCloud || !window.DadosCobranca) return localRows;
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "customer_notes_shards"));
+    // Supabase: customer_notes (uma linha por nota) já volta agrupado { <customerId>: [notas] }, como um shard.
+    const data = await window.DadosCobranca.lerTodasNotasClientes();
     const cloud = [];
-    snap.forEach(function(docu) {
-      const data = docu.data() || {};
+    (function() {
       Object.keys(data).forEach(function(custId) {
         const list = Array.isArray(data[custId]) ? data[custId] : [];
         list.forEach(function(occ) {
@@ -4686,7 +4773,7 @@ async function auditCollectNoteRows(fromCloud) {
           if (row) cloud.push(row);
         });
       });
-    });
+    })();
     return cloud.concat(localRows);
   } catch (e) {
     console.warn("[Auditoria] ocorrências na nuvem", e);
@@ -4695,17 +4782,16 @@ async function auditCollectNoteRows(fromCloud) {
 }
 
 async function auditRowsFromAnexosMapa() {
-  if (!window.firebaseDb || !window.firebaseCollections) return [];
+  if (!window.DadosNucleo) return [];
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "anexos_mapa"));
+    // Supabase: anexos_mapa tem uma linha por envio (antes era um doc por empreendimento com o mapa byKey).
+    const envios = await window.DadosNucleo.tabela("anexos_mapa").listar();
     const rows = [];
-    snap.forEach(function(docu) {
-      const data = docu.data() || {};
-      const byKey = data.byKey && typeof data.byKey === "object" ? data.byKey : {};
-      const enterpriseId = String(data.enterpriseId || docu.id || "");
-      Object.keys(byKey).forEach(function(k) {
-        const rec = byKey[k];
+    const data = {}; // updatedAt do doc antigo foi descartado (vale o sentAt de cada envio)
+    envios.forEach(function(rec) {
+      const enterpriseId = String(rec.enterpriseId || "");
+      const k = rec.chave || rec.id;
+      (function() {
         if (!rec) return;
         const sentBy = String(rec.sentBy || "").trim();
         const tag = String(rec.tag || "").trim();
@@ -4737,7 +4823,7 @@ async function auditRowsFromAnexosMapa() {
             costCenterId: rec.enterpriseId || enterpriseId
           }
         });
-      });
+      })();
     });
     return rows;
   } catch (e) {
@@ -5215,10 +5301,10 @@ window.crmPedirAdvogadoAtuando = function() {
       return Promise.resolve(ainda);
     }
   }
-  return new Promise((resolve) => {
+  // Advogado já conectado em outra sessão aparece desativado: duas pessoas não entram com o mesmo nome.
+  return window.crmCadastrosOcupadosAgora(lista).then((ocupados) => new Promise((resolve) => {
     const antigo = document.getElementById("crm-advogado-atuando");
     if (antigo) antigo.remove();
-    const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     let escolhido = null;
     const overlay = document.createElement("div");
     overlay.id = "crm-advogado-atuando";
@@ -5227,16 +5313,8 @@ window.crmPedirAdvogadoAtuando = function() {
     overlay.style.cssText = "position:fixed;inset:0;z-index:200000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:24px;";
     const card = document.createElement("div");
     card.style.cssText = "width:min(440px,100%);background:#fff;border-radius:16px;padding:22px 22px 18px;box-shadow:0 24px 60px rgba(15,23,42,.28);";
-    const botoes = lista.map((p, i) => {
-      const id = "crm-adv-op-" + i;
-      return `<button type="button" id="${id}" data-idx="${i}" style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font:inherit;">
-        <span style="width:36px;height:36px;border-radius:50%;background:#105436;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
-        <span style="min-width:0;">
-          <span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
-          <span style="display:block;font-size:.75rem;color:#64748b;">${esc(p.email)}</span>
-        </span>
-      </button>`;
-    }).join("");
+    const ocupadoDe = (p) => ocupados.get(String((p && p.email) || "").toLowerCase().trim());
+    const botoes = lista.map((p, i) => window.crmBotaoQuemAcessa(p, i, ocupadoDe(p), p.email || "")).join("");
     card.innerHTML = `
       <h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f172a;">Quem está acessando?</h2>
       <p style="margin:0 0 14px;font-size:.84rem;color:#64748b;line-height:1.45;">A conta da Microsoft pode ser de outra pessoa. Escolha quem está entrando agora. Esse nome fica no registro de usuários online.</p>
@@ -5250,6 +5328,7 @@ window.crmPedirAdvogadoAtuando = function() {
     const ok = card.querySelector("#crm-adv-ok");
     const pintar = () => {
       card.querySelectorAll("[data-idx]").forEach((btn) => {
+        if (btn.disabled) return;
         const on = escolhido && String(btn.getAttribute("data-idx")) === String(lista.indexOf(escolhido));
         btn.style.borderColor = on ? "#105436" : "#e2e8f0";
         btn.style.background = on ? "#f0fdf4" : "#fff";
@@ -5257,14 +5336,27 @@ window.crmPedirAdvogadoAtuando = function() {
       ok.disabled = !escolhido;
       ok.style.opacity = escolhido ? "1" : ".45";
     };
-    card.querySelectorAll("[data-idx]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
-        pintar();
-      });
+    const ligar = (btn) => btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
+      pintar();
     });
-    ok.addEventListener("click", () => {
+    card.querySelectorAll("[data-idx]").forEach(ligar);
+    ok.addEventListener("click", async () => {
       if (!escolhido) return;
+      // Confere de novo na hora de entrar: alguém pode ter escolhido o mesmo nome enquanto a janela estava aberta.
+      ok.disabled = true;
+      const agora = await window.crmCadastrosOcupadosAgora([escolhido]);
+      const ocupado = agora.get(String(escolhido.email || "").toLowerCase().trim());
+      if (ocupado) {
+        alert(escolhido.name + " já está conectado agora em outra sessão. Escolha o seu próprio nome ou peça para a outra sessão sair.");
+        const idx = lista.indexOf(escolhido);
+        const btn = card.querySelector('[data-idx="' + idx + '"]');
+        if (btn) btn.outerHTML = window.crmBotaoQuemAcessa(escolhido, idx, ocupado, escolhido.email || "");
+        escolhido = null;
+        pintar();
+        return;
+      }
       window.crmAplicarAdvogadoAtuando(escolhido);
       overlay.remove();
       resolve(escolhido);
@@ -5273,7 +5365,7 @@ window.crmPedirAdvogadoAtuando = function() {
       overlay.remove();
       if (window.crmSair) window.crmSair();
     });
-  });
+  }));
 };
 
 window.crmSair = function() {
@@ -5379,11 +5471,17 @@ async function processSuccessfulLogin(loggedUser) {
       if (typeof window.checkNexDueAlerts === "function") {
         window.checkNexDueAlerts();
       }
+      if (window.RemessaAvulsaApp && typeof RemessaAvulsaApp.avisar === "function") {
+        RemessaAvulsaApp.avisar();
+      }
       if (typeof window.checkDistratoPrazoMes === "function") {
         window.checkDistratoPrazoMes();
       }
       if (window.FollowupCndApp && typeof FollowupCndApp.avisar === "function") {
         FollowupCndApp.avisar();
+      }
+      if (window.FollowupGestor && typeof window.FollowupGestor.iniciar === "function") {
+        window.FollowupGestor.iniciar();
       }
       if (window.GerarPagamentoApp && typeof window.GerarPagamentoApp.avisoFechamento === "function") {
         window.GerarPagamentoApp.avisoFechamento();
@@ -5411,6 +5509,9 @@ async function processSuccessfulLogin(loggedUser) {
       }
       if (typeof window.avisarRepactuacaoUltimoDia === "function") {
         window.avisarRepactuacaoUltimoDia();
+      }
+      if (typeof window.avisarTitulosMonitorados === "function") {
+        window.avisarTitulosMonitorados().catch(function() {});
       }
     }, 2500);
   } catch (err) {
@@ -5894,9 +5995,9 @@ window.persistBackOfficePermsObject = function(obj) {
 
 window.uploadBackOfficePermsToFirebase = async function(obj) {
   if (!obj || typeof window.crmPermsHasAnyTrue !== "function" || !window.crmPermsHasAnyTrue(obj)) return;
-  if (!window.firebaseDb || !window.firebaseCollections) return;
-  const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "back_office_perms");
-  await window.firebaseCollections.setDoc(docRef, {
+  if (!window.DadosNucleo) return;
+  // Supabase: config/back_office_perms fica inteiro em configuracoes (chave "config/back_office_perms").
+  await window.DadosNucleo.gravarConfig("back_office_perms", {
     payload: JSON.stringify(obj),
     savedAt: Number(obj._savedAt) || Date.now(),
     profileId: window.CRM_BACK_OFFICE_PROFILE_ID
@@ -5921,9 +6022,8 @@ window.applyBackOfficePermsFromCloudPayload = function(cloudRaw) {
 };
 
 window.downloadBackOfficePermsFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections) return null;
-  const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "back_office_perms");
-  const snap = await window.firebaseCollections.getDoc(docRef);
+  if (!window.DadosNucleo) return null;
+  const snap = await window.DadosNucleo.lerConfig("back_office_perms");
   const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
   if (!exists) return null;
   const data = snap.data() || {};
@@ -6147,6 +6247,19 @@ window.crmRepararCacoLista = function(list) {
       caco.login_email = CONTA;
       changed = true;
     }
+    // Cópia velha do Caco com o e-mail da conta (mesmo id e mesmo nome, sem usuário Sienge),
+    // criada antes de existir o E-mail de login. Sai da lista e fica marcada como removida
+    // para outro navegador não trazer de volta. Não mexe nos cadastros que entram pela conta.
+    const nomeNorm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+    for (let i = list.length - 1; i >= 0; i--) {
+      const u = list[i];
+      if (u === caco || emailOf(u) !== CONTA) continue;
+      if (String(u.id) === String(caco.id) && nomeNorm(u.name) === nomeNorm(caco.name)) {
+        list.splice(i, 1);
+        if (typeof window.removeCrmUserEmail === "function") window.removeCrmUserEmail(CONTA);
+        changed = true;
+      }
+    }
   }
   return changed;
 };
@@ -6165,6 +6278,50 @@ window.crmCadastrosDaConta = function(conta) {
 };
 
 window.CRM_CADASTRO_CONTA_KEY = "crm_cadastro_da_conta";
+
+/* Quem da lista já está conectado agora em OUTRA sessão (usuarios_online, sinal dos últimos 3 minutos).
+   Na conta compartilhada, duas pessoas não podem entrar com o mesmo cadastro. Devolve Map email -> { tela }.
+   A sessão desta aba (mesmo crm_presence_sid) não conta, para o F5 não bloquear a própria pessoa. */
+window.crmCadastrosOcupadosAgora = async function(lista) {
+  const ocupados = new Map();
+  const emails = new Set((lista || []).map((p) => String((p && p.email) || "").toLowerCase().trim()).filter(Boolean));
+  if (!emails.size || !window.sb || typeof window.sb.rpc !== "function") return ocupados;
+  let sid = "";
+  try { sid = sessionStorage.getItem("crm_presence_sid") || ""; } catch (e) {}
+  let meu = "";
+  try {
+    const salvoConta = JSON.parse(sessionStorage.getItem(window.CRM_CADASTRO_CONTA_KEY) || "null");
+    const salvoAdv = JSON.parse(sessionStorage.getItem(window.CRM_ADVOGADO_ATUANDO_KEY) || "null");
+    meu = String((salvoConta && salvoConta.email) || (salvoAdv && salvoAdv.email) || "").toLowerCase();
+  } catch (e) {}
+  try {
+    // No Supabase cada um só lê a própria linha de usuarios_online: a função cadastros_conectados responde
+    // só quais destes e-mails estão conectados (últimos 3 minutos) em outra sessão, e a tela.
+    const r = await window.sb.rpc("cadastros_conectados", { p_emails: Array.from(emails), p_sid: sid });
+    if (r && r.error) throw r.error;
+    ((r && r.data) || []).forEach((row) => {
+      const email = String((row && row.email) || "").toLowerCase().trim();
+      if (!email || (meu && email === meu)) return;
+      ocupados.set(email, { tela: (row && row.tela) || "" });
+    });
+  } catch (e) {
+    console.warn("[Quem está acessando] não consegui ler os usuários online:", e);
+  }
+  return ocupados;
+};
+
+/** Botão de pessoa nos dois "Quem está acessando?": desativado se a pessoa já está conectada em outra sessão. */
+window.crmBotaoQuemAcessa = function(p, i, ocupado, detalhe) {
+  const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const bloqueio = ocupado
+    ? `<span style="display:block;margin-top:2px;font-size:.72rem;font-weight:700;color:#b45309;">Já está conectado agora${ocupado.tela ? " (" + esc(ocupado.tela) + ")" : ""}. Saia da outra sessão para entrar com este nome.</span>`
+    : "";
+  return `<button type="button" data-idx="${i}" ${ocupado ? "disabled aria-disabled=\"true\"" : ""} style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:${ocupado ? "#f8fafc" : "#fff"};cursor:${ocupado ? "not-allowed" : "pointer"};opacity:${ocupado ? ".6" : "1"};font:inherit;">
+    <span style="width:36px;height:36px;border-radius:50%;background:${ocupado ? "#94a3b8" : "#105436"};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
+    <span style="min-width:0;"><span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
+    <span style="display:block;font-size:.75rem;color:#64748b;">${esc(detalhe)}</span>${bloqueio}</span>
+  </button>`;
+};
 
 /** Quando a conta serve a mais de um cadastro, pergunta quem está entrando. Devolve o cadastro escolhido ou null. */
 window.crmEscolherCadastroDaConta = function(loggedUser) {
@@ -6188,7 +6345,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
       }
     } catch (e) {}
   }
-  return new Promise((resolve) => {
+  return window.crmCadastrosOcupadosAgora(lista).then((ocupados) => new Promise((resolve) => {
     const antigo = document.getElementById("crm-cadastro-conta");
     if (antigo) antigo.remove();
     const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -6203,11 +6360,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
     card.innerHTML = `
       <h2 style="margin:0 0 6px;font-size:1.15rem;color:#0f172a;">Quem está acessando?</h2>
       <p style="margin:0 0 14px;font-size:.84rem;color:#64748b;line-height:1.45;">A conta ${esc(conta)} é usada por mais de uma pessoa. Escolha quem está entrando agora: o CRM abre com o perfil e as permissões dessa pessoa.</p>
-      <div>${lista.map((p, i) => `<button type="button" data-idx="${i}" style="display:flex;width:100%;text-align:left;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font:inherit;">
-        <span style="width:36px;height:36px;border-radius:50%;background:#105436;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 36px;">${esc(String(p.name || "?").trim().slice(0, 2).toUpperCase())}</span>
-        <span style="min-width:0;"><span style="display:block;font-weight:800;color:#0f172a;">${esc(p.name)}</span>
-        <span style="display:block;font-size:.75rem;color:#64748b;">${esc(p.profile_name || "")}${p.profile_name ? " · " : ""}${esc(p.email)}</span></span>
-      </button>`).join("")}</div>
+      <div>${lista.map((p, i) => window.crmBotaoQuemAcessa(p, i, ocupados.get(String(p.email || "").toLowerCase().trim()), (p.profile_name ? p.profile_name + " · " : "") + (p.email || ""))).join("")}</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
         <button type="button" id="crm-cad-sair" style="height:38px;padding:0 14px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#334155;font-weight:700;cursor:pointer;">Sair</button>
         <button type="button" id="crm-cad-ok" disabled style="height:38px;padding:0 16px;border-radius:10px;border:0;background:#105436;color:#fff;font-weight:800;cursor:pointer;opacity:.45;">Continuar</button>
@@ -6217,8 +6370,10 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
     const ok = card.querySelector("#crm-cad-ok");
     card.querySelectorAll("[data-idx]").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (btn.disabled) return;
         escolhido = lista[Number(btn.getAttribute("data-idx"))] || null;
         card.querySelectorAll("[data-idx]").forEach((b) => {
+          if (b.disabled) return;
           const on = b === btn;
           b.style.borderColor = on ? "#105436" : "#e2e8f0";
           b.style.background = on ? "#f0fdf4" : "#fff";
@@ -6227,8 +6382,20 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
         ok.style.opacity = escolhido ? "1" : ".45";
       });
     });
-    ok.addEventListener("click", () => {
+    ok.addEventListener("click", async () => {
       if (!escolhido) return;
+      // Confere de novo na hora de entrar: alguém pode ter escolhido o mesmo nome enquanto a janela estava aberta.
+      ok.disabled = true;
+      const agora = await window.crmCadastrosOcupadosAgora([escolhido]);
+      if (agora.has(String(escolhido.email || "").toLowerCase().trim())) {
+        alert(escolhido.name + " já está conectado agora em outra sessão. Escolha o seu próprio nome ou peça para a outra sessão sair.");
+        const idx = lista.indexOf(escolhido);
+        const btn = card.querySelector('[data-idx="' + idx + '"]');
+        if (btn) btn.outerHTML = window.crmBotaoQuemAcessa(escolhido, idx, agora.get(String(escolhido.email || "").toLowerCase().trim()), (escolhido.profile_name ? escolhido.profile_name + " · " : "") + (escolhido.email || ""));
+        escolhido = null;
+        ok.style.opacity = ".45";
+        return;
+      }
       try { sessionStorage.setItem(window.CRM_CADASTRO_CONTA_KEY, JSON.stringify({ conta, email: escolhido.email })); } catch (e) {}
       window._crmCadastroEscolhido = escolhido;
       overlay.remove();
@@ -6238,7 +6405,7 @@ window.crmEscolherCadastroDaConta = function(loggedUser) {
       overlay.remove();
       if (window.crmSair) window.crmSair();
     });
-  });
+  }));
 };
 
 window.mergeComissaoNfs = function(localStr, cloudStr) {
@@ -6264,9 +6431,8 @@ window.crmUsersDocExists = function(snap) {
 
 window.mergeCrmUsersWithCloud = async function(localStr, globalStr) {
   let dedicated = "[]";
-  if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDoc) {
-    const ref = window.firebaseCollections.doc(window.firebaseDb, "config", "crm_users");
-    const snap = await window.firebaseCollections.getDoc(ref);
+  if (window.DadosNucleo) {
+    const snap = await window.DadosNucleo.lerConfig("crm_users");
     if (window.crmUsersDocExists(snap)) {
       const data = snap.data() || {};
       dedicated = data.list || data.crm_users || "[]";
@@ -6330,23 +6496,90 @@ window.incluirCacoNaLista = function(raw) {
 
 // Leitura de config/global (quase 1 MB) reaproveitada por alguns segundos: a tela Usuários e Perfis
 // pedia o mesmo documento duas vezes seguidas. Toda gravação nele descarta a leitura guardada.
+// Supabase: o documento é montado das tabelas por DadosNucleo.lerConfig("global") (mesmo formato de antes).
 window.crmLerConfigGlobal = function() {
-  const fc = window.firebaseCollections;
   const agora = Date.now();
   const g = window._crmGlobalLeitura;
   if (g && agora - g.at < 5000) return g.p;
-  const p = fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
+  const p = window.DadosNucleo.lerConfig("global");
   window._crmGlobalLeitura = { at: agora, p: p };
   p.catch(() => { window._crmGlobalLeitura = null; });
   return p;
 };
 
+// Supabase: substitui o runTransaction do Firestore nos documentos de config/*. O "tx" lê com
+// DadosNucleo.lerConfig(id) e guarda as gravações, que vão para DadosNucleo.gravarConfig(id, ...) no fim.
+// Não é atômico nem repete em conflito (cada tabela de destino grava só as linhas que mudaram).
+// Para uma chave só de config/global, preferir DadosNucleo.trocarConfiguracao (esse sim repete em conflito).
+window.crmTransacaoConfig = async function(fn) {
+  if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
+  const gravacoes = [];
+  const tx = {
+    get: (id) => window.DadosNucleo.lerConfig(id, "config", { fresco: true }),
+    set: (id, dados, opcoes) => { gravacoes.push([id, dados, opcoes]); }
+  };
+  const ret = await fn(tx);
+  for (const g of gravacoes) {
+    if (g[0] === "global") window._crmGlobalLeitura = null;
+    await window.DadosNucleo.gravarConfig(g[0], g[1], g[2] || {});
+  }
+  return ret;
+};
+
+// Supabase: notas da agenda (agenda_personal_notes / agenda_recurring_notes). Id = "<NOME DO DONO>_<AAAA-MM-DD>".
+// Com a RLS só passa o que é do usuário atual, de "TODOS" ou compartilhado com ele (nucleo.md §26); o resto é
+// pulado aqui (antes gravava todas as chaves do localStorage e as alheias falhariam).
+window.crmAgendaPodeGravar = function(key, notes) {
+  let nome = "";
+  let email = "";
+  const u = window.AppState && window.AppState.currentUser;
+  if (u && u.name) {
+    nome = String(u.name).toUpperCase();
+    email = String(u.email || "").toLowerCase();
+  } else {
+    try {
+      const stored = JSON.parse(localStorage.getItem("currentUser"));
+      if (stored && stored.name) {
+        nome = String(stored.name).toUpperCase();
+        email = String(stored.email || "").toLowerCase();
+      }
+    } catch (e) {}
+  }
+  const dono = String(key || "").split("_")[0];
+  if (dono === "TODOS" || dono === "Todos") return true;
+  if (nome && dono === nome) return true;
+  return !!email && (Array.isArray(notes) ? notes : []).some((n) => n && Array.isArray(n.sharedWith) && n.sharedWith.includes(email));
+};
+
+// Grava { notes } no doc da agenda com merge (o merge mantém dono/usuario_id de quem criou).
+// Nota do próprio usuário leva usuario_id = id dele no Supabase (vem com o token, window.sbUsuario()):
+// é o que a regra de acesso confere para incluir/alterar. Notas de "TODOS" ficam sem dono.
+window.crmAgendaGravar = async function(tabela, key, notes) {
+  if (!window.DadosNucleo) return;
+  if (!window.crmAgendaPodeGravar(key, notes)) return;
+  const k = String(key);
+  const obj = { notes: notes || [] };
+  const i = k.indexOf("_");
+  if (i > 0) {
+    obj.dono = k.slice(0, i);
+    const dia = k.slice(i + 1);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dia)) obj.data = dia;
+  }
+  const dono = String(obj.dono || "").toUpperCase();
+  const u = window.AppState && window.AppState.currentUser;
+  if (dono && dono !== "TODOS" && u && String(u.name || "").toUpperCase() === dono) {
+    if (typeof window.sbToken === "function") await window.sbToken();
+    const eu = typeof window.sbUsuario === "function" ? window.sbUsuario() : null;
+    if (eu && eu.id) obj.usuario_id = eu.id;
+  }
+  return window.DadosNucleo.tabela(tabela).gravar(k, obj, { merge: true });
+};
+
 window.syncCrmUsersFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
-  const fc = window.firebaseCollections;
+  if (!window.DadosNucleo) return null;
   let dedicated = "[]";
   let globalUsers = "[]";
-  const dSnap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "crm_users"));
+  const dSnap = await window.DadosNucleo.lerConfig("crm_users");
   if (window.crmUsersDocExists(dSnap)) {
     const data = dSnap.data() || {};
     dedicated = data.list || data.crm_users || "[]";
@@ -6364,6 +6597,10 @@ window.syncCrmUsersFromFirebase = async function() {
   if (window.crmUsersDocExists(gSnap)) {
     const gData = gSnap.data() || {};
     globalUsers = gData.crm_users || "[]";
+    // Supabase: em config/global montado, removedEmails vem como texto JSON (vem de configuracoes).
+    if (typeof gData.removedEmails === "string") {
+      try { gData.removedEmails = JSON.parse(gData.removedEmails); } catch (e) { gData.removedEmails = []; }
+    }
     window.noteCrmUsersRemoved(gData.removedEmails);
     if (/caco@colenci\.com\.br/i.test(JSON.stringify(gData.removedEmails || []))) window._cacoPrecisaVolta = true;
   }
@@ -6392,8 +6629,7 @@ window.syncCrmUsersFromFirebase = async function() {
 };
 
 window.syncCrmProfilesFromFirebase = async function() {
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.getDoc) return null;
-  const fc = window.firebaseCollections;
+  if (!window.DadosNucleo) return null;
   const gSnap = await window.crmLerConfigGlobal();
   const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
   if (typeof window.absorbCrmProfileTombstones === "function") {
@@ -6454,13 +6690,12 @@ window.ensureCrmStorageRoom = function() {
 
 window.persistCrmProfilesNow = async function(profiles) {
   window._crmGlobalLeitura = null;
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e crie o perfil outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e crie o perfil outra vez.");
   }
   const mem = JSON.stringify(Array.isArray(profiles) ? profiles : []);
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const merged = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  const merged = await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const data = exists ? (snap.data() || {}) : {};
@@ -6504,17 +6739,16 @@ window.persistCrmProfilePermsNow = async function(profileId, perms) {
   window._crmGlobalLeitura = null;
   const id = String(profileId || "").trim();
   if (!id) throw new Error("Perfil sem identificador.");
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e salve as permissões outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e salve as permissões outra vez.");
   }
   const key = "crm_perms_" + id;
   const memObj = Object.assign({}, perms || {});
   delete memObj.__mirror_of__;
   if (!memObj._savedAt) memObj._savedAt = Date.now();
   const mem = JSON.stringify(memObj);
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const saved = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  const saved = await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const data = exists ? (snap.data() || {}) : {};
@@ -6552,14 +6786,14 @@ window.persistCrmUsersToFirebase = function(users) {
 
 window._writeCrmUsersNow = async function(mem) {
   window._crmGlobalLeitura = null;
-  if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.setDoc) {
-    throw new Error("Firebase não inicializado. Abra o sistema de novo e salve o usuário outra vez.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado. Abra o sistema de novo e salve o usuário outra vez.");
   }
-  const fc = window.firebaseCollections;
   let local = "[]";
   try { local = localStorage.getItem("crm_users") || "[]"; } catch (e) {}
-  const usersRef = fc.doc(window.firebaseDb, "config", "crm_users");
-  const globalRef = fc.doc(window.firebaseDb, "config", "global");
+  // Supabase: config/crm_users e config/global.crm_users vêm da mesma tabela usuarios (a segunda gravação não reenvia nada).
+  const usersRef = "crm_users";
+  const globalRef = "global";
   const writeMerged = async (dedicated, globalUsers) => {
     const merged = window.crmSomenteUsuariosDoAdministrador(
       window.mergeCrmUsers(mem, local),
@@ -6585,12 +6819,16 @@ window._writeCrmUsersNow = async function(mem) {
     return { merged, out };
   };
   let saved;
-  if (typeof fc.runTransaction === "function") {
-    saved = await fc.runTransaction(window.firebaseDb, async (tx) => {
+  if (typeof window.crmTransacaoConfig === "function") {
+    saved = await window.crmTransacaoConfig(async (tx) => {
       const dSnap = await tx.get(usersRef);
       const gSnap = await tx.get(globalRef);
       const dData = window.crmUsersDocExists(dSnap) ? (dSnap.data() || {}) : {};
       const gData = window.crmUsersDocExists(gSnap) ? (gSnap.data() || {}) : {};
+      // Supabase: removedEmails de config/global vem como texto JSON (configuracoes).
+      if (typeof gData.removedEmails === "string") {
+        try { gData.removedEmails = JSON.parse(gData.removedEmails); } catch (e) { gData.removedEmails = []; }
+      }
       window.noteCrmUsersRemoved(dData.removedEmails);
       window.noteCrmUsersRemoved(gData.removedEmails);
       const dedicated = dData.list || dData.crm_users || "[]";
@@ -6606,13 +6844,13 @@ window._writeCrmUsersNow = async function(mem) {
   } else {
     let dedicated = "[]";
     let globalUsers = "[]";
-    const dSnap = await fc.getDoc(usersRef);
+    const dSnap = await window.DadosNucleo.lerConfig(usersRef);
     if (window.crmUsersDocExists(dSnap)) {
       const data = dSnap.data() || {};
       dedicated = data.list || data.crm_users || "[]";
       window.noteCrmUsersRemoved(data.removedEmails);
     }
-    const gSnap = await fc.getDoc(globalRef);
+    const gSnap = await window.DadosNucleo.lerConfig(globalRef);
     if (window.crmUsersDocExists(gSnap)) {
       const data = gSnap.data() || {};
       globalUsers = data.crm_users || "[]";
@@ -6622,8 +6860,8 @@ window._writeCrmUsersNow = async function(mem) {
     saved.merged = window.stripRemovedCrmUsers(saved.merged);
     try { saved.out = JSON.parse(saved.merged); } catch (e) { saved.out = []; }
     const removedEmails = window.crmUsersRemovedList();
-    await fc.setDoc(usersRef, { list: saved.merged, removedEmails: removedEmails, updatedAt: new Date().toISOString() }, { merge: true });
-    await fc.setDoc(globalRef, { crm_users: saved.merged, removedEmails: removedEmails }, { merge: true });
+    await window.DadosNucleo.gravarConfig(usersRef, { list: saved.merged, removedEmails: removedEmails, updatedAt: new Date().toISOString() }, { merge: true });
+    await window.DadosNucleo.gravarConfig(globalRef, { crm_users: saved.merged, removedEmails: removedEmails }, { merge: true });
   }
   const merged = saved.merged;
   const out = saved.out;
@@ -6755,12 +6993,11 @@ window.crmFinanciamentosMesclar = function(payloadRaw, cloudRaw) {
 };
 
 window.commitCrmGlobalConfig = async function(payload) {
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !fc.doc || !window.firebaseDb) {
-    throw new Error("Firebase não inicializado.");
+  if (!window.DadosNucleo) {
+    throw new Error("Supabase não inicializado.");
   }
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  await fc.runTransaction(window.firebaseDb, async (tx) => {
+  const docRef = "global";
+  await window.crmTransacaoConfig(async (tx) => {
     const snap = await tx.get(docRef);
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const cloud = exists ? (snap.data() || {}) : {};
@@ -6944,17 +7181,13 @@ window.mergedCaucaoLiberados = function(parts) {
 };
 
 window.persistCaucaoLiberadosNow = async function(map) {
-  const fc = window.firebaseCollections;
-  if (!fc || !fc.runTransaction || !window.firebaseDb) return null;
+  if (!window.DadosNucleo) return null;
   const mem = JSON.stringify(map && typeof map === "object" ? map : {});
-  const docRef = fc.doc(window.firebaseDb, "config", "global");
-  const merged = await fc.runTransaction(window.firebaseDb, async (tx) => {
-    const snap = await tx.get(docRef);
-    const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-    const cloud = exists ? ((snap.data() || {}).crm_engenharia_caucao_liberados_v1 || "{}") : "{}";
-    const next = window.mergedCaucaoLiberados([mem, cloud]);
-    tx.set(docRef, { crm_engenharia_caucao_liberados_v1: next }, { merge: true });
-    return next;
+  // Supabase: uma chave só de config/global -> trocarConfiguracao (relê e repete em conflito).
+  window._crmGlobalLeitura = null;
+  const merged = await window.DadosNucleo.trocarConfiguracao("crm_engenharia_caucao_liberados_v1", (atual) => {
+    const cloud = atual || "{}";
+    return window.mergedCaucaoLiberados([mem, cloud]);
   });
   try {
     const setter = window._originalSetItem || localStorage.setItem.bind(localStorage);
@@ -7352,17 +7585,80 @@ window.crmBackOfficeReal = function() {
   return window.isCobrancaBackOfficeUser(rec || u);
 };
 
+/** Operador da régua (Atribuição por cidades) é o usuário? Comparação estrita, sem "todos". */
+window.crmOperadorDaReguaEhUsuario = function(op, user) {
+  if (!op || !user) return false;
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\./g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+  const o = norm(op);
+  if (!o || o === "TODOS") return false;
+  const nomes = [user.name, user.sienge_user].map(norm).filter(Boolean);
+  return nomes.some((n) => {
+    if (n === o) return true;
+    const tokOp = o.split(" ").filter((t) => t.length > 1);
+    const tokNome = n.split(" ");
+    return tokOp.length >= 2 && tokOp.every((t) => tokNome.indexOf(t) >= 0);
+  });
+};
+
+/** Terceirizadas que dividem alguma cidade com o operador interno logado (para ele acompanhar). */
+window.crmTerceirizadasAcompanhadas = function() {
+  if (window.crmAdministradorReal()) return [];
+  const real = window.AppState && AppState.currentUser;
+  if (!real) return [];
+  const eu = (typeof window.findCrmRegisteredUser === "function" && window.findCrmRegisteredUser(real))
+    || Object.assign({}, real, { name: window.crmNomeReal() });
+  const status = String(eu.status || "ATIVO").toUpperCase();
+  if (status === "INATIVO" || status === "PENDENTE") return [];
+  const ehTerc = (u) => typeof window.isOperadorCobrancaTerceirizadoProfile === "function"
+    && window.isOperadorCobrancaTerceirizadoProfile(u && u.profile_name);
+  if (ehTerc(eu)) return [];
+  const meuEmail = String(eu.email || real.email || "").toLowerCase();
+  const lista = typeof window.getCrmUsersList === "function" ? window.getCrmUsersList() : [];
+  const tercs = lista.filter((u) => u && ehTerc(u)
+    && String(u.status || "ATIVO").toUpperCase() !== "INATIVO"
+    && String(u.email || "").toLowerCase() !== meuEmail);
+  if (!tercs.length) return [];
+  const rules = (window.AppState && AppState.rules) || {};
+  const achadas = new Set();
+  Object.keys(rules).forEach((key) => {
+    if (String(key).indexOf("CID_") !== 0 || !rules[key]) return;
+    const ops = typeof window.mergeCityOperatorValues === "function"
+      ? window.mergeCityOperatorValues(rules[key].operator)
+      : [];
+    if (!ops.some((op) => window.crmOperadorDaReguaEhUsuario(op, eu))) return;
+    tercs.forEach((t) => {
+      if (ops.some((op) => window.crmOperadorDaReguaEhUsuario(op, t))) achadas.add(String(t.email || "").toLowerCase());
+    });
+  });
+  return tercs.filter((t) => achadas.has(String(t.email || "").toLowerCase()));
+};
+
+window.crmAcompanhaTerceirizada = function(alvo) {
+  const email = String((alvo && alvo.email) || alvo || "").toLowerCase();
+  if (!email) return false;
+  return window.crmTerceirizadasAcompanhadas().some((t) => String(t.email || "").toLowerCase() === email);
+};
+
+/** Quem não é administrador só pode abrir: advogados (back office) ou as terceirizadas das suas cidades. */
+window.crmPodeAbrirPerfil = function(alvo) {
+  if (!alvo) return false;
+  if (window.crmAdministradorReal()) return true;
+  if (window.crmBackOfficeReal()
+    && typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo)) return true;
+  return window.crmAcompanhaTerceirizada(alvo);
+};
+
 window.crmPodeVerOutrosPerfis = function() {
-  return window.crmAdministradorReal() || window.crmBackOfficeReal();
+  return window.crmAdministradorReal() || window.crmBackOfficeReal()
+    || window.crmTerceirizadasAcompanhadas().length > 0;
 };
 
 window.crmImpersonacaoAtual = function() {
-  const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
-  if (!admin && !back) return null;
   let raw = "";
   try { raw = sessionStorage.getItem(window.CRM_TESTE_CONTA_KEY) || ""; } catch (e) { raw = ""; }
   if (!raw) return null;
+  const admin = window.crmAdministradorReal();
   let salvo = null;
   try { salvo = JSON.parse(raw); } catch (e) { salvo = null; }
   const email = String((salvo && salvo.email) || "").toLowerCase();
@@ -7372,7 +7668,7 @@ window.crmImpersonacaoAtual = function() {
   if (!alvo || String(alvo.status || "ATIVO").toUpperCase() === "INATIVO") return null;
   const meu = String((AppState.currentUser && AppState.currentUser.email) || "").toLowerCase();
   if (meu && email === meu) return null;
-  if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo))) return null;
+  if (!admin && !window.crmPodeAbrirPerfil(alvo)) return null;
   return alvo;
 };
 
@@ -7433,13 +7729,9 @@ window.isCrmSuperAdmin = function() {
 };
 
 window.crmAbrirTesteConta = function(email) {
-  const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
-  if (!admin && !back) return;
   const lista = window.getCrmUsersList();
   const alvo = lista.find((u) => String((u && u.email) || "").toLowerCase() === String(email || "").toLowerCase());
-  if (!alvo) return;
-  if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(alvo))) return;
+  if (!alvo || !window.crmPodeAbrirPerfil(alvo)) return;
   try {
     sessionStorage.setItem(window.CRM_TESTE_CONTA_KEY, JSON.stringify({
       email: alvo.email,
@@ -7499,7 +7791,9 @@ window.crmPintarTesteConta = function() {
   const menu = document.getElementById("teste-conta-menu");
   if (!widget || !btn || !menu) return;
   const admin = window.crmAdministradorReal();
-  const back = !admin && window.crmBackOfficeReal();
+  const tercs = admin ? [] : window.crmTerceirizadasAcompanhadas();
+  const back = !admin && (window.crmBackOfficeReal() || tercs.length > 0);
+  const soTerc = back && !window.crmBackOfficeReal();
   widget.hidden = !(admin || back);
   if (!admin && !back) {
     menu.hidden = true;
@@ -7511,7 +7805,7 @@ window.crmPintarTesteConta = function() {
   btn.classList.toggle("is-teste", !!imp);
   btn.title = imp
     ? ("Acessos de " + (imp.name || imp.email) + ". Você continua " + (back ? "no seu perfil" : "administrador") + ".")
-    : (back ? "Ver outros perfis" : "Trocar de conta");
+    : (soTerc ? "Ver a terceirizada das suas cidades" : (back ? "Ver outros perfis" : "Trocar de conta"));
   btn.setAttribute("aria-label", btn.title);
   if (menu.hidden) return;
   const q = String(menu.dataset.q || "").trim().toLowerCase();
@@ -7519,7 +7813,7 @@ window.crmPintarTesteConta = function() {
   const lista = window.getCrmUsersList().filter((u) => {
     if (!u || String(u.status || "ATIVO").trim().toUpperCase() === "INATIVO") return false;
     if (String(u.email || "").toLowerCase().trim() === eu) return false;
-    if (back && !(typeof window.isAdvogadoCobrancaUser === "function" && window.isAdvogadoCobrancaUser(u))) return false;
+    if (back && !window.crmPodeAbrirPerfil(u)) return false;
     const blob = (String(u.name || "") + " " + String(u.email || "") + " " + String(u.profile_name || "")).toLowerCase();
     return !q || blob.indexOf(q) >= 0;
   }).sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
@@ -7528,17 +7822,17 @@ window.crmPintarTesteConta = function() {
     ? (imp
       ? `<button type="button" class="btn btn-cancel btn-sm teste-conta-encerrar" id="teste-conta-encerrar">Encerrar teste</button>
          <p>Você continua <b>${nomeReal}</b> e está vendo as telas de <b>${imp.name || imp.email}</b>. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`
-      : `<p>Escolha um advogado de cobrança para ver as telas que esse perfil enxerga. Você continua no seu usuário. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`)
+      : `<p>Escolha ${soTerc ? "a terceirizada que divide cidades com você" : (tercs.length ? "um advogado de cobrança ou a terceirizada das suas cidades" : "um advogado de cobrança")} para ver as telas que esse perfil enxerga. Você continua no seu usuário. Ao fechar o navegador, a próxima entrada volta a ser só o seu perfil.</p>`)
     : (imp
       ? `<button type="button" class="btn btn-cancel btn-sm teste-conta-encerrar" id="teste-conta-encerrar">Encerrar teste</button>
          <p>Você continua <b>${nomeReal}</b> e está com os acessos de <b>${imp.name || imp.email}</b>. O que for salvo fica como ${nomeReal} no usuário ${imp.name || imp.email}. Ao fechar o navegador, a próxima entrada volta a ser só administrador.</p>`
       : `<p>Escolha um operador para usar os acessos dele. Você continua administrador. Ao fechar o navegador, a próxima entrada volta a ser só administrador.</p>`);
   menu.innerHTML = aviso +
-    `<input class="form-control" id="teste-conta-busca" placeholder="${back ? "Buscar advogado" : "Buscar operador"}" value="${q.replace(/"/g, "&quot;")}">` +
+    `<input class="form-control" id="teste-conta-busca" placeholder="${soTerc ? "Buscar terceirizada" : (back ? (tercs.length ? "Buscar advogado ou terceirizada" : "Buscar advogado") : "Buscar operador")}" value="${q.replace(/"/g, "&quot;")}">` +
     (lista.length ? lista.map((u) => {
       const on = imp && String(imp.email || "").toLowerCase() === String(u.email || "").toLowerCase();
       return `<button type="button" class="teste-conta-item${on ? " is-on" : ""}" data-email="${String(u.email || "").replace(/"/g, "&quot;")}"><b>${String(u.name || u.email || "").replace(/</g, "")}</b><span>${String(u.profile_name || "Sem perfil").replace(/</g, "")}</span></button>`;
-    }).join("") : `<p>${back ? "Nenhum advogado de cobrança encontrado." : "Nenhum operador encontrado."}</p>`);
+    }).join("") : `<p>${soTerc ? "Nenhuma terceirizada encontrada." : (back ? "Nenhum advogado de cobrança encontrado." : "Nenhum operador encontrado.")}</p>`);
   const busca = document.getElementById("teste-conta-busca");
   if (busca) {
     busca.focus();
@@ -8148,15 +8442,18 @@ async function initializeApplication() {
        if (!raw) return {};
        try { return JSON.parse(raw) || {}; } catch (e) { return {}; }
      };
-     const firebaseOn = !!(window.firebaseDb && window.firebaseCollections);
+     // Supabase: "nuvem ligada" agora é a camada de dados da cobrança (nome da variável mantido).
+     const firebaseOn = !!window.DadosCobranca;
      const localNotes = lerNotasLocais("crm_moura_notes");
      AppState.notes = Object.keys(localNotes).length > 0 ? localNotes : (firebaseOn ? {} : (window.MOCK_DATA.INITIAL_MOCK_NOTES || {}));
      window.stripExactTesteFromStore(AppState.notes);
      window._isNotesHydrating = firebaseOn;
      AppState.judNotes = lerNotasLocais("crm_moura_jud_notes");
      
-     // Disparar carga assíncrona única dos shards para ter Último Contato atualizado sem onSnapshot caros
-     if (window.firebaseDb && window.firebaseCollections) {
+     // Disparar carga assíncrona única das notas para ter Último Contato atualizado sem listeners caros.
+     // Supabase: os shards deixaram de existir; customer_notes / jud_notes têm uma linha por nota e a camada
+     // devolve { <customerId>: [notas] } (mesmo formato do conteúdo de um shard).
+     if (window.DadosCobranca) {
          const aplicarNotasEmFatias = function(entries, store, modo) {
              return new Promise(function(resolve) {
                  let i = 0;
@@ -8180,33 +8477,19 @@ async function initializeApplication() {
                  lote();
              });
          };
-         const entradasDoSnap = function(snap) {
-             const entries = [];
-             snap.forEach(function(doc) {
-                 const data = doc.data() || {};
-                 Object.keys(data).forEach(function(key) { entries.push([key, data[key]]); });
-             });
-             return entries;
-         };
          const carregarNotas = async function() {
              try {
                  window._isNotesHydrating = true;
-                 console.log("[Firebase RT] Sincronizando todos os shards iniciais (Cobrança)...");
-                 const { collection, getDocs } = window.firebaseCollections;
-                 const notesSnap = await getDocs(collection(window.firebaseDb, 'customer_notes_shards'));
-                 await aplicarNotasEmFatias(entradasDoSnap(notesSnap), AppState.notes, "cob");
+                 console.log("[Supabase] Carregando ocorrências iniciais (Cobrança)...");
+                 const notasNuvem = await window.DadosCobranca.lerTodasNotasClientes();
+                 await aplicarNotasEmFatias(Object.entries(notasNuvem), AppState.notes, "cob");
 
-                 console.log("[Firebase RT] Sincronizando todos os shards iniciais (Jurídico)...");
-                 const judNotesSnap = await getDocs(collection(window.firebaseDb, 'customer_jud_notes_shards'));
-                 await aplicarNotasEmFatias(entradasDoSnap(judNotesSnap), AppState.judNotes, "jud");
-                 try {
-                     const judNotesSnapAlt = await getDocs(collection(window.firebaseDb, 'jud_notes_shards'));
-                     await aplicarNotasEmFatias(entradasDoSnap(judNotesSnapAlt), AppState.judNotes, "jud");
-                 } catch (judAltErr) {
-                     console.warn("[Firebase RT] Shard jud_notes_shards indisponível:", judAltErr);
-                 }
+                 // As duas coleções de shards judiciais (customer_jud_notes_shards e jud_notes_shards) viraram a tabela jud_notes.
+                 console.log("[Supabase] Carregando etapas judiciais iniciais (Jurídico)...");
+                 const judNuvem = await window.DadosCobranca.lerTodasNotasJuridicas();
+                 await aplicarNotasEmFatias(Object.entries(judNuvem), AppState.judNotes, "jud");
 
-                 console.log("[Firebase RT] Carga inicial unificada concluída com sucesso!");
+                 console.log("[Supabase] Carga inicial unificada concluída com sucesso!");
                  if (typeof window.ensureBoletoNotesTitulo4868Removed === "function") {
                    window.ensureBoletoNotesTitulo4868Removed();
                  }
@@ -8218,7 +8501,7 @@ async function initializeApplication() {
                    loadAgendaDayTasks(window.lastSelectedAgendaDate);
                  }
              } catch(e) {
-                 console.error("[Firebase RT] Erro ao sincronizar shards iniciais:", e);
+                 console.error("[Supabase] Erro ao carregar as notas iniciais:", e);
              } finally {
                  window._isNotesHydrating = false;
              }
@@ -8290,14 +8573,20 @@ async function initializeApplication() {
             throw quotaErr;
           }
         }
-        if (window.firebaseDb && window.firebaseCollections) {
+        if (window.DadosCobranca) {
             const drop = window.notesDropSet(opts);
             const strip4868 = (n, key) => !(typeof window.isTitulo4868BoletoOccurrence === "function" && window.isTitulo4868BoletoOccurrence(n, key));
+            // Supabase: cada nota é uma linha com id; nota local sem id ganha um agora (no próprio objeto da memória),
+            // para a cópia que volta do banco não duplicar a local na mesclagem por identidade.
+            const garantirIds = (lista) => (lista || []).forEach(n => {
+                if (n && !n.id) n.id = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : ("n_" + Date.now().toString(36) + Math.random().toString(36).slice(2));
+            });
             if (customerId) {
                const customerKey = window.normalizeCustomerNotesKey(customerId);
                const sourceList = window.getCustomerNotesList(AppState.notes, customerKey).filter(n => strip4868(n, customerKey));
-               const chunkId = window.getCustomerNoteChunkId(customerKey);
-               const docRef = window.firebaseCollections.doc(window.firebaseDb, 'customer_notes_shards', chunkId);
+               // Apagadas (dropIdentities) são identificadas antes de ganharem id novo.
+               const dropList = Array.from(drop);
+               garantirIds(sourceList.filter(n => !drop.has(window.occurrenceIdentity(n)) && !drop.has(String(n && n.date || ''))));
                const applyMerged = (remote) => {
                    const remoteList = Array.isArray(remote) ? remote : [];
                    let notesToSave = window.mergeOccurrenceLists(sourceList, remoteList).filter(n => strip4868(n, customerKey));
@@ -8309,60 +8598,43 @@ async function initializeApplication() {
                    }
                    return notesToSave;
                };
+               // Supabase: o runTransaction do shard virou a RPC salvar_notas_cliente (upsert por id, atômico no banco;
+               // em conflito só troca se o carimbo enviado for igual ou mais novo; apagadas vão em "remover").
+               // A leitura antes mantém a mesma mesclagem local + nuvem que a transação fazia.
                const writeMerged = async () => {
-                   const runTransaction = window.firebaseCollections.runTransaction;
-                   if (typeof runTransaction === "function") {
-                       let saved = [];
-                       await runTransaction(window.firebaseDb, async (transaction) => {
-                           const snap = await transaction.get(docRef);
-                           const data = snap.exists() ? (snap.data() || {}) : {};
-                           const remote = Array.isArray(data[customerKey]) ? data[customerKey] : [];
-                           saved = applyMerged(remote);
-                           if (!saved.length && !drop.size) return;
-                           if (!drop.size && remote.length && saved.length < remote.length) {
-                               saved = window.mergeOccurrenceLists(saved, remote);
-                           }
-                           transaction.set(docRef, { [customerKey]: saved }, { merge: true });
-                       });
-                       return saved;
+                   const remote = await window.DadosCobranca.lerNotasCliente(customerKey);
+                   let saved = applyMerged(remote);
+                   if (!saved.length && !drop.size) return saved;
+                   if (!drop.size && remote.length && saved.length < remote.length) {
+                       saved = window.mergeOccurrenceLists(saved, remote);
                    }
-                   const snap = await window.firebaseCollections.getDoc(docRef);
-                   const data = snap && snap.exists() ? (snap.data() || {}) : {};
-                   const remote = Array.isArray(data[customerKey]) ? data[customerKey] : [];
-                   return applyMerged(remote);
+                   garantirIds(saved);
+                   const gravadas = await window.DadosCobranca.salvarNotasCliente(customerKey, saved, { dropIdentities: dropList });
+                   return window.filterDroppedNotes((gravadas || []).filter(n => strip4868(n, customerKey)), drop);
                };
                const notesToSave = await writeMerged();
                window.persistCustomerNotesList(customerKey, customerId, notesToSave);
                if (!notesToSave.length && !drop.size) {
-                   console.warn("[Firebase RT] Lista local vazia para o cliente", customerKey, "- não sobrescreve a nuvem com array vazio.");
+                   console.warn("[Supabase] Lista local vazia para o cliente", customerKey, "- não sobrescreve a nuvem com array vazio.");
                    return;
                }
-               if (typeof window.firebaseCollections.runTransaction !== "function") {
-               await window.firebaseCollections.setDoc(docRef, { [customerKey]: notesToSave }, { merge: true });
-               }
-               console.log("[Firebase RT] Ocorrência salva com SUCESSO no Firebase!", customerKey, notesToSave.length, "registro(s)");
+               console.log("[Supabase] Ocorrência salva com SUCESSO!", customerKey, notesToSave.length, "registro(s)");
                if (typeof window.renderCustomerOccurrences === "function") window.renderCustomerOccurrences();
             } else {
-               console.log("[Firebase RT] Iniciando salvamento em massa (sharded)...");
-               const { collection, getDocs } = window.firebaseCollections;
-               const remoteMap = {};
+               console.log("[Supabase] Iniciando salvamento em massa das ocorrências...");
+               let remoteMap = {};
                let remoteOk = false;
                try {
-                   const notesSnap = await getDocs(collection(window.firebaseDb, 'customer_notes_shards'));
-                   notesSnap.forEach(d => {
-                       Object.entries(d.data() || {}).forEach(([k, v]) => {
-                           if (Array.isArray(v)) remoteMap[String(k)] = v;
-                       });
-                   });
+                   remoteMap = await window.DadosCobranca.lerTodasNotasClientes();
                    remoteOk = true;
                } catch (remoteErr) {
-                   console.warn("[Firebase RT] Não foi possível ler shards remotos no save em massa:", remoteErr);
+                   console.warn("[Supabase] Não foi possível ler as ocorrências da nuvem no save em massa:", remoteErr);
                }
                if (!remoteOk) {
-                   console.warn("[Firebase RT] Save em massa cancelado para não apagar ocorrências que estão só na nuvem.");
+                   console.warn("[Supabase] Save em massa cancelado para não apagar ocorrências que estão só na nuvem.");
                    return;
                }
-               const chunks = {};
+               const porCliente = {};
                for (const custId of Object.keys(AppState.notes)) {
                    const key = String(custId);
                    const list = window.filterDroppedNotes(
@@ -8373,26 +8645,31 @@ async function initializeApplication() {
                        drop
                    );
                    if (!list.length) continue;
+                   garantirIds(list);
                    AppState.notes[key] = list;
-                   const chunkId = window.getCustomerNoteChunkId(custId);
-                   if (!chunks[chunkId]) chunks[chunkId] = {};
-                   chunks[chunkId][key] = list;
+                   porCliente[key] = list;
                }
-               for (const [chunkId, data] of Object.entries(chunks)) {
-                   const docRef = window.firebaseCollections.doc(window.firebaseDb, 'customer_notes_shards', chunkId);
-                   await window.firebaseCollections.setDoc(docRef, data, { merge: true });
-               }
-               console.log("[Firebase RT] Salvamento em massa (sharded) concluído!");
+               // Supabase: uma RPC por cliente (antes um setDoc por shard), 4 por vez.
+               const fila = Object.keys(porCliente);
+               const dropList = Array.from(drop);
+               const trabalhar = async () => {
+                   while (fila.length) {
+                       const key = fila.shift();
+                       await window.DadosCobranca.salvarNotasCliente(key, porCliente[key], { dropIdentities: dropList });
+                   }
+               };
+               await Promise.all([trabalhar(), trabalhar(), trabalhar(), trabalhar()]);
+               console.log("[Supabase] Salvamento em massa das ocorrências concluído!");
             }
         }
       } catch(e) {
-          console.error('[Firebase RT] Erro FATAL ao salvar notas no Firebase:', e);
+          console.error('[Supabase] Erro FATAL ao salvar notas:', e);
           const msg = String((e && e.message) || e || "");
           const isQuota = /quota|exceeded|QuotaExceeded/i.test(msg) || (e && e.name === "QuotaExceededError");
           if (isQuota) {
             alert("O cache local do navegador (ocorrências) está cheio. A gravação na nuvem pode ter falhado antes de concluir — tente gravar de novo. Se persistir, limpe dados do site neste navegador ou contate o suporte.");
           } else {
-            alert("Erro ao salvar ocorrência na nuvem (Firebase): " + msg + ". A ocorrência pode desaparecer da tela. Contate o suporte.");
+            alert("Erro ao salvar ocorrência na nuvem: " + msg + ". A ocorrência pode desaparecer da tela. Contate o suporte.");
           }
       } finally {
           setTimeout(() => { window._isFirebaseSyncing = false; }, 500);
@@ -8404,15 +8681,14 @@ async function initializeApplication() {
         window.activeCustomerNotesUnsubscribe();
         window.activeCustomerNotesUnsubscribe = null;
       }
-      if (!customerId || !window.firebaseDb || !window.firebaseCollections) return;
+      if (!customerId || !window.DadosCobranca) return;
       const customerKey = window.normalizeCustomerNotesKey(customerId);
-      const shardId = window.getCustomerNoteChunkId(customerKey);
-      const shardRef = window.firebaseCollections.doc(window.firebaseDb, 'customer_notes_shards', shardId);
-      window.activeCustomerNotesUnsubscribe = window.firebaseCollections.onSnapshot(shardRef, snapshot => {
+      // Supabase: tempo real das notas do cliente (antes o doc do shard); cb recebe a lista completa do cliente.
+      window.activeCustomerNotesUnsubscribe = window.DadosCobranca.ouvirNotasCliente(customerKey, lista => {
         if (window._isFirebaseSyncing) return;
-        const data = snapshot.exists() ? snapshot.data() : {};
-        if (!data || !Object.prototype.hasOwnProperty.call(data, customerKey)) return;
-        const remote = data && Array.isArray(data[customerKey]) ? data[customerKey] : [];
+        // Antes: cliente ausente no shard = nada a fazer. Agora: lista vazia.
+        if (!Array.isArray(lista) || !lista.length) return;
+        const remote = lista;
         const local = window.getCustomerNotesList(AppState.notes, customerKey);
         const merged = window.applyRemoteNotes(local, remote, customerKey);
         AppState.notes[customerKey] = merged;
@@ -8425,53 +8701,30 @@ async function initializeApplication() {
         }
         if (window.renderCustomerOccurrences) window.renderCustomerOccurrences();
         if (typeof updateSidebarAgendaBadge === 'function') updateSidebarAgendaBadge();
-      }, error => console.error('[Firebase RT] Erro nas notas do cliente ativo:', error));
+      }, error => console.error('[Supabase RT] Erro nas notas do cliente ativo:', error));
     };
   // --- FIM MIGRACAO FIREBASE NOTES ---
   
   // --- INICIO MIGRACAO FIREBASE JUD NOTES & AGENDA NOTES ---
   try {
-    if (false && window.firebaseDb && window.firebaseCollections) {
-         // Jud Notes — listener em tempo real (ocorrências judiciais)
-         if (window.globalJudNotesUnsubscribe) window.globalJudNotesUnsubscribe();
+    if (false && window.DadosCobranca) {
+         // Jud Notes — o listener global de jud_notes_shards (desligado) saiu com os shards.
+         // TODO(supabase): se for religado, ouvir a tabela jud_notes inteira agrupando por customer_id
+         // (DadosCobranca só oferece ouvirNotasJuridicas por cliente; o mapa jud_notes não devolve customer_id).
          AppState.judNotes = JSON.parse(localStorage.getItem("crm_moura_jud_notes")) || {};
-         window.globalJudNotesUnsubscribe = window.firebaseCollections.onSnapshot(
-             window.firebaseCollections.collection(window.firebaseDb, 'jud_notes_shards'),
-             (snapshot) => {
-                 let changed = false;
-                 snapshot.docChanges().forEach(change => {
-                     const data = change.doc.data();
-                     if (change.type !== 'removed' && data) {
-                         Object.entries(data).forEach(([custId, notesList]) => {
-                             if (JSON.stringify(AppState.judNotes[custId]) !== JSON.stringify(notesList)) {
-                                 AppState.judNotes[custId] = notesList;
-                                 changed = true;
-                             }
-                         });
-                     }
-                 });
-                 if (changed) {
-                     window._isFirebaseSyncing = true;
-                     localStorage.setItem("crm_moura_jud_notes", JSON.stringify(AppState.judNotes));
-                     window._isFirebaseSyncing = false;
-                     console.log(`[Firebase RT] jud_notes atualizado em tempo real.`);
-                 }
-             },
-             (error) => { console.error("[Firebase RT] Erro no listener de jud_notes:", error); }
-         );
-         
+
          // Agenda Personal Notes RT Listener
-         window.globalAgendaPersonalUnsubscribe = window.firebaseCollections.onSnapshot(
-             window.firebaseCollections.collection(window.firebaseDb, 'agenda_personal_notes'),
+         // Supabase: DadosNucleo.tabela(...).ouvir entrega {docs, mudancas:[{tipo, doc}]} (doc já é o objeto, com id).
+         if (window.DadosNucleo) window.globalAgendaPersonalUnsubscribe = window.DadosNucleo.tabela('agenda_personal_notes').ouvir(
              (snapshot) => {
                  let changed = false;
                  let personalNotes = JSON.parse(localStorage.getItem("crm_agenda_personal_notes")) || {};
-                 snapshot.docChanges().forEach(change => {
-                     if (change.type === 'removed') {
+                 snapshot.mudancas.forEach(change => {
+                     if (change.tipo === 'removed') {
                          delete personalNotes[change.doc.id];
                          changed = true;
                      } else {
-                         const incoming = change.doc.data().notes || [];
+                         const incoming = change.doc.notes || [];
                          const local = personalNotes[change.doc.id] || [];
                          personalNotes[change.doc.id] = (typeof window.mergeAgendaNoteAlarmState === 'function')
                              ? window.mergeAgendaNoteAlarmState(incoming, local)
@@ -8484,24 +8737,22 @@ async function initializeApplication() {
                      localStorage.setItem("crm_agenda_personal_notes", JSON.stringify(personalNotes));
                      window._isFirebaseSyncing = false;
                      if (window.renderAgendaPersonalNotes) window.renderAgendaPersonalNotes();
-                     console.log(`[Firebase RT] agenda_personal_notes atualizado em tempo real.`);
+                     console.log(`[Supabase RT] agenda_personal_notes atualizado em tempo real.`);
                  }
-             },
-             (error) => { console.error("[Firebase RT] Erro no listener de agenda_personal_notes:", error); }
+             }
          );
 
          // Agenda Recurring Notes RT Listener
-         window.globalAgendaRecurringUnsubscribe = window.firebaseCollections.onSnapshot(
-             window.firebaseCollections.collection(window.firebaseDb, 'agenda_recurring_notes'),
+         if (window.DadosNucleo) window.globalAgendaRecurringUnsubscribe = window.DadosNucleo.tabela('agenda_recurring_notes').ouvir(
              (snapshot) => {
                  let changed = false;
                  let recurringNotes = JSON.parse(localStorage.getItem("crm_agenda_recurring_notes")) || {};
-                 snapshot.docChanges().forEach(change => {
-                     if (change.type === 'removed') {
+                 snapshot.mudancas.forEach(change => {
+                     if (change.tipo === 'removed') {
                          delete recurringNotes[change.doc.id];
                          changed = true;
                      } else {
-                         recurringNotes[change.doc.id] = change.doc.data().notes || [];
+                         recurringNotes[change.doc.id] = change.doc.notes || [];
                          changed = true;
                      }
                  });
@@ -8510,10 +8761,9 @@ async function initializeApplication() {
                      localStorage.setItem("crm_agenda_recurring_notes", JSON.stringify(recurringNotes));
                      window._isFirebaseSyncing = false;
                      if (window.renderAgendaPersonalNotes) window.renderAgendaPersonalNotes();
-                     console.log(`[Firebase RT] agenda_recurring_notes atualizado em tempo real.`);
+                     console.log(`[Supabase RT] agenda_recurring_notes atualizado em tempo real.`);
                  }
-             },
-             (error) => { console.error("[Firebase RT] Erro no listener de agenda_recurring_notes:", error); }
+             }
          );
      } else {
          AppState.judNotes = JSON.parse(localStorage.getItem("crm_moura_jud_notes")) || {};
@@ -8527,11 +8777,15 @@ async function initializeApplication() {
       window._isFirebaseSyncing = true;
       try {
         localStorage.setItem("crm_moura_jud_notes", JSON.stringify(AppState.judNotes || {}));
-        if (!window.firebaseDb || !window.firebaseCollections) return;
-        const writeShard = async (collectionName, key, list) => {
-            const chunkId = window.getCustomerNoteChunkId(key);
-            const docRef = window.firebaseCollections.doc(window.firebaseDb, collectionName, chunkId);
-            await window.firebaseCollections.setDoc(docRef, { [key]: list }, { merge: true });
+        if (!window.DadosCobranca) return;
+        // Supabase: os dois shards judiciais (jud_notes_shards e customer_jud_notes_shards) viraram a tabela jud_notes.
+        // O setDoc { [cliente]: lista } trocava a lista inteira do cliente; a RPC salvar_notas_juridicas faz upsert por id,
+        // então as que estão na nuvem e não estão mais na lista local vão em "remover" (mesmo resultado).
+        const writeShard = async (key, list) => {
+            const ficam = new Set((list || []).map(n => window.occurrenceIdentity(n)));
+            const nuvem = await window.DadosCobranca.lerNotasJuridicas(key);
+            const remover = nuvem.filter(n => n && n.id && !ficam.has(window.occurrenceIdentity(n))).map(n => n.id);
+            await window.DadosCobranca.salvarNotasJuridicas(key, list, { remover });
         };
         if (customerId) {
            const customerKey = window.normalizeCustomerNotesKey(customerId);
@@ -8545,19 +8799,17 @@ async function initializeApplication() {
                console.warn("[Firebase RT] Notas judiciais vazias para", customerKey, "- não sobrescreve a nuvem.");
                return;
            }
-           await writeShard('jud_notes_shards', customerKey, notesToSave);
-           await writeShard('customer_jud_notes_shards', customerKey, notesToSave);
+           await writeShard(customerKey, notesToSave);
         } else {
            for (const custId of Object.keys(AppState.judNotes || {})) {
                const list = window.getCustomerNotesList(AppState.judNotes, custId);
                if (!list.length) continue;
                const key = String(custId);
-               await writeShard('jud_notes_shards', key, list);
-               await writeShard('customer_jud_notes_shards', key, list);
+               await writeShard(key, list);
            }
         }
       } catch(e) {
-          console.error('Erro ao salvar jud_notes no Firebase', e);
+          console.error('Erro ao salvar jud_notes no Supabase', e);
       } finally {
           setTimeout(() => { window._isFirebaseSyncing = false; }, 500);
       }
@@ -8568,15 +8820,14 @@ async function initializeApplication() {
         window.activeCustomerJudNotesUnsubscribe();
         window.activeCustomerJudNotesUnsubscribe = null;
       }
-      if (!customerId || !window.firebaseDb || !window.firebaseCollections) return;
+      if (!customerId || !window.DadosCobranca) return;
       const customerKey = String(customerId);
-      const shardId = window.getCustomerNoteChunkId(customerKey);
-      const shardRef = window.firebaseCollections.doc(window.firebaseDb, 'jud_notes_shards', shardId);
-      window.activeCustomerJudNotesUnsubscribe = window.firebaseCollections.onSnapshot(shardRef, snapshot => {
+      // Supabase: tempo real das etapas judiciais do cliente (antes o doc do shard em jud_notes_shards).
+      window.activeCustomerJudNotesUnsubscribe = window.DadosCobranca.ouvirNotasJuridicas(customerKey, lista => {
         if (window._isFirebaseSyncing || window._isNotesHydrating) return;
-        const data = snapshot.exists() ? snapshot.data() : {};
-        if (!data || !Object.prototype.hasOwnProperty.call(data, customerKey)) return;
-        const remote = data && Array.isArray(data[customerKey]) ? data[customerKey] : [];
+        // Antes: cliente ausente no shard = nada a fazer. Agora: lista vazia.
+        if (!Array.isArray(lista) || !lista.length) return;
+        const remote = lista;
         const local = window.getCustomerNotesList(AppState.judNotes, customerKey);
         const merged = window.mergeOccurrenceLists(local, remote);
         if (JSON.stringify(local) === JSON.stringify(merged)) return;
@@ -8593,7 +8844,7 @@ async function initializeApplication() {
           const opType = AppState.currentUser ? AppState.currentUser.operator_type : "";
           syncCobrancaJudicialTabs(originIsSubjudice, opType === "advogado");
         }
-      }, error => console.error('[Firebase RT] Erro nas etapas judiciais do cliente ativo:', error));
+      }, error => console.error('[Supabase RT] Erro nas etapas judiciais do cliente ativo:', error));
     };
 
   window.saveAgendaNotesToFirebase = async function() {
@@ -8601,15 +8852,14 @@ async function initializeApplication() {
       const personalNotes = JSON.parse(localStorage.getItem("crm_agenda_personal_notes")) || {};
       const recurringNotes = JSON.parse(localStorage.getItem("crm_agenda_recurring_notes")) || {};
       window._isFirebaseSyncing = false;
-      if (window.firebaseDb && window.firebaseCollections) {
+      if (window.DadosNucleo) {
           try {
+             // Supabase: crmAgendaGravar só envia as chaves do usuário atual / TODOS / compartilhadas com ele.
              for (const key of Object.keys(personalNotes)) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', key);
-                window.firebaseCollections.setDoc(docRef, { notes: personalNotes[key] || [] }, { merge: true }).catch(e => console.error(e));
+                window.crmAgendaGravar('agenda_personal_notes', key, personalNotes[key] || []).catch(e => console.error(e));
              }
              for (const key of Object.keys(recurringNotes)) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_recurring_notes', key);
-                window.firebaseCollections.setDoc(docRef, { notes: recurringNotes[key] || [] }, { merge: true }).catch(e => console.error(e));
+                window.crmAgendaGravar('agenda_recurring_notes', key, recurringNotes[key] || []).catch(e => console.error(e));
              }
           } catch(e) {
               console.error('Erro ao salvar agenda notes no Firebase', e);
@@ -8878,6 +9128,10 @@ window.FILA_QUEUE_GROUPS = {
   EXECUTAR_ACORDO_QUEBRADO: 6,
   RECENTE_JURIDICO: 7,
   ANALISE_INTERNA_JURIDICO: 8,
+  // Acordo judicial quebrado há 31 dias ou mais: o cliente já passou pelo jurídico e volta para lá.
+  REENVIAR_JURIDICO: 8.5,
+  // E-mail ao jurídico já enviado e o Sienge ainda não está sub judice.
+  ALTERAR_SUBJUDICE_SIENGE: 8.75,
   ENVIAR_JURIDICO: 9,
   SEM_CATEGORIA_SEM_PAGTO: 10,
   SEM_CATEGORIA_COM_PAGTO: 11,
@@ -8987,10 +9241,14 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   if (typeof window.clientHasNexCumprida === "function" && window.clientHasNexCumprida(client)) {
     return G.NEX_CUMPRIDA;
   }
-  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Enviar para Jurídico
+  // Acordo judicial quebrado: até 30 dias no grupo próprio; 31 ou mais vai para Reenviar para Jurídico.
+  // Depois do e-mail, se o Sienge não está sub judice, a tag passa a Alterar p/ Sub judice Sienge.
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(client)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)) {
+        return G.ALTERAR_SUBJUDICE_SIENGE;
+      }
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9006,7 +9264,7 @@ window.getFilaQueueGroup = function(client, thresholdJuridico) {
   }
   if (client && client.hasOverdueAgreement) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(client)) {
-      return G.ENVIAR_JURIDICO;
+      return G.REENVIAR_JURIDICO;
     }
     return G.ACORDO_JURIDICO;
   }
@@ -9034,6 +9292,8 @@ window.getFilaQueueGroupMeta = function(group) {
     [G.EXECUTAR_ACORDO_QUEBRADO]: { label: 'Executar Acordo Quebrado', bg: '#ffe4e6', color: '#9f1239' },
     [G.RECENTE_JURIDICO]: { label: 'Recente Jurídico', bg: '#e0e7ff', color: '#3730a3' },
     [G.ANALISE_INTERNA_JURIDICO]: { label: 'Análise Interna Jurídico', bg: '#ede9fe', color: '#5b21b6' },
+    [G.REENVIAR_JURIDICO]: { label: 'Reenviar para Jurídico - Acordo Judicial Quebrado', bg: '#fee2e2', color: '#991b1b' },
+    [G.ALTERAR_SUBJUDICE_SIENGE]: { label: 'Acordo Judicial - Alterar p/ Sub judice Sienge', bg: '#fff7ed', color: '#c2410c' },
     [G.ENVIAR_JURIDICO]: { label: 'Enviar para Jurídico', bg: '#ffedd5', color: '#9a3412' },
     [G.SEM_CATEGORIA_SEM_PAGTO]: { label: 'Sem pagamento nos últimos 30 dias', bg: '#f8fafc', color: '#475569' },
     [G.SEM_CATEGORIA_COM_PAGTO]: { label: 'Com pagamento nos últimos 30 dias', bg: '#ecfdf5', color: '#047857' },
@@ -9057,20 +9317,48 @@ window.getAcordoJuridicoAgingHtml = function(client) {
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
-  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Enviar para Jurídico.">
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #f59e0b; background-color: #fef3c7; color: #92400e; font-weight: 600;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece com o Apoio Jurídico (Lucelia). No 31º dia o grupo passa a Reenviar para Jurídico - Acordo Judicial Quebrado.">
     <i data-lucide="handshake" style="width: 14px; height: 14px;"></i> Acordo Judicial Quebrado - ${dayLabel}
   </span>`;
 };
 
+window.acordoEmailTagChave = function(customerId, titulo) {
+  const c = String(customerId || "").replace(/\D/g, "");
+  const t = String(titulo || "").replace(/\D/g, "");
+  if (!c || !t) return "";
+  return c + "_" + t;
+};
+
+window.acordoEmailTags = {};
+try {
+  const cacheTags = JSON.parse(localStorage.getItem("crm_acordo_email_tag") || "{}");
+  if (cacheTags && typeof cacheTags === "object") window.acordoEmailTags = cacheTags;
+} catch (e) { window.acordoEmailTags = {}; }
+
+window.clientMarcadoAlterarSubjudiceSienge = function(client) {
+  const k = window.acordoEmailTagChave(client && client.customerId, client && client.saleId);
+  return !!(k && window.acordoEmailTags[k]);
+};
+
+window.getAlterarSubjudiceSiengeAgingHtml = function() {
+  return `<span style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fdba74; background-color: #fff7ed; color: #c2410c; font-weight: 600;" title="O e-mail ao jurídico já foi enviado. No Sienge este título não está sub judice: altere o status para sub judice.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Acordo Judicial - Alterar p/ Sub judice Sienge
+  </span>`;
+};
+
 window.getAcordoJudicialEnviarJuridicoAgingHtml = function(client) {
+  if (typeof window.clientMarcadoAlterarSubjudiceSienge === "function" && window.clientMarcadoAlterarSubjudiceSienge(client)
+    && typeof window.getAlterarSubjudiceSiengeAgingHtml === "function") {
+    return window.getAlterarSubjudiceSiengeAgingHtml();
+  }
   const days = typeof window.getAcordoJudicialQuebradoDays === "function"
     ? window.getAcordoJudicialQuebradoDays(client)
     : (Number(client && client.maxDaysDelay) || 0);
   const dayLabel = days + " dia" + (days === 1 ? "" : "s");
   const customerId = client && client.customerId != null ? client.customerId : "";
   const saleId = client && client.saleId != null ? client.saleId : "";
-  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para enviar ao Jurídico.">
-    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Enviar Jurídico - ${dayLabel}
+  return `<button onclick="enviarParaJuridico(${customerId}, ${saleId})" style="padding: 3px 10px; font-size: 0.75rem; line-height: 1.2; border-radius: 12px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid #fca5a5; background-color: #fee2e2; color: #991b1b; font-weight: 600; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.backgroundColor='#fecaca'; this.style.borderColor='#f87171'" onmouseout="this.style.backgroundColor='#fee2e2'; this.style.borderColor='#fca5a5'" title="Acordo judicial quebrado há 31 dias ou mais. Clique para reenviar ao Jurídico.">
+    <i data-lucide="scale" style="width: 14px; height: 14px;"></i> Reenviar Jurídico - ${dayLabel}
   </button>`;
 };
 
@@ -9278,16 +9566,16 @@ window.cancelMotivosGravar = async function(catalogo) {
       localStorage.setItem(key, JSON.stringify({ catalogo: doc.catalogo, em: doc.em, pendente: !!pendente }));
     } catch (e) {}
   };
-  if (!window.firebaseDb || !window.firebaseCollections) {
+  if (!window.DadosNucleo) {
     gravarLocal(true);
     return { ok: false, catalogo: doc.catalogo, erro: "A base não está disponível nesta tela." };
   }
   gravarLocal(true);
   try {
-    const fc = window.firebaseCollections;
     const payload = {};
     payload[key] = JSON.stringify({ catalogo: doc.catalogo, em: doc.em });
-    await fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), payload, { merge: true });
+    // Supabase: a chave vira linhas em motivos_cancelamento (ver dados-nucleo.js).
+    await window.DadosNucleo.gravarConfig("global", payload, { merge: true });
     gravarLocal(false);
     return { ok: true, catalogo: doc.catalogo };
   } catch (e) {
@@ -9299,14 +9587,14 @@ window.cancelMotivosGravar = async function(catalogo) {
 window.cancelMotivosSincronizar = async function() {
   const key = window.CANCEL_MOTIVOS_KEY;
   const revInicio = window._motivosCancelRev || 0;
-  if (!window.firebaseDb || !window.firebaseCollections) return window.cancelMotivosLista();
+  if (!window.DadosNucleo) return window.cancelMotivosLista();
   try {
-    const fc = window.firebaseCollections;
-    const ref = fc.doc(window.firebaseDb, "config", "global");
-    const snap = await fc.getDoc(ref);
+    const snap = await window.DadosNucleo.lerConfig("global");
     if ((window._motivosCancelRev || 0) !== revInicio) return window.cancelMotivosLista();
     const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
     const cloud = exists ? window.cancelMotivosLerBruto((snap.data() || {})[key] || "null") : { extras: [], em: "", temCatalogo: false };
+    // Supabase: "em" vem do atualizado_em das linhas, em epoch ms; a comparação abaixo é por texto ISO.
+    if (cloud.em && /^\d+$/.test(cloud.em)) cloud.em = Number(cloud.em) ? new Date(Number(cloud.em)).toISOString() : "";
     const local = window.cancelMotivosLerLocal();
     const localVence = local.temCatalogo && (local.pendente || !cloud.temCatalogo || String(local.em || "") >= String(cloud.em || ""));
     const base = localVence ? local.catalogo : (cloud.temCatalogo ? cloud.catalogo : window.cancelMotivosLista());
@@ -9600,7 +9888,42 @@ window.cancelamentoExigencias = function(client) {
   const obra = obras[cc];
   const obraAndamento = obra === true || !!(obra && obra.isOn);
   const webro = typeof window.suspenderClientePagaWebro === "function" && window.suspenderClientePagaWebro(client);
-  return { obraAndamento: obraAndamento, loteamentoFechado: loteamentoFechado, webro: !!webro };
+  // Obra do cliente ainda não terminou (Engenharia > Acompanhamento de obra, "Previsão término obras Cliente"):
+  // a prefeitura ainda não emite CND para o lote, então a CND fica dispensada.
+  const prev = (window._cancelPrevObras && window._cancelPrevObras.mapa) || {};
+  const linhaObra = prev[cc];
+  const fimObra = linhaObra ? String(linhaObra.cliente || "").slice(0, 10) : "";
+  const hoje = new Date();
+  const hojeIso = hoje.getFullYear() + "-" + String(hoje.getMonth() + 1).padStart(2, "0") + "-" + String(hoje.getDate()).padStart(2, "0");
+  const obraNaoTerminou = /^\d{4}-\d{2}-\d{2}$/.test(fimObra) && hojeIso <= fimObra;
+  return {
+    obraAndamento: obraAndamento,
+    obraNaoTerminou: obraNaoTerminou,
+    fimObraCliente: fimObra,
+    cndDispensada: obraAndamento || obraNaoTerminou,
+    loteamentoFechado: loteamentoFechado,
+    webro: !!webro
+  };
+};
+
+/** Lê (e guarda por 10 min) as previsões do Acompanhamento de obra da Engenharia, por centro de custo. */
+window.cancelamentoCarregarPrevisaoObras = async function() {
+  const c = window._cancelPrevObras;
+  if (c && Date.now() - c.em < 10 * 60 * 1000) return c.mapa;
+  // Supabase: tabela engenharia_acompanhamento (uma linha por CC), devolvida como o doc "obras" { linhas, savedAt }.
+  const DE = window.DadosEngenharia;
+  if (!DE) return (c && c.mapa) || {};
+  try {
+    const data = (await DE.lerAcompanhamento()) || {};
+    const mapa = {};
+    (Array.isArray(data.linhas) ? data.linhas : []).forEach(function(r) {
+      if (r && r.id) mapa[String(r.id).trim()] = r;
+    });
+    window._cancelPrevObras = { mapa: mapa, em: Date.now() };
+    return mapa;
+  } catch (e) {
+    return (c && c.mapa) || {};
+  }
 };
 
 window.cancelamentoNormDoc = function(texto) {
@@ -9661,8 +9984,8 @@ window.cancelamentoDocsOk = function() {
     if (!(distrato.files && distrato.files[0])) return false;
     if (!leitura.distrato || leitura.distrato.status !== "ok" || !leitura.distrato.ok) return false;
   }
-  if (!exig.obraAndamento && !(cnd && cnd.files && cnd.files[0])) return false;
-  if (!exig.obraAndamento && !window.cancelamentoCertidaoPronta()) return false;
+  if (!exig.cndDispensada && !(cnd && cnd.files && cnd.files[0])) return false;
+  if (!exig.cndDispensada && !window.cancelamentoCertidaoPronta()) return false;
   if (exig.loteamentoFechado && !exig.obraAndamento && !(assoc && assoc.files && assoc.files[0])) return false;
   if (exig.webro && !(webro && webro.files && webro.files[0])) return false;
   return true;
@@ -9909,6 +10232,8 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       nexCumprida: nex
     };
     const pode = window.cancelamentoPodeSeguir(info);
+    await window.cancelamentoCarregarPrevisaoObras();
+    if (!document.getElementById("cancel-avaliacao-pop")) return;
     const exig = window.cancelamentoExigencias(client);
     window._cancelExigencias = exig;
     window._cancelDocs = null;
@@ -9951,8 +10276,13 @@ window.abrirAvaliacaoCancelamento = async function(customerId, saleId) {
       if (exig.obraAndamento) {
         docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">Obra em andamento: CND e CND da associação dispensadas.</p>`;
       } else {
-        docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
-        docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        if (exig.obraNaoTerminou) {
+          const fimBr = exig.fimObraCliente.split("-").reverse().join("/");
+          docsHtml += `<p style="margin:12px 0 0;font-size:0.82rem;color:#166534;background:#f0fdf4;border-radius:8px;padding:8px 10px;">CND dispensada: a obra do empreendimento ainda não terminou (previsão de término das obras para o cliente em ${window.cancelContratoEsc(fimBr)}, no Acompanhamento de obra).</p>`;
+        } else {
+          docsHtml += campoArquivo("cancel-cnd-file", "CND", "A certidão sobe no cadastro da unidade. Se o arquivo for extrato ou boleto, o sistema pede a certidão da prefeitura em PDF e confere o texto.");
+          docsHtml += `<div id="cancel-cnd-extra"></div>`;
+        }
         if (exig.loteamentoFechado) {
           docsHtml += campoArquivo("cancel-assoc-file", "CND da associação", "Loteamento fechado. Anexe a CND da associação.");
         }
@@ -10110,11 +10440,11 @@ window.enviarCancelamentoContrato = async function() {
   const rot = window.cancelMotivoRotulo(iniciativa, motivo);
   const exig = window._cancelExigencias || {};
   const docs = window._cancelDocs || {};
-  if (!exig.obraAndamento && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
+  if (!exig.cndDispensada && !docs.cnd) { falha("Anexe a CND antes de cancelar."); return; }
   const leituraCancel = window._cancelLeitura || {};
   const classeCnd = leituraCancel.cnd && leituraCancel.cnd.classe;
   const classeCert = leituraCancel.certidao && leituraCancel.certidao.classe;
-  if (!exig.obraAndamento && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
+  if (!exig.cndDispensada && classeCnd && !classeCnd.certidao && !(docs.certidao && classeCert && classeCert.certidao)) {
     falha("O arquivo da CND não é uma certidão da prefeitura. Anexe a certidão em PDF.");
     return;
   }
@@ -10350,30 +10680,20 @@ window.ensureFilaPmpIndex = async function() {
     const est = window.EstoqueComercialApp;
     if (est && est.state && Array.isArray(est.state.units) && est.state.units.length) {
       units = est.state.units;
-    } else if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, "caixa_posicao"));
-      let best = "";
-      const buckets = {};
-      snap.forEach((d) => {
-        if (d.id === "_meta") return;
-        const data = d.data() || {};
-        const date = String(data.date || "");
-        if (!date || !Array.isArray(data.rows)) return;
-        if (!buckets[date]) buckets[date] = [];
-        buckets[date].push.apply(buckets[date], data.rows);
-        if (date > best) best = date;
-      });
-      rows = best ? buckets[best] : [];
+    } else if (window.DadosFinanceiro) {
+      // caixa_posicao no Supabase: só a foto mais recente (antes lia a coleção inteira e ficava com o maior dia).
+      const foto = await window.DadosFinanceiro.lerCaixaPosicaoRecente({ colunas: "id, d, cid, un, pmp" });
+      rows = Array.isArray(foto.rows) ? foto.rows : [];
       if (!rows.length) {
-        const estSnap = await getDocs(collection(window.firebaseDb, "estoque_comercial"));
-        estSnap.forEach((d) => {
-          if (d.id === "_meta" || d.id === "_batimento_state") return;
-          const data = d.data() || {};
-          (data.units || []).forEach((u) => {
+        // estoque_comercial no Supabase: uma linha por unidade (só as colunas que o índice de PMP usa).
+        if (window.DadosEngenharia) {
+          const lista = await window.DadosEngenharia.listarUnidadesEstoque({
+            colunas: "id, enterprise_id, name, customer_id, receivable_bill_id, pmp3m"
+          });
+          lista.forEach((u) => {
             if (u && u.pmp3m != null) units.push(u);
           });
-        });
+        }
       }
     }
     window._filaPmpIdx = filaBuildPmpIndex(units, rows);
@@ -10911,6 +11231,14 @@ window.webroOccurrenceWasReceived = function(occ, client) {
   const today = (typeof window.localDateStr === "function")
     ? window.localDateStr(new Date())
     : new Date().toISOString().slice(0, 10);
+  // A lista de pagamentos só guarda os últimos 30 dias. Para baixas mais antigas, olha o atraso de hoje:
+  // se a parcela vencida mais antiga vence depois da data da baixa Webro, a parcela daquela baixa
+  // já entrou no Sienge e o cliente fica só com a situação atual.
+  const atraso = Number(client && client.maxDaysDelay);
+  if (baixa && Number.isFinite(atraso) && atraso > 0 && typeof window.addDaysIso === "function") {
+    const vencMaisAntigo = window.addDaysIso(today, -atraso);
+    if (vencMaisAntigo > baixa) return true;
+  }
   for (const map of maps) {
     for (const id of ids) {
       if (!map.has(id)) continue;
@@ -11477,6 +11805,20 @@ window.escolherEtapasFinanciamento = function(localRaw, localAt, cloudRaw, cloud
     chosen.list = window.finEtapasSemExcluidas(chosen.list, tomb);
     chosen.at = Date.now();
     chosen.winner = "local";
+  }
+  /* Nuvem e navegador vazios (produção sem configuração) recebem o modelo.
+     Etapa que a pessoa excluiu fica no túmulo e não volta. */
+  if (!chosen.list.length) {
+    const modelo = (window.ETAPAS_FINANCIAMENTO_PADRAO || []).map((e, i) => ({
+      id: e.id,
+      nome: e.nome,
+      dias: e.dias,
+      descricao: e.descricao,
+      parentId: null,
+      order: (i + 1) * 10
+    }));
+    const padrao = window.finEtapasSemExcluidas(modelo, tomb);
+    if (padrao.length) chosen = pack(padrao, Date.now(), "local");
   }
   return chosen;
 };
@@ -12045,16 +12387,15 @@ window.pintarTagsProcessoContra = function() {
 
 window.carregarProcessosContraFila = function() {
   if (window._processoContraFilaPronto || window._processoContraFilaLoading) return;
-  const fc = window.firebaseCollections;
-  if (!window.firebaseDb || !fc || typeof fc.getDocs !== "function" || typeof fc.collection !== "function") return;
+  if (!window.DadosCobranca) return;
   window._processoContraFilaLoading = true;
   const geracao = (window._pcFilaGeracao || 0) + 1;
   window._pcFilaGeracao = geracao;
-  fc.getDocs(fc.collection(window.firebaseDb, "processos_contra")).then((snap) => {
+  // Supabase: só a coluna customer_id (a fila só precisa saber quais clientes têm processo).
+  window.DadosCobranca.tabela("processos_contra").listar({ colunas: "id, customer_id" }).then((lista) => {
     if (geracao !== window._pcFilaGeracao) return;
     const set = new Set();
-    snap.forEach((d) => {
-      const data = d.data() || {};
+    lista.forEach((data) => {
       const id = String(data.customerId || "");
       if (id) set.add(id);
     });
@@ -12368,14 +12709,28 @@ window.applyAdvFiltersTo = (sourceList) => {
         if (window.advFilters.queueGroups && window.advFilters.queueGroups.length > 0 && typeof window.getFilaQueueGroup === "function") {
             const G = window.FILA_QUEUE_GROUPS || {};
             const wanted = new Set();
+            // Tags de baixa Webro não são grupo da fila: valem pelo status da ocorrência Aguardando Baixa Webro.
+            const webroWanted = new Set();
             window.advFilters.queueGroups.forEach((key) => {
-                if (G[key] != null) wanted.add(G[key]);
+                if (key === "WEBRO_AGUARDANDO") webroWanted.add("AGUARDANDO");
+                else if (key === "WEBRO_PENDENTE") webroWanted.add("PENDENTE");
+                else if (G[key] != null) wanted.add(G[key]);
             });
-            if (wanted.size) {
+            if (wanted.size || webroWanted.size) {
                 const thresholdJuridico = typeof window.getEnvioJuridicoThreshold === "function"
                   ? window.getEnvioJuridicoThreshold()
                   : 151;
-                filteredList = filteredList.filter((c) => wanted.has(window.getFilaQueueGroup(c, thresholdJuridico)));
+                filteredList = filteredList.filter((c) => {
+                    const st = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+                    if (st && webroWanted.has(st)) return true;
+                    if (wanted.size && wanted.has(window.getFilaQueueGroup(c, thresholdJuridico))) {
+                        // A tag Aguardando Webro ou Pendente Repasse substitui a do grupo na fila.
+                        // Sem essa tag marcada, o cliente não entra no grupo selecionado.
+                        if (st === "AGUARDANDO" || st === "PENDENTE") return false;
+                        return true;
+                    }
+                    return false;
+                });
             }
         }
         if (window.advFilters.lotes && window.advFilters.lotes.length > 0) {
@@ -12883,6 +13238,10 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   if (dataAlreadyLoaded && typeof window.updateFilaCacheStatusIndicator === "function") {
     window.updateFilaCacheStatusIndicator();
   }
+  // Em segundo plano: baixas lançadas depois da carga do dia entram na próxima abertura e no Sprint.
+  if (getSiengeApiMode() === "real" && window.SiengeApiService && typeof SiengeApiService.refreshRecentPayments === "function") {
+    SiengeApiService.refreshRecentPayments().catch(() => {});
+  }
 
   if ((!bills || bills.length === 0) && !(window._filaProntaAtiva && filaPronta && filaPronta.length)) {
     if (body) {
@@ -12912,6 +13271,9 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   try { subjudiceMemory = JSON.parse(localStorage.getItem('subjudiceHistory') || '{}') || {}; } catch (e) { subjudiceMemory = {}; }
   const filaPausa = () => new Promise((resolve) => setTimeout(resolve, 0));
   if (window._filaProntaAtiva && filaPronta && filaPronta.length) {
+    if (typeof window.filaAplicarPagamentosRecentes === "function") {
+      try { filaPronta = window.filaAplicarPagamentosRecentes(filaPronta); } catch (e) {}
+    }
     filaPronta.forEach((c) => {
       if (!c) return;
       consolidated[String(c.customerId) + "-" + String(c.saleId)] = c;
@@ -13452,7 +13814,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
         }
         const g = typeof window.getFilaQueueGroup === "function" ? window.getFilaQueueGroup(c) : null;
         const G = window.FILA_QUEUE_GROUPS || {};
-        if (g && g === G.ENVIAR_JURIDICO) return true;
+        if (g && (g === G.ENVIAR_JURIDICO || g === G.REENVIAR_JURIDICO || g === G.ALTERAR_SUBJUDICE_SIENGE)) return true;
       }
       return false;
     });
@@ -13463,7 +13825,7 @@ async function _loadDashboardData_Impl(forceRefresh = false) {
   }
 
   if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
-  if (!window._filaProntaAtiva && typeof window.nexScheduleCumpridaCheck === "function") window.nexScheduleCumpridaCheck();
+  if (typeof window.nexScheduleCumpridaCheck === "function") window.nexScheduleCumpridaCheck();
   const originalAdvFilters = window.advFilters;
   window.advFilters = window.advFiltersFila || {};
   clientList = window.applyAdvFiltersTo(clientList);
@@ -14660,6 +15022,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const refreshBtn = document.getElementById("btn-refresh-dashboard");
   if (refreshBtn) {
     refreshBtn.onclick = async () => {
+      // Confirma o login Microsoft já no clique (abre a janela da Microsoft se o token não renovou sozinho).
+      // Em 27/11/2026 o token não renovava: o servidor recusava todas as chamadas ao Sienge (sem-login),
+      // a busca voltava vazia e o botão parecia não fazer nada.
+      const auth = window.MouraAuth;
+      let pedidoToken = Promise.resolve("ok");
+      try {
+        if (auth && typeof auth.getIntegraTokenInterativo === "function") pedidoToken = auth.getIntegraTokenInterativo();
+      } catch (e) {}
+      let token = "";
+      try { token = await pedidoToken; } catch (e) { token = ""; }
+      if (!token) {
+        alert("Não consegui confirmar seu login Microsoft, e sem ele o Sienge não responde. Se abriu uma janela da Microsoft, escolha sua conta da Moura Leite; se não abriu, libere pop-ups para este site ou saia e entre de novo no Integra.");
+        return;
+      }
       if (window.SiengeApiService) {
         SiengeApiService._defaultersFetchGen = (SiengeApiService._defaultersFetchGen || 0) + 1;
         SiengeApiService._defaultersPromise = null;
@@ -15418,7 +15794,8 @@ async function viewCustomerCard(customerId, saleId, specificTitulo = null) {
   });
   if (typeof window.applyFichaPerfilVista === "function") window.applyFichaPerfilVista(false);
   if (typeof window.syncQuitacaoAdvogadoVista === "function") window.syncQuitacaoAdvogadoVista();
-  
+  if (window.FollowupGestor && typeof window.FollowupGestor.atualizarBotaoFicha === "function") window.FollowupGestor.atualizarBotaoFicha();
+
   // Abas judiciais: menu Sub Judice, advogado, ou contrato/cliente já sub judice (ex.: fila de cobrança)
   syncCobrancaJudicialTabs(isSubjudice, isAdvogado);
 
@@ -15623,7 +16000,7 @@ function formatCpfCnpj(val) {
   ) || (window.rawClientList || []).find(c => String(c.customerId) === String(customerId));
   if (typeof window.clientIsAcordoJudicialQuebrado === "function" && window.clientIsAcordoJudicialQuebrado(filaMatch)) {
     if (typeof window.clientIsAcordoJudicialEnviarJuridico === "function" && window.clientIsAcordoJudicialEnviarJuridico(filaMatch)) {
-      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Enviar para Jurídico.">Enviar para Jurídico</span>`;
+      subjudiceAlertHtml += `<span style="background-color: #c2410c; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Acordo judicial quebrado há 31 dias ou mais. Grupo Reenviar para Jurídico - Acordo Judicial Quebrado.">Reenviar para Jurídico</span>`;
     } else {
       subjudiceAlertHtml += `<span style="background-color: #d97706; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; margin-left: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: inline-block; vertical-align: middle;" title="Parcela de acordo (SA, A1, A2…) vencida. Permanece no grupo Acordo Judicial Quebrado até o 30º dia.">Acordo Judicial Quebrado</span>`;
     }
@@ -16388,15 +16765,14 @@ function formatCpfCnpj(val) {
     
     // Buscar coordenadas do KMZ para exibir o botão do Google Earth.
     // Sem o Firebase a ficha segue com os dados do Sienge (título, datas e valores).
-    if (empIdToUse !== "N/D" && window.firebaseDb && window.firebaseCollections && window.firebaseCollections.doc && window.firebaseCollections.getDoc) {
-      const { doc, getDoc } = window.firebaseCollections;
-      const kmzRef = doc(window.firebaseDb, 'kmz_coordinates', empIdToUse);
-      getDoc(kmzRef).then(async docSnap => {
+    if (empIdToUse !== "N/D" && window.DadosNucleo) {
+      // Supabase: uma linha por empreendimento em kmz_coordinates (obter devolve o objeto ou null).
+      window.DadosNucleo.tabela('kmz_coordinates').obter(empIdToUse).then(async kmz => {
           let data = [];
           const span = document.getElementById("det-block-lot-span");
           if (!span) return;
-          const existe = docSnap && (typeof docSnap.exists === "function" ? docSnap.exists() : docSnap.exists);
-          if (existe) data = (docSnap.data() || {}).placemarks || [];
+          const existe = !!kmz;
+          if (existe) data = kmz.placemarks || [];
 
           let kmzMissing = false;
           if (!Array.isArray(data) || data.length === 0) kmzMissing = true;
@@ -17925,7 +18301,8 @@ function formatCpfCnpj(val) {
        kpiPago, kpiAcrescimo, kpiDesconto, kpiLiquido, kpiQtdPagas,
        kpiVencidas, kpiVencidasOriginal, kpiQtdVencidas,
        kpiAVencer, kpiQtdAVencer,
-       kpiTotalContrato, kpiTotalQtd
+       kpiTotalContrato, kpiTotalQtd,
+       _customerId: String(customerId)
     };
 
     const elTotalSum = document.getElementById("ext-kpi-total-sum");
@@ -18042,7 +18419,9 @@ function formatCpfCnpj(val) {
     }
     
     const kpiPctPaid = kpiSomaOriginal > 0 ? (kpiPago / kpiSomaOriginal) : (sale.status === 'Quitado' ? 1 : 0);
-    
+    // Follow-up do gestor: o resumo leva o mesmo percentual do medidor "Pago do Contrato".
+    if (AppState.currentContractKpis) AppState.currentContractKpis.kpiPctPago = kpiPctPaid;
+
     AppState.isCurrentContractPaid = (kpiPctPaid >= 1 || sale.status === 'Quitado');
     if (AppState.isCurrentContractPaid) {
         let payoffDateMsg = sale.payOffDate ? new Date(sale.payOffDate + 'T12:00:00').toLocaleDateString('pt-BR') : "";
@@ -18250,7 +18629,8 @@ function formatCpfCnpj(val) {
     }
 
     if (simInput && dbContract && dbContract.installments) {
-      if (sale.status === "Quitado") {
+         if (sale.status === "Quitado") {
+         if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial([]);
          if (simTableContainer) simTableContainer.style.display = "none";
          if (simFullContainer) simFullContainer.style.display = "none";
          if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(0);
@@ -18296,7 +18676,8 @@ function formatCpfCnpj(val) {
                   isActiveBoleto: false,
                   isFetchingBoleto: !!hasBoletoFlag,
                   originalValue: Number(inst.originalValue != null ? inst.originalValue : (inst.value != null ? inst.value : cb)),
-                  correctedValue: cb
+                  correctedValue: cb,
+                  _tituloBoleto: String(boletoBillId)
                };
                const blocksSienge = (typeof window.installmentIsParcelaWebro === "function" && window.installmentIsParcelaWebro(row))
                  || (typeof window.installmentAllowsSiengeBoleto === "function" && !window.installmentAllowsSiengeBoleto(row));
@@ -18310,17 +18691,39 @@ function formatCpfCnpj(val) {
             if (typeof AppState !== "undefined") AppState._simVencidas = vencidasSimulador;
          }
 
-         const fetchSlipForSimInst = async (simInst) => {
+         if (window.BoletoBaixa && boletoBillId) {
+            window.BoletoBaixa.carregar(String(boletoBillId)).then(() => {
+               if (typeof window.recalcularSimulador === "function") window.recalcularSimulador();
+            }).catch(() => {});
+         }
+         const fetchSlipForSimInst = async (simInst, tentativa = 0) => {
             if (!simInst.isFetchingBoleto && !simInst.generatedBillet) return;
             simInst.isFetchingBoleto = true;
+            let tentarDeNovo = false;
             try {
-               const slip = await SiengeApiService.getPaymentSlipNotification(saleId, simInst.installmentId);
-               const usable = typeof window.siengePaymentSlipIsUsable === "function"
-                 ? window.siengePaymentSlipIsUsable(slip)
-                 : !!(slip && slip.results && slip.results.length > 0);
+               // Mesmo título que a aba "Boletos do Contrato" usa; o saleId da ficha pode vir em outro formato.
+               const idsSlip = [];
+               [simInst._slipBillId, AppState.currentReceivableBillId, AppState.selectedSaleId, AppState.selectedTitulo, boletoBillId, saleId].forEach((v) => {
+                  const t = String(v == null ? "" : v).replace(/^B-/i, "").split("-")[0].trim();
+                  if (t && t !== "undefined" && t !== "null" && !idsSlip.includes(t)) idsSlip.push(t);
+               });
+               const slipUsavel = (s) => typeof window.siengePaymentSlipIsUsable === "function"
+                 ? window.siengePaymentSlipIsUsable(s)
+                 : !!(s && s.results && s.results.length > 0);
+               let slip = null;
+               // No máximo 2 títulos por parcela: o Sienge limita a conta a 200 consultas por minuto.
+               for (const idTit of idsSlip.slice(0, 2)) {
+                  slip = await SiengeApiService.getPaymentSlipNotification(idTit, simInst.installmentId);
+                  if (slipUsavel(slip)) { simInst._slipBillId = idTit; break; }
+               }
+               const usable = slipUsavel(slip);
+               // Boleto recém-gerado (últimos 15 min): o Sienge leva alguns segundos para devolver a linha.
+               const recemGerado = recentFresh && recentIds.includes(String(simInst.installmentId));
+               if (!usable && recemGerado && tentativa < 3) tentarDeNovo = true;
                if (usable) {
                   simInst.isActiveBoleto = true;
                   const barcode = slip.results[0].digitableLine || slip.results[0].digitableNumber || "";
+                  simInst.linhaBoleto = String(barcode).replace(/\D/g, "");
                   const dtFebraban = typeof window.boletoDataDaLinha === "function"
                     ? window.boletoDataDaLinha(barcode, simInst.due)
                     : null;
@@ -18351,6 +18754,14 @@ function formatCpfCnpj(val) {
                }
             } catch(e) {
                simInst.isActiveBoleto = false;
+               if (recentFresh && recentIds.includes(String(simInst.installmentId)) && tentativa < 3) tentarDeNovo = true;
+            }
+            if (tentarDeNovo) {
+               setTimeout(() => {
+                  if (AppState._simVencidas && AppState._simVencidas.indexOf(simInst) < 0) return;
+                  fetchSlipForSimInst(simInst, tentativa + 1);
+               }, [5000, 15000, 30000][tentativa] || 30000);
+               return;
             }
             simInst.isFetchingBoleto = false;
             if (typeof recalcularSimulador === "function") recalcularSimulador();
@@ -18458,7 +18869,9 @@ function formatCpfCnpj(val) {
                const jurosContrato = oficial ? oficial.juros : (charges.jurosPadrao != null ? charges.jurosPadrao : charges.juros);
                const honorarios = charges.honorarios || 0;
                const juros = jurosContrato + honorarios;
-               if (boletoVencidoDentroDe28(inst)) inst.selected = false;
+               // Baixa no banco informada e conferida em "Boletos do Contrato": libera gerar outro boleto.
+               const baixaInf = typeof window.simParcelaTemBaixa === "function" ? window.simParcelaTemBaixa(inst) : null;
+               if (boletoVencidoDentroDe28(inst) && !baixaInf) inst.selected = false;
                
                if (inst.selected) {
                   totalPrincipal += inst.cb;
@@ -18477,11 +18890,12 @@ function formatCpfCnpj(val) {
                   if (inst.isFetchingBoleto) {
                      chkHtml = `<div class="loading-spinner" style="width:14px; height:14px; border:2px solid var(--color-primary); border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></div>`;
                      bgStyle = "background-color: rgba(0,0,0,0.02);";
-                  } else if (boletoVencidoDentroDe28(inst)) {
-                     chkHtml = `<input type="checkbox" disabled class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-boleto-so-download="true" title="Boleto vencido e ainda válido. Baixe o boleto já gerado." style="cursor:not-allowed;opacity:0.45;">`;
+                  } else if (boletoVencidoDentroDe28(inst) && !baixaInf) {
+                     chkHtml = `<input type="checkbox" disabled class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-boleto-so-download="true" title="Boleto vencido e ainda válido. Baixe o boleto já gerado ou informe a baixa no banco em Boletos do Contrato." style="cursor:not-allowed;opacity:0.45;">`;
                      bgStyle = "background-color: #fffbeb;";
                   } else if (inst.isActiveBoleto || inst.boletoBaixado) {
-                     chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" data-has-active-boleto="true" ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
+                     const precisaBaixa = inst.isActiveBoleto && !inst.boletoBaixado && !baixaInf;
+                     chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" ${precisaBaixa ? 'data-has-active-boleto="true"' : ""} ${baixaInf ? 'data-baixa-informada="true"' : ""} ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
                      bgStyle = AppState.isSubjudiceMode ? "background-color: transparent;" : (inst.boletoBaixado ? "background-color: #fee2e2;" : "background-color: #ecfdf5;");
                   } else {
                      chkHtml = `<input type="checkbox" class="sim-row-check" data-index="${index}" data-inst-id="${inst.installmentId}" ${inst.selected ? "checked" : ""} style="cursor: pointer;">`;
@@ -18534,17 +18948,28 @@ function formatCpfCnpj(val) {
                       } else {
                         statusHtml = `<span style="background:var(--color-primary);color:#fff;padding:2px 6px;border-radius:4px;font-size:0.7rem;">A Vencer</span>`;
                       }
-                      acoesHtml = `<div class="sim-acoes"><button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="openBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)"><i data-lucide="file-text" style="width:12px;height:12px;"></i> Ver</button>
-                        <button class="btn btn-outline btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="downloadBoletoPdf(${JSON.stringify(String(saleId))}, ${JSON.stringify(String(inst.installmentId))}, this)" title="Download"><i data-lucide="download" style="width:12px;height:12px;"></i></button></div>`;
+                      const idBol = String(inst._slipBillId || saleId);
+                      acoesHtml = `<div class="sim-acoes"><button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="openBoletoPdf(${JSON.stringify(idBol)}, ${JSON.stringify(String(inst.installmentId))}, this)"><i data-lucide="file-text" style="width:12px;height:12px;"></i> Ver</button>
+                        <button class="btn btn-outline btn-sm" style="font-size:0.72rem;padding:4px 8px;border-radius:4px;" onclick="downloadBoletoPdf(${JSON.stringify(idBol)}, ${JSON.stringify(String(inst.installmentId))}, this)" title="Download"><i data-lucide="download" style="width:12px;height:12px;"></i></button></div>`;
+                    }
+                    if (baixaInf) {
+                      // Boleto baixado no banco: não oferece mais o arquivo antigo.
+                      statusHtml = `<span style="display:inline-block;background:#e0f2fe;color:#075985;border:1px solid #bae6fd;padding:2px 6px;border-radius:4px;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Baixa no banco informada em Boletos do Contrato. Pode gerar boleto novo.">Baixado no banco</span>`;
+                      acoesHtml = "";
                     }
                   }
 
                   const valorAtualizadoHtml = kpiFmt(inst.cb + multa + juros);
+                  const baixaParcial = typeof window.parcelaBaixaParcial === "function" ? window.parcelaBaixaParcial(inst) : null;
+                  if (baixaParcial && bgStyle.indexOf("transparent") >= 0) bgStyle = "background-color: #fffbeb;";
+                  const marcaParcial = baixaParcial
+                    ? `<div style="margin-top:4px;display:inline-flex;align-items:center;padding:1px 6px;border-radius:999px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.68rem;font-weight:700;white-space:nowrap;" title="Esta parcela teve baixa parcial. O corrigido é o saldo que ainda está em aberto.">Baixa parcial</div>`
+                    : "";
                   const tr = document.createElement("tr");
                   tr.style.cssText = `opacity: ${inst.selected || inst.isActiveBoleto || inst.boletoBaixado ? "1" : "0.55"}; ${bgStyle} border-bottom: 1px solid #f1f5f9;`;
                   tr.innerHTML = `
                      <td style="text-align: center;">${chkHtml}</td>
-                     <td>${inst.installmentNumber || inst.installmentId || "—"}</td>
+                     <td>${inst.installmentNumber || inst.installmentId || "—"}${marcaParcial}</td>
                      <td style="font-weight: 500;">${dateLabel}</td>
                      <td>${vencBoleto}</td>
                      <td>${diasAtraso > 0 ? diasAtraso : "—"}</td>
@@ -18561,6 +18986,7 @@ function formatCpfCnpj(val) {
                }
             });
             if (window.lucide) lucide.createIcons();
+            if (typeof window.renderAlertaBaixaParcial === "function") window.renderAlertaBaixaParcial(vencidasSimulador);
             
             if (simPrincipalEl) simPrincipalEl.textContent = kpiFmt(totalPrincipal);
             if (simJurosEl) simJurosEl.textContent = kpiFmt(totalMulta + totalJuros);
@@ -18572,6 +18998,23 @@ function formatCpfCnpj(val) {
             const totalAtualizado = totalPrincipal + totalMulta + totalJuros;
             const totalComHonorarios = totalAtualizado + totalHonorarios;
             if (simTotalEl) simTotalEl.textContent = kpiFmt(margemHon > 0 ? totalComHonorarios : totalAtualizado);
+
+            // Desconto em multa e juros: por enquanto o Sienge não aplica pela API (aviso abaixo da negociação).
+            try {
+              const taxaSim = typeof window.getSimuladorTaxaMultiplier === "function" ? window.getSimuladorTaxaMultiplier() : 1;
+              const selTaxa = document.getElementById("simulador-taxa");
+              let avisoSim = document.getElementById("simulador-aviso-sienge");
+              if (!avisoSim && selTaxa && selTaxa.parentNode) {
+                avisoSim = document.createElement("div");
+                avisoSim.id = "simulador-aviso-sienge";
+                selTaxa.parentNode.appendChild(avisoSim);
+              }
+              if (avisoSim) {
+                avisoSim.innerHTML = (taxaSim < 1 && typeof window.avisoDescontoSiengeHtml === "function")
+                  ? window.avisoDescontoSiengeHtml({ finePct: 2 * taxaSim, interestPct: 1 * taxaSim, alvo: margemHon > 0 ? totalComHonorarios : totalAtualizado })
+                  : "";
+              }
+            } catch (e) {}
 
             // Atualiza VF do Funil
             window.funnelCurrentVF = kpiAVencer + totalAtualizado;
@@ -18746,7 +19189,15 @@ function formatCpfCnpj(val) {
       }
       
       const badgeClass = riskLevel === "high" ? "risk-high" : riskLevel === "medium" ? "risk-medium" : "risk-low";
-      
+      // Follow-up do gestor: PMP e renegociações do mesmo Perfil Analítico da ficha.
+      AppState.currentFichaPerfil = {
+        _customerId: String(customerId),
+        pmp: mediaPMP,
+        renegociacoes: reparcelamentosCount,
+        pctEmDia: totalPagamentos > 0 ? pctEmDia : null,
+        perfil: profileName
+      };
+
       chronicBanner.innerHTML = `
         <div style="padding: 15px; border-radius: 6px; display: flex; align-items: flex-start; gap: 12px; border: 1.5px solid; margin-bottom: 20px;" class="${badgeClass}">
           <i data-lucide="${iconName}" style="width: 24px; height: 24px; flex-shrink: 0; margin-top: 2px;"></i>
@@ -18953,10 +19404,17 @@ function formatCpfCnpj(val) {
         alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
         return;
       }
-      const hasActiveBoleto = Array.from(checkboxes).some(c => c.getAttribute('data-has-active-boleto') === 'true');
-      if (hasActiveBoleto) {
-          const confirmBaixa = confirm("Atenção! Uma ou mais parcelas selecionadas já possuem um boleto gerado e válido nos últimos 28 dias.\n\nVocê realizou a baixa manual do boleto anterior?\nSe isso não foi feito, o cliente poderá pagar em duplicidade.\n\nClique em OK se já fez a baixa e deseja continuar, ou Cancelar para abortar.");
-          if (!confirmBaixa) return;
+      // Boleto ainda válido só é refeito depois da baixa no banco informada (com comprovante)
+      // em "Boletos do Contrato". Evita o cliente pagar em duplicidade.
+      const semBaixa = Array.from(checkboxes).filter(c => c.getAttribute('data-has-active-boleto') === 'true');
+      if (semBaixa.length) {
+        const nums = semBaixa.map(c => {
+          const id = c.getAttribute('data-inst-id');
+          const row = (AppState._simVencidas || []).find(s => String(s.installmentId) === String(id));
+          return row ? (row.installmentNumber || row.installmentId) : id;
+        }).join(", ");
+        alert("A parcela " + nums + " já tem boleto válido no banco.\n\nPara gerar outro, primeiro faça a baixa do boleto no banco e informe essa baixa com o comprovante em Boletos do Contrato > Informar baixa no banco.\n\nSe o cliente vai pagar o boleto atual, use Ver ou Download.");
+        return;
       }
 
       const instIds = Array.from(checkboxes).map(c => parseInt(c.getAttribute('data-inst-id')));
@@ -19162,6 +19620,7 @@ function renderCustomerOccurrences() {
     }
     const isWebroBaixa = !!(occ.webroBaixa || (typeof window.isWebroBaixaCanal === "function" && window.isWebroBaixaCanal(occ.canal)));
     const isReuniaoSemanal = !!(typeof window.isReuniaoSemanalTerceirizadaCanal === "function" && window.isReuniaoSemanalTerceirizadaCanal(occ.canal));
+    const isFollowupGestor = !!(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(occ.canal));
     if (isNexLocked) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#fef2f2', 'important');
@@ -19174,6 +19633,12 @@ function renderCustomerOccurrences() {
       card.style.setProperty('border', '1px solid #c7d2fe', 'important');
       card.style.setProperty('border-left', '4px solid #4f46e5', 'important');
       card.style.setProperty('box-shadow', '0 0 0 1px rgba(79,70,229,0.10)', 'important');
+    } else if (isFollowupGestor) {
+      card.style.setProperty('position', 'relative', 'important');
+      card.style.setProperty('background-color', '#fdf4ff', 'important');
+      card.style.setProperty('border', '1px solid #f0abfc', 'important');
+      card.style.setProperty('border-left', '4px solid #a21caf', 'important');
+      card.style.setProperty('box-shadow', '0 0 0 1px rgba(162,28,175,0.10)', 'important');
     } else if (isWebroBaixa) {
       card.style.setProperty('position', 'relative', 'important');
       card.style.setProperty('background-color', '#ecfdf5', 'important');
@@ -19202,11 +19667,12 @@ function renderCustomerOccurrences() {
       else if (occ.canal.toLowerCase() === 'presencial') canalIcon = 'user';
       else if (isNotaInterna) canalIcon = 'sticky-note';
       else if (isReuniaoSemanal) canalIcon = 'users';
+      else if (isFollowupGestor) canalIcon = 'clipboard-list';
       else if (isWebroBaixa) canalIcon = 'banknote';
       else if (isNexLocked) canalIcon = 'mail';
-      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : 'rgba(0,0,0,0.05)';
-      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)');
-      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa) ? '700' : '400';
+      const canalTagBg = isReuniaoSemanal ? '#e0e7ff' : (isFollowupGestor ? '#fae8ff' : 'rgba(0,0,0,0.05)');
+      const canalTagColor = isReuniaoSemanal ? '#3730a3' : (isFollowupGestor ? '#86198f' : (isWebroBaixa ? '#166534' : 'var(--color-text-muted)'));
+      const canalTagWeight = (isReuniaoSemanal || isWebroBaixa || isFollowupGestor) ? '700' : '400';
       tagsHtml += `<span style="background: ${canalTagBg}; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; color: ${canalTagColor}; font-weight: ${canalTagWeight};"><i data-lucide="${canalIcon}" style="width: 10px; height: 10px; display: inline-block; margin-right: 2px;"></i>${occ.canal}</span>`;
     }
     if (occ.iniciativa) {
@@ -19314,6 +19780,15 @@ function renderCustomerOccurrences() {
           `);
       }
       
+      // Follow up do Gestor sem resposta: o operador responde pelo pop-up do pedido.
+      if (isFollowupGestor && occ.followupGestorId && !(occ.replies && occ.replies.length) && window.FollowupGestor) {
+          const fgId = String(occ.followupGestorId).replace(/[^A-Za-z0-9_-]/g, "");
+          btns.push(`
+            <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; border-color: #f0abfc; color: #86198f;" onclick="window.FollowupGestor.responderPelaNota('${fgId}')">
+              <i data-lucide="message-square" style="width:10px; height:10px;"></i> ${window.FollowupGestor.souAdmin() ? "Ver pedido" : "Responder"}
+            </button>
+          `);
+      }
       if (isNotaInterna) {
           btns.push(`
             <button class="btn btn-outline btn-sm" style="padding: 2px 6px; font-size: 0.65rem; display: inline-flex; align-items: center; gap: 2px; margin-left: 4px;" onclick="window.toggleReplyInput('${occ.date}')">
@@ -19340,14 +19815,14 @@ function renderCustomerOccurrences() {
     }
 
     let repliesHtml = "";
-    if (isNotaInterna && occ.replies && occ.replies.length > 0) {
-      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid rgba(245,158,11,0.4); padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
+    if ((isNotaInterna || isFollowupGestor) && occ.replies && occ.replies.length > 0) {
+      repliesHtml = `<div style="margin-top: 8px; border-left: 2px solid ${isFollowupGestor ? 'rgba(162,28,175,0.4)' : 'rgba(245,158,11,0.4)'}; padding-left: 8px; margin-left: 4px; display: flex; flex-direction: column; gap: 6px;">`;
       occ.replies.forEach(reply => {
         const rDate = new Date(reply.date).toLocaleString('pt-BR');
         repliesHtml += `
           <div style="background: rgba(255,255,255,0.6); padding: 6px 8px; border-radius: 4px; border: 1px solid rgba(0,0,0,0.05); font-size: 0.75rem;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 0.7rem; color: var(--color-text-muted);">
-              <strong>${reply.author}</strong> <span>${rDate}</span>
+              <strong>${reply.tipo === "resposta" ? "Resposta · " : ""}${reply.author}</strong> <span>${rDate}</span>
             </div>
             <div style="color: #1e293b; white-space: pre-wrap;">${reply.text}</div>
           </div>
@@ -19885,7 +20360,7 @@ window.uploadOccurrenceAnexosToFirebase = async function(customerId, occId, file
   const list = Array.isArray(files) ? files.filter(Boolean) : [];
   if (!list.length) return [];
   if (!window.firebaseStorage || !window.firebaseCollections || !window.firebaseCollections.ref || !window.firebaseCollections.uploadBytes || !window.firebaseCollections.getDownloadURL) {
-    throw new Error("Firebase Storage não disponível. Não foi possível enviar o anexo.");
+    throw new Error("Armazenamento de arquivos não disponível. Não foi possível enviar o anexo.");
   }
   const { ref, uploadBytes, getDownloadURL } = window.firebaseCollections;
   const out = [];
@@ -20106,7 +20581,7 @@ async function saveCustomerOccurrence() {
         saveBtn.innerHTML = prevBtnHtml || '<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
         if (window.lucide) lucide.createIcons();
       }
-      alert("Não foi possível enviar o anexo para o Firebase. A ocorrência não foi gravada.\n" + ((upErr && upErr.message) || upErr));
+      alert("Não foi possível enviar o anexo para o armazenamento. A ocorrência não foi gravada.\n" + ((upErr && upErr.message) || upErr));
       return;
     }
     window.clearOccurrenceAnexos();
@@ -20395,14 +20870,26 @@ ${reqInfoLink}`
 }
 
 window.validateOccurrenceForm = function() {
+  // Roda a cada tecla no texto da ocorrência. Só troca o HTML do rótulo/botão quando ele muda de verdade (troca de
+  // canal) e só redesenha os ícones nesse caso: antes refazia tudo e chamava lucide.createIcons() na página inteira
+  // a cada letra, e o texto demorava para aparecer na tela.
+  let vofIcones = false;
+  const vofHtml = (el) => el && {
+    set innerHTML(h) {
+      if (el.dataset.vofHtml === h) return;
+      el.dataset.vofHtml = h;
+      el.innerHTML = h;
+      if (h.indexOf("data-lucide") >= 0) vofIcones = true;
+    }
+  };
   const textEl = document.getElementById("note-text");
   const pDateEl = document.getElementById("note-promise-date");
   const canalEl = document.getElementById("note-canal");
   const reminderEl = document.getElementById("note-reminder-select");
   const saveBtn = document.getElementById("btn-save-occurrence");
   const simBtn = document.getElementById("btn-simular-promessas");
-  const labelNoteText = document.getElementById("label-note-text");
-  
+  const labelNoteText = vofHtml(document.getElementById("label-note-text"));
+
   const iniciativaGroup = document.getElementById("occurrence-iniciativa-group");
   const promiseRow = document.getElementById("occurrence-promise-row");
   const installmentsGroup = document.getElementById("occurrence-installments-group");
@@ -20426,7 +20913,7 @@ window.validateOccurrenceForm = function() {
     if (pinGroup) pinGroup.style.display = (canal === "Nota interna") ? "block" : "none";
     
     if (labelNoteText) labelNoteText.innerHTML = (canal === "Proposta de renegociação") ? 'Proposta <span style="color: var(--color-danger);">*</span>' : 'Nota interna <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = (canal === "Proposta de renegociação") ? '<i data-lucide="save" style="width: 16px;"></i> Gravar Proposta' : '<i data-lucide="save" style="width: 16px;"></i> Gravar Nota interna';
+    if (saveBtn) vofHtml(saveBtn).innerHTML =(canal === "Proposta de renegociação") ? '<i data-lucide="save" style="width: 16px;"></i> Gravar Proposta' : '<i data-lucide="save" style="width: 16px;"></i> Gravar Nota interna';
     
     isValid = text.length > 0;
   } else if (canal === "Retorno Agendado") {
@@ -20437,9 +20924,9 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
     
     if (labelNoteText) labelNoteText.innerHTML = 'Observação <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Agendamento';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Agendamento';
     
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) pDateLabel.innerHTML = 'Data de Retorno <span style="color: var(--color-danger);">*</span>';
     if (pDateEl) {
       pDateEl.min = new Date().toISOString().split("T")[0];
@@ -20457,10 +20944,10 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
 
     if (labelNoteText) labelNoteText.innerHTML = 'Observação <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Baixa Webro';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Baixa Webro';
     if (textEl) textEl.placeholder = "Observação da baixa Webro...";
 
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) {
       pDateLabel.innerHTML = 'Data da Baixa Webro <span style="color: var(--color-danger);">*</span>'
         + ' <span style="font-weight:500;text-transform:none;letter-spacing:0;color:#64748b;">(pode ser retroativa)</span>';
@@ -20483,7 +20970,7 @@ window.validateOccurrenceForm = function() {
     const prazoDias = Number(window.COLENCI_PIX_PRAZO_DIAS) || 5;
     if (labelNoteText) labelNoteText.innerHTML = 'Acordo e valor do sinal <span style="color: var(--color-danger);">*</span>'
       + ' <span style="font-weight:500;text-transform:none;letter-spacing:0;color:#64748b;">(prazo do repasse: ' + prazoDias + ' dias a partir de hoje)</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Aguardando Pix Colenci';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Aguardando Pix Colenci';
     if (textEl) textEl.placeholder = "Acordo feito, valor do sinal e data em que o cliente pagou a Colenci...";
 
     isValid = text.length > 0 && canal.length > 0;
@@ -20495,7 +20982,7 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "none";
 
     if (labelNoteText) labelNoteText.innerHTML = 'Conversa com terceirizada <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Reunião Semanal';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Reunião Semanal';
     if (textEl) textEl.placeholder = "Registrar conversa com a terceirizada...";
 
     isValid = text.length > 0 && canal.length > 0;
@@ -20507,10 +20994,10 @@ window.validateOccurrenceForm = function() {
     if (reminderEl) reminderEl.closest('.form-group').style.display = "block";
     
     if (labelNoteText) labelNoteText.innerHTML = 'Conversa com o Cliente <span style="color: var(--color-danger);">*</span>';
-    if (saveBtn) saveBtn.innerHTML = '<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
+    if (saveBtn) vofHtml(saveBtn).innerHTML ='<i data-lucide="save" style="width: 16px;"></i> Gravar Ocorrência';
     if (textEl) textEl.placeholder = "Registrar tratativa de cobrança...";
     
-    const pDateLabel = document.getElementById('label-promise-date');
+    const pDateLabel = vofHtml(document.getElementById('label-promise-date'));
     if (pDateLabel) pDateLabel.innerHTML = 'Data de Promessa <span style="color: var(--color-danger);">*</span>';
     if (pDateEl) {
       pDateEl.min = new Date().toISOString().split("T")[0];
@@ -20542,8 +21029,8 @@ window.validateOccurrenceForm = function() {
     simBtn.style.opacity = isValid ? "1" : "0.5";
     simBtn.style.cursor = isValid ? "pointer" : "not-allowed";
   }
-  
-  if (window.lucide) window.lucide.createIcons();
+
+  if (vofIcones && window.lucide) window.lucide.createIcons();
 };
 
 window.errataOccurrence = function(customerId, occDate) {
@@ -21729,9 +22216,8 @@ window.salvarPedidoLiberacaoReneg = async function(pedido) {
   window._renegPedidos = (window._renegPedidos || []).filter((p) => p.id !== pedido.id).concat([pedido]);
   window.gravarPedidosLiberacaoLocal();
   window.pintarPedidosLiberacaoReneg();
-  if (!window.firebaseDb || !window.firebaseCollections) return false;
-  const ref = window.firebaseCollections.doc(window.firebaseDb, "reneg_liberacao", pedido.id);
-  await window.firebaseCollections.setDoc(ref, pedido);
+  if (!window.DadosCobranca) return false;
+  await window.DadosCobranca.tabela("reneg_liberacao").gravar(pedido.id, pedido);
   return true;
 };
 
@@ -21745,9 +22231,9 @@ window.decidirLiberacaoReneg = async function(id, status) {
   window.gravarPedidosLiberacaoLocal();
   window.pintarPedidosLiberacaoReneg();
   try {
-    if (window.firebaseDb && window.firebaseCollections) {
-      const ref = window.firebaseCollections.doc(window.firebaseDb, "reneg_liberacao", id);
-      await window.firebaseCollections.updateDoc(ref, { status: status, decididoEm: pedido.decididoEm, decididoPor: pedido.decididoPor });
+    if (window.DadosCobranca) {
+      // updateDoc -> gravar com merge (lê a linha e troca só estes campos).
+      await window.DadosCobranca.tabela("reneg_liberacao").gravar(id, { status: status, decididoEm: pedido.decididoEm, decididoPor: pedido.decididoPor }, { merge: true });
     }
   } catch (e) {
     console.warn("Falha ao atualizar a liberação:", e);
@@ -21810,10 +22296,10 @@ window.iniciarPedidosLiberacaoReneg = function() {
   try { window._renegPedidos = JSON.parse(localStorage.getItem("crm_reneg_liberacao_pedidos") || "[]"); } catch (e) { window._renegPedidos = []; }
   window.pintarPedidosLiberacaoReneg();
   const ligar = () => {
-    if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.onSnapshot) return false;
-    const col = window.firebaseCollections.collection(window.firebaseDb, "reneg_liberacao");
-    window._renegPedidosUnsub = window.firebaseCollections.onSnapshot(col, (snap) => {
-      const nuvem = snap.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+    if (!window.DadosCobranca) return false;
+    // Supabase: tempo real da tabela reneg_liberacao; snap.docs já são os objetos (com id).
+    window._renegPedidosUnsub = window.DadosCobranca.tabela("reneg_liberacao").ouvir((snap) => {
+      const nuvem = snap.docs.map((d) => Object.assign({}, d));
       const ids = new Set(nuvem.map((p) => p.id));
       const locais = (window._renegPedidos || []).filter((p) => p && p.status === "pendente" && !ids.has(p.id) && Date.now() - (p.criadoEm || 0) < 120000);
       window._renegPedidos = nuvem.concat(locais);
@@ -21822,7 +22308,7 @@ window.iniciarPedidosLiberacaoReneg = function() {
       if (document.getElementById("reneg-payment-method")) {
         try { renegAplicarFaixaModalidade(); } catch (e) {}
       }
-    }, (err) => console.warn("Pedidos de liberação:", err));
+    }, { aoErro: (err) => console.warn("Pedidos de liberação:", err) });
     return true;
   };
   if (!ligar()) {
@@ -23425,31 +23911,31 @@ window.carregarRenegPropostas = function(force) {
     return Promise.resolve(window._renegPropostasMap);
   }
   if (!force && window._renegPropostasCarregando) return window._renegPropostasCarregando;
-  const fc = window.firebaseCollections;
-  if (!window.firebaseDb || !fc || !fc.getDocs || !fc.collection) {
+  if (!window.DadosCobranca) {
     window._renegPropostasMap = window._renegPropostasMap || new Map();
     return Promise.resolve(window._renegPropostasMap);
   }
+  const tabRenegPropostas = window.DadosCobranca.tabela("reneg_propostas");
   window._renegPropostasCarregando = (async function() {
     const map = new Map();
-    const snap = await fc.getDocs(fc.collection(window.firebaseDb, "reneg_propostas"));
+    const lista = await tabRenegPropostas.listar();
     const hoje = renegIsoHoje();
     const vencer = [];
     const apagarTeste = [];
-    snap.forEach(function(d) {
-      const data = d.data() || {};
-      data.id = d.id;
-      if (renegPropostaTeste15479(d.id, data)) {
-        apagarTeste.push(d.id);
+    lista.forEach(function(data) {
+      const docId = String(data.id);
+      data.id = docId;
+      if (renegPropostaTeste15479(docId, data)) {
+        apagarTeste.push(docId);
         return;
       }
-      map.set(d.id, data);
+      map.set(docId, data);
     });
     window._renegPropostasMap = map;
     window._renegPropostasEm = Date.now();
     renegGravarPropostasLocais(map);
     apagarTeste.forEach(function(id) {
-      if (fc.deleteDoc) fc.deleteDoc(fc.doc(window.firebaseDb, "reneg_propostas", id)).catch(function() {});
+      tabRenegPropostas.excluir(id).catch(function() {});
     });
     if (typeof window.renegMarcarSinaisPagos === "function") {
       try { await window.renegMarcarSinaisPagos(map); } catch (e) {}
@@ -23463,8 +23949,7 @@ window.carregarRenegPropostas = function(force) {
       }
     });
     vencer.forEach(function(id) {
-      const ref = fc.doc(window.firebaseDb, "reneg_propostas", id);
-      fc.setDoc(ref, { status: "expirada", expiradaEm: new Date().toISOString() }, { merge: true }).catch(function() {});
+      tabRenegPropostas.gravar(id, { status: "expirada", expiradaEm: new Date().toISOString() }, { merge: true }).catch(function() {});
     });
     window._renegPropostasCarregando = null;
     return map;
@@ -23549,7 +24034,7 @@ function renegReciboConfereSinal(r, alvo, desdeIso) {
 
 window.renegMarcarSinaisPagos = async function(map) {
   if (!map || typeof map.forEach !== "function") return;
-  const fc = window.firebaseCollections;
+  const tabReneg = window.DadosCobranca ? window.DadosCobranca.tabela("reneg_propostas") : null;
   const abertas = [];
   map.forEach(function(p) {
     if (!p || p.sinalPago || p.status === "concluida") return;
@@ -23578,8 +24063,8 @@ window.renegMarcarSinaisPagos = async function(map) {
     p.sinalPago = true;
     p.sinalPagoEm = new Date().toISOString();
     if (p.status === "expirada") p.status = "ativa";
-    if (fc && fc.setDoc && fc.doc && window.firebaseDb) {
-      fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", p.id || renegPropostaId(p.customerId, p.saleId)), {
+    if (tabReneg) {
+      tabReneg.gravar(p.id || renegPropostaId(p.customerId, p.saleId), {
         sinalPago: true, sinalPagoEm: p.sinalPagoEm, status: p.status || "ativa"
       }, { merge: true }).catch(function() {});
     }
@@ -23699,9 +24184,9 @@ window.renegChecarPropostaAtiva = async function() {
   const pago = window.renegPropostaProntaParaConfessao(p);
   if (pago && !p.sinalPago) {
     p.sinalPago = true;
-    const fc = window.firebaseCollections;
-    if (fc && fc.setDoc) {
-      fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", p.id || renegPropostaId(p.customerId, p.saleId)), {
+    const tabReneg = window.DadosCobranca ? window.DadosCobranca.tabela("reneg_propostas") : null;
+    if (tabReneg) {
+      tabReneg.gravar(p.id || renegPropostaId(p.customerId, p.saleId), {
         sinalPago: true, sinalPagoEm: new Date().toISOString()
       }, { merge: true }).catch(function() {});
     }
@@ -23710,8 +24195,8 @@ window.renegChecarPropostaAtiva = async function() {
 };
 
 async function renegSalvarProposta(results, extra) {
-  const fc = window.firebaseCollections;
-  if (!window.firebaseDb || !fc || !fc.setDoc || !fc.doc) throw new Error("Firebase indisponível");
+  if (!window.DadosCobranca) throw new Error("Supabase indisponível");
+  const tabReneg = window.DadosCobranca.tabela("reneg_propostas");
   const customer = g_renegCustomer || {};
   const sale = g_renegSale || {};
   const customerId = String(customer.id || customer.customerId || AppState.selectedCustomerId || "");
@@ -23742,16 +24227,16 @@ async function renegSalvarProposta(results, extra) {
     createdBy: u.name || u.nome || "",
     createdByEmail: u.email || ""
   };
-  await fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", id), dados, { merge: true });
+  await tabReneg.gravar(id, dados, { merge: true });
   dados.id = id;
   if (extra && extra.codigo) {
     const anterior = window._renegPropostasMap && window._renegPropostasMap.get(id);
     if (anterior && anterior.codigoAuth && anterior.codigoAuth !== extra.codigo) {
-      fc.setDoc(fc.doc(window.firebaseDb, "documentos_autenticados", anterior.codigoAuth), { substituido: true }, { merge: true }).catch(function() {});
+      if (window.DadosNucleo) window.DadosNucleo.tabela("documentos_autenticados").gravar(anterior.codigoAuth, { substituido: true }, { merge: true }).catch(function() {});
     }
     dados.codigoAuth = extra.codigo;
     dados.reparcelamento = extra.reparcelamento || null;
-    await fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", id), {
+    await tabReneg.gravar(id, {
       codigoAuth: extra.codigo,
       reparcelamento: extra.reparcelamento || null
     }, { merge: true });
@@ -23764,48 +24249,237 @@ async function renegSalvarProposta(results, extra) {
 async function renegConcluirProposta() {
   const p = renegPropostaAtual();
   if (!p) return;
-  const fc = window.firebaseCollections;
+  const tabReneg = window.DadosCobranca ? window.DadosCobranca.tabela("reneg_propostas") : null;
   p.status = "concluida";
   p.sinalPago = true;
   p.concluidaEm = new Date().toISOString();
-  if (fc && fc.setDoc) {
-    await fc.setDoc(fc.doc(window.firebaseDb, "reneg_propostas", p.id), {
+  if (tabReneg) {
+    await tabReneg.gravar(p.id, {
       status: "concluida", sinalPago: true, concluidaEm: p.concluidaEm
     }, { merge: true });
   }
 }
 
-async function baixarHtmlComoPdf(html, nomeArquivo, opts) {
-  if (!window.jspdf || !window.jspdf.jsPDF || typeof html2canvas !== "function") {
-    throw new Error("gerador de PDF indisponível");
+function rgbCssPdf(css) {
+  const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : [17, 17, 17];
+}
+
+function fundoCssPdf(css) {
+  const m = String(css || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/);
+  if (!m) return null;
+  const a = m[4] == null ? 1 : parseFloat(m[4]);
+  if (!(a > 0.04)) return null;
+  if (+m[1] > 250 && +m[2] > 250 && +m[3] > 250) return null;
+  return [+m[1], +m[2], +m[3]];
+}
+
+function fonteCssPdf(st) {
+  const fam = String(st.fontFamily || "").toLowerCase();
+  const serif = /times|georgia|serif/.test(fam) && !/sans-serif/.test(fam);
+  const bold = (parseInt(st.fontWeight, 10) || 0) >= 600 || st.fontWeight === "bold";
+  const italic = /italic|oblique/.test(st.fontStyle || "");
+  let estilo = "normal";
+  if (bold && italic) estilo = "bolditalic";
+  else if (bold) estilo = "bold";
+  else if (italic) estilo = "italic";
+  return { nome: serif ? "times" : "helvetica", estilo: estilo };
+}
+
+function escalaCssPdf(el) {
+  let s = 1;
+  let n = el;
+  while (n && n.nodeType === 1) {
+    const t = getComputedStyle(n).transform;
+    const m = t && t !== "none" ? t.match(/matrix\(\s*([-\d.]+)/) : null;
+    const a = m ? parseFloat(m[1]) : 1;
+    if (a > 0.2 && a < 4) s *= a;
+    n = n.parentElement;
   }
+  return s;
+}
+
+/**
+ * Desenha o HTML já montado na tela como texto de verdade no PDF.
+ * A posição segue o que o navegador quebrou (justificado, título, quadro, tabela).
+ * Imagem (logo, QR) continua imagem. opts.pagina preenche a folha atual;
+ * sem isso, o bloco pode passar de uma folha e a margem é opts.margem (mm).
+ */
+function pintarElementoComoTextoPdf(pdf, el, opts) {
+  opts = opts || {};
+  if (!el || !pdf) throw new Error("Gerador de PDF indisponível.");
+  const raiz = el.getBoundingClientRect();
+  if (!(raiz.width > 1) || !(raiz.height > 1)) throw new Error("A página do documento não foi medida.");
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const margem = opts.pagina ? 0 : (Number(opts.margem) || 0);
+  const utilW = pageW - margem * 2;
+  const utilH = pageH - margem * 2;
+  const escala = utilW / raiz.width;
+  const fatiaPx = utilH / escala;
+  const uma = !!opts.pagina || raiz.height <= fatiaPx + 2;
+  const nPag = uma ? 1 : Math.max(1, Math.ceil((raiz.height - 1) / fatiaPx));
+  const localY = (rect) => rect.top - raiz.top;
+  const localX = (rect) => rect.left - raiz.left;
+  const xy = (x, y, indice) => {
+    const base = uma ? 0 : indice * fatiaPx;
+    return [margem + x * escala, margem + (y - base) * escala];
+  };
+  const corte = (top, height, indice) => {
+    if (uma) return height > 0.3 ? { y: top, h: height } : null;
+    const a = Math.max(top, indice * fatiaPx);
+    const b = Math.min(top + height, (indice + 1) * fatiaPx);
+    return b - a > 0.4 ? { y: a, h: b - a } : null;
+  };
+  const paginaDe = (top, height) => {
+    if (uma) return 0;
+    const meio = top + height / 2;
+    return Math.min(nPag - 1, Math.max(0, Math.floor(meio / fatiaPx)));
+  };
+
+  const caixas = [];
+  el.querySelectorAll("*").forEach((node) => {
+    if (node.hasAttribute && node.hasAttribute("data-doc-palavra")) return;
+    if (node.closest && node.closest("svg")) return;
+    const st = getComputedStyle(node);
+    if (st.display === "none" || st.visibility === "hidden") return;
+    const r = node.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    caixas.push({ node: node, st: st, top: localY(r), left: localX(r), width: r.width, height: r.height });
+  });
+
+  const imagens = [];
+  el.querySelectorAll("img").forEach((img) => {
+    const r = img.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return;
+    imagens.push({ img: img, top: localY(r), left: localX(r), width: r.width, height: r.height });
+  });
+
+  const palavras = [];
+  const guardar = (texto, rect, pai) => {
+    const t = String(texto || "");
+    if (!t || !pai || rect.width < 0.2 || rect.height < 0.2) return;
+    palavras.push({
+      t: t,
+      top: localY(rect),
+      left: localX(rect),
+      width: rect.width,
+      height: rect.height,
+      pai: pai
+    });
+  };
+  el.querySelectorAll("span[data-doc-palavra]").forEach((span) => {
+    guardar(span.textContent, span.getBoundingClientRect(), span);
+  });
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let no;
+  while ((no = walker.nextNode())) {
+    const pai = no.parentElement;
+    if (!pai || pai.closest("span[data-doc-palavra]") || pai.closest("svg") || pai.closest("script,style")) continue;
+    const st = getComputedStyle(pai);
+    if (st.display === "none" || st.visibility === "hidden") continue;
+    const bruto = no.nodeValue || "";
+    let i = 0;
+    while (i < bruto.length) {
+      while (i < bruto.length && /\s/.test(bruto.charAt(i))) i++;
+      if (i >= bruto.length) break;
+      const ini = i;
+      while (i < bruto.length && !/\s/.test(bruto.charAt(i))) i++;
+      const range = document.createRange();
+      range.setStart(no, ini);
+      range.setEnd(no, i);
+      const rects = range.getClientRects();
+      const rect = rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+      guardar(bruto.slice(ini, i), rect, pai);
+    }
+  }
+
+  const formatoImg = (img) => {
+    const s = String((img && (img.currentSrc || img.src)) || "");
+    if (/image\/jpe?g|\.jpe?g(\?|$)/i.test(s)) return "JPEG";
+    return "PNG";
+  };
+
+  for (let p = 0; p < nPag; p++) {
+    if (p > 0) pdf.addPage();
+    caixas.forEach((c) => {
+      const fat = corte(c.top, c.height, p);
+      if (!fat) return;
+      const bg = fundoCssPdf(c.st.backgroundColor);
+      if (bg) {
+        pdf.setFillColor(bg[0], bg[1], bg[2]);
+        const o = xy(c.left, fat.y, p);
+        pdf.rect(o[0], o[1], c.width * escala, fat.h * escala, "F");
+      }
+      const lado = (nome, x1, y1, x2, y2) => {
+        const w = parseFloat(c.st["border" + nome + "Width"]) || 0;
+        if (w < 0.4) return;
+        const cor = rgbCssPdf(c.st["border" + nome + "Color"]);
+        pdf.setDrawColor(cor[0], cor[1], cor[2]);
+        pdf.setLineWidth(Math.max(0.08, w * escala));
+        const a = xy(x1, y1, p);
+        const b = xy(x2, y2, p);
+        pdf.line(a[0], a[1], b[0], b[1]);
+      };
+      const right = c.left + c.width;
+      const bot = c.top + c.height;
+      if (fat.y - c.top < 0.8) lado("Top", c.left, c.top, right, c.top);
+      if (c.top + c.height - (fat.y + fat.h) < 0.8) lado("Bottom", c.left, bot, right, bot);
+      lado("Left", c.left, fat.y, c.left, fat.y + fat.h);
+      lado("Right", right, fat.y, right, fat.y + fat.h);
+    });
+    imagens.forEach((im) => {
+      if (paginaDe(im.top, im.height) !== p) return;
+      const o = xy(im.left, im.top, p);
+      const fmt = formatoImg(im.img);
+      try { pdf.addImage(im.img, fmt, o[0], o[1], im.width * escala, im.height * escala); }
+      catch (e) {
+        try { pdf.addImage(im.img.src, fmt, o[0], o[1], im.width * escala, im.height * escala); } catch (e2) {}
+      }
+    });
+    palavras.forEach((w) => {
+      if (paginaDe(w.top, w.height) !== p) return;
+      const st = getComputedStyle(w.pai);
+      const fonte = fonteCssPdf(st);
+      const px = (parseFloat(st.fontSize) || 14) * escalaCssPdf(w.pai);
+      pdf.setFont(fonte.nome, fonte.estilo);
+      pdf.setFontSize(Math.max(4, px * escala * 72 / 25.4));
+      const cor = rgbCssPdf(st.color);
+      pdf.setTextColor(cor[0], cor[1], cor[2]);
+      const natural = pdf.getTextWidth(w.t);
+      const alvo = w.width * escala;
+      let espaco = 0;
+      const ls = parseFloat(st.letterSpacing);
+      if (isFinite(ls)) espaco += ls * escala;
+      if (w.t.length > 1 && natural > 0) espaco += (alvo - natural) / (w.t.length - 1);
+      if (espaco < -0.35) espaco = -0.35;
+      if (espaco > 0.8) espaco = 0.8;
+      if (Math.abs(espaco) < 0.01) espaco = 0;
+      pdf.setCharSpace(espaco);
+      const meia = Math.max(0, (w.height - px) / 2);
+      const o = xy(w.left, w.top + meia + px * 0.8, p);
+      pdf.text(w.t, o[0], o[1]);
+      pdf.setCharSpace(0);
+    });
+  }
+}
+
+window.pintarElementoComoTextoPdf = pintarElementoComoTextoPdf;
+
+async function baixarHtmlComoPdf(html, nomeArquivo, opts) {
+  if (!window.jspdf || !window.jspdf.jsPDF) throw new Error("gerador de PDF indisponível");
   const host = document.createElement("div");
-  host.style.cssText = "position:fixed;left:0;top:0;width:740px;background:#fff;padding:24px 32px;color:#111;z-index:-1;pointer-events:none;";
+  host.style.cssText = "position:fixed;left:-13000px;top:0;width:740px;background:#fff;padding:24px 32px;color:#111;";
   host.innerHTML = html;
   document.body.appendChild(host);
   try {
     if (window.RelacionamentoApp && typeof RelacionamentoApp._justificarPagina === "function") {
       RelacionamentoApp._justificarPagina(host);
     }
-    const canvas = await html2canvas(host, { scale: 2, backgroundColor: "#ffffff" });
+    await Promise.all(Array.from(host.querySelectorAll("img")).map((img) => img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; })));
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const margin = 8;
-    const imgW = 210 - margin * 2;
-    const pageCanvasH = Math.floor((297 - margin * 2) * canvas.width / imgW);
-    let y = 0;
-    let page = 0;
-    while (y < canvas.height) {
-      const sliceH = Math.min(pageCanvasH, canvas.height - y);
-      const slice = document.createElement("canvas");
-      slice.width = canvas.width;
-      slice.height = sliceH;
-      slice.getContext("2d").drawImage(canvas, 0, y, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-      if (page) pdf.addPage();
-      pdf.addImage(slice.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, imgW, sliceH * imgW / canvas.width);
-      y += sliceH;
-      page += 1;
-    }
+    pintarElementoComoTextoPdf(pdf, host, { margem: 8 });
     const bytes = new Uint8Array(pdf.output("arraybuffer"));
     if (!(opts && opts.devolver)) renegBaixarBytes(bytes, nomeArquivo);
     return bytes;
@@ -23894,10 +24568,8 @@ function renegCarregarQrLib() {
 }
 
 async function renegGuardarProva(codigo, hash, info, payload) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.setDoc || !fx.doc) throw new Error("O Firebase não está disponível para guardar a prova do acordo.");
-  await fx.setDoc(fx.doc(db, "documentos_autenticados", codigo), {
+  if (!window.DadosNucleo) throw new Error("O Supabase não está disponível para guardar a prova do acordo.");
+  await window.DadosNucleo.tabela("documentos_autenticados").gravar(codigo, {
     tipo: "acordo",
     tipoNome: "Acordo",
     codigo: codigo,
@@ -23910,7 +24582,7 @@ async function renegGuardarProva(codigo, hash, info, payload) {
   }, { merge: true });
 }
 
-async function renegCarimbarAcordo(bytes, results, codigoPronto) {
+async function renegCarimbarAcordo(bytes, results, codigoPronto, opts) {
   const codigo = codigoPronto || ("ac-" + (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "").slice(0, 12) : Date.now().toString(36)));
   const payload = renegPayloadRemade(results);
   const sale = g_renegSale || {};
@@ -23922,6 +24594,16 @@ async function renegCarimbarAcordo(bytes, results, codigoPronto) {
     unidade: [unit.costCenterId || sale.costCenterId || sale.enterpriseId, unit.name || unit.unitName || sale.unitName].filter(Boolean).join(" - "),
     cliente: cli.name || ""
   };
+  if (opts && opts.imprimirQr === false) {
+    let aviso = "";
+    try {
+      const hash = await renegSha256(bytes);
+      await renegGuardarProva(codigo, hash, info, payload);
+    } catch (e) {
+      aviso = "A proposta foi gerada, mas a prova do reparcelamento não ficou salva. " + ((e && e.message) || "");
+    }
+    return { bytes: bytes, codigo: codigo, reparcelamento: payload, aviso: aviso };
+  }
   try {
     const rel = window.RelacionamentoApp;
     if (!rel || typeof rel._carregarPdfLib !== "function") throw new Error("O editor de PDF não está disponível.");
@@ -24176,24 +24858,21 @@ function renegPedirPdfPix() {
 
 async function renegMontarPdfAcordo(results, nomeArquivo, pixBytes) {
   const pdf = baixarPropostaAcordoPdf(results, nomeArquivo);
-  let cru = new Uint8Array(pdf.output("arraybuffer"));
+  const cru = new Uint8Array(pdf.output("arraybuffer"));
   if (pixBytes) {
     const textoPix = await renegTextoPdf(pixBytes);
     const erroPix = renegValidarPdfPix(textoPix, Number(results && results.sinalValue) || 0);
     if (erroPix) throw new Error(erroPix);
-    cru = await renegAnexarPdf(cru, pixBytes);
   }
-  return renegCarimbarAcordo(cru, results, "");
+  return renegCarimbarAcordo(cru, results, "", { imprimirQr: false });
 }
 
 window.subirReparcelamentoPorCodigo = async function(codigo) {
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
   const vazio = { ok: false, motivo: "sem-reparcelamento" };
-  if (!codigo || !fx || !db || !fx.getDoc || !fx.doc) return vazio;
-  const snap = await fx.getDoc(fx.doc(db, "documentos_autenticados", codigo));
-  if (!snap || !snap.exists || !snap.exists()) return vazio;
-  const prova = snap.data() || {};
+  if (!codigo || !window.DadosNucleo) return vazio;
+  const docsAuth = window.DadosNucleo.tabela("documentos_autenticados");
+  const prova = await docsAuth.obter(codigo);
+  if (!prova) return vazio;
   if (prova.tipo !== "acordo" || !prova.reparcelamento) return vazio;
   if (prova.substituido) return { ok: false, motivo: "substituido" };
   if (prova.reparcelamentoEnviado) return { ok: false, motivo: "ja-enviado" };
@@ -24227,7 +24906,7 @@ window.subirReparcelamentoPorCodigo = async function(codigo) {
     if (res && res.simulated) {
       return { ok: false, motivo: "erro", detalhe: "O Integra está em modo simulado. O reparcelamento não foi enviado ao Sienge." };
     }
-    await fx.setDoc(fx.doc(db, "documentos_autenticados", codigo), {
+    await docsAuth.gravar(codigo, {
       reparcelamentoEnviado: true,
       reparcelamentoEnviadoEm: new Date().toISOString()
     }, { merge: true });
@@ -24676,8 +25355,8 @@ function baixarPropostaAcordoPdf(results, nomeArquivo) {
     abatido
       ? abatido.texto
       : (temSinal
-        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
-        : "A proposta só tem validade com o pagamento do sinal, pelo PIX da página seguinte. Sem esse pagamento, a proposta não vale."),
+        ? "A proposta só tem validade com o pagamento do sinal de " + brl(results.sinalValue) + " até " + (sinalData || "a data combinada") + ", pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale e fica sem efeito em " + (expira || "dois dias depois") + "."
+        : "A proposta só tem validade com o pagamento do sinal, pelo QR Code PIX enviado em separado. Sem esse pagamento, a proposta não vale."),
     abatido
       ? "O pagamento do sinal em " + abatido.dataBr + " é o aceite do cliente. Não há assinatura nesta proposta."
       : "O pagamento do sinal é o aceite do cliente. Não há assinatura nesta proposta.",
@@ -24844,8 +25523,18 @@ async function renegTermoPdfSelecionavel(titulo, texto, testemunhas) {
     if (y + altura > fundo) nova();
   };
   if (logo) {
-    try { pdf.addImage(logo, "PNG", 210 - margem - 42, 10, 42, 14); } catch (e) {}
-    y = 30;
+    // Mantém a proporção do arquivo (o logo é quase quadrado): cabe numa caixa de até 42 x 24 mm no canto direito.
+    let lw = 42;
+    let lh = 14;
+    try {
+      const props = pdf.getImageProperties(logo);
+      const ratio = props && props.width && props.height ? props.width / props.height : 3;
+      lh = 24;
+      lw = lh * ratio;
+      if (lw > 42) { lw = 42; lh = lw / ratio; }
+    } catch (e) {}
+    try { pdf.addImage(logo, "PNG", 210 - margem - lw, 10, lw, lh); } catch (e) {}
+    y = Math.max(30, 10 + lh + 6);
   }
   pdf.setTextColor(17, 17, 17);
   pdf.setFont("times", "bold");
@@ -24996,7 +25685,7 @@ function generateAgreementPDF() {
     if (pack.aviso) alert(pack.aviso);
     let salva = null;
     try { salva = await renegSalvarProposta(results, { codigo: pack.codigo, reparcelamento: pack.reparcelamento }); }
-    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no Firebase: " + ((e && e.message) || e)); return; }
+    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no banco: " + ((e && e.message) || e)); return; }
     renegMontarAvisoProposta(salva, false);
     window.atualizarBotaoReneg();
     return;
@@ -25075,7 +25764,7 @@ function generateAgreementPDF() {
   if (modo === "proposta") {
     let salva = null;
     try { salva = await renegSalvarProposta(results); }
-    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no Firebase: " + ((e && e.message) || e)); return; }
+    catch (e) { alert("O PDF da proposta foi baixado, mas não consegui gravar no banco: " + ((e && e.message) || e)); return; }
     renegMontarAvisoProposta(salva, false);
     window.atualizarBotaoReneg();
   } else {
@@ -25537,13 +26226,9 @@ window.distratoCcCandidates = function() {
 window.ensureDistratoObrasCloud = function() {
   if (window._distObrasCloudTried) return;
   window._distObrasCloudTried = true;
-  const fx = window.firebaseCollections;
-  const db = window.firebaseDb;
-  if (!fx || !db || !fx.getDoc) return;
-  fx.getDoc(fx.doc(db, "config", "global")).then((snap) => {
-    if (!snap || typeof snap.exists !== "function" || !snap.exists()) return;
-    const data = snap.data() || {};
-    const cloudRaw = data.crm_obras_andamento;
+  if (!window.DadosNucleo) return;
+  // Supabase: lê só a chave crm_obras_andamento de configuracoes (não precisa montar o config/global inteiro).
+  window.DadosNucleo.lerConfiguracao("crm_obras_andamento").then((cloudRaw) => {
     if (!cloudRaw) return;
     const cloud = typeof cloudRaw === "string" ? cloudRaw : JSON.stringify(cloudRaw);
     const local = localStorage.getItem("crm_obras_andamento") || "";
@@ -29987,6 +30672,20 @@ window.generateDistratoPDF = async function generateDistratoPDF() {
     alert("Abra o simulador de distrato a partir de um contrato.");
     return;
   }
+  // Um distrato em aberto por título: outro só depois da baixa aprovada pelo administrador.
+  if (window.DocAssinaturaApp && typeof DocAssinaturaApp.distratoAbertoDoTitulo === "function") {
+    const tituloDist = g_distSale.receivableBillId || g_distSale.id || "";
+    const aberto = await DocAssinaturaApp.distratoAbertoDoTitulo(tituloDist);
+    if (aberto) {
+      const quando = typeof DocAssinaturaApp.quando === "function" ? DocAssinaturaApp.quando(aberto.createdAt) : String(aberto.createdAt || "");
+      const pedida = aberto.baixa && aberto.baixa.status === "pendente";
+      alert("Já existe um distrato em aberto para o título " + tituloDist + ", gerado em " + quando + " por " + (aberto.userName || "—") + ".\n\n"
+        + (pedida
+          ? "A baixa dele já foi pedida e aguarda a aprovação do administrador. Depois da aprovação, gere o novo distrato."
+          : "Para gerar outro, peça a baixa do anterior em Relacionamento > Documentos para assinar (botão Pedir baixa), com a justificativa. O administrador precisa aprovar."));
+      return;
+    }
+  }
   if (typeof window.enrichCustomerForLegalDocs === "function") {
     g_distCustomer = await window.enrichCustomerForLegalDocs(g_distCustomer);
   }
@@ -31309,6 +32008,17 @@ window.renderAlertaDescontoEncargos = function(customerId) {
   box.style.display = "block";
 };
 
+/** Aviso enquanto o Sienge não aplica pela API a multa e os juros com desconto (teste de 24/11/2026). */
+window.avisoDescontoSiengeHtml = function(o) {
+  const pct = (v) => (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return `<div style="margin-top:8px;padding:9px 11px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.8rem;line-height:1.45;">
+    <strong>Atenção: boleto com desconto de multa e juros deve ser gerado direto no Sienge.</strong>
+    Pelo Integra, o Sienge ainda aplica a multa e os juros do contrato (2% e 1% a.m.), mesmo com o desconto escolhido. Estamos aguardando resposta do suporte do Sienge.
+    No Sienge, informe multa <b>${pct(o && o.finePct)}%</b> e juros <b>${pct(o && o.interestPct)}% a.m.</b> para chegar em <b>${money(o && o.alvo)}</b>.
+  </div>`;
+};
+
 window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultiplier) {
   const box = document.getElementById("reprocess-charges-summary");
   if (!box) return { multa: 0, juros: 0, principal: 0 };
@@ -31366,6 +32076,12 @@ window.renderReprocessChargesSummary = function(instIds, dueDateStr, taxaMultipl
     box.style.cssText = "display:block;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:0.82rem;line-height:1.45;";
     box.innerHTML = `<strong>Este boleto será gerado COM acréscimos.</strong> A API do Sienge receberá multa <b>${Number(finePct).toFixed(2)}%</b> e juros <b>${Number(interestPct).toFixed(2)}% a.m.</b>${(multa + juros) > 0.009 ? ` · Estimativa: multa ${money(multa)} + juros ${money(juros)} · Total ${money(principal + multa + juros)}` : ""}.${honHint}${graceHint}`;
   }
+  // Enquanto o Sienge não responde: a API ignora multa e juros enviados e aplica os do contrato
+  // (teste no título 14394 em 24/11/2026). Desconto ou isenção precisa ser gerado direto no Sienge.
+  if (waiver.waive || taxa < 1) {
+    const alvo = isento ? principal : principal + multa + juros;
+    box.innerHTML += window.avisoDescontoSiengeHtml({ finePct: finePct, interestPct: interestPct, alvo: alvo });
+  }
   return { multa, juros, principal, honorarios, finePct, interestPct, waive: waiver.waive };
 };
 
@@ -31388,10 +32104,17 @@ function boletoVencidoDentroDe28(inst) {
 }
 window.boletoVencidoDentroDe28 = boletoVencidoDentroDe28;
 
+/** Baixa no banco já informada (com comprovante conferido) para o boleto atual desta parcela. */
+window.simParcelaTemBaixa = function(inst) {
+  if (!inst || !window.BoletoBaixa || !inst._tituloBoleto || !inst.linhaBoleto) return null;
+  return window.BoletoBaixa.temBaixa(inst._tituloBoleto, inst.installmentId, inst.linhaBoleto);
+};
+
 window.reprocessBoleto = async function(billId, instId, costCenterId, source = 'avulso') {
   const idsPedido = (Array.isArray(instId) ? instId : [instId]).map(String);
   const sims = (AppState && AppState._simVencidas) || [];
-  const bloqueadas = sims.filter((s) => idsPedido.includes(String(s.installmentId)) && boletoVencidoDentroDe28(s));
+  const bloqueadas = sims.filter((s) => idsPedido.includes(String(s.installmentId)) && boletoVencidoDentroDe28(s)
+    && !(typeof window.simParcelaTemBaixa === "function" && window.simParcelaTemBaixa(s)));
   if (bloqueadas.length) {
     const nums = bloqueadas.map((s) => s.installmentNumber || s.installmentId).join(", ");
     alert("A parcela " + nums + " já tem boleto vencido e ainda dentro dos 28 dias. Baixe o boleto já gerado. Não é possível gerar outro nesse período.");
@@ -31601,7 +32324,21 @@ window.validateReprocessForm = function() {
   
   const isPromessaValid = isPromessaHidden || (canal && iniciativa && text);
 
-  if (account && dueDate && isPromessaValid) {
+  // Desconto de juros e multa: o boleto precisa ser gerado no Sienge com o desconto; aqui o botão fica bloqueado.
+  const taxaSel = document.getElementById('reprocess-taxa');
+  const comDesconto = !!(taxaSel && String(taxaSel.value) !== "1");
+  let avisoDesc = document.getElementById('reprocess-aviso-desconto');
+  if (!avisoDesc && taxaSel && taxaSel.parentNode) {
+    avisoDesc = document.createElement('div');
+    avisoDesc.id = 'reprocess-aviso-desconto';
+    avisoDesc.style.cssText = 'display:none;margin-top:8px;padding:8px 10px;border-radius:6px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:0.82rem;font-weight:700;line-height:1.35;';
+    avisoDesc.textContent = 'Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto. Aqui só é possível gerar o boleto sem isenção.';
+    taxaSel.parentNode.appendChild(avisoDesc);
+  }
+  if (avisoDesc) avisoDesc.style.display = comDesconto ? 'block' : 'none';
+  btn.title = comDesconto ? 'Boleto com desconto de juros e multa: gere no Sienge.' : (!account ? 'Escolha a conta do boleto (a lista vem do Sienge).' : '');
+
+  if (account && dueDate && isPromessaValid && !comDesconto) {
     btn.disabled = false;
     btn.style.opacity = "1";
     btn.style.cursor = "pointer";
@@ -31614,6 +32351,11 @@ window.validateReprocessForm = function() {
 
 window.submitReprocessBoleto = async function() {
   if (!currentReprocessBillId || currentReprocessInstId === null) return;
+  const taxaSelDesc = document.getElementById('reprocess-taxa');
+  if (taxaSelDesc && String(taxaSelDesc.value) !== "1") {
+    alert("Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto.");
+    return;
+  }
 
   const accountSelectEl = document.getElementById('reprocess-account');
   const selectedOpt = accountSelectEl && accountSelectEl.selectedOptions && accountSelectEl.selectedOptions[0];
@@ -31631,6 +32373,10 @@ window.submitReprocessBoleto = async function() {
     ? window.syncReprocessChargePercents()
     : window.resolveBoletoChargePercents(currentReprocessSource === "simulacao");
   const taxaNow = Number(pctNow && pctNow.taxa);
+  if (Number.isFinite(taxaNow) && taxaNow < 1) {
+    alert("Com desconto de juros e multa, o boleto precisa ser gerado no Sienge com o desconto.");
+    return;
+  }
   currentReprocessTaxa = Number.isFinite(taxaNow) ? taxaNow : 0;
   let fine = Number(pctNow && pctNow.fine);
   let interest = Number(pctNow && pctNow.interest);
@@ -34118,8 +34864,10 @@ window.getLatestCustomerContact = function(customerId) {
     ? notesFn(AppState.judNotes, customerId)
     : ((AppState.judNotes && AppState.judNotes[customerId]) || []);
   let latest = null;
+  // Pedido do gestor e resposta do operador (Follow up do Gestor) não são contato com o cliente.
+  const followupGestor = (n) => typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n && n.canal);
   (Array.isArray(notesNormal) ? notesNormal : []).forEach(n => {
-    if (!n || !n.date) return;
+    if (!n || !n.date || followupGestor(n)) return;
     if (!latest || new Date(n.date) > new Date(latest.date)) latest = n;
   });
   (Array.isArray(notesJud) ? notesJud : []).forEach(n => {
@@ -34593,9 +35341,8 @@ window.deleteAgendaPersonalNote = function(index, sourceKey) {
         allNotes[sourceKey].splice(index, 1);
         if (allNotes[sourceKey].length === 0) {
             delete allNotes[sourceKey];
-            if (window.firebaseDb && window.firebaseCollections) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', sourceKey);
-                window.firebaseCollections.setDoc(docRef, { notes: [] }, { merge: true }).catch(e => {});
+            if (window.DadosNucleo) {
+                window.crmAgendaGravar('agenda_personal_notes', sourceKey, []).catch(e => {});
             }
         }
         localStorage.setItem('crm_agenda_personal_notes', JSON.stringify(allNotes));
@@ -34889,9 +35636,8 @@ window.saveAgendaAlarm = function(dateStr, index, datetimeValue, sourceKey = '',
             notesList.splice(index, 1);
             if (notesList.length === 0) {
                 delete allNotes[currentStorageKey];
-                if (window.firebaseDb && window.firebaseCollections) {
-                    const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', currentStorageKey);
-                    window.firebaseCollections.setDoc(docRef, { notes: [] }, { merge: true }).catch(e => {});
+                if (window.DadosNucleo) {
+                    window.crmAgendaGravar('agenda_personal_notes', currentStorageKey, []).catch(e => {});
                 }
             }
             // Insere na chave do dia do alarme
@@ -35520,7 +36266,7 @@ async function _loadZeroPaidTab_Impl() {
       // Obter último contato
       const notesNormal = (AppState.notes && AppState.notes[bill.customerId]) ? AppState.notes[bill.customerId] : [];
       const notesJud = (AppState.judNotes && AppState.judNotes[bill.customerId]) ? AppState.judNotes[bill.customerId] : [];
-      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna'; });
+      const notes = [...notesNormal, ...notesJud].filter(n => { const c = (n.canal||"").toLowerCase(); return c !== 'nota interna' && n.fase !== 'Nota Interna' && !(typeof window.isFollowUpGestorCanal === "function" && window.isFollowUpGestorCanal(n.canal)); });
       
       if (notes.length > 0) {
         notes.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -37814,8 +38560,9 @@ window.nexIsLegallyValid = function(item) {
 };
 
 window.nexScheduleCumpridaCheck = function() {
-  if (window._nexCumpridaChecking || typeof window.nexCollectAll !== "function") return;
-  if (!window.SiengeApiService || typeof SiengeApiService.getCustomerFinancialStatements !== "function") return;
+  if (window._nexCumpridaPromise) return window._nexCumpridaPromise;
+  if (typeof window.nexCollectAll !== "function") return Promise.resolve();
+  if (!window.SiengeApiService || typeof SiengeApiService.getCustomerFinancialStatements !== "function") return Promise.resolve();
   if (!window._nexPayAttempted) window._nexPayAttempted = new Set();
   const pending = window.nexCollectAll().filter(function(it) {
     if (!it || !window.nexIsEntregue(it.status) || !it.arDigital) return false;
@@ -37825,7 +38572,7 @@ window.nexScheduleCumpridaCheck = function() {
     const key = window.nexPayKey(it.customerId, it.titulo || it.saleId);
     return key && !window._nexPayAttempted.has(key);
   });
-  if (!pending.length) return;
+  if (!pending.length) return Promise.resolve();
   const byCustomer = new Map();
   pending.forEach(function(it) {
     const cid = String(it.customerId || "");
@@ -37836,9 +38583,9 @@ window.nexScheduleCumpridaCheck = function() {
     if (!byCustomer.has(cid)) byCustomer.set(cid, []);
     byCustomer.get(cid).push(titulo);
   });
-  if (!byCustomer.size) return;
+  if (!byCustomer.size) return Promise.resolve();
   window._nexCumpridaChecking = true;
-  Promise.all(Array.from(byCustomer.entries()).map(async function(pair) {
+  window._nexCumpridaPromise = Promise.all(Array.from(byCustomer.entries()).map(async function(pair) {
     const cid = pair[0];
     const titulos = pair[1];
     try {
@@ -37864,6 +38611,7 @@ window.nexScheduleCumpridaCheck = function() {
   })).then(function() {
     window._nexCumpridaChecking = false;
     window._nexCumpridaSet = null;
+    if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
     if (window._isDefaultersLoading) {
       window._filaSearchPending = true;
       return;
@@ -37872,7 +38620,10 @@ window.nexScheduleCumpridaCheck = function() {
     if (tab && tab.style.display !== "none" && window.AppState && AppState.defaultersLoaded && typeof loadDashboardData === "function") {
       loadDashboardData(false);
     }
+  }).finally(function() {
+    window._nexCumpridaPromise = null;
   });
+  return window._nexCumpridaPromise;
 };
 
 window.nexScheduleFollowupPayCheck = function() {
@@ -37988,22 +38739,17 @@ window.purgeNexItems = async function(shouldRemove, opts) {
     window._nexHistStamp = (window._nexHistStamp || 0) + 1;
     window._nexCollectCache = null;
   }
-  if (!localOnly && window.firebaseDb && window.firebaseCollections) {
+  if (!localOnly && window.DadosCobranca) {
     try {
-      const { collection, getDocs, doc, setDoc, deleteDoc } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, "nex_letters"));
-      for (const d of snap.docs) {
-        const data = d.data() || {};
+      // Supabase: nex_letters tem uma linha por carta; listarNex remonta os docs "<cliente>_<título>" com items[]
+      // (com html, porque os que sobram são regravados) e salvarNex troca as cartas do doc (lista vazia apaga).
+      const docs = await window.DadosCobranca.listarNex();
+      for (const data of docs) {
         const items = Array.isArray(data.items) ? data.items : [];
-        const next = items.filter(it => !drop(it, d.id));
+        const next = items.filter(it => !drop(it, data.id));
         if (next.length === items.length) continue;
         removed += items.length - next.length;
-        if (!next.length) {
-          if (deleteDoc) await deleteDoc(d.ref);
-          else await setDoc(doc(window.firebaseDb, "nex_letters", d.id), { ...data, items: [], updatedAt: Date.now() }, { merge: true });
-        } else {
-          await setDoc(doc(window.firebaseDb, "nex_letters", d.id), { ...data, items: next, updatedAt: Date.now() }, { merge: true });
-        }
+        await window.DadosCobranca.salvarNex(data.customerId, data.titulo, next);
       }
     } catch (e) {
       console.warn("[NEX] Falha ao apagar NEX", e);
@@ -38125,47 +38871,29 @@ window.purgeBoletoNotesTitulo4868 = async function() {
   try { localStorage.setItem("crm_moura_jud_notes", JSON.stringify(AppState.judNotes || {})); } catch (e) {}
   if (typeof renderCustomerOccurrences === "function") renderCustomerOccurrences();
   if (typeof updateSidebarAgendaBadge === "function") updateSidebarAgendaBadge();
-  if (!(window.firebaseDb && window.firebaseCollections)) {
+  if (!window.DadosCobranca) {
     window.persistPurgedBoleto4868Identities(found);
     return found.length;
   }
   try {
-    const { collection, getDocs, setDoc, doc, getDoc } = window.firebaseCollections;
-    const patchCollection = async (name) => {
-      const snap = await getDocs(collection(window.firebaseDb, name));
-      for (const d of snap.docs) {
-        const data = d.data() || {};
-        const patch = {};
-        let changed = false;
-        Object.keys(data).forEach(k => {
-          if (!Array.isArray(data[k])) return;
-          data[k].forEach(x => {
-            if (window.isTitulo4868BoletoOccurrence(x, k)) found.push(window.occurrenceIdentity(x));
-          });
-          const filtered = data[k].filter(x => !window.isTitulo4868BoletoOccurrence(x, k));
-          if (filtered.length !== data[k].length) {
-            patch[k] = filtered;
-            changed = true;
+    // Supabase: em vez de regravar os shards filtrados, apaga as notas do título 4868 pelo id
+    // (customer_notes e jud_notes; os dois shards judiciais e o legado customer_notes/5187 já estão nessas tabelas).
+    const patchCollection = async (lerTodas, salvar) => {
+      const data = await lerTodas();
+      for (const k of Object.keys(data)) {
+        if (!Array.isArray(data[k])) continue;
+        const remover = [];
+        data[k].forEach(x => {
+          if (window.isTitulo4868BoletoOccurrence(x, k)) {
+            found.push(window.occurrenceIdentity(x));
+            if (x && x.id) remover.push(x.id);
           }
         });
-        if (changed) await setDoc(d.ref, patch, { merge: true });
+        if (remover.length) await salvar(k, [], { remover });
       }
     };
-    await patchCollection("customer_notes_shards");
-    try { await patchCollection("customer_jud_notes_shards"); } catch (e) {}
-    try { await patchCollection("jud_notes_shards"); } catch (e) {}
-    try {
-      const legacy = doc(window.firebaseDb, "customer_notes", "5187");
-      const snap = await getDoc(legacy);
-      if (snap.exists()) {
-        const data = snap.data() || {};
-        const list = Array.isArray(data.notes) ? data.notes : [];
-        const filtered = list.filter(x => !window.isTitulo4868BoletoOccurrence(x, "5187"));
-        if (filtered.length !== list.length) {
-          await setDoc(legacy, { notes: filtered }, { merge: true });
-        }
-      }
-    } catch (e) {}
+    await patchCollection(window.DadosCobranca.lerTodasNotasClientes, window.DadosCobranca.salvarNotasCliente);
+    try { await patchCollection(window.DadosCobranca.lerTodasNotasJuridicas, window.DadosCobranca.salvarNotasJuridicas); } catch (e) {}
   } catch (e) {
     console.warn("[CRM] Falha ao limpar ocorrências do título 4868", e);
   }
@@ -38189,10 +38917,9 @@ window.ensureBoletoNotesTitulo4868Removed = async function() {
     try {
       const n = await window.purgeBoletoNotesTitulo4868();
       try { localStorage.setItem(flag, "1"); } catch (e) {}
-      if (window.firebaseDb && window.firebaseCollections) {
+      if (window.DadosNucleo) {
         try {
-          const { doc, setDoc } = window.firebaseCollections;
-          await setDoc(doc(window.firebaseDb, "settings", "boleto_teste_purged_titulo_4868_v5"), {
+          await window.DadosNucleo.gravarSetting("boleto_teste_purged_titulo_4868_v5", {
             purgedAt: Date.now(),
             titulo: "4868",
             identities: window.getPurgedBoleto4868Identities()
@@ -38219,18 +38946,18 @@ window.ensureNexTitulo12753Removed = async function() {
       const titulo = String((it && (it.titulo || it.saleId)) || window.nexTituloFromKey(key) || "");
       return titulo === "12753";
     };
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_removed_titulo_12753");
-        const snap = await getDoc(flagRef);
+        // Supabase: marca de limpeza única em settings (configuracoes "settings/<id>").
+        const flagRef = "nex_removed_titulo_12753";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           await window.purgeNexItems(is12753, { localOnly: true });
           try { localStorage.setItem(flag, "1"); } catch (e) {}
           return 0;
         }
         const n = await window.purgeNexItems(is12753);
-        await setDoc(flagRef, { purgedAt: Date.now(), titulo: "12753" });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now(), titulo: "12753" });
         try { localStorage.setItem(flag, "1"); } catch (e) {}
         return n;
       } catch (e) {
@@ -38272,32 +38999,29 @@ window.removeNexOccurrenceNote = function(customerId, nexId) {
 window.purgeAllNexOccurrenceNotes = async function() {
   window.stripNexNotesFromState();
   try { localStorage.setItem("crm_moura_notes", JSON.stringify(AppState.notes)); } catch (e) {}
-  if (!(window.firebaseDb && window.firebaseCollections)) return;
+  if (!window.DadosCobranca) return;
   try {
-    const { collection, getDocs, setDoc } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "customer_notes_shards"));
+    // Supabase: apaga pelo id as notas de NEX de cada cliente (antes regravava os shards filtrados).
+    const data = await window.DadosCobranca.lerTodasNotasClientes();
     const patchByRef = [];
-    for (const d of snap.docs) {
-      const data = d.data() || {};
-      const patch = {};
-      let changed = false;
-      Object.keys(data).forEach(k => {
-        if (!Array.isArray(data[k])) return;
-        const filtered = data[k].filter(n => !(n && (n.nexLocked || String(n.canal || "").toUpperCase() === "NEX")));
-        if (filtered.length !== data[k].length) {
-          patch[k] = filtered;
-          changed = true;
-        }
-      });
-      if (changed) patchByRef.push({ ref: d.ref, patch });
-    }
-    for (const item of patchByRef) await setDoc(item.ref, item.patch, { merge: true });
+    Object.keys(data).forEach(k => {
+      if (!Array.isArray(data[k])) return;
+      const remover = data[k].filter(n => n && n.id && (n.nexLocked || String(n.canal || "").toUpperCase() === "NEX")).map(n => n.id);
+      if (remover.length) patchByRef.push({ customerId: k, remover });
+    });
+    for (const item of patchByRef) await window.DadosCobranca.salvarNotasCliente(item.customerId, [], { remover: item.remover });
   } catch (e) {
     console.warn("[NEX] Falha ao limpar notas de NEX", e);
   }
 };
 
+// Limpeza geral de 28/08/2026: já foi feita. Desligada de vez, porque, quando a leitura da trava
+// no Firebase falhava, ela rodava de novo e apagava todas as NEX e as notas de NEX (aconteceu em 19/11).
 window.ensureAllNexCleared = async function() {
+  return 0;
+};
+
+window.ensureAllNexClearedAntiga = async function() {
   const flag = "crm_nex_cleared_all_v20260828";
   try {
     if (localStorage.getItem(flag) === "1") return 0;
@@ -38309,17 +39033,16 @@ window.ensureAllNexCleared = async function() {
       await window.purgeAllNexOccurrenceNotes();
       return n;
     };
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_cleared_all_20260828");
-        const snap = await getDoc(flagRef);
+        const flagRef = "nex_cleared_all_20260828";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           try { localStorage.setItem(flag, "1"); } catch (e) {}
           return 0;
         }
         const n = await run();
-        await setDoc(flagRef, { purgedAt: Date.now() });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now() });
         try { localStorage.setItem(flag, "1"); } catch (e) {}
         if (typeof window.renderNexFollowup === "function") window.renderNexFollowup();
         return n;
@@ -38436,17 +39159,16 @@ window.ensureNexTodayPurged = async function() {
   } catch (e) {}
   if (window._nexPurgePromise) return window._nexPurgePromise;
   window._nexPurgePromise = (async () => {
-    if (window.firebaseDb && window.firebaseCollections) {
+    if (window.DadosNucleo) {
       try {
-        const { doc, getDoc, setDoc } = window.firebaseCollections;
-        const flagRef = doc(window.firebaseDb, "settings", "nex_purged_2026-08-27");
-        const snap = await getDoc(flagRef);
+        const flagRef = "nex_purged_2026-08-27";
+        const snap = await window.DadosNucleo.lerSetting(flagRef);
         if (snap.exists()) {
           try { localStorage.setItem("crm_nex_purged_2026-08-27", "1"); } catch (e) {}
           return 0;
         }
         const n = await window.purgeNexGeneratedOnDates(["2026-08-27"]);
-        await setDoc(flagRef, { purgedAt: Date.now(), date: "2026-08-27" });
+        await window.DadosNucleo.gravarSetting(flagRef, { purgedAt: Date.now(), date: "2026-08-27" });
         try { localStorage.setItem("crm_nex_purged_2026-08-27", "1"); } catch (e) {}
         return n;
       } catch (e) {
@@ -38479,9 +39201,9 @@ window.loadNexHistory = async function(customerId, saleId) {
     });
     if (keep.length) lists.push(keep);
   });
-  if (window.firebaseDb && window.firebaseCollections) {
+  if (window.DadosCobranca) {
     try {
-      const { doc, getDoc, collection, query, where, getDocs } = window.firebaseCollections;
+      // Supabase: docs "<cliente>_<título>" remontados das cartas (uma linha por carta em nex_letters).
       const seen = new Set();
       const takeDoc = (data) => {
         if (!data || !Array.isArray(data.items) || !data.items.length) return;
@@ -38492,18 +39214,16 @@ window.loadNexHistory = async function(customerId, saleId) {
         });
         if (keep.length) lists.push(keep);
       };
-      if (query && getDocs && collection && where) {
-        const snap = await getDocs(query(collection(window.firebaseDb, "nex_letters"), where("customerId", "==", String(customerId))));
-        snap.forEach(d => {
-          seen.add(d.id);
-          takeDoc(d.data() || {});
-        });
-      }
+      const docsCliente = await window.DadosCobranca.listarNex({ customerId: String(customerId) });
+      docsCliente.forEach(d => {
+        seen.add(d.id);
+        takeDoc(d);
+      });
       for (const id of candidates) {
         const docId = window.nexHistoryKey(customerId, id);
         if (seen.has(docId)) continue;
-        const snap = await getDoc(doc(window.firebaseDb, "nex_letters", docId));
-        if (snap.exists()) takeDoc(snap.data() || {});
+        const d = await window.DadosCobranca.lerNex(docId);
+        if (d) takeDoc(d);
       }
     } catch (e) {
       console.warn("[NEX] Falha ao ler histórico", e);
@@ -38563,21 +39283,10 @@ window.saveNexHistory = async function(customerId, saleId, items) {
     });
     localStorage.setItem("crm_nex_history", JSON.stringify(bag));
   } catch (e) {}
-  if (window.firebaseDb && window.firebaseCollections) {
+  if (window.DadosCobranca) {
     try {
-      const { doc, setDoc, deleteDoc } = window.firebaseCollections;
-      const ref = doc(window.firebaseDb, "nex_letters", key);
-      if (!items.length && deleteDoc) {
-        await deleteDoc(ref);
-      } else {
-        await setDoc(ref, {
-          customerId: String(customerId),
-          saleId: String(titulo),
-          titulo: String(titulo),
-          items,
-          updatedAt: Date.now()
-        }, { merge: true });
-      }
+      // Supabase: RPC salvar_nex_letters troca as cartas do doc "<cliente>_<título>" (lista vazia apaga, como o deleteDoc).
+      await window.DadosCobranca.salvarNex(String(customerId), String(titulo), items || []);
     } catch (e) {
       console.warn("[NEX] Falha ao salvar histórico", e);
     }
@@ -39066,16 +39775,16 @@ window.verCecGerada = async function() {
 window.hydrateNexHistoryBag = async function() {
   if (window._nexBagHydrated) return;
   if (window._nexBagHydratePromise) return window._nexBagHydratePromise;
-  if (!(window.firebaseDb && window.firebaseCollections)) return;
+  if (!window.DadosCobranca) return;
   window._nexBagHydratePromise = (async () => {
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const snap = await getDocs(collection(window.firebaseDb, "nex_letters"));
+    // Supabase: todas as cartas, remontadas em docs "<cliente>_<título>" (d.id) com items[] (com html, que fica só na memória).
+    const docsNex = await window.DadosCobranca.listarNex();
     let bag = {};
     try { bag = JSON.parse(localStorage.getItem("crm_nex_history") || "{}") || {}; } catch (e) { bag = {}; }
     window._nexHistory = window._nexHistory || {};
-    snap.forEach(d => {
-      const data = d.data() || {};
+    docsNex.forEach(d => {
+      const data = d;
       const items = Array.isArray(data.items) ? data.items : [];
       if (!items.length) return;
       const key = d.id;
@@ -40039,11 +40748,12 @@ window.ensureFilaSignalsIndex = function() {
       else if (window.filaStageVazio(estagio) && window.relFotoEntries(data).length) remember(vazio, chaves, data, true);
       return chaves;
     };
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snap = await getDocs(collection(window.firebaseDb, "vistorias"));
-      snap.forEach((docSnap) => {
-        const data = Object.assign({ id: docSnap.id, _collection: "vistorias" }, docSnap.data() || {});
+    // vistorias e construction_checks no Supabase (window.DadosEngenharia).
+    if (window.DadosEngenharia) {
+      const DE = window.DadosEngenharia;
+      const lista = await DE.tabela("vistorias").listar();
+      lista.forEach((item) => {
+        const data = Object.assign({ id: item.id, _collection: "vistorias" }, item);
         if (data.isTest) return;
         const keys = typeof _vcDocIdentityKeys === "function" ? _vcDocIdentityKeys(data) : [];
         data._sortDate = typeof _vcPendingRequestDate === "function" ? _vcPendingRequestDate(data) : "";
@@ -40052,9 +40762,9 @@ window.ensureFilaSignalsIndex = function() {
         else guardarCasa(data, keys);
         pushAlbum(data, chaves);
       });
-      const checks = await getDocs(collection(window.firebaseDb, "construction_checks"));
-      checks.forEach((docSnap) => {
-        const data = Object.assign({ id: docSnap.id, _collection: "construction_checks" }, docSnap.data() || {});
+      const checks = await DE.tabela("construction_checks").listar();
+      checks.forEach((item) => {
+        const data = Object.assign({ id: item.id, _collection: "construction_checks" }, item);
         const keys = typeof _vcDocIdentityKeys === "function" ? _vcDocIdentityKeys(data) : [];
         const chaves = guardarCasa(data, keys);
         if (!stageForaDaFila(estagioDoc(data)) || window.relFotoEntries(data).length) pushAlbum(data, chaves);
@@ -40453,6 +41163,7 @@ window.scheduleNexDueAlertWake = function() {
 };
 
 window.snoozeNexDueAlertNextBusinessDay = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const today = window.nexTodayIso();
   const cycles = window.nexDueActiveCycles(today);
   if (!cycles.length) return;
@@ -40472,6 +41183,7 @@ window.snoozeNexDueAlertNextBusinessDay = function() {
 };
 
 window.markNexDueAlertsSeen = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const today = window.nexTodayIso();
   const pending = window.nexDueActiveCycles(today);
   const ack = new Set(window.getNexDueAckCycles());
@@ -40488,6 +41200,7 @@ window.markNexDueAlertsSeen = function() {
 };
 
 window.goToNexFromDueAlert = function() {
+  if (typeof window.nexDueAlertFecharSePrevia === "function" && window.nexDueAlertFecharSePrevia()) return;
   const modal = document.getElementById("modal-nex-due-alerts");
   if (modal) modal.style.display = "none";
   sessionStorage.setItem("wesendActivePanel", "elegiveis-zero");
@@ -40551,7 +41264,16 @@ window.checkNexDueAlerts = function(isTest) {
     if (existing) existing.style.display = "none";
     return;
   }
+  window.renderNexDueAlertModal(pending, today, { previa: false });
+  if (isTest && !pending.length) alert("Nenhum vencimento no prazo.");
+};
+
+// Monta e mostra o pop-up "Gerar NEX" com os ciclos recebidos. Usado pelo alerta real e pela prévia
+// da gestão de pop-ups (opts.previa = true: os botões só fecham, nada é gravado).
+window.renderNexDueAlertModal = function(pending, today, opts) {
+  const previa = !!(opts && opts.previa);
   const modal = window.ensureNexDueAlertModal();
+  modal.dataset.previa = previa ? "1" : "";
   const listEl = document.getElementById("nex-due-alerts-list");
   const intro = document.getElementById("nex-due-alert-intro");
   const snoozeBtn = document.getElementById("btn-nex-due-snooze");
@@ -40576,7 +41298,34 @@ window.checkNexDueAlerts = function(isTest) {
     snoozeBtn.disabled = !canSnooze;
   }
   modal.style.display = "flex";
-  if (isTest && !pending.length) alert("Nenhum vencimento no prazo.");
+  return modal;
+};
+
+// Em prévia, os botões do pop-up de NEX só fecham (sem gravar ciente/adiamento nem navegar).
+window.nexDueAlertFecharSePrevia = function() {
+  const modal = document.getElementById("modal-nex-due-alerts");
+  if (!modal || modal.dataset.previa !== "1") return false;
+  modal.style.display = "none";
+  modal.dataset.previa = "";
+  return true;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["nex"] = function() {
+  const today = typeof window.nexTodayIso === "function" ? window.nexTodayIso() : window.crmIsoLocal(new Date());
+  const cfg = typeof window.readNexDueConfig === "function" ? window.readNexDueConfig() : null;
+  const openOffset = (cfg && cfg.openOffset) || 1;
+  const maxOffset = Math.max((cfg && cfg.maxOffset) || 3, openOffset);
+  const dueIso = window.addDaysIso(today, -1);
+  const exemplo = [{
+    dueDay: Number(String(dueIso).slice(8, 10)),
+    dueIso: dueIso,
+    openIso: today,
+    maxIso: window.addBusinessDaysIso(today, Math.max(maxOffset - openOffset, 1)),
+    openOffset: openOffset,
+    maxOffset: maxOffset
+  }];
+  window.renderNexDueAlertModal(exemplo, today, { previa: true });
 };
 
 window.DISTRATO_PRAZO_ACK_KEY = "crm_distrato_prazo_ack_v2";
@@ -40805,6 +41554,14 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
   const chave = "crm_repac_" + modo + "_dia_" + String(u.email || u.name || "op").toLowerCase() + "_" + hoje;
   try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
   if (document.getElementById("repac-ultimo-dia")) return;
+  window.montarAvisoRepactuacaoDia(modo, hoje, { chave: chave });
+};
+
+// Monta o pop-up do último/primeiro dia útil (repactuação). Usado pelo aviso real e pela prévia
+// da gestão de pop-ups (opts.previa = true: Fechar e "Abrir repactuação" só fecham, sem gravar ciente).
+window.montarAvisoRepactuacaoDia = function(modo, hoje, opts) {
+  const previa = !!(opts && opts.previa);
+  const chave = (opts && opts.chave) || "";
   const agora = new Date(hoje + "T12:00:00");
   const comp = new Date(agora.getFullYear(), agora.getMonth() + 1, 1);
   const fimDia = new Date(comp.getFullYear(), comp.getMonth() + 1, 0).getDate();
@@ -40841,15 +41598,132 @@ window.avisarRepactuacaoUltimoDia = function(dataForcada) {
   </div>`;
   document.body.appendChild(overlay);
   const fechar = () => {
-    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    if (!previa && chave) {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
     overlay.remove();
   };
   overlay.querySelector("#repac-dia-fechar").addEventListener("click", fechar);
   const abrir = overlay.querySelector("#repac-dia-repac");
   if (abrir) abrir.addEventListener("click", function() {
     fechar();
+    if (previa) return;
     if (typeof window.switchTab === "function") window.switchTab("repactuacao-lote", "Repactuação");
   });
+  return overlay;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["repactuacao"] = function() {
+  const antigo = document.getElementById("repac-ultimo-dia");
+  if (antigo) antigo.remove();
+  const hoje = window.crmIsoLocal(new Date());
+  const ultimo = window.crmUltimoDiaUtilDoMes(hoje) || hoje;
+  window.montarAvisoRepactuacaoDia("ultimo", ultimo, { previa: true });
+};
+
+// Títulos fora da carteira de lotes que o back office acompanha de perto. Continuam na inadimplência;
+// quando têm parcela vencida, o back office recebe um aviso no login (uma vez por dia, até pagar).
+window.TITULOS_MONITORADOS_BACK_OFFICE = [
+  { titulo: "16955", motivo: "Casa SPA (centro de custo 16300), fora do relatório de inadimplência dos empreendimentos no Sienge." }
+];
+
+window.avisarTitulosMonitorados = async function() {
+  const u = window.AppState && window.AppState.currentUser;
+  if (!u || typeof window.crmProfileKind !== "function") return;
+  const rec = typeof window.findCrmRegisteredUser === "function" ? window.findCrmRegisteredUser(u) : null;
+  const perfil = (rec && rec.profile_name) || u.profile_name || "";
+  if (window.crmProfileKind(perfil) !== "back_office") return;
+  const lista = window.TITULOS_MONITORADOS_BACK_OFFICE || [];
+  if (!lista.length || !window.SiengeApiService || typeof SiengeApiService.getDefaulters !== "function") return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  const hoje = window.crmIsoLocal(new Date());
+  const chave = "crm_titulos_monitorados_" + String(u.email || u.name || "op").toLowerCase() + "_" + hoje;
+  try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
+  let bills = [];
+  try { bills = await SiengeApiService.getDefaulters(); } catch (e) { return; }
+  if (!Array.isArray(bills)) return;
+  const vencidos = [];
+  for (const item of lista) {
+    const bill = bills.find((b) => String(b && (b.id || b.saleId)) === String(item.titulo));
+    if (!bill) continue;
+    const parcelas = (bill.defaulterInstallments || []).filter((p) => p && String(p.dueDate || "").slice(0, 10) < hoje);
+    if (!parcelas.length) continue;
+    vencidos.push({ item, bill, parcelas });
+  }
+  if (!vencidos.length) return;
+  if (document.getElementById("titulos-monitorados-aviso")) return;
+  window.montarAvisoTitulosMonitorados(vencidos, { chave: chave });
+};
+
+// Monta o pop-up "Título acompanhado está vencido" com a lista { item, bill, parcelas }.
+// Usado pelo aviso real e pela prévia da gestão de pop-ups (opts.previa = true: os botões só fecham).
+window.montarAvisoTitulosMonitorados = function(vencidos, opts) {
+  const previa = !!(opts && opts.previa);
+  const chave = (opts && opts.chave) || "";
+  const esc = (v) => String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const brl = (v) => (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const dataBr = (iso) => { const p = String(iso || "").slice(0, 10).split("-"); return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : ""; };
+  const blocos = vencidos.map(({ item, bill, parcelas }) => {
+    const total = parcelas.reduce((s, p) => s + (Number(p.correctedValueWithAdditions) || 0), 0);
+    const linhas = parcelas.map((p) => `<div class="apa-item"><strong>Parcela ${esc(p.installmentNumber || p.installmentId)} · venceu em ${esc(dataBr(p.dueDate))}</strong><span>${esc(p.daysOfDelay)} dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">${esc(brl(p.correctedValueWithAdditions))}</span></div>`).join("");
+    return `<div style="margin-bottom:12px;">
+      <p style="margin:0 0 4px 0;"><strong>Título ${esc(item.titulo)}</strong> · ${esc(bill.clientName || "")}${bill.units ? " · " + esc(bill.units) : ""}</p>
+      <p style="margin:0 0 6px 0;color:#475569;font-size:0.82rem;">${esc(item.motivo)}</p>
+      ${linhas}
+      <p style="margin:6px 0 0 0;">Total vencido: <strong style="color:#b91c1c;">${esc(brl(total))}</strong></p>
+      <button type="button" class="btn btn-primary" data-tm-cliente="${esc(bill.customerId)}" data-tm-venda="${esc(bill.saleId || bill.id)}" data-tm-titulo="${esc(item.titulo)}" style="margin-top:8px;">Abrir ficha do cliente</button>
+    </div>`;
+  }).join("");
+  const overlay = document.createElement("div");
+  overlay.id = "titulos-monitorados-aviso";
+  overlay.className = "repac-dia";
+  overlay.setAttribute("role", "alertdialog");
+  overlay.setAttribute("aria-labelledby", "titulos-monitorados-titulo");
+  overlay.innerHTML = `<div class="repac-dia-box">
+    <div class="repac-dia-head">
+      <h3 id="titulos-monitorados-titulo">Título acompanhado está vencido</h3>
+      <button type="button" class="btn btn-fechar" id="titulos-monitorados-fechar">Fechar</button>
+    </div>
+    <p>Este título está na inadimplência e precisa de contato do back office.</p>
+    ${blocos}
+  </div>`;
+  document.body.appendChild(overlay);
+  const fechar = () => {
+    if (!previa && chave) {
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
+    overlay.remove();
+  };
+  overlay.querySelector("#titulos-monitorados-fechar").addEventListener("click", fechar);
+  overlay.querySelectorAll("[data-tm-cliente]").forEach((btn) => btn.addEventListener("click", function() {
+    fechar();
+    if (previa) return;
+    if (typeof window.openCustomerFromRelacionamento === "function") {
+      window.openCustomerFromRelacionamento(this.getAttribute("data-tm-cliente"), this.getAttribute("data-tm-venda"), this.getAttribute("data-tm-titulo"));
+    }
+  }));
+  return overlay;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["titulos-monitorados"] = function() {
+  const antigo = document.getElementById("titulos-monitorados-aviso");
+  if (antigo) antigo.remove();
+  const hoje = window.crmIsoLocal(new Date());
+  const base = (window.TITULOS_MONITORADOS_BACK_OFFICE || [])[0];
+  const item = { titulo: (base && base.titulo) || "10001", motivo: (base && base.motivo) || "Título fora da carteira de lotes, acompanhado de perto pelo back office." };
+  const v1 = window.addDaysIso(hoje, -35);
+  const v2 = window.addDaysIso(hoje, -5);
+  const vencidos = [{
+    item: item,
+    bill: { id: item.titulo, saleId: item.titulo, customerId: "0", clientName: "Cliente exemplo", units: "Unidade exemplo" },
+    parcelas: [
+      { installmentNumber: "11", dueDate: v1, daysOfDelay: 35, correctedValueWithAdditions: 1873.42 },
+      { installmentNumber: "12", dueDate: v2, daysOfDelay: 5, correctedValueWithAdditions: 1812.9 }
+    ]
+  }];
+  window.montarAvisoTitulosMonitorados(vencidos, { previa: true });
 };
 
 window.checkDistratoPrazoMes = function() {
@@ -41104,7 +41978,7 @@ window.nexSiengeUnitContext = function(customerId, saleId, item) {
 };
 
 window.nexHtmlToPdfFile = async function(html, fileName) {
-  if (typeof html2canvas !== "function" || !window.jspdf) {
+  if (!window.jspdf || typeof window.pintarElementoComoTextoPdf !== "function") {
     throw new Error("Gerador de PDF indisponível.");
   }
   const wrap = document.createElement("div");
@@ -41115,30 +41989,10 @@ window.nexHtmlToPdfFile = async function(html, fileName) {
     if (window.RelacionamentoApp && typeof RelacionamentoApp._justificarPagina === "function") {
       RelacionamentoApp._justificarPagina(wrap);
     }
-    const canvas = await html2canvas(wrap, { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false });
+    await Promise.all(Array.from(wrap.querySelectorAll("img")).map((img) => img.complete ? null : new Promise((r) => { img.onload = img.onerror = r; })));
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF("p", "mm", "a4");
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const pageHeightPx = Math.max(1, Math.floor(canvas.width * (pageH / pageW)));
-    let offset = 0;
-    let first = true;
-    while (offset < canvas.height) {
-      const sliceH = Math.min(pageHeightPx, canvas.height - offset);
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = canvas.width;
-      pageCanvas.height = sliceH;
-      const ctx = pageCanvas.getContext("2d");
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-      ctx.drawImage(canvas, 0, offset, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
-      const data = pageCanvas.toDataURL("image/jpeg", 0.93);
-      if (!first) pdf.addPage();
-      first = false;
-      const sliceMm = sliceH * pageW / canvas.width;
-      pdf.addImage(data, "JPEG", 0, 0, pageW, sliceMm);
-      offset += pageHeightPx;
-    }
+    window.pintarElementoComoTextoPdf(pdf, wrap, { margem: 0 });
     const blob = pdf.output("blob");
     return new File([blob], fileName || "documento.pdf", { type: "application/pdf" });
   } finally {
@@ -45004,9 +45858,6 @@ window.migrarEtapasFinanciamentoPadrao = function(lista) {
 window.ensureEtapasFinanciamento = function() {
   if (!Array.isArray(window.EtapasFinanciamentoState)) window.EtapasFinanciamentoState = [];
   if (window.EtapasFinanciamentoState.length) return false;
-  let stored = null;
-  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
-  if (stored != null) return false;
   const base = window.ETAPAS_FINANCIAMENTO_PADRAO.map((e, i) => ({
     id: e.id,
     nome: e.nome,
@@ -45015,13 +45866,20 @@ window.ensureEtapasFinanciamento = function() {
     parentId: null,
     order: (i + 1) * 10
   }));
-  window.EtapasFinanciamentoState = typeof window.finEtapasSemExcluidas === "function"
+  const limpa = typeof window.finEtapasSemExcluidas === "function"
     ? window.finEtapasSemExcluidas(base)
     : base;
-  try {
-    localStorage.setItem("crm_moura_financiamento", JSON.stringify(window.EtapasFinanciamentoState));
-  } catch (e) {}
+  if (!limpa.length) return false;
+  window.EtapasFinanciamentoState = limpa;
   window._finEtapasVeioDoPadrao = true;
+  let stored = null;
+  try { stored = localStorage.getItem("crm_moura_financiamento"); } catch (e) {}
+  /* Lista "[]" já gravada não ganha data nova aqui: a sincronização compara com a nuvem
+     e só sobe o modelo quando os dois lados estão vazios. */
+  if (stored != null) return false;
+  try {
+    localStorage.setItem("crm_moura_financiamento", JSON.stringify(limpa));
+  } catch (e) {}
   return true;
 };
 
@@ -45053,8 +45911,8 @@ window.persistEtapasFinanciamento = function() {
     if (gravou) localStorage.setItem("crm_moura_financiamento_at", at);
     else localStorage.removeItem("crm_moura_financiamento_at");
   } catch (e) {}
-  const fc = window.firebaseCollections;
-  if (fc && fc.doc && fc.setDoc && window.firebaseDb) {
+  // Supabase: grava as chaves em configuracoes (DadosNucleo.gravarConfig).
+  if (window.DadosNucleo) {
     let excluidas = window._finEtapasExcluidasMem || "";
     if (!excluidas) {
       try { excluidas = localStorage.getItem(window.FIN_ETAPAS_EXCLUIDAS_KEY) || ""; } catch (e) {}
@@ -45064,7 +45922,7 @@ window.persistEtapasFinanciamento = function() {
       crm_moura_financiamento_at: at
     };
     if (excluidas) doc.crm_moura_financiamento_excluidas = excluidas;
-    fc.setDoc(fc.doc(window.firebaseDb, "config", "global"), doc, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
+    window.DadosNucleo.gravarConfig("global", doc, { merge: true }).catch((e) => console.error("[etapas financiamento]", e));
   }
   if (window.forceUploadLocalConfig) window.forceUploadLocalConfig(true).catch(console.error);
 };
@@ -45588,6 +46446,7 @@ async function loadCustomerBoletos(customerId, saleId) {
     let boletosHtml = `<table class="crm-table" style="width:100%; border-collapse:collapse; margin-top: 15px;">
       <thead>
         <tr style="background:#f5f5f5; text-align:left;">
+          <th style="padding:10px 6px; border-bottom:1px solid #ddd; width:32px;" title="Marque para informar a baixa no banco"></th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Título</th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Parcela</th>
           <th style="padding:10px; border-bottom:1px solid #ddd;">Venc. Orig.</th>
@@ -45646,9 +46505,10 @@ async function loadCustomerBoletos(customerId, saleId) {
         const recentBadge = isRecentGen ? ` <span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:700;">Recém gerado</span>` : "";
         
         boletosHtml += `
-          <tr id="row-inst-${inst.installmentId}">
+          <tr id="row-inst-${inst.installmentId}" data-inst-num="${String(inst.installmentNumber || inst.installmentId).replace(/[^\w-]/g, '')}">
+            <td style="padding:10px 6px; border-bottom:1px solid #eee; text-align:center;"><input type="checkbox" class="bolbx-chk" disabled title="Aguardando o boleto no Sienge" onchange="BoletoBaixa.aoMarcar(this)" style="cursor:pointer;"></td>
             <td style="padding:10px; border-bottom:1px solid #eee; font-weight:600; color:var(--color-primary);">${currentBill.billReceivableId || currentBill.documentCode || 'N/D'}</td>
-            <td style="padding:10px; border-bottom:1px solid #eee;">${inst.installmentNumber || 'N/D'}${recentBadge}</td>
+            <td style="padding:10px; border-bottom:1px solid #eee;">${inst.installmentNumber || 'N/D'}${recentBadge}<span class="bolbx-tag"></span></td>
             <td style="padding:10px; border-bottom:1px solid #eee;">${dueDateStr}</td>
             <td style="padding:10px; border-bottom:1px solid #eee;" id="true-due-date-${inst.installmentId}">Buscando...</td>
             <td style="padding:10px; border-bottom:1px solid #eee;">${new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'}).format(inst.originalValue || 0)}</td>
@@ -45675,8 +46535,12 @@ async function loadCustomerBoletos(customerId, saleId) {
       container.innerHTML = `
         <h3 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 15px; display: flex; align-items: center;">Boletos do Contrato <span style="background:var(--color-primary); color:#fff; padding:2px 8px; border-radius:12px; font-size:0.8rem; margin-left:8px;">${count}</span></h3>
         <p style="font-size: 0.9rem; color: #666;">Aqui estão os boletos disponíveis (não pagos) para o contrato atual.</p>
+        ${window.BoletoBaixa ? `<div class="bolbx-bar"><button type="button" class="btn btn-outline bolbx-btn" disabled onclick="BoletoBaixa.abrir()"><i data-lucide="file-check" style="width:14px;height:14px;"></i> Informar baixa no banco</button></div>` : ""}
         ${boletosHtml}
       `;
+      if (window.BoletoBaixa) {
+        window.BoletoBaixa.prepararAba(container, boletoBillId, realCustomerId).catch(() => {});
+      }
     }
     
     if (window.lucide) {
@@ -45758,6 +46622,10 @@ async function loadCustomerBoletos(customerId, saleId) {
             const tdDate = document.getElementById(`true-due-date-${inst.installmentId}`);
             if (tdDate) tdDate.textContent = trueDateStr;
 
+            // Boleto ainda válido (até 28 dias do vencimento): pode receber baixa informada.
+            const linhaValidaBaixa = !!(window.BoletoBaixa && dtFebraban
+              && Math.floor((Date.now() - dtFebraban.getTime()) / 86400000) <= 28);
+
             if (dtFebraban) {
                // Recalcula o atraso baseado na data do boleto (com carência de dia útil)
                const today = new Date();
@@ -45796,6 +46664,10 @@ async function loadCustomerBoletos(customerId, saleId) {
             } else {
                const tdDate = document.getElementById(`true-due-date-${inst.installmentId}`);
                if (tdDate) tdDate.textContent = trueDateStr || "—";
+            }
+            // Depois dos botões: se a baixa já foi informada, o módulo troca Ver/Download pelo aviso.
+            if (linhaValidaBaixa) {
+              window.BoletoBaixa.linhaPronta(inst.installmentId, (slip.results[0].digitableNumber || slip.results[0].digitableLine || ""), trueDateStr);
             }
           } catch(e) {
              const row = document.getElementById(`row-inst-${inst.installmentId}`);
@@ -46049,6 +46921,9 @@ async function saveDocPadrao(tipo) {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   const ids = keyMap[tipo] || [];
   const data = {};
@@ -46062,13 +46937,12 @@ async function saveDocPadrao(tipo) {
     if (elReneg) elReneg.value = data['doc-reneg-clauses'];
   }
   
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const { doc, setDoc } = window.firebaseCollections;
-      const ref = doc(window.firebaseDb, 'settings', 'docpadrao_' + tipo);
-      await setDoc(ref, data);
+      // Supabase: settings/docpadrao_<tipo> fica inteiro em configuracoes.
+      await window.DadosNucleo.gravarSetting('docpadrao_' + tipo, data);
     } catch (e) {
-      console.error("Erro ao salvar documento padrão no Firebase", e);
+      console.error("Erro ao salvar documento padrão no Supabase", e);
     }
   }
   
@@ -46109,6 +46983,9 @@ async function previewDocPadrao(tipo) {
     vencimento: 'Alteração de Vencimento',
     aditamento: 'Aditamento Contratual',
     permuta: 'Permuta de lote',
+    simiq: 'Termo de simulação do saldo devedor (IQ)',
+    deciq: 'Declaração de saldo devedor (IQ)',
+    quifin: 'Termo de quitação por financiamento',
   };
   const label = labelMap[tipo] || tipo;
   const fillLegalPreview = async (rawText) => {
@@ -46231,6 +47108,35 @@ async function previewDocPadrao(tipo) {
       .replace(/\{\{\s*CERTIFICADO_GRAPROHAB\s*\}\}/g, '071/2021');
     const filled = window.centerDistratoSignatures ? window.centerDistratoSignatures(await fillLegalPreview(exemplo)) : await fillLegalPreview(exemplo);
     content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">Na prévia, o lote de destino e os valores usam um exemplo de troca dentro do mesmo empreendimento. Na geração entram o lote ativo escolhido e o saldo do título.</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
+  } else if (tipo === 'simiq' || tipo === 'deciq' || tipo === 'quifin') {
+    const title = document.getElementById('doc-' + tipo + '-title')?.value || '';
+    let corpo = document.getElementById('doc-' + tipo + '-corpo')?.value || '';
+    if (typeof applyDistratoConditionals === 'function') corpo = applyDistratoConditionals(corpo, { hasConjuge: true });
+    let filled = await fillLegalPreview(corpo);
+    const exemplosFin = {
+      SALDO_DEVEDOR: 'R$ 48.320,15',
+      SALDO_DEVEDOR_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      SALDO_CORRIGIDO: 'R$ 51.040,00',
+      SALDO_CORRIGIDO_EXTENSO: 'cinquenta e um mil e quarenta reais',
+      VALOR_QUITACAO: 'R$ 48.320,15',
+      VALOR_QUITACAO_EXTENSO: 'quarenta e oito mil, trezentos e vinte reais e quinze centavos',
+      VALOR_PAGO: 'R$ 36.500,00',
+      VALOR_PAGO_EXTENSO: 'trinta e seis mil e quinhentos reais',
+      QTD_PARCELAS_ABERTAS: '42',
+      DATA_BASE_SALDO: new Date().toLocaleDateString('pt-BR'),
+      TABELA_PARCELAS: '<table style="width:100%;border-collapse:collapse;font-size:12px;margin:8px 0;"><tr><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Parcela</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:left;">Vencimento</th><th style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">Valor presente</th></tr><tr><td style="border:1px solid #cbd5e1;padding:4px 6px;">48</td><td style="border:1px solid #cbd5e1;padding:4px 6px;">10/12/2026</td><td style="border:1px solid #cbd5e1;padding:4px 6px;text-align:right;">R$ 1.150,48</td></tr></table>',
+      MATRICULA: '27.403',
+      AREA_LOTE: '250,00 m²',
+      NUM_CONTRATO: '1042'
+    };
+    filled = filled.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (full, key) => Object.prototype.hasOwnProperty.call(exemplosFin, key) ? exemplosFin[key] : full);
+    if (window.centerSimpleDocSignature) filled = window.centerSimpleDocSignature(filled);
+    const nota = tipo === 'simiq'
+      ? 'Na prévia, saldo e parcelas usam um exemplo. Na etapa 1 do financiamento entram o saldo e as parcelas em aberto do título no Sienge.'
+      : (tipo === 'deciq'
+        ? 'Na prévia, o saldo usa um exemplo. Na etapa 4 do financiamento entra o saldo devedor do título no Sienge.'
+        : 'Na prévia, o valor quitado usa um exemplo. Na etapa 10 entra o saldo declarado neste financiamento ou, se ele já estiver zerado, o total recebido no título.');
+    content = `<h2 style="text-align:center;">${title}</h2><p style="font-size:12px;color:#64748b;">${nota}</p><hr><div style="white-space:pre-wrap;font-family:serif;font-size:14px;line-height:1.6;">${filled}</div>`;
   }
   
   const win = window.open('', '_blank', 'width=700,height=600,scrollbars=yes');
@@ -46273,7 +47179,7 @@ function applySavedDocPadraoFields(tipo, data, fieldMap) {
 
 // Carregar templates salvos ao inicializar
 async function loadDocPadraoTemplates() {
-  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta'];
+  const tipos = ['reneg', 'boleto', 'carta', 'cec', 'suspensao', 'distrato', 'escritura', 'quitacao', 'terceiros', 'vencimento', 'aditamento', 'permuta', 'simiq', 'deciq', 'quifin'];
   const fieldMap = {
     reneg: ['doc-reneg-title', 'doc-reneg-subtitle', 'doc-reneg-clauses'],
     boleto: ['doc-boleto-inst1', 'doc-boleto-inst2', 'doc-boleto-obs'],
@@ -46287,14 +47193,15 @@ async function loadDocPadraoTemplates() {
     vencimento: ['doc-vencimento-title', 'doc-vencimento-corpo'],
     aditamento: ['doc-aditamento-title', 'doc-aditamento-corpo'],
     permuta: ['doc-permuta-title', 'doc-permuta-corpo'],
+    simiq: ['doc-simiq-title', 'doc-simiq-corpo'],
+    deciq: ['doc-deciq-title', 'doc-deciq-corpo'],
+    quifin: ['doc-quifin-title', 'doc-quifin-corpo'],
   };
   
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const { doc, getDoc } = window.firebaseCollections;
       for (const tipo of tipos) {
-        const ref = doc(window.firebaseDb, 'settings', 'docpadrao_' + tipo);
-        const snap = await getDoc(ref);
+        const snap = await window.DadosNucleo.lerSetting('docpadrao_' + tipo);
         if (snap.exists()) {
           const data = snap.data();
           localStorage.setItem(`crm_docpadrao_${tipo}`, JSON.stringify(data));
@@ -47061,11 +47968,9 @@ window.gerarTermoSuspensaoPdf = async function(customerId, saleId, opts) {
       } catch(e) {}
   }
   
-  if (!corpo && window.firebaseCollections && window.firebaseDb) {
+  if (!corpo && window.DadosNucleo) {
       try {
-          const { doc, getDoc } = window.firebaseCollections;
-          const fbRef = doc(window.firebaseDb, 'settings', 'docpadrao_suspensao');
-          const snap = await getDoc(fbRef);
+          const snap = await window.DadosNucleo.lerSetting('docpadrao_suspensao');
           if (snap.exists()) {
               const data = snap.data();
               localStorage.setItem('crm_docpadrao_suspensao', JSON.stringify(data));
@@ -47422,7 +48327,7 @@ window.uploadEmpreendimentoMapa = async function() {
       if (window.loadMapaList) window.loadMapaList();
   } catch (err) {
       statusDiv.style.color = "var(--color-danger)";
-      statusDiv.innerHTML = "âŒ Erro: " + (err && err.message ? err.message : 'Falha ao enviar ao Firebase Storage.');
+      statusDiv.innerHTML = "âŒ Erro: " + (err && err.message ? err.message : 'Falha ao enviar o arquivo.');
   }
 };
 
@@ -47916,7 +48821,8 @@ async function uploadKMZ() {
       throw new Error("Os polígonos do centro foram lidos, mas a pasta Lotes não tem unidade no formato 13900-A-01.");
     }
 
-    const { doc, setDoc } = window.firebaseCollections;
+    if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
     const agora = new Date().toISOString();
     const gravar = codigos.filter((id) => grupos[id].lots.length);
     kmzCarga("Registrando coordenadas", 42);
@@ -47932,25 +48838,9 @@ async function uploadKMZ() {
         quadraCount: pack.quadras.length,
         updatedAt: agora
       };
-      const docRef = doc(window.firebaseDb, "kmz_coordinates", empId);
-      try {
-        await setDoc(docRef, payload);
-      } catch (e) {
-        await setDoc(docRef, {
-          empreendimento_id: empId,
-          placemarks: pack.lots,
-          quadras: [],
-          quadrasDoc: empId + "_quadras",
-          count: pack.lots.length,
-          quadraCount: pack.quadras.length,
-          updatedAt: agora
-        });
-        await setDoc(doc(window.firebaseDb, "kmz_coordinates", empId + "_quadras"), {
-          empreendimento_id: empId,
-          quadras: pack.quadras,
-          updatedAt: agora
-        });
-      }
+      // Supabase: placemarks e quadras ficam na mesma linha (jsonb); o doc "<id>_quadras" do limite de 1 MB
+      // do Firestore não é mais necessário.
+      await kmzTabela.gravar(empId, payload);
     }
 
     kmzCarga("Desenhando polígonos", 86);
@@ -47968,16 +48858,15 @@ async function uploadKMZ() {
 }
 
 window.desenharQuadrasKmz = async function(map, empId) {
-  if (!map || !empId || !window.firebaseDb || !window.firebaseCollections || typeof L === "undefined") return;
+  if (!map || !empId || !window.DadosNucleo || typeof L === "undefined") return;
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(empId)));
-    if (!snap.exists()) return;
-    const data = snap.data() || {};
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
+    const data = await kmzTabela.obter(String(empId));
+    if (!data) return;
     let quadras = Array.isArray(data.quadras) ? data.quadras : [];
     if (!quadras.length && data.quadrasDoc) {
-      const extra = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(data.quadrasDoc)));
-      if (extra.exists()) quadras = (extra.data() || {}).quadras || [];
+      const extra = await kmzTabela.obter(String(data.quadrasDoc));
+      if (extra) quadras = extra.quadras || [];
     }
     const pontos = (coords) => {
       return (window.parseKmzCoordPoints ? window.parseKmzCoordPoints(coords) : [])
@@ -48388,12 +49277,12 @@ window.abrirMapaKmz = async function(empId) {
 
   let data = {};
   try {
-    const { doc, getDoc } = window.firebaseCollections;
-    const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", id));
-    if (snap.exists()) data = snap.data() || {};
+    const kmzTabela = window.DadosNucleo.tabela("kmz_coordinates");
+    const linha = await kmzTabela.obter(id);
+    if (linha) data = linha;
     if ((!data.quadras || !data.quadras.length) && data.quadrasDoc) {
-      const extra = await getDoc(doc(window.firebaseDb, "kmz_coordinates", String(data.quadrasDoc)));
-      if (extra.exists()) data.quadras = (extra.data() || {}).quadras || [];
+      const extra = await kmzTabela.obter(String(data.quadrasDoc));
+      if (extra) data.quadras = extra.quadras || [];
     }
   } catch (e) {
     console.warn("[KMZ] mapa", e);
@@ -48660,13 +49549,10 @@ async function loadKMZList() {
   });
 
   try {
-    const { collection, getDocs } = window.firebaseCollections;
-    const base = collection(window.firebaseDb, "kmz_coordinates");
-    const querySnapshot = await getDocs(base);
+    const linhas = await window.DadosNucleo.tabela("kmz_coordinates").listar();
     const porId = {};
-    querySnapshot.forEach((docSnap) => {
-      const item = docSnap.data() || {};
-      const id = String(item.empreendimento_id || docSnap.id || "");
+    linhas.forEach((item) => {
+      const id = String(item.empreendimento_id || item.id || "");
       if (!/^\d{4,6}$/.test(id)) return;
       const lotes = Number(item.count !== undefined ? item.count : (item.placemarks ? item.placemarks.length : 0)) || 0;
       const poligonos = Number(item.quadraCount !== undefined ? item.quadraCount : (item.quadras ? item.quadras.length : 0)) || 0;
@@ -48699,11 +49585,11 @@ async function deleteKMZ(empId) {
   if (!confirm(`Tem certeza que deseja excluir o KMZ do empreendimento ${empId}? Isso removerá a visualização 3D do mapa.`)) return;
   
   try {
-    const { doc, deleteDoc, ref, deleteObject } = window.firebaseCollections;
-    
-    // Excluir do Firestore
-    const docRef = doc(window.firebaseDb, 'kmz_coordinates', empId);
-    await deleteDoc(docRef);
+    // O arquivo continua no Storage do Firebase (fora desta migração); as coordenadas vão para o Supabase.
+    const { ref, deleteObject } = window.firebaseCollections;
+
+    // Excluir do Supabase
+    await window.DadosNucleo.tabela("kmz_coordinates").excluir(empId);
 
     // Excluir do Storage
     const storageRef = ref(window.firebaseStorage, `kmz/${empId}.kmz`);
@@ -48733,6 +49619,10 @@ window.fichaAtualizarBotaoLote = function(estado, coords, lotName, empId) {
     span.appendChild(btn);
   }
   const base = "border:none;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;justify-content:center;margin-left:8px;border-radius:4px;font-size:0.75rem;font-weight:bold;white-space:nowrap;";
+  // Follow-up do gestor: guarda o lote do KMZ da ficha aberta para o botão do resumo.
+  window._fichaLoteAtual = (estado === "abrir" && coords)
+    ? { customerId: String((window.AppState && AppState.selectedCustomerId) || ""), lotName: lotName, coords: coords, empId: empId }
+    : null;
   if (estado === "abrir" && coords) {
     btn.disabled = false;
     btn.style.cssText = base + "background:#105436;color:#fff;cursor:pointer;";
@@ -50075,17 +50965,15 @@ window.loadKmzPlacemarks = async function(empId) {
   })).filter((p) => p.lot_name && p.coordinates);
 
   try {
-    if (window.firebaseDb && window.firebaseCollections) {
-      const { doc, getDoc } = window.firebaseCollections;
-      const snap = await getDoc(doc(window.firebaseDb, "kmz_coordinates", id));
-      if (snap.exists()) {
-        const data = snap.data() || {};
+    if (window.DadosNucleo) {
+      const data = await window.DadosNucleo.tabela("kmz_coordinates").obter(id);
+      if (data) {
         const marks = normalize(data.placemarks || data.points || []);
         if (marks.length) return marks;
       }
     }
   } catch (e) {
-    console.warn("[KMZ] Firebase:", e);
+    console.warn("[KMZ] Supabase:", e);
   }
 
   try {
@@ -51550,6 +52438,7 @@ window.searchRelacionamento = async function() {
       return nome;
     }
 
+    window._billsDoPrincipal = {};
     results = await Promise.all(contratos.map(async c => {
        const tituloId = c.receivableBillId || c.contractNumber || c.id;
 
@@ -51654,6 +52543,28 @@ window.searchRelacionamento = async function() {
                        realContractStr = contractData.contractNumber;
                }
            } catch(e) {}
+       }
+
+       // Comprador secundário: o título fica no cliente principal e a lista do pesquisado vem vazia.
+       // Sem isso o contrato aparecia "Adimplente" mesmo quitado. Lê o título na lista do principal (traz payOffDate).
+       if (!contractBills.length && c.receivableBillId && typeof window.salesContractPeople === "function"
+         && typeof SiengeApiService.getReceivableBills === "function") {
+           try {
+               const pessoas = window.salesContractPeople(c) || [];
+               const principal = pessoas.find((p) => p.main) || null;
+               if (principal && principal.id != null && String(principal.id) !== String(customerId)) {
+                   window._billsDoPrincipal = window._billsDoPrincipal || {};
+                   const chave = String(principal.id);
+                   if (!window._billsDoPrincipal[chave]) {
+                       window._billsDoPrincipal[chave] = SiengeApiService.getReceivableBills(principal.id).catch(() => null);
+                   }
+                   const resP = await window._billsDoPrincipal[chave];
+                   const listaP = (resP && (resP.results || resP)) || [];
+                   const doContrato = (Array.isArray(listaP) ? listaP : []).find((b) =>
+                       String(b.receivableBillId || b.id) === String(c.receivableBillId));
+                   if (doContrato) contractBills.push(doContrato);
+               }
+           } catch (e) {}
        }
 
        const cStatus = String(c.status || '').toUpperCase();
@@ -53035,9 +53946,8 @@ window.saveProcessNumber = function(value) {
     if (typeof window.atualizarAvisoProcesso === "function") window.atualizarAvisoProcesso();
     window._processoJudicialLido = window._processoJudicialLido || {};
     window._processoJudicialLido[cid] = true;
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.doc || !fc.setDoc) return;
-    fc.setDoc(fc.doc(window.firebaseDb, "processos_judiciais", cid), {
+    if (!window.DadosCobranca) return;
+    window.DadosCobranca.tabela("processos_judiciais").gravar(cid, {
       customerId: cid,
       numero: texto,
       updatedAt: new Date().toISOString()
@@ -53054,12 +53964,11 @@ window.carregarProcessoJudicial = async function(customerId) {
     catch (e) { AppState.judicialProcessNumbers = {}; }
   }
   let texto = window.processoJudicialTexto(AppState.judicialProcessNumbers[cid] || AppState.judicialProcessNumbers[Number(cid)] || "");
-  const fc = window.firebaseCollections;
-  if (window.firebaseDb && fc && fc.doc && fc.getDoc) {
+  if (window.DadosCobranca) {
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "processos_judiciais", cid));
-      if (snap && typeof snap.exists === "function" && snap.exists()) {
-        const remoto = window.processoJudicialTexto((snap.data() || {}).numero);
+      const reg = await window.DadosCobranca.tabela("processos_judiciais").obter(cid);
+      if (reg) {
+        const remoto = window.processoJudicialTexto(reg.numero);
         if (remoto) texto = remoto;
       }
     } catch (e) {}
@@ -55476,28 +56385,21 @@ window.persistCentrosCustoCustomToFirebase = async function() {
     window._ccCustomPersistAgain = true;
     return;
   }
-  if (!window.firebaseDb || !window.firebaseCollections) return;
-  const { doc, getDoc, setDoc } = window.firebaseCollections;
+  if (!window.DadosNucleo) return;
   window._ccCustomWritingCloud = true;
   try {
     const origSet = window._originalSetItem || localStorage.setItem.bind(localStorage);
     const localRaw = localStorage.getItem("crm_centros_custo_custom") || "{}";
     let dedicatedRaw = "";
+    // Supabase: config/centros_custo e global.crm_centros_custo_custom vêm da mesma tabela centros_custo;
+    // basta ler uma vez (globalRaw fica vazio).
     let globalRaw = "";
     try {
-      const dSnap = await getDoc(doc(window.firebaseDb, "config", "centros_custo"));
+      const dSnap = await window.DadosNucleo.lerConfig("centros_custo");
       const dExists = dSnap && (typeof dSnap.exists === "function" ? dSnap.exists() : dSnap.exists);
       if (dExists) {
         const d = dSnap.data() || {};
         dedicatedRaw = d.byId ? JSON.stringify(d.byId) : (d.crm_centros_custo_custom || "");
-      }
-    } catch (e) {}
-    try {
-      const gSnap = await getDoc(doc(window.firebaseDb, "config", "global"));
-      const gExists = gSnap && (typeof gSnap.exists === "function" ? gSnap.exists() : gSnap.exists);
-      if (gExists) {
-        const g = gSnap.data() || {};
-        globalRaw = g.crm_centros_custo_custom || "";
       }
     } catch (e) {}
     const cloudMerged = typeof window.mergeCentrosCustoCustom === "function"
@@ -55538,12 +56440,9 @@ window.persistCentrosCustoCustomToFirebase = async function() {
       window.applyCentrosCustoCustomPayload(json);
     }
     const payload = { byId: map, updatedAt: Date.now(), crm_centros_custo_custom: json };
-    await setDoc(doc(window.firebaseDb, "config", "centros_custo"), payload, { merge: false });
-    try {
-      await setDoc(doc(window.firebaseDb, "config", "global"), { crm_centros_custo_custom: json }, { merge: true });
-    } catch (e) {
-      console.warn("[CC custom] global setDoc falhou; documento dedicado permanece", e);
-    }
+    // Supabase: grava só as linhas alteradas de centros_custo (a RLS exige sub_cfg_apoio_centro_custo_editar).
+    // A cópia em config/global não existe mais (é a mesma tabela).
+    await window.DadosNucleo.gravarConfig("centros_custo", payload, { merge: false });
   } catch (e) {
     console.error("[CC custom] persist:", e);
   } finally {
@@ -55763,8 +56662,12 @@ window.mergePlanoImpostos = function(localStr, cloudStr) {
 window.syncGlobalConfigFromFirebase = async function() {
     try {
         if (typeof window.ensureCrmStorageRoom === "function") window.ensureCrmStorageRoom();
-        if (!window.firebaseDb || !window.firebaseCollections) return;
-        const snap = await window.firebaseCollections.getDocs(window.firebaseCollections.collection(window.firebaseDb, "config"));
+        if (!window.DadosNucleo) return;
+        // Supabase: só estes quatro documentos de config são usados aqui; ler cada um evita montar todos
+        // (DadosNucleo.listarConfig() também montaria central_email, obra_vgv, parcerias, fluxos...).
+        const lidos = await Promise.all(["global", "back_office_perms", "centros_custo", "crm_users"]
+            .map((id) => window.DadosNucleo.lerConfig(id)));
+        const snap = lidos.filter((d) => d && d.exists());
         let globalData = null;
         let backOfficeCloud = null;
         let centrosCustoCloud = null;
@@ -56183,6 +57086,9 @@ window.syncGlobalConfigFromFirebase = async function() {
                         if (typeof window.dedupeAccentCityRules === "function") {
                             window.dedupeAccentCityRules();
                         }
+                        if (typeof window.crmPintarTesteConta === "function") {
+                            try { window.crmPintarTesteConta(); } catch (e) {}
+                        }
                         const after = localStorage.getItem(k) || "";
                         if (after !== (globalData[k] || "") && window.forceUploadLocalConfig) {
                             setTimeout(() => window.forceUploadLocalConfig(true), 1500);
@@ -56366,14 +57272,13 @@ window.forceUploadLocalConfig = async function(silent = true) {
             }
         }
         
-        if (!window.firebaseDb || !window.firebaseCollections) throw new Error("Firebase não inicializado.");
+        if (!window.DadosNucleo) throw new Error("Supabase não inicializado.");
         if (typeof window.persistCentrosCustoCustomToFirebase === "function") {
           await window.persistCentrosCustoCustomToFirebase();
         }
-        const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "global");
         let crmUsersMerged = !payload.crm_users;
         try {
-          const snap = await window.firebaseCollections.getDoc(docRef);
+          const snap = await window.DadosNucleo.lerConfig("global");
           const cloud = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists) ? (snap.data() || {}) : {};
           if (typeof window.crmFinanciamentosMesclar === "function") {
             const mergedProc = window.crmFinanciamentosMesclar(payload.crm_moura_financiamentos_proc || "{}", cloud.crm_moura_financiamentos_proc || "{}");
@@ -56502,10 +57407,8 @@ window.forceUploadLocalConfig = async function(silent = true) {
           if (payload.crm_moura_condicoes_pagamento || cloud.crm_moura_condicoes_pagamento || (window.CondicoesPagamentoApp && CondicoesPagamentoApp.flags)) {
             let dedicatedRaw = "";
             try {
-              if (window.firebaseCollections.getDoc) {
-                const dSnap = await window.firebaseCollections.getDoc(
-                  window.firebaseCollections.doc(window.firebaseDb, "config", "condicoes_pagamento")
-                );
+              if (window.DadosNucleo) {
+                const dSnap = await window.DadosNucleo.lerConfig("condicoes_pagamento");
                 const dExists = dSnap && (typeof dSnap.exists === "function" ? dSnap.exists() : dSnap.exists);
                 if (dExists) {
                   const d = dSnap.data() || {};
@@ -56564,8 +57467,9 @@ window.syncAllNotesToFirebase = async function() {
         console.log('[SyncNotes]', msg);
     };
     
-    if (!window.firebaseDb || !window.firebaseCollections) {
-        setStatus('âŒ Firebase não está inicializado. Tente novamente em alguns instantes.', '#ef4444');
+    // Supabase: todas as coleções daqui (notas da cobrança/jurídico e agenda) já estão no Supabase.
+    if (!window.DadosCobranca || !window.DadosNucleo) {
+        setStatus('âŒ O banco não está disponível. Tente novamente em alguns instantes.', '#ef4444');
         return;
     }
     
@@ -56580,8 +57484,9 @@ window.syncAllNotesToFirebase = async function() {
         
         for (const custId of noteKeys) {
             if (notes[custId] && notes[custId].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'customer_notes', String(custId));
-                await window.firebaseCollections.setDoc(docRef, { notes: notes[custId] }, { merge: false });
+                // Supabase: o doc legado customer_notes/<cliente> virou a tabela customer_notes (uma linha por nota).
+                // Upsert pela RPC (não apaga o que está só na nuvem, ao contrário do setDoc sem merge do doc legado).
+                await window.DadosCobranca.salvarNotasCliente(String(custId), notes[custId]);
                 uploadedNotes++;
                 if (uploadedNotes % 10 === 0) {
                     setStatus(`ðŸ”„ Sincronizando notas... ${uploadedNotes}/${noteKeys.length} clientes`, '#1d4ed8');
@@ -56598,8 +57503,8 @@ window.syncAllNotesToFirebase = async function() {
         let uploadedJud = 0;
         for (const custId of Object.keys(judNotes)) {
             if (judNotes[custId] && judNotes[custId].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'jud_notes', String(custId));
-                await window.firebaseCollections.setDoc(docRef, { notes: judNotes[custId] }, { merge: false });
+                // Supabase: idem para o legado jud_notes/<cliente> -> tabela jud_notes.
+                await window.DadosCobranca.salvarNotasJuridicas(String(custId), judNotes[custId]);
                 uploadedJud++;
                 if (uploadedJud % 5 === 0) await new Promise(r => setTimeout(r, 200));
             }
@@ -56610,9 +57515,11 @@ window.syncAllNotesToFirebase = async function() {
         const personalNotes = JSON.parse(localStorage.getItem('crm_agenda_personal_notes') || '{}');
         for (const key of Object.keys(personalNotes)) {
             if (personalNotes[key] && personalNotes[key].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_personal_notes', key);
-                await window.firebaseCollections.setDoc(docRef, { notes: personalNotes[key] }, { merge: false });
-                await new Promise(r => setTimeout(r, 100));
+                // Supabase: só as chaves do usuário / TODOS / compartilhadas (RLS); merge mantém dono e usuario_id.
+                if (window.crmAgendaPodeGravar(key, personalNotes[key])) {
+                    await window.crmAgendaGravar('agenda_personal_notes', key, personalNotes[key]);
+                    await new Promise(r => setTimeout(r, 100));
+                }
             }
         }
         
@@ -56620,13 +57527,14 @@ window.syncAllNotesToFirebase = async function() {
         const recurringNotes = JSON.parse(localStorage.getItem('crm_agenda_recurring_notes') || '{}');
         for (const key of Object.keys(recurringNotes)) {
             if (recurringNotes[key] && recurringNotes[key].length > 0) {
-                const docRef = window.firebaseCollections.doc(window.firebaseDb, 'agenda_recurring_notes', key);
-                await window.firebaseCollections.setDoc(docRef, { notes: recurringNotes[key] }, { merge: false });
-                await new Promise(r => setTimeout(r, 100));
+                if (window.crmAgendaPodeGravar(key, recurringNotes[key])) {
+                    await window.crmAgendaGravar('agenda_recurring_notes', key, recurringNotes[key]);
+                    await new Promise(r => setTimeout(r, 100));
+                }
             }
         }
         
-        const msg = `âœ… Sincronização concluída! ${uploadedNotes} clientes com ocorrências, ${uploadedJud} com notas judiciais enviados para o Firebase.`;
+        const msg = `âœ… Sincronização concluída! ${uploadedNotes} clientes com ocorrências, ${uploadedJud} com notas judiciais enviados para o banco.`;
         setStatus(msg, '#16a34a');
         setTimeout(() => alert(msg + '\n\nAtualize a página na Vercel para ver os dados.'), 100);
         
@@ -56728,7 +57636,7 @@ localStorage.setItem = function(key, value) {
         }
         if (window._fbConfigTimeout) clearTimeout(window._fbConfigTimeout);
         window._fbConfigTimeout = setTimeout(async () => {
-            if (window.firebaseDb && window.firebaseCollections) {
+            if (window.DadosNucleo) {
                 try {
                     let payload = {};
                     window.SYNC_KEYS.forEach(k => {
@@ -56741,10 +57649,9 @@ localStorage.setItem = function(key, value) {
                             payload[k] = localStorage.getItem(k);
                         }
                     }
-                    const docRef = window.firebaseCollections.doc(window.firebaseDb, "config", "global");
                     let crmUsersMerged = !payload.crm_users;
                     try {
-                      const snap = await window.firebaseCollections.getDoc(docRef);
+                      const snap = await window.DadosNucleo.lerConfig("global");
                       const cloud = snap && snap.exists() ? (snap.data() || {}) : {};
                       if (typeof window.crmFinanciamentosMesclar === "function") {
                         const mergedProc = window.crmFinanciamentosMesclar(payload.crm_moura_financiamentos_proc || "{}", cloud.crm_moura_financiamentos_proc || "{}");
@@ -57175,16 +58082,15 @@ window.applyRenegotiationText = function(prefix = '') {
 window.whatsappAlertsData = { clients: {}, lastCompletedMonth: "" };
 
 async function loadWhatsappAlerts() {
-    if (window.firebaseCollections && window.firebaseDb) {
+    if (window.DadosNucleo) {
         try {
-            const { doc, getDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, 'settings', 'whatsapp_alerts');
-            const snap = await getDoc(ref);
+            // Supabase: settings/whatsapp_alerts fica inteiro em configuracoes.
+            const snap = await window.DadosNucleo.lerSetting('whatsapp_alerts');
             if (snap.exists()) {
                 window.whatsappAlertsData = snap.data();
             }
         } catch (e) {
-            console.error("Erro ao carregar whatsapp_alerts do Firebase", e);
+            console.error("Erro ao carregar whatsapp_alerts do Supabase", e);
         }
     } else {
         // Fallback local
@@ -57201,13 +58107,11 @@ async function loadWhatsappAlerts() {
 }
 
 async function saveWhatsappAlerts() {
-    if (window.firebaseCollections && window.firebaseDb) {
+    if (window.DadosNucleo) {
         try {
-            const { doc, setDoc } = window.firebaseCollections;
-            const ref = doc(window.firebaseDb, 'settings', 'whatsapp_alerts');
-            await setDoc(ref, window.whatsappAlertsData);
+            await window.DadosNucleo.gravarSetting('whatsapp_alerts', window.whatsappAlertsData);
         } catch (e) {
-            console.error("Erro ao salvar whatsapp_alerts no Firebase", e);
+            console.error("Erro ao salvar whatsapp_alerts no Supabase", e);
         }
     }
     localStorage.setItem("whatsapp_alerts_data", JSON.stringify(window.whatsappAlertsData));
@@ -57661,13 +58565,13 @@ window.userCanMarkSubjudiceIntegra = function(user) {
 window.loadSubjudiceIntegra = async function() {
   if (window.subjudiceIntegraLoaded) return;
   let data = null;
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const ref = window.firebaseCollections.doc(window.firebaseDb, "settings", "subjudice_integra");
-      const snap = await window.firebaseCollections.getDoc(ref);
+      // Supabase: settings/subjudice_integra fica inteiro em configuracoes.
+      const snap = await window.DadosNucleo.lerSetting("subjudice_integra");
       if (snap && typeof snap.exists === "function" && snap.exists()) data = snap.data();
     } catch (e) {
-      console.error("Erro ao carregar subjudice_integra do Firebase", e);
+      console.error("Erro ao carregar subjudice_integra do Supabase", e);
     }
   }
   if (!data) {
@@ -57685,12 +58589,11 @@ window.saveSubjudiceIntegra = async function() {
   try {
     localStorage.setItem("subjudice_integra_data", JSON.stringify(window.subjudiceIntegraData || { clients: {} }));
   } catch (e) {}
-  if (window.firebaseCollections && window.firebaseDb) {
+  if (window.DadosNucleo) {
     try {
-      const ref = window.firebaseCollections.doc(window.firebaseDb, "settings", "subjudice_integra");
-      await window.firebaseCollections.setDoc(ref, window.subjudiceIntegraData || { clients: {} });
+      await window.DadosNucleo.gravarSetting("subjudice_integra", window.subjudiceIntegraData || { clients: {} });
     } catch (e) {
-      console.error("Erro ao salvar subjudice_integra no Firebase", e);
+      console.error("Erro ao salvar subjudice_integra no Supabase", e);
     }
   }
 };
@@ -57938,6 +58841,7 @@ window.toggleWhatsappSnoozeMenu = function(ev) {
 };
 
 window.snoozeWhatsappBilletAlert = function(choice) {
+    if (typeof window.whatsappAlertFecharSePrevia === "function" && window.whatsappAlertFecharSePrevia()) return;
     const now = new Date();
     let until = new Date(now);
     if (choice === "amanha") {
@@ -57996,43 +58900,13 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
         return;
     }
     
-    let modal = document.getElementById("modal-whatsapp-alerts");
-    if (modal && !document.getElementById("whatsapp-snooze-menu")) {
-        modal.remove();
-        modal = null;
-    }
-    if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'modal-whatsapp-alerts';
-        modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
-        modal.innerHTML = `
-            <div style="background: white; width: 600px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
-                <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Lembrete de Envio de Boletos (WhatsApp)</h2>
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">Os seguintes clientes estão com o alerta ativado para envio manual da remessa mensal via WhatsApp:</p>
-                <div id="whatsapp-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
-                <div id="whatsapp-alerts-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end;">
-                    <div style="position: relative;">
-                        <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleWhatsappSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
-                        <div id="whatsapp-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(15)">15 min</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(30)">30 min</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(60)">1 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(120)">2 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(180)">3 h</button>
-                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert('amanha')">Amanhã</button>
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" style="background: #0f766e; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markWhatsappAlertsAsDone()">Marcar como Concluído neste Mês</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(modal);
-    }
+    const modal = window.ensureWhatsappAlertModal();
+    modal.dataset.previa = "";
     const listEl = document.getElementById("whatsapp-alerts-list");
     if (!listEl) return;
     listEl.innerHTML = `<div style="padding:16px;color:#64748b;font-size:0.9rem;">Localizando títulos no Sienge…</div>`;
     if (modal) modal.style.display = "flex";
-    
+
     let clientDataMap = {};
     let clientTitlesMap = {};
     if (window.rawClientList) {
@@ -58043,7 +58917,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             } else {
                 clientDataMap[cid] = { ...clientDataMap[cid], ...c };
             }
-            
+
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
             if (c.saleId && !clientTitlesMap[cid].includes(c.saleId)) {
                 clientTitlesMap[cid].push(c.saleId);
@@ -58062,7 +58936,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                 if (c.name) clientDataMap[cid].name = c.name;
                 if (c.customerName) clientDataMap[cid].customerName = c.customerName;
             }
-            
+
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
             if (c.saleId && !clientTitlesMap[cid].includes(String(c.saleId))) {
                 clientTitlesMap[cid].push(String(c.saleId));
@@ -58089,7 +58963,7 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                 if (c.customerName) clientDataMap[cid].customerName = c.customerName;
             }
             if (!clientTitlesMap[cid]) clientTitlesMap[cid] = [];
-            
+
             if (c.receivableBills && Array.isArray(c.receivableBills)) {
                 c.receivableBills.forEach(rb => {
                     if ((rb.documentId || "").trim() === "CT") {
@@ -58110,11 +58984,11 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             }
         });
     }
-    
+
     const monthKey = window.currentMonthStr || new Date().toISOString().slice(0, 7);
     let checkedState = {};
     try { checkedState = JSON.parse(localStorage.getItem('whatsappAlertsIndividual_' + monthKey) || '{}'); } catch(e){}
-    
+
     if (typeof window.toggleWhatsappIndividual === 'undefined') {
         window.toggleWhatsappIndividual = function(cid, el) {
             const mKey = window.currentMonthStr || new Date().toISOString().slice(0, 7);
@@ -58147,8 +59021,58 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
               } catch (e) {}
             }
 
+            cards.push(window.montarCardWhatsappAlerta(id, name, email, phone, titleObjs, !!checkedState[id], false));
+    }
+    listEl.innerHTML = "";
+    cards.forEach(card => listEl.appendChild(card));
+
+    // Se a prévia abriu durante a busca no Sienge, o aviso real volta a gravar.
+    if (modal) modal.dataset.previa = "";
+    if (modal) modal.style.display = "flex";
+    if (window.lucide) lucide.createIcons();
+};
+
+// Cria (uma vez) o pop-up "Lembrete de Envio de Boletos (WhatsApp)". Usado pelo lembrete real e pela prévia.
+window.ensureWhatsappAlertModal = function() {
+    let modal = document.getElementById("modal-whatsapp-alerts");
+    if (modal && !document.getElementById("whatsapp-snooze-menu")) {
+        modal.remove();
+        modal = null;
+    }
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'modal-whatsapp-alerts';
+        modal.style.cssText = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; justify-content: center; align-items: center;";
+        modal.innerHTML = `
+            <div style="background: white; width: 600px; max-width: 90vw; border-radius: 12px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); max-height: 85vh; display: flex; flex-direction: column;">
+                <h2 style="margin: 0 0 10px 0; color: #0f172a; font-size: 1.25rem;">Lembrete de Envio de Boletos (WhatsApp)</h2>
+                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 20px;">Os seguintes clientes estão com o alerta ativado para envio manual da remessa mensal via WhatsApp:</p>
+                <div id="whatsapp-alerts-list" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; padding-right: 5px;"></div>
+                <div id="whatsapp-alerts-footer" style="display: flex; justify-content: flex-end; gap: 12px; align-items: flex-end;">
+                    <div style="position: relative;">
+                        <button type="button" class="btn btn-outline" style="border: 1px solid #cbd5e1; background: #f8fafc; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.toggleWhatsappSnoozeMenu(event)">Lembrar Mais Tarde ▾</button>
+                        <div id="whatsapp-snooze-menu" style="display: none; flex-direction: column; position: absolute; bottom: calc(100% + 6px); right: 0; min-width: 180px; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 10px 24px rgba(15,23,42,0.15); overflow: hidden; z-index: 2;">
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(15)">15 min</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(30)">30 min</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(60)">1 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(120)">2 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert(180)">3 h</button>
+                            <button type="button" style="display:block;width:100%;text-align:left;background:transparent;border:none;padding:10px 14px;font-size:0.9rem;color:#0f172a;cursor:pointer;border-top:1px solid #e2e8f0;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'" onclick="window.snoozeWhatsappBilletAlert('amanha')">Amanhã</button>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" style="background: #0f766e; color: white; border: none; cursor: pointer; padding: 8px 16px; border-radius: 6px;" onclick="window.markWhatsappAlertsAsDone()">Marcar como Concluído neste Mês</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+    }
+    return modal;
+};
+
+// Monta o cartão de um cliente no lembrete de WhatsApp. Em prévia, o checkbox fica desabilitado (não grava nada).
+window.montarCardWhatsappAlerta = function(id, name, email, phone, titleObjs, checked, previa) {
             let titlesHtml = "";
-            if (titleObjs.length) {
+            if (titleObjs && titleObjs.length) {
                 const parts = titleObjs.map(t => {
                   const extra = t.contractNumber && String(t.contractNumber) !== String(t.id)
                     ? ` (contrato ${t.contractNumber})`
@@ -58161,15 +59085,16 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
             } else {
                 titlesHtml = `<div style="margin-top: 8px; font-size: 0.85rem; color: #b91c1c; padding-top: 6px; border-top: 1px dashed #e2e8f0;"><strong>Título:</strong> Não identificado (Sienge sem contrato CT para este cliente)</div>`;
             }
-            
-            const isChecked = checkedState[id] ? "checked" : "";
-            
+
+            const isChecked = checked ? "checked" : "";
+            const onChange = previa ? "disabled" : `onchange="window.toggleWhatsappIndividual('${id}', this)"`;
+
             const card = document.createElement("div");
             card.style.cssText = "padding: 12px 15px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff;";
             card.innerHTML = `
                 <div style="font-weight: 600; color: #0f172a; margin-bottom: 4px;">
                     <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
-                        <input type="checkbox" onchange="window.toggleWhatsappIndividual('${id}', this)" ${isChecked} style="width: 16px; height: 16px; accent-color: #0f766e; cursor: pointer;">
+                        <input type="checkbox" ${onChange} ${isChecked} style="width: 16px; height: 16px; accent-color: #0f766e; cursor: pointer;">
                         ${id} - ${name}
                     </label>
                 </div>
@@ -58181,16 +59106,40 @@ window.checkMonthlyBilletAlerts = async function(isTest = false) {
                     ${titlesHtml}
                 </div>
             `;
-            cards.push(card);
-    }
+            return card;
+};
+
+// Em prévia, os botões do lembrete de WhatsApp só fecham (sem gravar concluído/adiamento nem agendar timer).
+window.whatsappAlertFecharSePrevia = function() {
+    const modal = document.getElementById("modal-whatsapp-alerts");
+    if (!modal || modal.dataset.previa !== "1") return false;
+    const menu = document.getElementById("whatsapp-snooze-menu");
+    if (menu) menu.style.display = "none";
+    modal.style.display = "none";
+    modal.dataset.previa = "";
+    return true;
+};
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["boletos-whatsapp"] = function() {
+    const modal = window.ensureWhatsappAlertModal();
+    modal.dataset.previa = "1";
+    const listEl = document.getElementById("whatsapp-alerts-list");
+    if (!listEl) return;
+    const exemplos = [
+        { id: "1001", name: "Cliente exemplo", email: "cliente.exemplo@email.com", phone: "(41) 99999-0001",
+          titles: [{ id: "20001", contractNumber: "CT-20001", unit: "Quadra 1 · Lote 10" }], checked: true },
+        { id: "1002", name: "Cliente exemplo 2", email: "cliente2.exemplo@email.com", phone: "(41) 99999-0002",
+          titles: [{ id: "20002", unit: "Quadra 3 · Lote 7" }, { id: "20003", unit: "Quadra 3 · Lote 8" }], checked: false }
+    ];
     listEl.innerHTML = "";
-    cards.forEach(card => listEl.appendChild(card));
-        
-    if (modal) modal.style.display = "flex";
+    exemplos.forEach(e => listEl.appendChild(window.montarCardWhatsappAlerta(e.id, e.name, e.email, e.phone, e.titles, e.checked, true)));
+    modal.style.display = "flex";
     if (window.lucide) lucide.createIcons();
 };
 
 window.markWhatsappAlertsAsDone = async function() {
+    if (typeof window.whatsappAlertFecharSePrevia === "function" && window.whatsappAlertFecharSePrevia()) return;
     const today = new Date();
     const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
     window.whatsappAlertsData.lastCompletedMonth = currentMonthStr;
@@ -59312,9 +60261,8 @@ window.mapaJuridicoPosicaoViva = function() {
 
 window.mapaJuridicoPersistirPosicao = function(pos) {
   try {
-    if (!pos || !window.firebaseCollections || !window.firebaseDb) return;
-    const docRef = window.firebaseCollections.doc(window.firebaseDb, "inadimplencia_snapshots", pos.date);
-    window.firebaseCollections.setDoc(docRef, {
+    if (!pos || !window.DadosCobranca) return;
+    window.DadosCobranca.tabela("inadimplencia_snapshots").gravar(pos.date, {
       date: pos.date,
       subjudice_count: pos.titles,
       subjudice_customers: pos.clients,
@@ -59363,11 +60311,9 @@ window.mapaJuridicoCarregarSnapshots = async function() {
   if (Array.isArray(window._mapaJuridicoSnapsCache)) return window._mapaJuridicoSnapsCache;
   const snapshots = [];
   try {
-    if (window.firebaseCollections && window.firebaseDb) {
-      const snapRef = window.firebaseCollections.collection(window.firebaseDb, "inadimplencia_snapshots");
-      const q = window.firebaseCollections.query(snapRef, window.firebaseCollections.orderBy("date", "asc"));
-      const fbDocs = await window.firebaseCollections.getDocs(q);
-      fbDocs.forEach((d) => { const data = d.data(); if (data) snapshots.push(data); });
+    if (window.DadosCobranca) {
+      const lista = await window.DadosCobranca.tabela("inadimplencia_snapshots").listar({ ordem: ["date", "asc"] });
+      lista.forEach((data) => { if (data) snapshots.push(data); });
       window._mapaJuridicoSnapsCache = snapshots;
     }
   } catch (e) {
@@ -60218,23 +61164,41 @@ window.resolveBrokerCreditorNames = async function(ids) {
 };
 
 window.gerarMapaZeropaidPDF = async function() {
-    const zeroList = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
-    const zeroKeys = new Set(zeroList.map(c => `${c.customerId}-${c.saleId}`));
     const opFilter = window.activeZeroOperatorFilter
         || (typeof activeZeroOperatorFilter !== "undefined" ? activeZeroOperatorFilter : "TODOS");
     const normOp = (v) => (typeof window.normalizeOperatorName === "function")
         ? window.normalizeOperatorName(v)
         : String(v || "").toUpperCase();
-    const webroList = (window.rawClientList || []).filter(c => {
-        if (!c || zeroKeys.has(`${c.customerId}-${c.saleId}`) || c.isZeroPaid) return false;
+    // Entrada = as três tags da fila: Pagamento de entrada Webro, Aguardando Webro e Pendente Repasse Webro.
+    const tagEntrada = (c) => {
+        const baixa = typeof window.getWebroBaixaStatus === "function" ? window.getWebroBaixaStatus(c) : null;
+        if (baixa) return baixa === "PENDENTE" ? "pendente" : "aguardando";
+        if (typeof window.clientHasPagamentoEntradaWebro === "function" && window.clientHasPagamentoEntradaWebro(c)) return "pagamento";
+        return "";
+    };
+    // Um título por linha (cliente + título): o mesmo título não conta duas vezes.
+    const chave = (c) => `${c.customerId}-${String(c.saleId || "").replace(/^B-/i, "").split("-")[0]}`;
+    const unicos = (lista) => {
+        const vistos = new Set();
+        return lista.filter(c => {
+            if (!c || vistos.has(chave(c))) return false;
+            vistos.add(chave(c));
+            return true;
+        });
+    };
+    const zeroBase = (window.zeroPaidList && window.zeroPaidList.length) ? window.zeroPaidList : [];
+    // Aguardando Webro e Pendente Repasse Webro ficam fora do mapa (o cliente já pagou na Webro).
+    const zeroList = unicos(zeroBase.filter(c => c && !tagEntrada(c)));
+    const webroList = unicos(zeroBase.concat(window.rawClientList || []).filter(c => {
+        if (!c) return false;
         const subj = typeof window.clientIsSubjudice === "function"
             ? window.clientIsSubjudice(c)
             : (c.subjudice === "S" || c.subjudice === true);
         if (subj) return false;
-        if (typeof window.clientHasPagamentoEntradaWebro !== "function" || !window.clientHasPagamentoEntradaWebro(c)) return false;
+        if (tagEntrada(c) !== "pagamento") return false;
         if (opFilter && opFilter !== "TODOS" && normOp(c.assignedOperator) !== normOp(opFilter)) return false;
         return true;
-    });
+    }));
     if (!zeroList.length && !webroList.length) {
         alert("Não há clientes 0% pago nem pagando entrada Webro para gerar o mapa.");
         return;
@@ -60257,6 +61221,13 @@ window.gerarMapaZeropaidPDF = async function() {
     }
 
     const yieldUI = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 40)));
+    const comPrazo = (p, ms) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("tempo esgotado")), ms);
+        Promise.resolve(p).then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
     await yieldUI();
 
     let container = null;
@@ -60274,13 +61245,15 @@ window.gerarMapaZeropaidPDF = async function() {
 
         const needFetch = all.filter(c => c && c.customerId && (!c.saleDate || (!c.brokerId && !c.brokerName)));
         const fetchIds = [...new Set(needFetch.map(c => c.customerId))];
+        const limiteBusca = Date.now() + 25000;
         if (fetchIds.length && typeof SiengeApiService !== "undefined" && typeof SiengeApiService.getSales === "function") {
             const batchSize = 6;
             for (let i = 0; i < fetchIds.length; i += batchSize) {
+                if (Date.now() > limiteBusca) break;
                 const batch = fetchIds.slice(i, i + batchSize);
                 await Promise.all(batch.map(async (custId) => {
                     try {
-                        const sales = await SiengeApiService.getSales(custId);
+                        const sales = await comPrazo(SiengeApiService.getSales(custId), 8000);
                         if (!window.AppState.sales) window.AppState.sales = [];
                         sales.forEach(s => {
                             const idx = window.AppState.sales.findIndex(xs => String(xs.id) === String(s.id));
@@ -60299,7 +61272,13 @@ window.gerarMapaZeropaidPDF = async function() {
         }
 
         const brokerIds = all.map(c => c.brokerId).filter(Boolean);
-        const brokerNames = brokerIds.length ? await window.resolveBrokerCreditorNames(brokerIds) : {};
+        let brokerNames = {};
+        try {
+            brokerNames = brokerIds.length ? await comPrazo(window.resolveBrokerCreditorNames(brokerIds), 12000) : {};
+        } catch (err) {
+            console.warn("Mapa 0% pago: nomes dos corretores ficaram de fora", err);
+            brokerNames = window._brokerNameCache || {};
+        }
         all.forEach(c => {
             if (c.brokerId && brokerNames[c.brokerId]) c.brokerName = brokerNames[c.brokerId];
         });
@@ -60309,7 +61288,8 @@ window.gerarMapaZeropaidPDF = async function() {
         }[ch]));
         const fmtInt = (val) => Math.round(Number(val) || 0).toLocaleString("pt-BR");
         const clientValue = (c) => (c.overdueValue || 0) + (c.overdueCharges || 0);
-        const titleCount = (c) => (c.billIds && c.billIds.length) ? c.billIds.length : 1;
+        // Cada linha já é um título (sem repetição); billIds pode repetir o mesmo título e não entra na conta.
+        const titleCount = () => 1;
         const empLabel = (ccId) => {
             const id = typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(ccId) : String(ccId || "N/D");
             const rawName = (typeof getCostCenterName === "function" ? getCostCenterName(ccId) : "") || "";
@@ -60330,31 +61310,40 @@ window.gerarMapaZeropaidPDF = async function() {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             monthKeys.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`);
         }
-        const recencyDefs = [
-            { label: "Até 30 dias", max: 30 },
-            { label: "31 a 90 dias", max: 90 },
+        // Aging: títulos por dias de atraso (maior atraso do título).
+        const agingDefs = [
+            { label: "1 a 15 dias", max: 15 },
+            { label: "16 a 30 dias", max: 30 },
+            { label: "31 a 60 dias", max: 60 },
+            { label: "61 a 90 dias", max: 90 },
             { label: "91 a 180 dias", max: 180 },
-            { label: "6 a 12 meses", max: 365 },
-            { label: "Mais de 1 ano", max: Infinity },
-            { label: "Sem data de venda", max: null }
+            { label: "Mais de 180 dias", max: Infinity }
         ];
+        const agingIdx = (c) => {
+            const d = Math.max(0, Number(c && c.maxDaysDelay) || 0);
+            const i = agingDefs.findIndex(a => d <= a.max);
+            return i >= 0 ? i : agingDefs.length - 1;
+        };
 
         const stats = (list) => {
             const s = { value: 0, titles: 0, clients: new Set(), delaySum: 0, delayN: 0, ageSum: 0, ageN: 0,
-                months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, recency: recencyDefs.map(() => 0) };
+                months: Object.fromEntries(monthKeys.map(k => [k, 0])), older: 0, noDate: 0, aging: agingDefs.map(() => 0), agingValor: agingDefs.map(() => 0) };
+            // Tudo em número de títulos.
             list.forEach(c => {
+                const t = titleCount(c);
                 s.value += clientValue(c);
-                s.titles += titleCount(c);
+                s.titles += t;
                 s.clients.add(String(c.customerId));
                 if (c.maxDaysDelay > 0) { s.delaySum += c.maxDaysDelay; s.delayN++; }
+                const ai = agingIdx(c);
+                s.aging[ai] += t;
+                s.agingValor[ai] += clientValue(c);
                 const d = parseSale(c);
-                if (!d) { s.noDate++; s.recency[5]++; return; }
+                if (!d) { s.noDate += t; return; }
                 const days = Math.max(0, Math.round((now - d) / 86400000));
                 s.ageSum += days; s.ageN++;
                 const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-                if (s.months[key] != null) s.months[key]++; else s.older++;
-                const idx = recencyDefs.findIndex(r => r.max != null && days <= r.max);
-                s.recency[idx >= 0 ? idx : 4]++;
+                if (s.months[key] != null) s.months[key] += t; else s.older += t;
             });
             const avgAge = s.ageN ? Math.round(s.ageSum / s.ageN) : 0;
             s.clientsN = s.clients.size;
@@ -60365,54 +61354,71 @@ window.gerarMapaZeropaidPDF = async function() {
         const sz = stats(zeroList);
         const sw = stats(webroList);
 
-        const C_ZERO = "#334155";
-        const C_WEB = "#94a3b8";
-        const C_HEAD = "#1e293b";
-        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f8fafc";
+        // Cores do mapa: verde da marca nos cabeçalhos, vermelho para 0% pago e azul para entrada Webro.
+        const C_ZERO = "#dc2626";
+        const C_WEB = "#1d4ed8";
+        const C_HEAD = "#105436";
+        const BG_ZERO = "#fef2f2";
+        const BG_WEB = "#eff6ff";
+        const zebra = (i) => i % 2 === 0 ? "#fff" : "#f3f8f5";
         const ellipsisTd = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
         const dot = (color) => `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle;"></span>`;
 
         const chartSlots = monthKeys.map(k => ({ label: `${k.slice(5, 7)}/${k.slice(2, 4)}`, z: sz.months[k], w: sw.months[k] }));
+        // Começa no primeiro mês com venda em atraso; os meses vazios depois dele continuam no gráfico.
+        while (chartSlots.length && !(chartSlots[0].z + chartSlots[0].w)) chartSlots.shift();
         if (sz.older || sw.older) chartSlots.unshift({ label: "Antes", z: sz.older, w: sw.older });
         if (sz.noDate || sw.noDate) chartSlots.push({ label: "S/ data", z: sz.noDate, w: sw.noDate });
 
+        // Colunas empilhadas: 0% pago embaixo, entrada Webro em cima e o total no topo.
         const groupedBarChart = (slots) => {
-            const maxVal = Math.max(1, ...slots.map(s => Math.max(s.z, s.w)));
-            const W = 640, H = 150, padTop = 16, padBot = 20, padSide = 10;
+            const maxVal = Math.max(1, ...slots.map(s => s.z + s.w));
+            // Largura da coluna esquerda (mesma da tabela Por empreendimento): (1086 - 26 - 36) / 2.
+            const W = 512, H = 168, padTop = 18, padBot = 22, padSide = 10;
             const stepX = (W - padSide * 2) / Math.max(slots.length, 1);
-            const barW = Math.min(14, Math.max(6, stepX * 0.32));
+            const barW = Math.min(30, Math.max(12, stepX * 0.55));
+            const alt = H - padTop - padBot;
             let out = "";
             slots.forEach((s, i) => {
                 const cx = padSide + stepX * i + stepX / 2;
-                [[s.z, C_ZERO, -barW / 2 - 1], [s.w, C_WEB, barW / 2 + 1]].forEach(([v, color, off]) => {
-                    const x = cx + off;
-                    const h = (v / maxVal) * (H - padTop - padBot);
-                    const y = H - padBot - h;
-                    out += `<rect x="${x - barW / 2}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${v ? color : "#e2e8f0"}" rx="2"/>`;
-                    if (v) out += `<text x="${x}" y="${y - 3}" text-anchor="middle" font-size="7.5" font-weight="700" fill="#334155">${v}</text>`;
+                const x = cx - barW / 2;
+                let base = H - padBot;
+                [[s.z, C_ZERO], [s.w, C_WEB]].forEach(([v, color]) => {
+                    if (!v) return;
+                    const h = (v / maxVal) * alt;
+                    const y = base - h;
+                    out += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(h, 1)}" fill="${color}"/>`;
+                    if (h >= 12) out += `<text x="${cx}" y="${y + h / 2 + 3}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#fff">${v}</text>`;
+                    base = y;
                 });
-                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="7" fill="#64748b">${s.label}</text>`;
+                const total = s.z + s.w;
+                if (total) out += `<text x="${cx}" y="${base - 3}" text-anchor="middle" font-size="9" font-weight="800" fill="#0f172a">${total}</text>`;
+                else out += `<rect x="${x}" y="${H - padBot - 1}" width="${barW}" height="1" fill="#e2e8f0"/>`;
+                out += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="8.5" font-weight="600" fill="#475569">${s.label}</text>`;
             });
             return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;">
                 <line x1="0" y1="${H - padBot}" x2="${W}" y2="${H - padBot}" stroke="#e2e8f0" stroke-width="1.5"/>${out}
             </svg>`;
         };
 
-        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:4px 6px;font-size:8px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
-        const totalTd = (v, align) => `<td style="padding:5px 6px;border-top:2px solid #cbd5e1;text-align:${align || "center"};font-weight:800;color:${C_HEAD};">${v}</td>`;
+        const th = (label, align, extra) => `<th style="text-align:${align || "left"};padding:5px 7px;font-size:9px;font-weight:800;color:#fff;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;${extra || ""}">${label}</th>`;
+        const totalTd = (v, align, extra) => `<td style="padding:6px 7px;border-top:2px solid ${C_HEAD};text-align:${align || "center"};font-weight:800;color:${C_HEAD};${extra || ""}">${v}</td>`;
+        // Colunas 0% pago e entrada: fundo da cor da coluna em todas as linhas, alternando claro/escuro junto com a zebra.
+        const celZero = (v, i) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_ZERO};background:${i % 2 === 0 ? "#fdf5f5" : "#fae6e6"};">${v || "-"}</td>`;
+        const celWeb = (v, i) => `<td style="padding:5px 7px;text-align:center;font-weight:800;color:${C_WEB};background:${i % 2 === 0 ? "#f4f8ff" : "#e4eefc"};">${v || "-"}</td>`;
 
         const recencyTable = `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup><col style="width:46%"><col style="width:18%"><col style="width:18%"><col style="width:18%"></colgroup>
-                <thead><tr style="background:${C_HEAD};">${th("Quando comprou")}${th("0% pago", "center")}${th("Entrada", "center")}${th("Total", "center")}</tr></thead>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup><col style="width:40%"><col style="width:20%"><col style="width:20%"><col style="width:20%"></colgroup>
+                <thead><tr style="background:${C_HEAD};">${th("Dias em atraso")}${th(`${dot("#fca5a5")}0% pago`, "center")}${th(`${dot("#93c5fd")}Entrada`, "center")}${th("Total", "center")}</tr></thead>
                 <tbody>
-                    ${recencyDefs.map((r, i) => `<tr style="background:${zebra(i)};">
-                        <td style="padding:4px 6px;font-weight:700;color:#334155;">${esc(r.label)}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};">${sz.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;">${sw.recency[i]}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;">${sz.recency[i] + sw.recency[i]}</td>
+                    ${agingDefs.map((r, i) => `<tr style="background:${zebra(i)};">
+                        <td style="padding:5px 7px;font-weight:700;color:#1e293b;">${esc(r.label)}</td>
+                        ${celZero(sz.aging[i], i)}
+                        ${celWeb(sw.aging[i], i)}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${sz.aging[i] + sw.aging[i] || "-"}</td>
                     </tr>`).join("")}
-                    <tr style="background:#f1f5f9;">${totalTd("Total", "left")}${totalTd(zeroList.length)}${totalTd(webroList.length)}${totalTd(zeroList.length + webroList.length)}</tr>
+                    <tr style="background:#e7f6ee;">${totalTd("Total de títulos", "left")}${totalTd(sz.titles, "center", `color:${C_ZERO};`)}${totalTd(sw.titles, "center", `color:${C_WEB};`)}${totalTd(sz.titles + sw.titles)}</tr>
                 </tbody>
             </table>`;
 
@@ -60427,7 +61433,7 @@ window.gerarMapaZeropaidPDF = async function() {
             add(zeroList, "z");
             add(webroList, "w");
             return Object.values(map).map(r => ({ ...r, zc: r.z.cl.size, zt: r.z.t, wc: r.w.cl.size, wt: r.w.t }))
-                .sort((a, b) => (b.zc + b.wc) - (a.zc + a.wc) || (b.zt + b.wt) - (a.zt + a.wt));
+                .sort((a, b) => (b.zt + b.wt) - (a.zt + a.wt) || b.zt - a.zt);
         };
         const capRows = (rows, max, otherLabel) => {
             if (rows.length <= max) return rows;
@@ -60436,7 +61442,7 @@ window.gerarMapaZeropaidPDF = async function() {
             return rows.slice(0, max - 1).concat([{ id: "", name: `${otherLabel} (${rest.length})`, isOther: true, zc: sum("zc"), zt: sum("zt"), wc: sum("wc"), wt: sum("wt") }]);
         };
         const ccIdOf = (c) => (typeof getPrimaryCostCenter === "function" ? getPrimaryCostCenter(c.costCenterId) : c.costCenterId) || "N/D";
-        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 16, "OUTROS EMPREENDIMENTOS");
+        const empRows = capRows(combine(ccIdOf, c => ({ id: ccIdOf(c), name: empLabel(c.costCenterId) })), 10, "OUTROS EMPREENDIMENTOS");
         const brokerRows = capRows(combine(
             c => c.brokerId ? `id:${c.brokerId}` : (c.brokerName ? `n:${String(c.brokerName).trim().toUpperCase()}` : "sem"),
             c => ({
@@ -60444,31 +61450,29 @@ window.gerarMapaZeropaidPDF = async function() {
                 name: c.brokerName ? String(c.brokerName).trim().toUpperCase() : (c.brokerId ? `CREDOR ${c.brokerId}` : "SEM CORRETOR NO CONTRATO"),
                 isOther: !c.brokerId && !c.brokerName
             })
-        ), 16, "OUTROS CORRETORES");
+        ), 10, "OUTROS CORRETORES");
 
         const zt = sz.titles, wt = sw.titles;
+        // Só títulos: 0% pago, entrada e total.
         const splitTable = (rows, firstCols, firstHeads, emptyMsg) => `
-            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:8.5px;">
-                <colgroup>${firstCols}<col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:11%"></colgroup>
+            <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;">
+                <colgroup>${firstCols}<col style="width:14%"><col style="width:14%"><col style="width:14%"></colgroup>
                 <thead>
-                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1], "vertical-align:bottom;")).join("")}
-                        ${th(`${dot(C_ZERO)}0% pago`, "center", "border-left:1px solid #475569;")}${th("", "center")}
-                        ${th(`${dot(C_WEB)}Entrada`, "center", "border-left:1px solid #475569;")}${th("", "center")}</tr>
-                    <tr style="background:#334155;">${firstHeads.map(() => th("")).join("")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}
-                        ${th("Clientes", "center", "border-left:1px solid #475569;")}${th("Títulos", "center")}</tr>
+                    <tr style="background:${C_HEAD};">${firstHeads.map(h => th(h[0], h[1])).join("")}
+                        ${th(`${dot("#fca5a5")}0% pago`, "center")}
+                        ${th(`${dot("#93c5fd")}Entrada`, "center")}
+                        ${th("Total", "center")}</tr>
                 </thead>
                 <tbody>
                     ${rows.map((r, i) => `<tr style="background:${zebra(i)};">
                         ${r.cells}
-                        <td style="padding:4px 6px;text-align:center;font-weight:800;color:${C_ZERO};border-left:1px solid #e2e8f0;">${r.zc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:${C_ZERO};">${r.zt || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;font-weight:700;color:#64748b;border-left:1px solid #e2e8f0;">${r.wc || "-"}</td>
-                        <td style="padding:4px 6px;text-align:center;color:#64748b;">${r.wt || "-"}</td>
-                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 4}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
-                    <tr style="background:#f1f5f9;">
-                        <td colspan="${firstHeads.length}" style="padding:5px 6px;border-top:2px solid #cbd5e1;font-weight:800;color:${C_HEAD};">Total</td>
-                        ${totalTd(sz.clientsN)}${totalTd(zt)}${totalTd(sw.clientsN)}${totalTd(wt)}
+                        ${celZero(r.zt, i)}
+                        ${celWeb(r.wt, i)}
+                        <td style="padding:5px 7px;text-align:center;font-weight:800;color:#0f172a;">${(r.zt + r.wt) || "-"}</td>
+                    </tr>`).join("") || `<tr><td colspan="${firstHeads.length + 3}" style="padding:12px;text-align:center;color:#94a3b8;">${emptyMsg}</td></tr>`}
+                    <tr style="background:#e7f6ee;">
+                        <td colspan="${firstHeads.length}" style="padding:6px 7px;border-top:2px solid ${C_HEAD};font-weight:800;color:${C_HEAD};">Total de títulos</td>
+                        ${totalTd(zt, "center", `color:${C_ZERO};`)}${totalTd(wt, "center", `color:${C_WEB};`)}${totalTd(zt + wt)}
                     </tr>
                 </tbody>
             </table>`;
@@ -60490,38 +61494,42 @@ window.gerarMapaZeropaidPDF = async function() {
             "Sem corretores no contrato"
         );
 
-        const kpi = (label, value) => `
-            <div style="flex:1;min-width:0;padding:6px 10px;border-left:1px solid #e2e8f0;">
-                <div style="font-size:8px;font-weight:700;color:#64748b;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
-                <div style="font-size:16px;font-weight:800;color:#0f172a;margin-top:2px;white-space:nowrap;">${value}</div>
+        const kpi = (label, value, color) => `
+            <div style="flex:1;min-width:0;padding:8px 12px;border-left:1px solid rgba(15,23,42,0.08);">
+                <div style="font-size:9px;font-weight:800;color:#475569;letter-spacing:0.4px;text-transform:uppercase;white-space:nowrap;">${label}</div>
+                <div style="font-size:20px;font-weight:800;color:${color || "#0f172a"};margin-top:2px;white-space:nowrap;">${value}</div>
             </div>`;
-        const kpiGroup = (color, title, sub, s) => `
-            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:#fff;border:1px solid #e2e8f0;border-top:3px solid ${color};border-radius:8px;">
-                <div style="width:150px;flex-shrink:0;padding:6px 10px;display:flex;flex-direction:column;justify-content:center;">
-                    <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;letter-spacing:0.3px;">${dot(color)}${title}</div>
-                    <div style="font-size:8px;color:#64748b;margin-top:2px;">${sub}</div>
+        const kpiGroup = (color, bg, title, sub, s, extra) => `
+            <div style="flex:1;min-width:0;display:flex;align-items:stretch;background:${bg};border:1px solid ${color}33;border-left:6px solid ${color};border-radius:10px;">
+                <div style="width:190px;flex-shrink:0;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:12px;font-weight:800;color:${color};text-transform:uppercase;letter-spacing:0.3px;">${title}</div>
+                    <div style="font-size:9px;color:#475569;margin-top:2px;line-height:1.35;">${sub}</div>
+                    ${extra || ""}
                 </div>
-                ${kpi("Valor em atraso", fmtInt(s.value))}
-                ${kpi("Clientes", s.clientsN)}
-                ${kpi("Títulos", s.titles)}
-                ${kpi("Desde a venda", s.avgSaleLabel)}
+                ${kpi("Títulos", s.titles, color)}
+                ${kpi("Valor em atraso", "R$ " + fmtInt(s.value))}
+                ${kpi("Atraso médio", s.avgDelay + " dias")}
             </div>`;
         const quadro = (title, body, extra) => `
-            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
-                <div style="background:${C_HEAD};color:#fff;padding:6px 10px;font-weight:800;font-size:10px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
-                <div style="flex:1;min-height:0;padding:6px 8px;overflow:hidden;">${body}</div>
+            <div style="min-width:0;min-height:0;background:#fff;border:1px solid #d7e6dd;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;${extra || ""}">
+                <div style="background:${C_HEAD};color:#fff;padding:7px 12px;font-weight:800;font-size:11px;letter-spacing:0.4px;text-transform:uppercase;">${esc(title)}</div>
+                <div style="flex:1;min-height:0;padding:10px 12px;overflow:hidden;">${body}</div>
             </div>`;
 
-        const legend = `<div style="display:flex;gap:14px;justify-content:center;font-size:8px;font-weight:700;color:#475569;margin-bottom:2px;">
-            <span>${dot(C_ZERO)}0% pago</span><span>${dot(C_WEB)}Pagando entrada (boleto Webro)</span></div>`;
+        const legChip = (color, txt) => `<span style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;background:#fff;border:1.5px solid ${color};color:${color};font-size:10px;font-weight:800;"><span style="width:12px;height:12px;border-radius:3px;background:${color};display:inline-block;"></span>${txt}</span>`;
         const saleBand = `
-            <div style="display:flex;gap:12px;height:100%;align-items:stretch;">
-                <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;">
-                    <div style="font-size:8px;font-weight:800;color:#475569;text-transform:uppercase;text-align:center;">Vendas nos últimos 12 meses</div>
-                    ${legend}
-                    ${groupedBarChart(chartSlots)}
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:36px;height:100%;align-items:stretch;">
+                <div style="min-width:0;display:flex;flex-direction:column;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;">Títulos por mês da venda</div>
+                        <div style="display:flex;gap:8px;">${legChip(C_ZERO, "0% pago")}${legChip(C_WEB, "Entrada Webro")}</div>
+                    </div>
+                    <div style="flex:1;display:flex;align-items:flex-end;">${groupedBarChart(chartSlots)}</div>
                 </div>
-                <div style="width:330px;flex-shrink:0;">${recencyTable}</div>
+                <div style="min-width:0;">
+                    <div style="font-size:10px;font-weight:800;color:${C_HEAD};text-transform:uppercase;margin-bottom:8px;">Aging · títulos por dias em atraso</div>
+                    ${recencyTable}
+                </div>
             </div>`;
 
         const nowLabel = `${now.toLocaleDateString("pt-BR")} às ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
@@ -60531,46 +61539,84 @@ window.gerarMapaZeropaidPDF = async function() {
         container.style.cssText = "position:absolute;top:-9999px;left:-9999px;width:1122px;height:793px;background:#fff;padding:14px 18px;font-family:'Inter','Segoe UI',sans-serif;box-sizing:border-box;display:flex;flex-direction:column;";
         container.id = "mapa-zeropaid-pdf-container";
         container.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #e2e8f0;padding-bottom:8px;margin-bottom:8px;flex-shrink:0;">
+            <div style="display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg, #105436 0%, #1b8253 100%);border-radius:10px;padding:8px 14px;margin-bottom:8px;flex-shrink:0;">
                 <div style="display:flex;align-items:center;gap:12px;">
-                    <img src="${logoUrl}" alt="Logo" style="height:32px;object-fit:contain;">
+                    <img src="${logoUrl}" alt="Logo" style="height:34px;object-fit:contain;background:#fff;border-radius:6px;padding:2px;">
                     <div>
-                        <h1 style="margin:0;color:#0f172a;font-size:16px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
-                        <p style="margin:2px 0 0 0;color:#64748b;font-size:10px;">Posição em: ${nowLabel} · Atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
+                        <h1 style="margin:0;color:#fff;font-size:17px;font-weight:800;">Mapa de início de contrato — 0% pago e entrada Webro</h1>
+                        <p style="margin:2px 0 0 0;color:#d1fae5;font-size:10px;">Posição em ${nowLabel} · em número de títulos · atraso médio: 0% pago ${sz.avgDelay} dias · entrada Webro ${sw.avgDelay} dias</p>
                     </div>
                 </div>
+                <div style="text-align:right;color:#fff;">
+                    <div style="font-size:9px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;color:#d1fae5;">Total de títulos</div>
+                    <div style="font-size:24px;font-weight:800;line-height:1;">${sz.titles + sw.titles}</div>
+                </div>
             </div>
-            <div style="display:flex;gap:8px;margin-bottom:8px;flex-shrink:0;">
-                ${kpiGroup(C_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz)}
-                ${kpiGroup(C_WEB, "Pagando entrada", "Entrada em boleto Webro em aberto", sw)}
+            <div style="display:flex;gap:10px;margin-bottom:10px;flex-shrink:0;">
+                ${kpiGroup(C_ZERO, BG_ZERO, "0% pago", "Sem nenhuma receita no contrato", sz, "")}
+                ${kpiGroup(C_WEB, BG_WEB, "Entrada Webro", "Entrada em boleto Webro em aberto", sw, "")}
             </div>
-            ${quadro("Quando o cliente comprou o lote", saleBand, "flex-shrink:0;height:196px;margin-bottom:8px;")}
-            <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            ${quadro("Venda e atraso dos títulos", saleBand, "flex-shrink:0;height:250px;margin-bottom:10px;")}
+            <div style="flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                 ${quadro("Por empreendimento", empTable)}
                 ${quadro("Corretor que fez a venda", brokerTable)}
             </div>
         `;
 
-        document.body.appendChild(container);
-        await yieldUI();
-        const canvas = await html2canvas(container, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false });
         const { jsPDF } = window.jspdf;
         const pdf = new jsPDF("l", "mm", "a4");
-        const imgData = canvas.toDataURL("image/jpeg", 0.92);
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
-        const props = pdf.getImageProperties(imgData);
-        const ratio = props.width / props.height;
-        let w = pdfWidth;
-        let h = pdfWidth / ratio;
-        if (h > pdfHeight) { h = pdfHeight; w = pdfHeight * ratio; }
-        pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
+        const fotografar = async (el, novaPagina) => {
+            document.body.appendChild(el);
+            await yieldUI();
+            // Fonte que não termina de carregar travava o html2canvas: espera 2 s e segue sem ela.
+            let liberouFonte = false;
+            const fonts = document.fonts;
+            if (fonts && fonts.ready) {
+                const fontePronta = await Promise.race([
+                    fonts.ready.then(() => true).catch(() => true),
+                    new Promise(r => setTimeout(() => r(false), 2000))
+                ]);
+                if (!fontePronta) {
+                    try {
+                        Object.defineProperty(fonts, "ready", { configurable: true, get() { return Promise.resolve(); } });
+                        liberouFonte = true;
+                    } catch (e) {}
+                }
+            }
+            let canvas;
+            // O html2canvas copia o documento inteiro antes de desenhar. Com a fila, as abas e as tabelas do Integra
+            // abertas, cada página demorava muito (e passava do prazo). Copia só o quadro do PDF e o <head> (estilos).
+            const soOQuadro = (n) => {
+                if (!n || n === el || el.contains(n) || (n.contains && n.contains(el))) return false;
+                if (document.head && document.head.contains(n)) return false;
+                return true;
+            };
+            try {
+                canvas = await comPrazo(html2canvas(el, { scale: 1.5, useCORS: true, backgroundColor: "#ffffff", logging: false, imageTimeout: 4000, ignoreElements: soOQuadro }), 20000);
+            } finally {
+                if (liberouFonte) {
+                    try { delete fonts.ready; } catch (e) {}
+                }
+                if (el.parentNode) document.body.removeChild(el);
+            }
+            const imgData = canvas.toDataURL("image/jpeg", 0.92);
+            const props = pdf.getImageProperties(imgData);
+            const ratio = props.width / props.height;
+            let w = pdfWidth;
+            let h = pdfWidth / ratio;
+            if (h > pdfHeight) { h = pdfHeight; w = pdfHeight * ratio; }
+            if (novaPagina) pdf.addPage("a4", "l");
+            pdf.addImage(imgData, "JPEG", (pdfWidth - w) / 2, (pdfHeight - h) / 2, w, h);
+        };
+        await fotografar(container, false);
+        // Só a página do resumo: a lista analítica dos clientes saiu do PDF.
         pdf.save("Mapa_Clientes_0_Pago.pdf");
-        if (container.parentNode) document.body.removeChild(container);
-        restoreBtn();
     } catch (e) {
         console.error("Erro ao gerar mapa 0% pago:", e);
-        alert("Ocorreu um erro ao gerar o PDF. Verifique o console.");
+        alert("Ocorreu um erro ao gerar o PDF. " + ((e && e.message) || ""));
+    } finally {
         if (container && container.parentNode) document.body.removeChild(container);
         restoreBtn();
     }

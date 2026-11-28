@@ -119,12 +119,12 @@ const OrcamentoForecastApp = {
 
   async salvarNuvem() {
     const emp = this.state.companyId;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    // Forecast no Supabase (orcamento_forecast, id "emp_<companyId>", via window.DadosEngenharia).
+    const D = window.DadosEngenharia;
     const pack = this.pacote(emp, false);
-    if (!emp || !pack || !fx || !db || typeof fx.setDoc !== "function") return;
+    if (!emp || !pack || !D) return;
     try {
-      await fx.setDoc(fx.doc(db, "orcamento_forecast", "emp_" + emp), {
+      await D.gravarForecast(emp, {
         savedAt: Date.now(),
         atual: pack.atual,
         versoes: pack.versoes
@@ -133,13 +133,11 @@ const OrcamentoForecastApp = {
   },
 
   async carregarNuvem(emp) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!emp || !fx || !db || typeof fx.getDoc !== "function") return;
+    const D = window.DadosEngenharia;
+    if (!emp || !D) return;
     this.state.carregando = true;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "orcamento_forecast", "emp_" + emp));
-      const data = snap && typeof snap.data === "function" ? snap.data() : null;
+      const data = await D.lerForecast(emp);
       if (data && data.versoes) {
         const local = this.pacote(emp, false);
         const localAt = local && local.savedAt || 0;

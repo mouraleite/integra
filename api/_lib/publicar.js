@@ -10,11 +10,11 @@
    no cadastro de usuários. Precisa da variável GITHUB_PUBLICAR_TOKEN na Vercel (token do GitHub
    com permissão "Contents: Read and write" só no repositório integra). */
 const https = require("https");
-const { conferirAcesso } = require("../../lib/integra-auth");
+const { conferirAcesso, cadastrosAtivos } = require("../../lib/integra-auth");
+const { tabela } = require("../../lib/dados-servidor");
 
 const REPO = "mouraleite/integra";
-const BRANCHES_TESTE = ["develop", "Marcelo", "lucelia"];
-const FIRESTORE = "https://firestore.googleapis.com/v1/projects/crm-gestao-mldu/databases/(default)/documents";
+const BRANCHES_TESTE = ["develop", "Marcelo", "lucelia", "isabella_garcia", "israel"];
 
 function responder(res, status, data) {
   res.statusCode = status;
@@ -74,49 +74,15 @@ function github(metodo, caminho, dados) {
   return pedir("https://api.github.com/repos/" + REPO + caminho, { method: metodo, headers }, corpo);
 }
 
-// Lê um documento do Firestore (formato REST) e devolve um objeto simples.
-function valorFs(v) {
-  if (!v || typeof v !== "object") return null;
-  if ("stringValue" in v) return v.stringValue;
-  if ("integerValue" in v) return Number(v.integerValue);
-  if ("doubleValue" in v) return Number(v.doubleValue);
-  if ("booleanValue" in v) return v.booleanValue;
-  if ("nullValue" in v) return null;
-  if ("timestampValue" in v) return v.timestampValue;
-  if ("mapValue" in v) {
-    const o = {};
-    const f = (v.mapValue && v.mapValue.fields) || {};
-    Object.keys(f).forEach((k) => { o[k] = valorFs(f[k]); });
-    return o;
-  }
-  if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(valorFs);
-  return null;
-}
-
-async function lerDoc(caminho) {
-  const r = await pedir(FIRESTORE + "/" + caminho, { method: "GET", headers: { Accept: "application/json" } });
-  if (r.status !== 200 || !r.json || !r.json.fields) return null;
-  return valorFs({ mapValue: { fields: r.json.fields } });
-}
-
 function normal(s) {
   return String(s || "").trim().toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+// Administrador = algum cadastro ativo com esse e-mail (public.usuarios) tem o perfil ADMINISTRADOR.
 async function ehAdministrador(email) {
-  const doc = await lerDoc("config/crm_users");
-  if (!doc) return false;
-  let lista = doc.list || doc.crm_users || "[]";
-  if (typeof lista === "string") {
-    try { lista = JSON.parse(lista); } catch (e) { lista = []; }
-  }
-  if (!Array.isArray(lista)) return false;
-  const alvo = String(email || "").toLowerCase().trim();
-  const u = lista.find((x) => x && (String(x.email || "").toLowerCase().trim() === alvo
-    || String(x.login_email || "").toLowerCase().trim() === alvo));
-  if (!u) return false;
-  if (normal(u.status || "ATIVO") === "INATIVO") return false;
-  return normal(u.profile_name) === "ADMINISTRADOR";
+  const ativos = await cadastrosAtivos(email);
+  if (!ativos || !ativos.length) return false;
+  return ativos.some((u) => normal(u.perfil) === "ADMINISTRADOR");
 }
 
 function hojeBrasil() {
@@ -153,7 +119,8 @@ module.exports = async function handler(req, res) {
   const id = String((body && body.solicitacao) || "").trim();
   if (!/^[A-Za-z0-9_-]{6,80}$/.test(id)) return responder(res, 400, { error: "Solicitação inválida." });
 
-  const sol = await lerDoc("solicitacoes_producao/" + id);
+  let sol = null;
+  try { sol = await tabela("solicitacoes_producao").obter(id); } catch (e) { return responder(res, 502, { error: "Não consegui ler a solicitação no banco." }); }
   if (!sol) return responder(res, 404, { error: "Solicitação não encontrada." });
   if (sol.status !== "pendente") return responder(res, 409, { error: "Esta solicitação já foi decidida (" + sol.status + ")." });
   const branch = String(sol.branch || "");
@@ -167,13 +134,26 @@ module.exports = async function handler(req, res) {
     return responder(res, 409, { error: "O que foi pedido não está mais na branch " + branch + ". Peça para o desenvolvedor encaminhar de novo." });
   }
 
+  // Publicar só até um ponto: "ate" é uma alteração do próprio pedido; vai ela e todas as anteriores.
+  const ate = String((body && body.ate) || "").trim();
+  let alvo = sha;
+  if (ate && ate !== sha) {
+    if (!/^[0-9a-f]{40}$/.test(ate)) return responder(res, 400, { error: "Ponto de publicação inválido." });
+    const cmpAte = await github("GET", "/compare/" + ate + "..." + sha);
+    if (cmpAte.status !== 200 || !cmpAte.json || cmpAte.json.status !== "ahead") {
+      return responder(res, 400, { error: "O ponto escolhido não faz parte deste pedido." });
+    }
+    alvo = ate;
+  }
+  const parcial = alvo !== sha;
+
   const quem = String(sol.solicitante && (sol.solicitante.nome || sol.solicitante.email) || "desenvolvedor");
-  const mensagem = "Junta " + branch + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")";
+  const mensagem = "Junta " + branch + (parcial ? " até " + alvo.slice(0, 7) : "") + " na produção (pedido de " + quem + ", aprovado por " + acesso.email + ")";
   // 1) junta na main
-  let merge = await github("POST", "/merges", { base: "main", head: sha, commit_message: mensagem });
+  let merge = await github("POST", "/merges", { base: "main", head: alvo, commit_message: mensagem });
   // Conflito com a produção: se depois do pedido a branch só recebeu atualizações com a produção
   // (commits de "merge", nenhuma alteração nova do desenvolvedor), usa a branch já atualizada.
-  if (merge.status === 409 && cmp.json.status === "ahead") {
+  if (!parcial && merge.status === 409 && cmp.json.status === "ahead") {
     // Alterações do desenvolvedor (commits que não são "merge") que ainda não estão na produção:
     // precisam ser exatamente as mesmas no pedido e na ponta da branch.
     const proprios = async (ref) => {
@@ -239,5 +219,5 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  return responder(res, 200, { publicado: true, versao, commit: commitFinal, branch, testes });
+  return responder(res, 200, { publicado: true, versao, commit: commitFinal, branch, testes, parcial, ate: alvo });
 };

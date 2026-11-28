@@ -412,6 +412,10 @@ const ConfigUsersApp = {
       ] }]
     },
     {
+      name: "Projetos", icon: "folder", key: "mod_projetos", direct: true,
+      submodules: []
+    },
+    {
       name: "Vistoria", icon: "camera", key: "mod_vistoria", direct: true,
       submodules: []
     },
@@ -438,7 +442,9 @@ const ConfigUsersApp = {
             { id: "zero_paid", label: "Clientes 0% Pago" },
             { id: "notificacoes", label: "Notificações" },
             { id: "followup_cnd", label: "Follow-up CND", permBase: "sub_fin_cr_followup_cnd" },
+            { id: "followup_cobranca", label: "Follow-up Cobrança", permBase: "sub_fin_cr_followup_cobranca" },
             { id: "recebimentos_webro", label: "Recebimentos Webro" },
+            { id: "remessa_avulsa", label: "Remessa avulsa", permBase: "sub_fin_cr_remessa_avulsa" },
             { id: "scod", label: "Scod" },
             { id: "relatorios", label: "Relatórios" },
             { id: "configuracoes", label: "Configurações" }
@@ -451,6 +457,7 @@ const ConfigUsersApp = {
             { id: "gerar_pagamento", label: "Gerar Pagamento", permBase: "sub_fin_cp_gerar_pagamento" },
             { id: "cartao_credito", label: "Cartão de crédito", permBase: "sub_fin_cp_cartao_credito" },
             { id: "titulos_incompletos", label: "Títulos incompletos", permBase: "sub_fin_cp_titulos_incompletos" },
+            { id: "consultar_titulo", label: "Consultar título", permBase: "sub_fin_cp_consultar_titulo" },
             { id: "rydoo", label: "Rydoo", permBase: "sub_fin_cp_rydoo" }
           ]
         },
@@ -470,6 +477,10 @@ const ConfigUsersApp = {
             { id: "mutuo", label: "Mútuo" },
             { id: "resultado_caixa", label: "Resultado de caixa" }
           ]
+        },
+        {
+          name: "Antecipações", key: "sub_fin_antec",
+          actions: [{ id: "antecipacoes", label: "Antecipações" }]
         },
         {
           name: "Repactuação", key: "sub_fin_repac",
@@ -2030,7 +2041,7 @@ const ConfigUsersApp = {
       if (typeof window.crmPintarTesteConta === "function") window.crmPintarTesteConta();
       } catch (e) {
           console.error("[ConfigUsers] save", e);
-          alert("Não foi possível salvar o usuário no Firebase. " + (e && e.message ? e.message : "Tente de novo."));
+          alert("Não foi possível salvar o usuário no banco. " + (e && e.message ? e.message : "Tente de novo."));
       }
   },
 

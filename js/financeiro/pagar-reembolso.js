@@ -99,10 +99,9 @@ const PagarReembolsoApp = {
     return typeof window.hasCrmPerm === "function" && window.hasCrmPerm("sub_fin_cr_pagar_reembolso_editar") === true;
   },
 
+  // Tabela custas_judiciais no Supabase (área cobrança/jurídico): listar / gravar(id, obj, {merge}) / excluir.
   fb() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.collection || !fc.getDocs || !fc.doc || !fc.setDoc) return null;
-    return fc;
+    return window.DadosCobranca ? window.DadosCobranca.tabela("custas_judiciais") : null;
   },
 
   init() {
@@ -188,13 +187,11 @@ const PagarReembolsoApp = {
       return;
     }
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "custas_judiciais"));
+      const snap = await fc.listar();
       const itens = [];
       const usados = [];
       const testes = [];
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        data.id = d.id;
+      snap.forEach((data) => {
         if (this.testeExcluido(data)) {
           testes.push(data.id);
           return;
@@ -202,8 +199,8 @@ const PagarReembolsoApp = {
         if (data.documentNumber) usados.push(String(data.documentNumber));
         itens.push(data);
       });
-      if (testes.length && fc.deleteDoc) {
-        await Promise.all(testes.map((id) => fc.deleteDoc(fc.doc(window.firebaseDb, "custas_judiciais", id)).catch(() => {})));
+      if (testes.length) {
+        await Promise.all(testes.map((id) => fc.excluir(id).catch(() => {})));
       }
       this.documentosUsados = usados;
       await this.completarProcessos(itens);
@@ -374,7 +371,7 @@ const PagarReembolsoApp = {
       if (cliente) patch.customerName = cliente;
       if (!Object.keys(patch).length) return;
       try {
-        await fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), patch, { merge: true });
+        await fc.gravar(item.id, patch, { merge: true });
       } catch (e) {}
     }));
   },
@@ -545,7 +542,7 @@ const PagarReembolsoApp = {
       const proc = g[0].processoConsulta || "sem número no cadastro";
       return "Título " + g[0].saleId + " · " + this.money(total) + " · processo " + proc;
     });
-    const texto = "Liberar " + grupos.length + " título(s) a pagar no Sienge?\n\n" + linhas.join("\n") + "\n\nCredor 2244 · documento REEM · vencimento em 10 dias · PIX.";
+    const texto = "Liberar " + grupos.length + " título(s) a pagar no Sienge?\n\n" + linhas.join("\n") + "\n\nCredor 2244 · documento REEM · vencimento em 10 dias · depósito Itaú.";
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(texto) : confirm(texto);
     if (!ok) return;
     this.liberando = true;
@@ -645,24 +642,85 @@ const PagarReembolsoApp = {
     if (st) st.cachedCostCenters = list || [];
   },
 
-  rateio(ccId) {
+  /* Parcerias da Parametrização de parceiros. Se a tela ainda não foi aberta, lê do banco sem gravar nada. */
+  async parcerias() {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (!PP) return [];
+    if (Array.isArray(PP.items) && PP.items.length) return PP.items;
+    let lista = [];
+    try { lista = JSON.parse(localStorage.getItem(PP.STORAGE_KEY || "crm_parcerias_v1") || "[]") || []; } catch (e) { lista = []; }
+    if (window.DadosNucleo) {
+      try {
+        // config/partner_parametrizations: montado da tabela parcerias ({ list: texto JSON }).
+        const snap = await window.DadosNucleo.lerConfig("partner_parametrizations");
+        if (snap.exists()) {
+          const raw = snap.data().list;
+          const nuvem = typeof raw === "string" ? JSON.parse(raw) : raw;
+          if (Array.isArray(nuvem) && nuvem.length) lista = nuvem;
+        }
+      } catch (e) {
+        console.warn("[PagarReembolso] parcerias do banco indisponíveis, usando cache local.", e);
+      }
+    }
+    return (Array.isArray(lista) ? lista : []).map((p) => (typeof PP.normalizeItem === "function" ? PP.normalizeItem(JSON.parse(JSON.stringify(p))) : p));
+  },
+
+  /* Rateio da Parametrização de parceiros (aba Obras e centros + Rateio DFC), como na prestação de contas:
+     só os centros da obra marcados em "Entra na conta"; o % da conta 2.03.02.11 vai para o centro do parceiro
+     e o restante para o centro da obra. Centro de outra empresa fica de fora (o Sienge recusa).
+     Sem parceria cadastrada para a obra, a conta fora da parceria ou sociedade: 100% no centro do título. */
+  async rateio(ccId, companyId) {
     const digits = String(ccId || "").replace(/\D/g, "");
     const base = parseInt(digits, 10);
+    const sozinho = [{ costCenterId: base, percentage: 100 }];
     const PP = window.ParametrizacaoParceiroApp;
-    const PC = window.PrestacaoContasApp;
-    const obra = PP && typeof PP.obraFromCc === "function" ? PP.obraFromCc(digits) : digits.slice(0, -2);
-    let map = null;
-    if (PC && typeof PC.padraoObra === "function") map = PC.padraoObra(obra);
-    const ids = map ? Object.keys(map) : [];
-    if (!ids.length) return [{ costCenterId: base, percentage: 100 }];
-    let acc = 0;
-    return ids.map((id, i) => {
-      const pct = i === ids.length - 1
-        ? Math.round((100 - acc) * 10000) / 10000
-        : Math.round((Number(map[id]) || 0) * 10000) / 10000;
-      acc += pct;
-      return { costCenterId: parseInt(id, 10), percentage: pct };
-    }).filter((x) => x.costCenterId && x.percentage > 0);
+    if (!PP || !digits) return sozinho;
+    const so = (id) => String(id == null ? "" : id).replace(/\D/g, "");
+    const obraCod = typeof PP.obraFromCc === "function" ? PP.obraFromCc(digits) : digits.slice(0, -2);
+    const lista = await this.parcerias();
+    let part = null;
+    let obra = null;
+    lista.some((p) => (p.obras || []).some((o) => {
+      const tem = (o.costCenters || []).some((c) => so(c.id) === digits);
+      if (tem || String(o.code) === obraCod) { part = p; obra = o; }
+      return tem;
+    }));
+    if (!part || !obra || (typeof PP.isSociedade === "function" && PP.isSociedade(part))) return sozinho;
+    if (typeof PP.accountEntersPartnership === "function" && !PP.accountEntersPartnership(part, obra, this.CONTA)) return sozinho;
+    let pct = typeof PP.partnerPctForObra === "function" ? Number(PP.partnerPctForObra(part, obra, this.CONTA)) : NaN;
+    if (!Number.isFinite(pct)) pct = Number(obra.defaultPartnerShare) || 0;
+    if (!(pct > 0)) return sozinho;
+    pct = Math.min(100, pct);
+    const catalogo = typeof PP.catalogoCentros === "function" ? PP.catalogoCentros() : new Map();
+    const empresa = String(companyId || "");
+    const centros = (obra.costCenters || []).filter((c) => {
+      const id = so(c.id);
+      if (!id || c.inAccount === false) return false;
+      if (id === digits) return true;
+      const cat = catalogo.get(id);
+      const dono = cat && typeof PP.empresaDoCentro === "function" ? PP.empresaDoCentro(cat) : "";
+      return !empresa || !dono || dono === empresa;
+    });
+    if (!centros.some((c) => so(c.id) === digits)) return sozinho;
+    const papel = (c) => (typeof PP.papelDoCentro === "function" ? PP.papelDoCentro(c) : "obra");
+    const parceiros = centros.filter((c) => papel(c) === "terrenista");
+    const daObra = centros.filter((c) => papel(c) !== "terrenista");
+    if (!parceiros.length) return sozinho;
+    const map = {};
+    parceiros.forEach((c) => { map[so(c.id)] = pct / parceiros.length; });
+    if (pct < 100) {
+      if (!daObra.length) return sozinho;
+      daObra.forEach((c) => { map[so(c.id)] = (100 - pct) / daObra.length; });
+    }
+    const ids = Object.keys(map).filter((id) => map[id] > 0);
+    if (!ids.length) return sozinho;
+    const peso = ids.reduce((s, id) => s + Number(map[id]), 0);
+    // Em centésimos de ponto: a soma dá 10000 certinho e a sobra do arredondamento vai para o maior.
+    const partes = ids.map((id) => ({ id: id, c: Math.floor((Number(map[id]) / peso) * 10000) }));
+    const sobra = 10000 - partes.reduce((s, p) => s + p.c, 0);
+    partes.sort((a, b) => b.c - a.c);
+    partes[0].c += sobra;
+    return partes.filter((p) => p.c > 0).map((p) => ({ costCenterId: parseInt(p.id, 10), percentage: p.c / 100 }));
   },
 
   foldUnit(s) {
@@ -719,7 +777,7 @@ const PagarReembolsoApp = {
     const notes = this.observacao(grupo);
     const dep = await this.departamentoTesouraria();
     await this.garantirCentros();
-    const rateio = this.rateio(ccId);
+    const rateio = await this.rateio(ccId, companyId);
     await this.completarUnidades([primeiro]);
     const CJ = window.CustasJudiciaisApp;
     const nomeUnidade = (CJ && typeof CJ.limparUnidade === "function" ? CJ.limparUnidade(primeiro.unitName, ccId) : String(primeiro.unitName || "").trim());
@@ -754,29 +812,52 @@ const PagarReembolsoApp = {
     };
     let billId = "";
     let created = null;
+    const avisos = [];
+    const textoRateio = (lista) => lista.map((r) => r.costCenterId + " " + String(r.percentage).replace(".", ",") + "%").join(" · ");
     try {
-      let ultimoErro = null;
-      for (let c = 0; c < candidatos.length; c++) {
-        payload.units = [{ unitId: String(candidatos[c]), costCenterId: parseInt(ccId, 10), percentage: 100, principal: "S" }];
-        try {
-          created = await this.siengeJson("/bills", {
-            method: "POST",
-            headers: {
-              Authorization: this.siengeAuth(),
-              Accept: "application/json",
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-          });
-          ultimoErro = null;
-          break;
-        } catch (erroUnidade) {
-          ultimoErro = erroUnidade;
-          const msg = (erroUnidade && erroUnidade.message) || "";
-          if (!/n[aã]o est[aá] cadastrad/i.test(msg) || c === candidatos.length - 1) throw erroUnidade;
+      const criar = async () => {
+        let ultimoErro = null;
+        for (let c = 0; c < candidatos.length; c++) {
+          payload.units = [{ unitId: String(candidatos[c]), costCenterId: parseInt(ccId, 10), percentage: 100, principal: "S" }];
+          try {
+            created = await this.siengeJson("/bills", {
+              method: "POST",
+              headers: {
+                Authorization: this.siengeAuth(),
+                Accept: "application/json",
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify(payload)
+            });
+            return;
+          } catch (erroUnidade) {
+            ultimoErro = erroUnidade;
+            const msg = (erroUnidade && erroUnidade.message) || "";
+            if (!/n[aã]o est[aá] cadastrad/i.test(msg) || c === candidatos.length - 1) throw erroUnidade;
+          }
         }
+        if (ultimoErro) throw ultimoErro;
+      };
+      try {
+        await criar();
+      } catch (erroRateio) {
+        // Rateio recusado (plano financeiro não liberado num dos centros, centro de outra empresa ou soma ≠ 100%):
+        // tenta de novo com 100% no centro de custo do título e avisa qual rateio foi recusado.
+        const msg = (erroRateio && erroRateio.message) || "";
+        const doRateio = /par[aâ]metro 665|n[aã]o est[aá] autorizado|vinculados a empresa|percentage|percentual/i.test(msg);
+        const tentado = textoRateio(payload.budgetCategories.map((b) => ({ costCenterId: b.costCenterId, percentage: b.percentage })));
+        const unico = parseInt(ccId, 10);
+        if (!doRateio || (payload.budgetCategories.length === 1 && payload.budgetCategories[0].costCenterId === unico)) {
+          throw new Error(msg + " (rateio enviado: " + tentado + ")");
+        }
+        payload.budgetCategories = [{ costCenterId: unico, paymentCategoriesId: this.CONTA, percentage: 100 }];
+        try {
+          await criar();
+        } catch (e2) {
+          throw new Error(((e2 && e2.message) || e2) + " (rateio enviado: " + unico + " 100%; antes: " + tentado + ")");
+        }
+        avisos.push("Lançado 100% no centro de custo " + unico + ": o Sienge recusou o rateio " + tentado + " (" + msg + ").");
       }
-      if (ultimoErro) throw ultimoErro;
       billId = created.body && (created.body.id || created.body.billId);
       if (!billId) {
         const loc = created.res.headers.get("Location") || created.res.headers.get("location") || "";
@@ -793,14 +874,13 @@ const PagarReembolsoApp = {
       });
       throw e;
     }
-    const avisos = [];
     try {
-      await this.enviarPix(billId);
+      await this.enviarDepositoItau(billId);
     } catch (e) {
-      avisos.push("PIX não gravado: " + ((e && e.message) || e));
-      this.auditar("erro", "Título " + billId + " gerado, mas o PIX não foi gravado. Título a receber " + primeiro.saleId + ".", {
+      avisos.push("Depósito Itaú não gravado: " + ((e && e.message) || e));
+      this.auditar("erro", "Título " + billId + " gerado, mas a forma de pagamento (depósito Itaú) não foi gravada. Título a receber " + primeiro.saleId + ".", {
         action: "Atualizar título", method: "PATCH",
-        endpoint: "/bills/" + billId + "/installments/payment-information/pix",
+        endpoint: "/bills/" + billId + "/installments/payment-information/bank-transfer",
         billId: billId, companyId: companyId, cliente: primeiro.customerName || "", erro: (e && e.message) || String(e)
       });
     }
@@ -832,6 +912,54 @@ const PagarReembolsoApp = {
     } catch (e) {
       return "";
     }
+  },
+
+  /* Depósito na conta Itaú do credor 2244 (forma 3 no Sienge). Os títulos com a mesma conta saem
+     num único pagamento no banco, em vez de um PIX por título. */
+  async enviarDepositoItau(billId) {
+    const r = await this.siengeJson("/creditors/" + this.CREDOR + "/bank-informations?limit=100&offset=0");
+    const corpo = r.body || {};
+    const contas = corpo.results || corpo.data || (Array.isArray(corpo) ? corpo : []);
+    const itau = contas.filter((b) => String(b.bank || b.bankCode || "").replace(/\D/g, "").padStart(3, "0") === "341");
+    const bank = itau.find((b) => String(b.defaultFlag || "").trim().toUpperCase() === "S") || itau[0];
+    if (!bank) throw new Error("O credor " + this.CREDOR + " não tem conta no Itaú cadastrada no Sienge.");
+    const espera = (ms) => new Promise((res) => setTimeout(res, ms));
+    let list = [];
+    for (let t = 1; t <= 6 && !list.length; t++) {
+      try {
+        const inst = await this.siengeJson("/bills/" + encodeURIComponent(billId) + "/installments");
+        const body = inst.body || {};
+        list = body.results || body.data || (Array.isArray(body) ? body : []);
+      } catch (e) {}
+      if (!list.length && t < 6) await espera(1200 * t);
+    }
+    if (!list.length) throw new Error("A parcela do título " + billId + " ainda não apareceu.");
+    const installmentId = list[0].installmentNumber || list[0].id || 1;
+    const ag = String(bank.agency || bank.branchNumber || "").trim();
+    const [agNum, agDig] = ag.indexOf("-") >= 0 ? ag.split("-", 2) : [ag, ""];
+    const conta = String(bank.accountNumber || bank.account || "").trim();
+    const digito = String(bank.checkDigit || bank.accountDigit || "").trim();
+    const tipoConta = String(bank.accountType || "C").trim().toUpperCase().slice(0, 1);
+    const favorecido = String(bank.nameOfRecipient || bank.beneficiaryName || "COLENCI ADVOGADOS").trim();
+    await this.siengeJson("/bills/" + encodeURIComponent(billId) + "/installments/" + encodeURIComponent(installmentId) + "/payment-information/bank-transfer", {
+      method: "PATCH",
+      headers: {
+        Authorization: this.siengeAuth(),
+        Accept: "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        paymentTypeId: 3,
+        beneficiaryAccountType: tipoConta === "P" ? "P" : "C",
+        beneficiaryBankCode: "341",
+        beneficiaryBankBranchNumber: agNum,
+        beneficiaryBankBranchDigit: agDig || "",
+        beneficiaryAccountNumber: conta,
+        beneficiaryAccountDigit: digito,
+        beneficiaryName: favorecido,
+        notes: "Banco: 341-Banco Itaú Unibanco\nAgência: " + ag + "\nConta: " + conta + (digito ? "-" + digito : "") + "\nFavorecido: " + favorecido
+      })
+    });
   },
 
   async enviarPix(billId) {
@@ -892,7 +1020,7 @@ const PagarReembolsoApp = {
     if (!fc) return;
     const quando = new Date().toISOString();
     const u = (window.AppState && AppState.currentUser) || {};
-    await Promise.all(grupo.map((item) => fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), {
+    await Promise.all(grupo.map((item) => fc.gravar(item.id, {
       billId: String(billId),
       documentNumber: doc,
       notes: notes,
@@ -949,7 +1077,7 @@ const PagarReembolsoApp = {
           if (info.pago && fc && item.id) {
             const dados = { reemPago: true, reemConferidoEm: new Date().toISOString() };
             if (info.pagoEm) dados.pagoEm = info.pagoEm;
-            fc.setDoc(fc.doc(window.firebaseDb, "custas_judiciais", item.id), dados, { merge: true }).catch(() => {});
+            fc.gravar(item.id, dados, { merge: true }).catch(() => {});
           }
         } catch (e) {
           item.reemPago = false;

@@ -11,7 +11,7 @@
     { key: "tvoContrato", label: "Prazo máximo legal (TVO Contrato)" }
   ];
   const DATAS = COLUNAS.filter((c) => c.key !== "id");
-  const NUVEM = { colecao: "engenharia_acompanhamento", doc: "obras" };
+  // Nuvem: tabela engenharia_acompanhamento no Supabase (uma linha por empreendimento), via window.DadosEngenharia.
   /* Carga inicial da planilha "Previsão término obras" (aba Ver 26-08-26), último dia de cada mês.
      Só entra quando ainda não existe nada salvo na nuvem. "idem" no Lazer = mesma data da Infraestrutura. */
   const CARGA_INICIAL = [
@@ -237,13 +237,13 @@
     },
 
     async salvarNuvem(at) {
-      const fx = window.firebaseCollections;
-      const db = window.firebaseDb;
-      if (!this.podeEditar() || !fx || !db || typeof fx.setDoc !== "function") return;
+      const DE = window.DadosEngenharia;
+      if (!this.podeEditar() || !DE) return;
       // Sem ter lido a nuvem, não grava por cima (evita apagar as obras com uma cópia local vazia ou antiga).
       if (this.nuvemEstado !== "ok") return;
       try {
-        await fx.setDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc), { linhas: this.linhas, savedAt: at || Date.now() });
+        // Substitui a lista inteira (como o setDoc do doc "obras"); o savedAt passa a ser o atualizado_em do banco.
+        await DE.salvarAcompanhamento(this.linhas);
       } catch (e) {
         console.warn("[Acompanhamento de obra] Não foi possível salvar na nuvem:", e);
       }
@@ -259,18 +259,19 @@
         if (this.nuvemEstado === "lendo" || this.nuvemEstado === "ok") return;
         this.nuvemEstado = "lendo";
       }
-      const fx = window.firebaseCollections;
-      const db = window.firebaseDb;
-      if (!fx || !db || typeof fx.getDoc !== "function") {
+      const DE = window.DadosEngenharia;
+      if (!DE) {
         if (n < 120) setTimeout(() => this.carregarNuvem(n + 1), 500);
-        else this.falhaNuvem(new Error("Firebase não ficou pronto"));
+        else this.falhaNuvem(new Error("Banco de dados não ficou pronto"));
         return;
       }
       let snap;
       let erro = null;
       for (let i = 0; i < 3 && !snap; i++) {
         try {
-          snap = await fx.getDoc(fx.doc(db, NUVEM.colecao, NUVEM.doc));
+          // null = ainda não há linhas (como snap.exists() falso). { linhas, savedAt } como o doc "obras".
+          const doc = await DE.lerAcompanhamento();
+          snap = { exists: () => !!doc, data: () => doc || undefined };
         } catch (e) {
           erro = e;
           await new Promise((r) => setTimeout(r, 1500 * (i + 1)));

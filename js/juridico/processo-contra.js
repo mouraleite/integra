@@ -67,10 +67,14 @@ const ProcessoContraApp = {
     return typeof window.hasCrmPerm === "function" && window.hasCrmPerm("sub_jur_geral_processo_contra_editar") === true;
   },
 
-  fb() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.collection || !fc.getDocs || !fc.doc || !fc.setDoc) return null;
-    return fc;
+  // Credores gravados pelo cron (sienge_creditors no Supabase, área financeiro).
+  tabelaCredores() {
+    return window.DadosFinanceiro ? window.DadosFinanceiro.tabela("sienge_creditors") : null;
+  },
+
+  // Processos e motivos no Supabase (tabelas processos_contra e processos_contra_motivos).
+  dados() {
+    return window.DadosCobranca || null;
   },
 
   empresaGerida(id) {
@@ -640,26 +644,20 @@ const ProcessoContraApp = {
   },
 
   async lerCredoresFirebase() {
-    const fc = this.fb();
-    if (!fc) return [];
+    const tab = this.tabelaCredores();
+    if (!tab) return [];
     const itens = [];
     const vistos = new Set();
-    for (let i = 0; i < ["sienge_creditors", "creditors"].length; i++) {
-      const nome = ["sienge_creditors", "creditors"][i];
-      try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, nome));
-        if (snap && typeof snap.forEach === "function") {
-          snap.forEach((d) => {
-            const data = (d && d.data && d.data()) || {};
-            const c = this.normalizarCredor(Object.assign({ id: d.id }, data));
-            if (!c || !c.id || c.id.charAt(0) === "_" || !c.name || vistos.has(c.id)) return;
-            vistos.add(c.id);
-            itens.push(c);
-          });
-        }
-        if (itens.length) break;
-      } catch (e) {}
-    }
+    // A coleção legada "creditors" (fallback antigo) não foi para o Supabase: só sienge_creditors.
+    try {
+      const linhas = await tab.listar();
+      linhas.forEach((data) => {
+        const c = this.normalizarCredor(data);
+        if (!c || !c.id || c.id.charAt(0) === "_" || !c.name || vistos.has(c.id)) return;
+        vistos.add(c.id);
+        itens.push(c);
+      });
+    } catch (e) {}
     return itens;
   },
 
@@ -1409,20 +1407,14 @@ const ProcessoContraApp = {
   },
 
   async carregar() {
-    const fc = this.fb();
+    const D = this.dados();
     const box = document.getElementById("pc-lista");
-    if (!fc) {
-      if (box) box.innerHTML = `<p class="cj-nota">Não consegui ler os processos: o Firebase não está disponível.</p>`;
+    if (!D) {
+      if (box) box.innerHTML = `<p class="cj-nota">Não consegui ler os processos: o banco de dados não está disponível.</p>`;
       return;
     }
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, "processos_contra"));
-      const itens = [];
-      snap.forEach((d) => {
-        const data = d.data() || {};
-        data.id = d.id;
-        itens.push(data);
-      });
+      const itens = await D.tabela("processos_contra").listar();
       itens.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
       this.itens = itens;
       this.sincronizarFila();
@@ -1626,22 +1618,17 @@ const ProcessoContraApp = {
 
   async salvarCatalogo() {
     this.gravarMotivosLocal();
-    const fc = this.fb();
-    if (!fc) throw new Error("O Firebase não está disponível.");
-    await fc.setDoc(fc.doc(window.firebaseDb, "processos_contra_motivos", "lista"), {
-      itens: this.motivos.map((m) => ({ id: m.id, nome: m.nome })),
-      updatedAt: new Date().toISOString()
-    });
+    const D = this.dados();
+    if (!D) throw new Error("O banco de dados não está disponível.");
+    // Troca o catálogo inteiro numa transação (uma linha por motivo; ordem = posição na lista).
+    await D.salvarMotivosProcessoContra(this.motivos.map((m) => ({ id: m.id, nome: m.nome })));
   },
 
   async carregarMotivosNuvem() {
-    const fc = this.fb();
-    if (!fc) return;
+    const D = this.dados();
+    if (!D) return;
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "processos_contra_motivos", "lista"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const data = existe ? (snap.data() || {}) : null;
-      const itens = data && Array.isArray(data.itens) ? data.itens : null;
+      const itens = await D.lerMotivosProcessoContra();
       if (!itens || !itens.length) {
         if (!this.motivos.length) this.motivos = this.MOTIVOS_PADRAO.map((m) => ({ id: m.id, nome: m.nome }));
         await this.salvarCatalogo();
@@ -1945,15 +1932,15 @@ const ProcessoContraApp = {
     if (valor == null || valor <= 0) { alert("Informe o valor da causa."); return; }
     if (!escolhido) { alert("Escolha o motivo na lista."); return; }
     if (!this.temPdf()) { alert("Anexe o PDF do processo aberto. Ele é obrigatório."); return; }
-    const fc = this.fb();
-    if (!fc) { alert("O Firebase não está disponível."); return; }
+    const D = this.dados();
+    if (!D) { alert("O banco de dados não está disponível."); return; }
     const u = (window.AppState && AppState.currentUser) || {};
     const id = "pc_" + Date.now();
     this.salvando = true;
     this.render();
     try {
       const anexos = await this.subirAnexos(id);
-      await fc.setDoc(fc.doc(window.firebaseDb, "processos_contra", id), {
+      await D.tabela("processos_contra").gravar(id, {
         parteTipo: this.parte.tipo,
         parteId: String(this.parte.id || ""),
         parteNome: this.parte.nome || "",
@@ -1989,10 +1976,10 @@ const ProcessoContraApp = {
       ? await window.mouraConfirm("Excluir este processo contra?")
       : confirm("Excluir este processo?");
     if (!ok) return;
-    const fc = this.fb();
-    if (!fc || !fc.deleteDoc) return;
+    const D = this.dados();
+    if (!D) return;
     try {
-      await fc.deleteDoc(fc.doc(window.firebaseDb, "processos_contra", id));
+      await D.tabela("processos_contra").excluir(id);
       await this.carregar();
     } catch (e) {
       alert("Não consegui excluir: " + ((e && e.message) || e));

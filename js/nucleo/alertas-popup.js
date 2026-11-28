@@ -13,6 +13,16 @@ const AlertasPopupApp = {
         <p style="color:#64748b;font-size:0.82rem;">Na tela real também aparecem Lembrar Mais Tarde e Marcar como Concluído neste Mês.</p>`
     },
     {
+      id: "remessa-avulsa",
+      nome: "Boletos avulsos para gerar",
+      quando: "No login, nos dias em que o batimento das 7h da Remessa avulsa encontra parcelas do mês sem boleto. Não abre no primeiro dia útil do mês (dia da remessa mensal). Lembrar mais tarde esconde até a próxima entrada; Abrir Remessa avulsa não mostra mais naquele dia.",
+      logica: "O batimento das 7h lê o extrato do mês: parcelas sem boleto e sem recebimento, situação Normal, condição Parcelas Mensais ou Parcela Acordo, sem financiamento em aberto. O back office gera o boleto avulso no Sienge e envia por e-mail na Remessa avulsa, pela caixa e com o texto da aba Configurações.",
+      quem: "Operador de cobrança back office com acesso à Remessa avulsa. Administrador não recebe.",
+      titulo: "Boletos avulsos para gerar",
+      corpo: `<p>O batimento das 7h encontrou <b>12 parcela(s)</b> deste mês sem boleto gerado.</p>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real há Lembrar mais tarde e Abrir Remessa avulsa.</p>`
+    },
+    {
       id: "vistoria-resultado",
       nome: "Vistoria pedida na ficha foi aceita",
       quando: "Assim que o back office aceita a vistoria. Fica até a pessoa fechar.",
@@ -21,6 +31,17 @@ const AlertasPopupApp = {
       titulo: "Vistoria finalizada",
       corpo: `<p>O back office aceitou a vistoria que você pediu pela ficha do cliente.</p>
         <div class="apa-item"><strong>Cliente exemplo · QD 04 LT 18</strong><span>Água: sim · Energia: sim · Estágio: alvenaria</span></div>`
+    },
+    {
+      id: "followup-gestor",
+      nome: "Pedido de atualização do gestor",
+      quando: "No login e assim que o administrador envia o pedido. Responder depois esconde até a próxima entrada no Integra. Some quando o operador responde.",
+      logica: "O administrador clica em Pedir atualização na ficha do cliente e escreve as considerações. O pedido leva o resumo do contrato daquele momento: valores pagos, vencidos e a vencer, percentual pago, construção (com o lote do KMZ, se houver), Nex, renegociações, PMP e último contato. Nas Ocorrências e Promessas entra a nota Follow up do Gestor, e a resposta do operador fica como resposta dessa nota. Essas notas não contam como contato com o cliente. Os títulos pendentes aparecem nos Insights da home, e Contas a Receber > Follow-up Cobrança lista todos os pedidos.",
+      quem: "O operador responsável pelo título, escolhido pelo administrador no pedido (vem preenchido com o operador da fila). Administrador não recebe.",
+      titulo: "O gestor gostaria de uma atualização detalhada deste caso",
+      corpo: `<p>Pedido de Administrador exemplo · 24/11/2026 08:40</p>
+        <div class="apa-item"><strong>Cliente exemplo · Título 13444</strong><span>Pagos 26 parc. R$ 24.914,58 · Vencidos 3 parc. R$ 5.289,12 · 27% pago</span><span>Nex enviada em 10/10/2026 · 2 renegociações · PMP 33 dias</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real há Visualizar Extrato, Abrir ficha, o campo da resposta e Enviar resposta.</p>`
     },
     {
       id: "vistoria",
@@ -101,9 +122,9 @@ const AlertasPopupApp = {
     {
       id: "ponto-sexta",
       nome: "Pendências no cartão de ponto",
-      quando: "No login, na sexta-feira. Se a sexta for feriado, no dia útil anterior. Só nesse dia. Ciente dispensa o restante do dia.",
-      logica: "Pede para checar as pendências no cartão de ponto do time. Não abre nos outros dias da semana.",
-      quem: "israel@mouraleite.com.br.",
+      quando: "No login, na sexta-feira. Se a sexta for feriado, no dia útil anterior. Só nesse dia. Ciente dispensa o restante do dia, inclusive depois de Ctrl+F5 ou em outro computador.",
+      logica: "Pede para checar as pendências no cartão de ponto do time. Não abre nos outros dias da semana. O ciente fica gravado no banco do Integra.",
+      quem: "israel@mouraleite.com.br, só na própria conta. Testando como outra conta, não abre.",
       titulo: "Pendências no cartão de ponto",
       corpo: `<p>Cheque as pendências no cartão de ponto do time.</p>
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente.</p>`
@@ -111,9 +132,9 @@ const AlertasPopupApp = {
     {
       id: "ponto-fechamento",
       nome: "Validar o ponto do time",
-      quando: "No login, no dia 15. Se o dia 15 cair em feriado ou fim de semana, no próximo dia útil. Só nesse dia. Ciente dispensa o restante do dia.",
-      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Não fica aberto nos dias seguintes.",
-      quem: "israel@mouraleite.com.br.",
+      quando: "No login, no dia 15. Se o dia 15 cair em feriado ou fim de semana, no próximo dia útil. Só nesse dia. Ciente dispensa o restante do dia, inclusive depois de Ctrl+F5 ou em outro computador.",
+      logica: "Pede para validar o ponto do time. O período fechado vai do dia 15 do mês anterior até o dia 14 do mês do fechamento. Não fica aberto nos dias seguintes. O ciente fica gravado no banco do Integra.",
+      quem: "israel@mouraleite.com.br, só na própria conta. Testando como outra conta, não abre.",
       titulo: "Validar o ponto do time",
       corpo: `<p>Valide o ponto do time. O mês fechou de 15/10/2026 até 14/11/2026.</p>
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente. Se a sexta cair no mesmo dia, os dois textos vêm no mesmo aviso.</p>`
@@ -131,14 +152,28 @@ const AlertasPopupApp = {
         <p style="color:#64748b;font-size:0.82rem;">Na tela real o botão é Ciente.</p>`
     },
     {
+      id: "webro-repasse",
+      nome: "Repasse Webro pendente",
+      quando: "No login, quando há título com a tag Pendente Repasse Webro. Ciente dispensa o restante do dia.",
+      logica: "A baixa Webro registrada em Ocorrências e Promessas tem 3 dias úteis para o repasse entrar. Passado o prazo, o título fica com a tag Pendente Repasse Webro. Quem está com a fila de cobrança aberta atualiza a lista a cada 2 minutos; título que sai da tag sai da lista. O botão Checar repasse abre Recebimentos Webro, na aba Repasse pendente.",
+      quem: "Analista de Pagadoria I.",
+      titulo: "Repasse Webro pendente",
+      faixa: true,
+      corpo: `<p>Há títulos pendentes de baixa na Webro: a Webro recebeu e o repasse não entrou no prazo de 3 dias úteis. Checar repasse.</p>
+        <div class="apa-item"><strong>Título 16752 · Cliente exemplo</strong><span>14704 - P-06 · baixa na Webro em 06/11/2026</span></div>
+        <p style="color:#64748b;font-size:0.82rem;">Na tela real os botões são Ciente e Checar repasse.</p>`
+    },
+    {
       id: "esteira",
       nome: "Etapas vencidas na esteira",
       quando: "Todo dia às 08:00, enquanto a etapa continuar vencida. Se a pessoa entra depois, abre na hora. Fechar dispensa só aquele dia, inclusive depois de atualizar a página.",
-      logica: "Lista só financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. Esses mesmos casos ficam em destaque na lista de financiamentos em aberto.",
+      logica: "Lista financiamento em aberto cuja etapa atual da esteira está com o prazo estourado. No mesmo aviso, mostra cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte. O batimento das 7h grava essas parcelas; se ainda não houver batimento do dia, a consulta é feita na hora.",
       quem: "Administrador e operador de cobrança back office.",
       titulo: "Etapas vencidas na esteira",
       corpo: `<p>Estes financiamentos estão com a etapa atual fora do prazo.</p>
-        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>`
+        <div class="apa-item"><strong>Bruna Alves · título 6526</strong><span>Validar minuta · atrasada</span></div>
+        <p style="margin-top:12px;">Clientes de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte.</p>
+        <div class="apa-item"><strong>Erick Henrique · título 9336</strong><span>8 parcelas vencidas · 1 a vencer neste mês · 1 a vencer no mês seguinte</span></div>`
     },
     {
       id: "documentos",
@@ -148,6 +183,28 @@ const AlertasPopupApp = {
       quem: "Quem gerou o documento, nos dias úteis 5 e 6. Do 7º dia útil em diante, a cada dois dias úteis, todas as pessoas do mesmo perfil de quem gerou, inclusive ela.",
       titulo: "Documento pendente no Sienge",
       corpo: `<p>O documento Cessão de direitos de ELISABETE FALCI, título 6526, foi emitido em 15/10/2026 e não foi concluído no Sienge ainda.</p>`
+    },
+    {
+      id: "titulos-monitorados",
+      nome: "Título acompanhado vencido",
+      quando: "No login, depois que a fila do dia carrega, enquanto o título tiver parcela vencida. Uma vez por pessoa e por dia, ao fechar.",
+      logica: "A lista de títulos acompanhados fica no código (hoje só o 16955, Casa SPA). Eles continuam na inadimplência; o aviso abre quando algum deles tem parcela vencida na fila do dia.",
+      quem: "Operador de cobrança back office.",
+      titulo: "Título acompanhado está vencido",
+      corpo: `<p>Este título está na inadimplência e precisa de contato do back office.</p>
+        <p style="margin:0 0 4px 0;"><strong>Título 16955</strong> · Cliente exemplo · CASA SPA</p>
+        <div class="apa-item"><strong>Parcela 6 · venceu em 16/11/2026</strong><span>9 dia(s) em atraso</span><span style="color:#b91c1c;font-weight:700;">R$ 6.000,00</span></div>`
+    },
+    {
+      id: "mudanca-endereco",
+      nome: "Mudança de endereço do Integra",
+      quando: "Ao abrir o Integra no endereço antigo (crm-gestao.vercel.app), uma vez por dia em cada navegador, até a virada. No dia da virada passa a bloquear o endereço antigo e levar para o novo.",
+      logica: "Só age no endereço antigo de produção; bolhas de teste e o endereço novo não mostram. A chave BLOQUEAR em js/nucleo/aviso-endereco.js é ligada depois da carga final dos dados.",
+      quem: "Todos os usuários.",
+      titulo: "O Integra vai mudar de endereço",
+      corpo: `<p>A partir de <strong>segunda-feira, 30/11/2026</strong>, o Integra passa a funcionar neste endereço:</p>
+        <div class="apa-item"><strong>integra-mouraleite.vercel.app</strong></div>
+        <p><strong>Até lá, continue usando este endereço normalmente.</strong> Salve o endereço novo nos favoritos.</p>`
     },
     {
       id: "repactuacao",
@@ -166,21 +223,113 @@ const AlertasPopupApp = {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
+  /* ---------- Liga/desliga ----------
+     A lista dos pop-ups desligados fica em config/popups_desligados ({ ids: [...] }) e numa cópia no navegador,
+     para o aviso já saber na entrada. Cada pop-up que respeita a chave chama window.PopupAtivo(id) antes de abrir
+     sozinho (a prévia desta tela continua abrindo). Sem nada gravado, vale DESLIGADOS_PADRAO. */
+  DESLIGADOS_PADRAO: ["lotes"],
+  // Pop-ups que já consultam a chave. Os demais aparecem como "Sempre ligado".
+  COM_CHAVE: ["lotes", "fechamento-pagadoria", "remessa-avulsa", "titulos-incompletos", "webro-repasse", "documentos", "esteira", "ponto-sexta", "ponto-fechamento", "home-office"],
+  CACHE: "crm_popups_desligados_v1",
+  _desligados: null,
+  _carregando: null,
+
+  desligados() {
+    if (!this._desligados) {
+      let ids = null;
+      try { ids = JSON.parse(localStorage.getItem(this.CACHE) || "null"); } catch (e) {}
+      this._desligados = new Set(Array.isArray(ids) ? ids : this.DESLIGADOS_PADRAO);
+    }
+    return this._desligados;
+  },
+
+  ativo(id) {
+    return !this.desligados().has(String(id));
+  },
+
+  guardarCache() {
+    try { localStorage.setItem(this.CACHE, JSON.stringify([...this.desligados()])); } catch (e) {}
+  },
+
+  async esperarBanco() {
+    for (let i = 0; i < 40; i++) {
+      if (window.DadosNucleo && typeof window.DadosNucleo.lerConfig === "function") return "sb";
+      const fc = window.firebaseCollections;
+      if (window.firebaseDb && fc && fc.getDoc && fc.doc) return "fb";
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return "";
+  },
+
+  async carregar() {
+    if (this._carregando) return this._carregando;
+    this._carregando = (async () => {
+      try {
+        const banco = await this.esperarBanco();
+        let snap = null;
+        if (banco === "sb") snap = await window.DadosNucleo.lerConfig("popups_desligados");
+        else if (banco === "fb") snap = await window.firebaseCollections.getDoc(window.firebaseCollections.doc(window.firebaseDb, "config", "popups_desligados"));
+        else return;
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        const ids = existe ? ((snap.data() || {}).ids) : null;
+        this._desligados = new Set(Array.isArray(ids) ? ids.map(String) : this.DESLIGADOS_PADRAO);
+        this.guardarCache();
+      } catch (e) {
+        // Antes do login a leitura pode ser recusada: tenta de novo mais tarde (vale a cópia do navegador).
+        console.warn("[Alertas pop-up] leitura do liga/desliga", e);
+        this._carregando = null;
+        this._tentativas = (this._tentativas || 0) + 1;
+        if (this._tentativas < 6) setTimeout(() => this.carregar(), 15000);
+      }
+    })();
+    return this._carregando;
+  },
+
+  async alternar(id, ligar) {
+    const set = this.desligados();
+    if (ligar) set.delete(String(id)); else set.add(String(id));
+    this.guardarCache();
+    this.abrir();
+    try {
+      const banco = await this.esperarBanco();
+      const dados = { ids: [...set], atualizadoEm: new Date().toISOString(), por: (window.currentUser && (window.currentUser.email || window.currentUser.name)) || "" };
+      if (banco === "sb") await window.DadosNucleo.gravarConfig("popups_desligados", dados);
+      else if (banco === "fb") await window.firebaseCollections.setDoc(window.firebaseCollections.doc(window.firebaseDb, "config", "popups_desligados"), dados);
+      else throw new Error("banco indisponível");
+    } catch (e) {
+      alert("Não consegui gravar no banco do Integra. A mudança vale só neste navegador por enquanto.");
+    }
+  },
+
   abrir() {
     const root = document.getElementById("alertas-popup-root");
     if (!root) return;
-    const linhas = this.itens.map((item) => `<tr>
+    const linhas = this.itens.map((item) => {
+      const temChave = this.COM_CHAVE.indexOf(item.id) >= 0;
+      const ligado = !temChave || this.ativo(item.id);
+      const chave = temChave
+        ? `<label class="apa-chave" title="${ligado ? "Ligado: abre sozinho pela regra" : "Desligado: não abre sozinho"}">
+            <input type="checkbox" ${ligado ? "checked" : ""} onchange="AlertasPopupApp.alternar('${item.id}', this.checked)">
+            <span class="apa-chave-trilho"></span><span class="apa-chave-txt">${ligado ? "Ligado" : "Desligado"}</span></label>`
+        : `<span class="apa-chave-fixo">Sempre ligado</span>`;
+      return `<tr class="${ligado ? "" : "is-desligado"}">
       <td class="apa-nome">${this.esc(item.nome)}</td>
       <td>${this.esc(item.quando)}</td>
       <td>${this.esc(item.logica)}</td>
       <td>${this.esc(item.quem)}</td>
+      <td class="apa-situacao">${chave}</td>
       <td class="apa-acoes">
         <button type="button" class="tvig-ico" title="Visualizar" onclick="AlertasPopupApp.visualizar('${item.id}')">
           <i data-lucide="eye" style="width:15px;height:15px;"></i>
         </button>
       </td>
-    </tr>`).join("");
-    root.innerHTML = `<p class="apa-lead">Cada linha é um pop-up que abre sozinho quando a regra abaixo se cumpre. Visualizar mostra o aviso como a pessoa recebe, sem gravar ciente e sem disparar a regra.</p>
+    </tr>`;
+    }).join("");
+    if (!this._lidoNaTela) {
+      this._lidoNaTela = true;
+      this.carregar().then(() => { if (document.getElementById("alertas-popup-root")) this.abrir(); });
+    }
+    root.innerHTML = `<p class="apa-lead">Cada linha é um pop-up que abre sozinho quando a regra abaixo se cumpre. Visualizar mostra o aviso como a pessoa recebe, sem gravar ciente e sem disparar a regra. A coluna Situação liga ou desliga o pop-up para todos os usuários.</p>
       <div style="overflow:auto;">
         <table class="apa-tabela">
           <thead>
@@ -189,6 +338,7 @@ const AlertasPopupApp = {
               <th>Quando abre</th>
               <th>Lógica</th>
               <th>Quem recebe</th>
+              <th class="apa-situacao">Situação</th>
               <th class="apa-acoes">Ações</th>
             </tr>
           </thead>
@@ -198,9 +348,36 @@ const AlertasPopupApp = {
     if (window.lucide && lucide.createIcons) lucide.createIcons();
   },
 
-  visualizar(id) {
+  /** Faixa no topo da tela enquanto a prévia real está aberta: diz para quem é e que nada é gravado. */
+  faixaPrevia(item) {
+    const antiga = document.getElementById("apa-previa-faixa");
+    if (antiga) antiga.remove();
+    const faixa = document.createElement("div");
+    faixa.id = "apa-previa-faixa";
+    faixa.className = "apa-previa-faixa";
+    faixa.textContent = "Prévia (nada é gravado) · Para: " + item.quem;
+    document.body.appendChild(faixa);
+    setTimeout(() => { if (faixa.parentNode) faixa.remove(); }, 8000);
+  },
+
+  async visualizar(id) {
     const item = this.itens.find((row) => row.id === id);
     if (!item) return;
+    // Prévia real: o próprio módulo do pop-up registra em window.PopupPrevias a função que abre o aviso
+    // de verdade, com dados de exemplo e sem gravar. Módulo sob demanda é carregado antes.
+    if (item.grupo && typeof window.crmCarregarGrupoSobDemanda === "function") {
+      try { await window.crmCarregarGrupoSobDemanda(item.grupo); } catch (e) {}
+    }
+    const previa = window.PopupPrevias && window.PopupPrevias[id];
+    if (typeof previa === "function") {
+      try {
+        await previa();
+        this.faixaPrevia(item);
+        return;
+      } catch (e) {
+        console.warn("[Alertas pop-up] prévia real falhou, mostrando o resumo:", e);
+      }
+    }
     const antigo = document.getElementById("apa-preview");
     if (antigo) antigo.remove();
     const pop = document.createElement("div");
@@ -224,3 +401,6 @@ const AlertasPopupApp = {
 };
 
 window.AlertasPopupApp = AlertasPopupApp;
+/** true = o pop-up pode abrir sozinho. Usado pelos módulos antes de abrir o aviso automático. */
+window.PopupAtivo = function (id) { return AlertasPopupApp.ativo(id); };
+AlertasPopupApp.carregar();
