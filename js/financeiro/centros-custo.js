@@ -348,7 +348,7 @@ const CentrosCustoApp = {
         gravouNuvem = true;
       } catch (e) {
         console.error("[CentrosCusto] gravar conta de parceria", e);
-        alert("Não consegui gravar a conta de parceria no Firebase (" + (e.message || e) + "). Tente salvar de novo.");
+        alert("Não consegui gravar a conta de parceria na nuvem (" + (e.message || e) + "). Tente salvar de novo.");
       }
       if (gravouNuvem) {
         CentrosCustoState.customFields[key] = custom;
@@ -484,28 +484,23 @@ const CentrosCustoApp = {
   },
 
   async gravarContaParceria(ccId, conta) {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc) throw new Error("Firebase indisponível.");
+    if (!window.DadosFinanceiro) throw new Error("Supabase indisponível.");
     const limpa = conta ? JSON.parse(JSON.stringify({
       id: conta.id || "", numero: conta.numero || "", nome: conta.nome || "", banco: conta.banco || "", agencia: conta.agencia || ""
     })) : null;
-    const at = Date.now();
-    await fc.setDoc(fc.doc(window.firebaseDb, this.CONTA_COLLECTION, String(ccId)), {
-      cc_id: String(ccId), conta: limpa, updatedAt: at, updatedBy: this.usuarioAtual()
-    });
-    return at;
+    // cc_conta_parceria no Supabase: devolve o updatedAt gravado (ms; o gatilho usa o horário do servidor).
+    return window.DadosFinanceiro.gravarContaParceria(ccId, limpa, this.usuarioAtual());
   },
 
-  /** Lê as contas do Firebase e aplica no mapa local; envia para o Firebase as que só existem neste navegador. */
+  /** Lê as contas do Supabase (cc_conta_parceria) e aplica no mapa local; envia as que só existem neste navegador. */
   async carregarContasParceria(opts) {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs) return {};
+    if (!window.DadosFinanceiro) return {};
     let remoto = {};
     try {
-      const snap = await fc.getDocs(fc.collection(window.firebaseDb, this.CONTA_COLLECTION));
-      snap.forEach((d) => { remoto[d.id] = d.data() || {}; });
+      const lista = await window.DadosFinanceiro.tabela(this.CONTA_COLLECTION).listar();
+      lista.forEach((d) => { const id = String(d.id); const o = Object.assign({}, d); delete o.id; remoto[id] = o; });
     } catch (e) {
-      console.warn("[CentrosCusto] contas de parceria no Firebase:", e);
+      console.warn("[CentrosCusto] contas de parceria no Supabase:", e);
       return {};
     }
     const parse = window.parseCentrosCustoCustomMap || ((r) => { try { return JSON.parse(r || "{}") || {}; } catch (e) { return {}; } });
@@ -578,12 +573,10 @@ const CentrosCustoApp = {
     if (!sel) return;
     const cc = CentrosCustoState.costCenters.find(c => String(c.id) === String(id));
     const companyId = cc && (cc.idCompany || cc.companyId);
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDoc) {
+    if (window.DadosFinanceiro) {
       try {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, this.CONTA_COLLECTION, String(id)));
-        if (snap.exists()) {
-          const r = snap.data() || {};
+        const r = await window.DadosFinanceiro.tabela(this.CONTA_COLLECTION).obter(String(id));
+        if (r) {
           const rec = CentrosCustoState.customFields[String(id)] || (CentrosCustoState.customFields[String(id)] = { cc_id: String(id) });
           if (Number(r.updatedAt || 0) >= Number(rec.conta_parceria_at || 0)) {
             rec.conta_parceria = r.conta || null;

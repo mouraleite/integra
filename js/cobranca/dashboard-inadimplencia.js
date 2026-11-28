@@ -59,22 +59,21 @@ const DashboardInadimplencia = (function() {
 
   async function carregarDados() {
     try {
-      if (window.firebaseCollections && window.firebaseDb) {
-        const snapRef = window.firebaseCollections.collection(window.firebaseDb, 'inadimplencia_snapshots');
-        const q = window.firebaseCollections.query(snapRef, window.firebaseCollections.orderBy("date", "asc"));
-        const fbDocs = await window.firebaseCollections.getDocs(q);
+      if (window.DadosCobranca) {
+        // Supabase: tabela inadimplencia_snapshots (data_json já vem como objeto).
+        const lista = await window.DadosCobranca.tabela('inadimplencia_snapshots').listar({ ordem: ["date", "asc"] });
         snapshots = [];
-        fbDocs.forEach(d => {
-          const data = d.data();
+        lista.forEach(data => {
+          delete data.id; // o d.data() do Firestore não trazia o id
           if (data.total_value > 1000) {
             snapshots.push(data);
           }
         });
       } else {
-        console.warn('Firebase não inicializado para carregar snapshots');
+        console.warn('Camada de dados não inicializada para carregar snapshots');
       }
     } catch (e) {
-      console.error('Falha na requisição dos snapshots do Firebase', e);
+      console.error('Falha na requisição dos snapshots do Supabase', e);
     }
   }
 
@@ -267,14 +266,14 @@ const DashboardInadimplencia = (function() {
       ? listOrMetrics
       : sprintCarteiraMetrics(listOrMetrics);
     if (!metrics || (!metrics.clients && !metrics.titles)) return;
-    if (!window.firebaseCollections || !window.firebaseDb) return;
+    if (!window.DadosCobranca) return;
     const fonte = origem === "relatorio" ? "relatorio" : "fila";
     const dateStr = todayIsoLocal();
-    const docRef = window.firebaseCollections.doc(window.firebaseDb, "inadimplencia_snapshots", dateStr);
+    const tabSnap = window.DadosCobranca.tabela("inadimplencia_snapshots");
     try {
-      const existing = await window.firebaseCollections.getDoc(docRef);
-      if (existing && existing.exists()) {
-        const prev = existing.data() || {};
+      const existing = await tabSnap.obter(dateStr);
+      if (existing) {
+        const prev = existing || {};
         const temSprint = prev.sprint_value != null && prev.sprint_titles != null;
         if (temSprint && fonte !== "relatorio") {
           console.warn(`[Sprint] Base ${dateStr} mantida. A montagem da fila não substitui a carteira já gravada.`);
@@ -285,7 +284,8 @@ const DashboardInadimplencia = (function() {
         const prevTitles = Number(prev.sprint_titles) || 0;
         const carteiraMaior = (prevClients > 0 && metrics.clients > prevClients * 1.2)
           || (prevTitles > 0 && metrics.titles > prevTitles * 1.2);
-        if (publicado && carteiraMaior) {
+        const antigoIncompleto = prevTitles > 0 && metrics.titles > prevTitles * 1.5;
+        if (publicado && carteiraMaior && !antigoIncompleto) {
           console.warn(`[Sprint] Base ${dateStr} mantida (${prevClients} clientes / ${prevTitles} títulos). O relatório novo (${metrics.clients} clientes / ${metrics.titles} títulos) é outra carteira.`);
           return;
         }
@@ -308,7 +308,7 @@ const DashboardInadimplencia = (function() {
       total_count: metrics.titles,
       source_count: metrics.titles
     };
-    await window.firebaseCollections.setDoc(docRef, payload, { merge: true });
+    await tabSnap.gravar(dateStr, payload, { merge: true });
   }
 
   function clientDelay(c) {
@@ -1925,6 +1925,52 @@ const DashboardInadimplencia = (function() {
     }
   }
 
+  /** Empresas que responderam na carga da fila de hoje (as que falharam ficam de fora). null se não souber. */
+  async function empresasQueResponderam() {
+    if (Array.isArray(window._filaEmpresasRespondidas) && window._filaEmpresasRespondidas.length) return window._filaEmpresasRespondidas;
+    try {
+      // Supabase: ficha do dia na sienge_defaulters_history (companyIds = empresas que responderam na carga).
+      if (!window.DadosCobranca || typeof window.DadosCobranca.lerCacheDia !== "function") return null;
+      const hoje = typeof window.localDateStr === "function" ? window.localDateStr(new Date()) : new Date().toISOString().slice(0, 10);
+      const ficha = await window.DadosCobranca.lerCacheDia(hoje);
+      const ids = ficha ? ficha.companyIds : null;
+      return Array.isArray(ids) && ids.length ? ids.map(Number) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function filaCargaIncompleta(fila, respondidas) {
+    const contagem = {};
+    const valor = {};
+    (fila || []).forEach((b) => {
+      const id = Number(b && b.companyId);
+      if (!Number.isFinite(id)) return;
+      contagem[id] = (contagem[id] || 0) + 1;
+      valor[id] = (valor[id] || 0) + (Number(b.overdueValue != null ? b.overdueValue : b.value) || 0);
+    });
+    let esperadas = [];
+    try {
+      if (typeof getConfiguredInternalCompanyIds === "function") esperadas = getConfiguredInternalCompanyIds();
+    } catch (e) {}
+    if (!esperadas.length) esperadas = [1, 2, 3, 6, 13, 20, 32, 36];
+    if ((contagem[1] || 0) < 50 || (valor[1] || 0) < 100000) {
+      return "A fila não carregou a empresa 1. Atualize a fila e espere todas as empresas entrarem antes de gerar o sprint.";
+    }
+    // Empresa que respondeu na carga sem título vencido está certa (ex.: 4 e 14 nunca têm título vencido).
+    const ok = new Set((respondidas || []).map(Number));
+    const faltando = esperadas.filter((id) => {
+      if (ok.has(Number(id))) return false;
+      const n = contagem[id] || 0;
+      const v = valor[id] || 0;
+      return n < 1 || (n < 5 && v < 1000);
+    });
+    if (faltando.length) {
+      return "A fila não carregou todas as empresas (" + faltando.join(", ") + "). Atualize a fila e espere o fim da busca antes de gerar o sprint.";
+    }
+    return "";
+  }
+
   async function listaDaFilaParaSprint() {
     if (Array.isArray(window.rawClientList) && window.rawClientList.length) return window.rawClientList;
     if (typeof window.carregarFilaProntaDoDia === "function") {
@@ -1946,6 +1992,11 @@ const DashboardInadimplencia = (function() {
       alert("A fila de cobrança de hoje ainda não está carregada. Abra a Fila de cobrança e espere ela terminar de montar.");
       return;
     }
+    const avisoFila = filaCargaIncompleta(fila, await empresasQueResponderam());
+    if (avisoFila) {
+      alert(avisoFila);
+      return;
+    }
     // Baixas lançadas depois da carga da madrugada (mesmo com data de ontem) saem do Sprint.
     if (window.SiengeApiService && typeof SiengeApiService.refreshRecentPayments === "function") {
       try {
@@ -1959,6 +2010,16 @@ const DashboardInadimplencia = (function() {
       fila = window.filaAplicarPagamentosRecentes(fila);
       if (Array.isArray(window.rawClientList) && window.rawClientList.length) window.rawClientList = fila;
     }
+    if (!Array.isArray(window.rawClientList) || !window.rawClientList.length) window.rawClientList = fila;
+    if (typeof window.nexScheduleCumpridaCheck === "function") {
+      try {
+        await Promise.race([
+          Promise.resolve(window.nexScheduleCumpridaCheck()),
+          new Promise((resolve) => setTimeout(resolve, 25000))
+        ]);
+      } catch (e) {}
+    }
+    if (typeof window.rebuildNexCumpridaIndex === "function") window.rebuildNexCumpridaIndex();
     if (typeof window.refreshVistoriaSprintCounts === "function") {
       try { await window.refreshVistoriaSprintCounts(); } catch (e) {}
     }
@@ -2071,7 +2132,31 @@ const DashboardInadimplencia = (function() {
         return `d-${chartSnaps.length - 1 - i}`;
     });
     const fechSnap = fechSnapReal;
-    const hojeSnap = snapshots[snapshots.length-1];
+    let hojeSnap = snapshots[snapshots.length-1];
+    if (totalOverdue > 0 && (!hojeSnap || Number(hojeSnap.total_value) < totalOverdue * 0.85)) {
+      hojeSnap = {
+        date: hojeSnap && hojeSnap.date ? hojeSnap.date : todayIsoLocal(),
+        total_value: totalOverdue,
+        total_count: totalBills,
+        data_json: {
+          companies: Object.keys(companyData).map((id) => {
+            const c = companyData[id];
+            return {
+              count: c.totalBills,
+              value: c.totalValue,
+              aging: {
+                d0_30: { value: c.d30_v, count: 0 },
+                d31_60: { value: c.d60_v, count: 0 },
+                d61_90: { value: c.d90_v, count: 0 },
+                d91_120: { value: c.d120_v, count: 0 },
+                d120p: { value: c.d120p_v, count: 0 }
+              }
+            };
+          })
+        }
+      };
+      if (chartSnaps.length) chartSnaps[chartSnaps.length - 1] = hojeSnap;
+    }
 
     function fmtK(v) { if(!v) return '0'; if(v>=1000000) return (v/1000000).toFixed(1)+'M'; if(v>=1000) return (v/1000).toFixed(0)+'K'; return formatMoney(v); }
     function fmtMoneyNoRs(v) { return Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
@@ -2115,6 +2200,7 @@ const DashboardInadimplencia = (function() {
       
       const b1Raw = getBands(snap1), b2Raw = getBands(snap2);
       const t1 = snap1.total_value || 1, t2 = snap2.total_value || 1;
+      const escala = Math.max(t1, t2, 1);
       
       // Proporcional fallback para o fechamento se não tivermos histórico de aging
       if (b1Raw.d30 === 0 && b1Raw.d60 === 0 && b1Raw.d90 === 0 && snap1.total_value > 0) {
@@ -2162,11 +2248,11 @@ const DashboardInadimplencia = (function() {
       
       let rects = '';
       let y1 = 0;
-      b1.forEach(b => { const h = (b.v/t1)*(H-padTop-padBot); rects += `<rect x="${x1 - barW/2}" y="${H-padBot-y1-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y1+=h; });
+      b1.forEach(b => { const h = (b.v/escala)*(H-padTop-padBot); rects += `<rect x="${x1 - barW/2}" y="${H-padBot-y1-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y1+=h; });
       let y2 = 0;
-      b2.forEach(b => { const h = (b.v/t2)*(H-padTop-padBot); rects += `<rect x="${x2 - barW/2}" y="${H-padBot-y2-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y2+=h; });
+      b2.forEach(b => { const h = (b.v/escala)*(H-padTop-padBot); rects += `<rect x="${x2 - barW/2}" y="${H-padBot-y2-h}" width="${barW}" height="${h}" fill="${b.color}"/>`; y2+=h; });
       
-      return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;margin:0 auto;">
+      return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;flex:none;">
           ${topArrowSvg}
           ${rects}
           <text x="${x1}" y="${H-5}" text-anchor="middle" font-size="8.5" fill="#64748b">${label1}</text>
@@ -2185,6 +2271,8 @@ const DashboardInadimplencia = (function() {
       return `<div style="text-align:center;"><div style="font-size:8.5px;font-weight:700;color:#334155;margin-bottom:3px;">${fmtK(total)}</div><svg width="${W}" height="${H}" style="display:block;margin:0 auto;">${rects}</svg><div style="font-size:8.5px;color:#64748b;margin-top:3px;">${label}</div></div>`;
     }
 
+    // Os SVGs do sprint não usam "margin:0 auto": no PDF do Teams o html2canvas deslocava o gráfico para a direita e
+    // cortava as últimas barras (a de "Hoje" sumia e o rótulo da variação saía cortado). As colunas já centralizam.
     function barChartSvg(data, labels, color, isVal=false) {
       if (!data||data.length===0) return '';
       const maxVal = Math.max(...data, 1);
@@ -2246,7 +2334,7 @@ const DashboardInadimplencia = (function() {
       
       const axisLine = `<line x1="${0}" y1="${H - padBot}" x2="${W}" y2="${H - padBot}" stroke="#e2e8f0" stroke-width="1.5" />`;
 
-      return `<svg width="${W}" height="${H}" style="overflow:visible;display:block;margin:0 auto;">
+      return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;display:block;flex:none;">
           ${topArrowSvg}
           ${axisLine}
           ${bars}
@@ -2473,23 +2561,63 @@ tr.tot td{background:#fff7ed!important;font-weight:800;color:#c2410c;border-top:
 .op-card td:last-child{text-align:right;font-weight:800;color:#1e293b}
 </style>
 <script>
-    function sendToTeams() {
-        const txt = \`${teamsText.replace(/`/g, "\\`").replace(/\\/g, "\\\\")}\`;
-        navigator.clipboard.writeText(txt).then(() => {
-            alert("O texto padrão foi copiado para a área de transferência (Ctrl+C)!\\n\\nSalve o PDF na próxima tela e cole-o na janela do Teams que será aberta a seguir.");
-            window.print();
-            setTimeout(() => { window.open('${teamsLink}', '_blank'); }, 1000);
-        }).catch(e => {
-            console.error("Erro ao copiar", e);
-            window.print();
-            setTimeout(() => { window.open('${teamsLink}', '_blank'); }, 1000);
+    // Gera o PDF desta página e baixa direto na pasta de downloads do navegador (sem a janela de imprimir),
+    // copia o texto padrão e abre o chat do Teams.
+    function carregarScript(src) {
+        return new Promise(function (ok, erro) {
+            const s = document.createElement('script');
+            s.src = src; s.onload = ok; s.onerror = erro;
+            document.head.appendChild(s);
         });
+    }
+    async function baixarPdfSprint() {
+        if (!window.html2canvas) await carregarScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+        if (!window.jspdf) await carregarScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+        const barra = document.querySelector('.no-print');
+        if (barra) barra.style.display = 'none';
+        let canvas;
+        try {
+            canvas = await window.html2canvas(document.body, { scale: 2, useCORS: true, backgroundColor: '#f1f5f9', windowWidth: document.body.scrollWidth });
+        } finally {
+            if (barra) barra.style.display = '';
+        }
+        const pdf = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+        const margem = 5, largura = 210 - 2 * margem, alturaPagina = 297 - 2 * margem;
+        const pxPorMm = canvas.width / largura;
+        const fatiaPx = Math.floor(alturaPagina * pxPorMm);
+        for (let y = 0, pagina = 0; y < canvas.height; y += fatiaPx, pagina++) {
+            const h = Math.min(fatiaPx, canvas.height - y);
+            const parte = document.createElement('canvas');
+            parte.width = canvas.width; parte.height = h;
+            parte.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+            if (pagina > 0) pdf.addPage();
+            pdf.addImage(parte.toDataURL('image/jpeg', 0.92), 'JPEG', margem, margem, largura, h / pxPorMm);
+        }
+        pdf.save('Sprint Diário - ${dateStr.split("/").join("-")}.pdf');
+    }
+    async function sendToTeams() {
+        const txt = \`${teamsText.replace(/`/g, "\\`").replace(/\\/g, "\\\\")}\`;
+        try { await navigator.clipboard.writeText(txt); } catch (e) { console.error("Erro ao copiar", e); }
+        // Abre a aba do Teams já no clique (aberta depois de gerar o PDF, o navegador bloquearia).
+        const teams = window.open('about:blank', '_blank');
+        const botao = document.getElementById('btn-sprint-teams');
+        if (botao) { botao.disabled = true; botao.textContent = 'Gerando PDF...'; }
+        try {
+            await baixarPdfSprint();
+        } catch (e) {
+            console.error("Erro ao gerar o PDF", e);
+            alert("Não consegui gerar o PDF. Use Imprimir e salve como PDF.");
+        } finally {
+            if (botao) { botao.disabled = false; botao.textContent = '💬 Enviar por Teams'; }
+        }
+        if (teams) teams.location.href = '${teamsLink}';
+        else window.open('${teamsLink}', '_blank');
     }
 </script>
 </head><body>
 <div class="no-print">
     <button onclick="window.print()">🖨️ Imprimir</button>
-    <button onclick="sendToTeams()" style="background:#464eb8;">💬 Enviar por Teams</button>
+    <button id="btn-sprint-teams" onclick="sendToTeams()" style="background:#464eb8;">💬 Enviar por Teams</button>
 </div>
 <h1>Sprint Diário — Inadimplência &nbsp;·&nbsp; ${dateStr}</h1>
 <div class="kpi-strip">

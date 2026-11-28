@@ -15,8 +15,8 @@
     registros.replaceChildren();
 
     try {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snapshot = await getDocs(collection(window.firebaseDb, 'landbank'));
+      // Supabase: documentos do Landbank em configuracoes ("landbank/<id>").
+      const snapshot = await window.DadosNucleo.listarDocs('landbank');
       const terrenos = snapshot.docs.map(doc => doc.data());
       const collator = new Intl.Collator('pt-BR', { sensitivity: 'base' });
       terrenos.sort((a, b) => {

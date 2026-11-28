@@ -53,9 +53,55 @@ const AlertaPonto = {
     return imp || u || null;
   },
 
+  /* Só a conta do Israel, e não quando ela está testando como outra conta. */
   ehIsrael() {
     const u = this.contaReal();
-    return !!(u && String(u.email || "").toLowerCase() === this.EMAIL);
+    if (!u || String(u.email || "").toLowerCase() !== this.EMAIL) return false;
+    const imp = typeof window.crmImpersonacaoAtual === "function" ? window.crmImpersonacaoAtual() : null;
+    return !imp;
+  },
+
+  /* O ciente também fica no banco (Supabase, tabela alertas_ciente: uma linha por alerta/tipo/dia),
+     para valer depois do Ctrl+F5 e em outro computador. */
+  COLECAO: "alertas_ciente",
+  DOC: "ponto_israel",
+
+  async bancoPronto() {
+    for (let i = 0; i < 40 && !window.DadosNucleo; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!window.DadosNucleo) return null;
+    await window.DadosNucleo.pronto;
+    return window.sb || null;
+  },
+
+  async lerRemoto() {
+    try {
+      const sb = await this.bancoPronto();
+      if (!sb) return;
+      const r = await sb.from(this.COLECAO).select("tipo, dia").eq("alerta", this.DOC);
+      if (r.error) throw r.error;
+      (r.data || []).forEach((l) => {
+        this._visto[(l.tipo + "_" + l.dia).replace("_", ":")] = true;
+      });
+    } catch (e) {
+      console.warn("[AlertaPonto] não leu o ciente no banco", e);
+    }
+  },
+
+  async gravarRemoto(tipo, dia) {
+    try {
+      const sb = await this.bancoPronto();
+      if (!sb) return;
+      const conta = this.contaReal();
+      const r = await sb.from(this.COLECAO).upsert(
+        { alerta: this.DOC, tipo, dia, usuario_email: String((conta && conta.email) || this.EMAIL).toLowerCase() },
+        { onConflict: "alerta,tipo,dia" }
+      );
+      if (r.error) throw r.error;
+    } catch (e) {
+      console.warn("[AlertaPonto] não gravou o ciente no banco", e);
+    }
   },
 
   /* Sexta da semana que contém hoje. Domingo usa a sexta que já passou. */
@@ -153,6 +199,7 @@ const AlertaPonto = {
       }
     }
     gravar(sessionStorage);
+    this.gravarRemoto(tipo, dia);
   },
 
   avisosDe(hoje) {
@@ -164,12 +211,14 @@ const AlertaPonto = {
     };
   },
 
-  verificar() {
+  async verificar() {
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
     }
     if (this.ehIsrael()) {
+      const antes = this.avisosDe(this.hoje());
+      if (antes.sexta || antes.mes) await this.lerRemoto();
       const avisos = this.avisosDe(this.hoje());
       if ((avisos.sexta || avisos.mes) && !document.getElementById("alerta-ponto")) this.abrir(avisos);
     }
@@ -184,7 +233,13 @@ const AlertaPonto = {
     this._timer = setTimeout(() => this.verificar(), Math.max(1000, prox.getTime() - Date.now()));
   },
 
-  abrir(avisos) {
+  /* previa = true: abre o mesmo pop-up pela tela de gestão de pop-ups, sem gravar o ciente. */
+  abrir(avisos, previa) {
+    if (!previa && typeof window.PopupAtivo === "function") {
+      avisos = Object.assign({}, avisos);
+      if (!window.PopupAtivo("ponto-sexta")) avisos.sexta = false;
+      if (!window.PopupAtivo("ponto-fechamento")) avisos.mes = null;
+    }
     const partes = [];
     if (avisos.sexta) partes.push("Cheque as pendências no cartão de ponto do time.");
     if (avisos.mes) {
@@ -209,14 +264,42 @@ const AlertaPonto = {
     </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector("#alerta-ponto-ciente").addEventListener("click", () => {
-      if (avisos.sexta) this.marcar("sexta", avisos.sexta);
-      if (avisos.mes) this.marcar("mes", avisos.mes);
+      if (!previa) {
+        if (avisos.sexta) this.marcar("sexta", avisos.sexta);
+        if (avisos.mes) this.marcar("mes", avisos.mes);
+      }
       overlay.remove();
     });
+  },
+
+  /* Prévia: a sexta desta semana (ou a próxima) e o dia de fechamento deste mês (ou do próximo). */
+  previaSexta() {
+    const hoje = this.hoje();
+    let sexta = this.sextaDaSemana(hoje);
+    if (sexta < hoje) sexta = this.addDias(sexta, 7);
+    this.abrir({ sexta: sexta, mes: "" }, true);
+  },
+
+  previaFechamento() {
+    const hoje = this.hoje();
+    const p = hoje.split("-");
+    let ano = Number(p[0]);
+    let mes = Number(p[1]);
+    let dia = this.diaFechamento(ano, mes);
+    if (dia < hoje) {
+      mes += 1;
+      if (mes > 12) { mes = 1; ano += 1; }
+      dia = this.diaFechamento(ano, mes);
+    }
+    this.abrir({ sexta: "", mes: dia }, true);
   }
 };
 
 window.AlertaPonto = AlertaPonto;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["ponto-sexta"] = function () { AlertaPonto.previaSexta(); };
+window.PopupPrevias["ponto-fechamento"] = function () { AlertaPonto.previaFechamento(); };
 
 document.addEventListener("DOMContentLoaded", function () {
   let tentativas = 0;

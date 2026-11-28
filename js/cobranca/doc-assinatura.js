@@ -45,6 +45,282 @@ const DocAssinaturaApp = {
     return false;
   },
 
+  /* ---------- Documento em aberto e baixa com aprovação do administrador ----------
+     Distrato gerado fica "em aberto" até ser lançado no Sienge ou baixado. Enquanto houver um em aberto
+     para o título, não se gera outro. A baixa pede justificativa e só vale depois que o administrador aprova. */
+  souAdmin() {
+    return typeof window.isCrmSuperAdmin === "function" && window.isCrmSuperAdmin();
+  },
+
+  emAberto(row) {
+    return !!row && row.status !== "lancado" && row.status !== "baixado";
+  },
+
+  tituloNum(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  /** Distrato em aberto do título (o mais recente), lido da lista compartilhada. null quando não há. */
+  async distratoAbertoDoTitulo(titulo) {
+    const t = this.tituloNum(titulo);
+    if (!t) return null;
+    let lista = null;
+    if (window.DadosCobranca) {
+      try {
+        lista = await window.DadosCobranca.tabela(this.COL).listar({ filtros: [["titulo", "eq", t]] });
+      } catch (e) {
+        console.warn("[Assinatura] consulta de distrato em aberto", e);
+        lista = null;
+      }
+    }
+    const locais = (this.lerLocal() || []).concat(this.itens || []);
+    const todos = (lista || []).concat(locais.filter((r) => r && (!lista || String(r.id || "").indexOf("local-") === 0)));
+    const abertos = todos.filter((r) => r && r.tipo === "distrato" && this.tituloNum(r.titulo) === t && this.emAberto(r));
+    abertos.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+    return abertos[0] || null;
+  },
+
+  /* ---------- Documentos parados (sprint diário e home) ----------
+     Distrato e TCD (termo de cessão de direitos) ainda em aberto, gerados há mais de N dias corridos. */
+  DIAS_PARADO: 7,
+
+  /** Carrega a lista em segundo plano (uma vez) e repinta a home quando chegar. */
+  prepararParados() {
+    if ((this.itens && this.itens.length) || this._carregandoParados) return;
+    this._carregandoParados = this.garantirItens().then(() => {
+      const hd = window.HomeDashboard;
+      const box = document.getElementById("home-op-insights-container");
+      if (hd && box && box.style.display !== "none" && typeof hd.renderInsights === "function") {
+        try { hd.renderInsights(); } catch (e) {}
+      }
+    }).catch(() => {}).finally(() => { this._carregandoParados = null; });
+  },
+
+  parados(user) {
+    this.prepararParados();
+    const limite = Date.now() - this.DIAS_PARADO * 86400000;
+    const email = String((user && user.email) || "").toLowerCase();
+    const nome = this.normNome(user && (user.name || user.nome));
+    const doUsuario = (r) => {
+      if (!user) return true;
+      if (email && r.userEmail && email === String(r.userEmail).toLowerCase()) return true;
+      return !!(nome && nome.length > 3 && nome === this.normNome(r.userName));
+    };
+    const lista = (this.itens || []).filter((r) => {
+      if (!r || !this.emAberto(r) || (r.tipo !== "distrato" && r.tipo !== "cessao")) return false;
+      const t = new Date(r.createdAt || "").getTime();
+      return Number.isFinite(t) && t < limite && doUsuario(r);
+    });
+    return { distrato: lista.filter((r) => r.tipo === "distrato"), cessao: lista.filter((r) => r.tipo === "cessao") };
+  },
+
+  diasDesde(iso) {
+    const t = new Date(iso || "").getTime();
+    return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : 0;
+  },
+
+  /** O documento foi gerado por um operador de cobrança (inclui o back office)? Procura quem gerou no cadastro de usuários. */
+  geradoPorOperadorCobranca(r) {
+    let users = [];
+    try { users = JSON.parse(localStorage.getItem("crm_users") || "[]"); } catch (e) { users = []; }
+    if ((!users || !users.length) && window.ConfigUsersApp && Array.isArray(ConfigUsersApp.users)) users = ConfigUsersApp.users;
+    const email = String((r && r.userEmail) || "").toLowerCase();
+    const nome = this.normNome(r && r.userName);
+    const u = (users || []).find((x) => x && ((email && String(x.email || "").toLowerCase() === email)
+      || (nome && nome.length > 3 && this.normNome(x.name) === nome)));
+    if (!u) return false;
+    if (typeof window.isOperadorCobrancaProfile === "function") return window.isOperadorCobrancaProfile(u.profile_name);
+    return String(u.profile_name || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").includes("OPERADOR COBRANCA");
+  },
+
+  /** Linhas do sprint: por quem gerou, "x distratos e y TCD com mais de 7 dias". Só operadores de cobrança e back office. */
+  linhasSprintParados() {
+    const tudo = this.parados(null);
+    const porPessoa = new Map();
+    tudo.distrato.concat(tudo.cessao).filter((r) => this.geradoPorOperadorCobranca(r)).forEach((r) => {
+      const k = String(r.userEmail || r.userName || "—").toLowerCase();
+      if (!porPessoa.has(k)) porPessoa.set(k, { nome: r.userName || "—", distrato: 0, cessao: 0 });
+      porPessoa.get(k)[r.tipo === "distrato" ? "distrato" : "cessao"] += 1;
+    });
+    if (!porPessoa.size) return [];
+    const plural = (n, s, p) => n + " " + (n === 1 ? s : p);
+    const linhas = ["📝 *Documentos para assinar parados há mais de " + this.DIAS_PARADO + " dias*"];
+    [...porPessoa.values()].sort((a, b) => (b.distrato + b.cessao) - (a.distrato + a.cessao)).forEach((p) => {
+      const partes = [];
+      if (p.distrato) partes.push(plural(p.distrato, "distrato", "distratos"));
+      if (p.cessao) partes.push(plural(p.cessao, "TCD", "TCD"));
+      linhas.push("• " + String(p.nome).toUpperCase() + ": " + partes.join(" e "));
+    });
+    return linhas;
+  },
+
+  modalBaixa(html) {
+    let m = document.getElementById("docs-baixa-modal");
+    if (!m) {
+      m = document.createElement("div");
+      m.id = "docs-baixa-modal";
+      m.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:100001;display:flex;align-items:center;justify-content:center;padding:16px;";
+      document.body.appendChild(m);
+    }
+    m.innerHTML = `<div style="background:#fff;width:min(560px,96vw);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,0.28);padding:18px;">${html}</div>`;
+    m.style.display = "flex";
+    return m;
+  },
+
+  fecharModalBaixa() {
+    const m = document.getElementById("docs-baixa-modal");
+    if (m) m.style.display = "none";
+  },
+
+  /* Baixa de qualquer documento em aberto (a lixeira da linha): sempre com justificativa.
+     Quem não é administrador pede e o administrador aprova; o administrador dá a baixa direto, também justificando.
+     O documento não é apagado: fica como "Baixado", com quem pediu, quem decidiu e o porquê. */
+  pedirBaixa(id) {
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !this.emAberto(row)) return;
+    if (chave.indexOf("local-") === 0) { alert("Este documento ainda não foi salvo na lista compartilhada. Atualize a tela e tente de novo."); return; }
+    if (row.baixa && row.baixa.status === "pendente") { alert("Já existe um pedido de baixa aguardando o administrador para este documento."); return; }
+    const admin = this.souAdmin();
+    const tipo = this.tipoLabel(row.tipo).toLowerCase();
+    const regra = admin
+      ? "Como administrador, a baixa vale na hora. O documento fica na lista como Baixado, com a justificativa."
+      : "A baixa só vale depois que o administrador aprovar." + (row.tipo === "distrato" ? " Enquanto isso, não é possível gerar outro distrato para este título." : "");
+    this.modalBaixa(`
+      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">${admin ? "Dar baixa" : "Pedir baixa"} do ${this.esc(tipo)}</h3>
+      <div style="font-size:0.85rem;color:#475569;margin-bottom:10px;">${this.esc(this.nomeExibido(row))} · Título ${this.esc(row.titulo)} · gerado em ${this.esc(this.quando(row.createdAt))} por ${this.esc(row.userName || "—")}</div>
+      <div style="font-size:0.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;margin-bottom:10px;">${this.esc(regra)}</div>
+      <label for="docs-baixa-just" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Justificativa (obrigatória)</label>
+      <textarea id="docs-baixa-just" rows="4" maxlength="1000" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Por que este documento deve ser baixado? (ex.: valor errado, cliente desistiu, novo cálculo)"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button type="button" class="btn btn-cancel" onclick="DocAssinaturaApp.fecharModalBaixa()">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="docs-baixa-enviar" onclick="DocAssinaturaApp.enviarPedidoBaixa('${encodeURIComponent(chave)}')">${admin ? "Dar baixa" : "Pedir baixa"}</button>
+      </div>`);
+    const t = document.getElementById("docs-baixa-just");
+    if (t) t.focus();
+  },
+
+  async enviarPedidoBaixa(id) {
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    const el = document.getElementById("docs-baixa-just");
+    const just = String((el && el.value) || "").trim();
+    if (!row) return;
+    if (just.length < 10) { alert("Escreva a justificativa da baixa (pelo menos 10 caracteres)."); if (el) el.focus(); return; }
+    const eu = this.eu();
+    const agora = new Date().toISOString();
+    const admin = this.souAdmin();
+    const baixa = admin
+      ? { status: "aprovada", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: agora, decididoPor: eu.userName, decididoPorEmail: eu.userEmail, decididoEm: agora, motivoRecusa: "" }
+      : { status: "pendente", justificativa: just, pedidoPor: eu.userName, pedidoPorEmail: eu.userEmail, pedidoEm: agora };
+    const patch = admin ? { baixa: baixa, status: "baixado", baixadoEm: agora } : { baixa: baixa };
+    try {
+      await window.DadosCobranca.tabela(this.COL).gravar(chave, patch, { merge: true });
+    } catch (e) {
+      console.error("[Assinatura] pedido de baixa", e);
+      alert("Não foi possível gravar o pedido de baixa. Tente de novo.");
+      return;
+    }
+    Object.assign(row, patch);
+    this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === chave ? row : x)));
+    this.fecharModalBaixa();
+    this.pintar();
+  },
+
+  /** Recusa da baixa: o motivo vai num pop-up do Integra (antes era a janela do navegador). */
+  recusarBaixa(id) {
+    if (!this.souAdmin()) return;
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !row.baixa || row.baixa.status !== "pendente") return;
+    this.modalBaixa(`
+      <h3 style="margin:0 0 6px;color:#105436;font-size:1.05rem;">Recusar a baixa do ${this.esc(this.tipoLabel(row.tipo).toLowerCase())}</h3>
+      <div style="font-size:0.85rem;color:#475569;margin-bottom:10px;">${this.esc(this.nomeExibido(row))} · Título ${this.esc(row.titulo)} · pedida por ${this.esc(row.baixa.pedidoPor || "—")} em ${this.esc(this.quando(row.baixa.pedidoEm))}</div>
+      <div style="font-size:0.82rem;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:10px;"><b>Justificativa do pedido:</b> ${this.esc(row.baixa.justificativa || "—")}</div>
+      <label for="docs-baixa-motivo" style="font-size:0.72rem;font-weight:700;color:#475569;text-transform:uppercase;">Motivo da recusa</label>
+      <textarea id="docs-baixa-motivo" rows="3" maxlength="1000" style="width:100%;box-sizing:border-box;margin-top:4px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:0.88rem;resize:vertical;" placeholder="Por que a baixa não foi aceita?"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button type="button" class="btn btn-cancel" onclick="DocAssinaturaApp.fecharModalBaixa()">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="DocAssinaturaApp.decidirBaixa('${encodeURIComponent(chave)}', false)">Recusar baixa</button>
+      </div>`);
+    const t = document.getElementById("docs-baixa-motivo");
+    if (t) t.focus();
+  },
+
+  async decidirBaixa(id, aprovar) {
+    if (!this.souAdmin()) { alert("Só o administrador aprova a baixa."); return; }
+    const chave = decodeURIComponent(String(id || ""));
+    const row = (this.itens || []).find((r) => String(r.id) === chave);
+    if (!row || !row.baixa || row.baixa.status !== "pendente") return;
+    let motivo = "";
+    if (!aprovar) {
+      const el = document.getElementById("docs-baixa-motivo");
+      motivo = String((el && el.value) || "").trim();
+      if (!motivo) { alert("Escreva o motivo da recusa."); if (el) el.focus(); return; }
+      this.fecharModalBaixa();
+    } else {
+      const msg = "Aprovar a baixa do " + this.tipoLabel(row.tipo).toLowerCase() + " de " + this.nomeExibido(row) + " (título " + row.titulo + ")?\n\nJustificativa: " + row.baixa.justificativa;
+      const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
+      if (!ok) return;
+    }
+    const eu = this.eu();
+    const baixa = Object.assign({}, row.baixa, {
+      status: aprovar ? "aprovada" : "recusada",
+      decididoPor: eu.userName,
+      decididoPorEmail: eu.userEmail,
+      decididoEm: new Date().toISOString(),
+      motivoRecusa: motivo
+    });
+    const patch = aprovar ? { baixa: baixa, status: "baixado", baixadoEm: baixa.decididoEm } : { baixa: baixa };
+    try {
+      await window.DadosCobranca.tabela(this.COL).gravar(chave, patch, { merge: true });
+    } catch (e) {
+      console.error("[Assinatura] decisão da baixa", e);
+      alert("Não foi possível gravar a decisão. Tente de novo.");
+      return;
+    }
+    Object.assign(row, patch);
+    this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === chave ? row : x)));
+    this.pintar();
+  },
+
+  situacaoHtml(r) {
+    if (r.status === "lancado") return `<span class="docs-sit is-feito">Lançado no Sienge</span>`;
+    if (r.status === "baixado") {
+      const b = r.baixa || {};
+      return `<span class="docs-sit is-feito" title="${this.esc("Baixa aprovada por " + (b.decididoPor || "administrador") + ". Justificativa: " + (b.justificativa || ""))}">Baixado</span>`;
+    }
+    const b = r.baixa;
+    if (b && b.status === "pendente") {
+      return `<span class="docs-sit" style="background:#fef3c7;color:#92400e;" title="${this.esc("Pedida por " + (b.pedidoPor || "") + " em " + this.quando(b.pedidoEm) + ". Justificativa: " + (b.justificativa || ""))}">Baixa pedida</span>`
+        + `<small class="docs-just" title="${this.esc(b.justificativa || "")}">${this.esc(b.pedidoPor || "")}: ${this.esc(b.justificativa || "")}</small>`;
+    }
+    if (b && b.status === "recusada") {
+      return `<span class="docs-sit" title="${this.esc("Baixa recusada por " + (b.decididoPor || "") + ": " + (b.motivoRecusa || ""))}">Aguardando · baixa recusada</span>`;
+    }
+    return `<span class="docs-sit">Aguardando</span>`;
+  },
+
+  /** Só a decisão do administrador sobre um pedido pendente. Pedir baixa fica no ícone da lixeira da linha. */
+  botoesBaixaHtml(r) {
+    if (!r || !this.emAberto(r) || !r.baixa || r.baixa.status !== "pendente" || !this.souAdmin()) return "";
+    const chave = encodeURIComponent(String(r.id));
+    return `<button type="button" class="btn btn-primary docs-btn" onclick="DocAssinaturaApp.decidirBaixa('${chave}', true)">Aprovar baixa</button>`
+      + `<button type="button" class="btn btn-outline docs-btn" onclick="DocAssinaturaApp.recusarBaixa('${chave}')">Recusar</button>`;
+  },
+
+  /** Lixeira da linha: documento em aberto pede baixa com justificativa; finalizado o administrador remove da lista. */
+  botaoLixeiraHtml(r) {
+    const chave = encodeURIComponent(String(r.id));
+    if (this.emAberto(r)) {
+      const pendente = r.baixa && r.baixa.status === "pendente";
+      const titulo = pendente ? "Baixa já pedida, aguardando o administrador" : (this.souAdmin() ? "Dar baixa (com justificativa)" : "Pedir baixa (com justificativa)");
+      return `<button type="button" class="tvig-ico is-danger" title="${titulo}" ${pendente ? "disabled style=\"opacity:.35\"" : ""} onclick="DocAssinaturaApp.pedirBaixa('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
+    }
+    if (!this.souAdmin()) return "";
+    return `<button type="button" class="tvig-ico is-danger" title="Remover da lista" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button>`;
+  },
+
   lerLocal() {
     try {
       const raw = JSON.parse(localStorage.getItem(this.LS) || "[]");
@@ -113,9 +389,8 @@ const DocAssinaturaApp = {
       }
     }
     try {
-      if (!window.firebaseDb || !window.firebaseCollections || !window.firebaseCollections.addDoc) return;
-      const { collection, addDoc } = window.firebaseCollections;
-      const ref = await addDoc(collection(window.firebaseDb, this.COL), {
+      if (!window.DadosCobranca) return;
+      const novoId = await window.DadosCobranca.tabela(this.COL).criar({
         tipo: row.tipo,
         tipoLabel: row.tipoLabel,
         cliente: row.cliente,
@@ -136,7 +411,7 @@ const DocAssinaturaApp = {
         createdAt: row.createdAt,
         status: row.status
       });
-      row.id = ref.id;
+      row.id = novoId;
       const atual = this.lerLocal().map((x) => (x.createdAt === row.createdAt && x.userId === row.userId && x.tipo === row.tipo ? row : x));
       this.gravarLocal(atual);
       await this.guardarPdf(row, dados && dados.bytes);
@@ -145,10 +420,10 @@ const DocAssinaturaApp = {
     }
   },
 
+  // O PDF continua no Storage do Firebase (arquivos migram na Fase 4); o pdfUrl é gravado no Supabase.
   async guardarPdf(row, bytes) {
     if (!row || !bytes) return;
     const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     if (!window.firebaseStorage || !fx || !fx.ref || !fx.uploadBytes || !fx.getDownloadURL) return;
     try {
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -161,8 +436,8 @@ const DocAssinaturaApp = {
       this.gravarLocal(atual);
       const item = this.itens.find((x) => String(x.id) === String(row.id));
       if (item) item.pdfUrl = row.pdfUrl;
-      if (db && fx.doc && fx.updateDoc && !String(row.id).startsWith("local-")) {
-        await fx.updateDoc(fx.doc(db, this.COL, row.id), { pdfUrl: row.pdfUrl });
+      if (window.DadosCobranca && !String(row.id).startsWith("local-")) {
+        await window.DadosCobranca.tabela(this.COL).gravar(row.id, { pdfUrl: row.pdfUrl }, { merge: true });
       }
       if (document.getElementById("docs-ass-body")) this.pintar();
     } catch (e) {
@@ -224,7 +499,7 @@ const DocAssinaturaApp = {
   },
 
   botaoDistratoHtml(r) {
-    if (!r || r.tipo !== "distrato" || r.status === "lancado") return "";
+    if (!r || r.tipo !== "distrato" || !this.emAberto(r)) return "";
     const titulo = String(r.titulo || "").replace(/\D/g, "");
     const chave = encodeURIComponent(String(r.id));
     const aval = this.avalDistrato(r);
@@ -408,22 +683,27 @@ const DocAssinaturaApp = {
     const chave = decodeURIComponent(String(id || ""));
     const row = (this.itens || []).find((r) => String(r.id) === chave);
     if (!row) return;
+    // Distrato em aberto não some pela lixeira: só com baixa aprovada pelo administrador.
+    if (row.tipo === "distrato" && this.emAberto(row) && !this.souAdmin()) {
+      alert("Distrato em aberto não pode ser removido. Use Pedir baixa: o administrador aprova a baixa com a justificativa.");
+      return;
+    }
     const msg = "Remover " + this.tipoLabel(row.tipo) + " de " + (row.cliente || "este cliente") + " da lista?";
     const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(msg) : confirm(msg);
     if (!ok) return;
     this.itens = this.itens.filter((r) => String(r.id) !== chave);
     this.gravarLocal(this.lerLocal().filter((r) => String(r.id) !== chave));
     this.pintar();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || chave.indexOf("local-") === 0) return;
+    if (chave.indexOf("local-") === 0) return;
     try {
-      if (fx.deleteDoc && fx.doc) await fx.deleteDoc(fx.doc(db, this.COL, chave));
+      if (window.DadosCobranca) await window.DadosCobranca.tabela(this.COL).excluir(chave);
     } catch (e) {
       console.error("[Assinatura] excluir", e);
     }
+    // O PDF ainda está no Storage do Firebase.
+    const fx = window.firebaseCollections;
     try {
-      if (fx.deleteObject && fx.ref && window.firebaseStorage) {
+      if (fx && fx.deleteObject && fx.ref && window.firebaseStorage) {
         const path = "assinaturas/" + chave.replace(/[^\w\-]+/g, "_") + ".pdf";
         await fx.deleteObject(fx.ref(window.firebaseStorage, path));
       }
@@ -436,10 +716,8 @@ const DocAssinaturaApp = {
     this.pintar();
     let nuvem = [];
     try {
-      if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COL));
-        snap.forEach((d) => nuvem.push(Object.assign({ id: d.id }, d.data() || {})));
+      if (window.DadosCobranca) {
+        nuvem = await window.DadosCobranca.tabela(this.COL).listar();
       } else {
         this.aviso = "A lista compartilhada ainda não respondeu. Os documentos desta máquina continuam visíveis.";
       }
@@ -490,7 +768,7 @@ const DocAssinaturaApp = {
 
   visiveis() {
     return this.itens.filter((row) => {
-      if (row && row.status === "lancado" && !this.mostrarFinalizados) return false;
+      if (row && !this.emAberto(row) && !this.mostrarFinalizados) return false;
       if (this.tipo && row.tipo !== this.tipo) return false;
       if (this.vista === "meus" && !this.mesmoUsuario(row)) return false;
       return true;
@@ -769,10 +1047,8 @@ const DocAssinaturaApp = {
     const id = String(row.id || "");
     const patch = { status: "lancado", lancadoEm: row.lancadoEm };
     this.gravarLocal(this.lerLocal().map((x) => (String(x.id) === id ? Object.assign({}, x, patch) : x)));
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !fx.updateDoc || !fx.doc || id.indexOf("local-") === 0) return;
-    try { await fx.updateDoc(fx.doc(db, this.COL, id), patch); } catch (e) {}
+    if (!window.DadosCobranca || id.indexOf("local-") === 0) return;
+    try { await window.DadosCobranca.tabela(this.COL).gravar(id, patch, { merge: true }); } catch (e) {}
   },
 
   async reconciliarDistratos() {
@@ -936,18 +1212,14 @@ const DocAssinaturaApp = {
     if (this.itens && this.itens.length) return;
     let nuvem = [];
     try {
-      if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-        const { collection, getDocs } = window.firebaseCollections;
-        const snap = await getDocs(collection(window.firebaseDb, this.COL));
-        snap.forEach((d) => nuvem.push(Object.assign({ id: d.id }, d.data() || {})));
-      }
+      if (window.DadosCobranca) nuvem = await window.DadosCobranca.tabela(this.COL).listar();
     } catch (e) {}
     this.itens = this.unir(nuvem, this.lerLocal());
   },
 
   pendentesParaAlertar() {
     return (this.itens || []).filter((row) => {
-      if (!row || row.status === "lancado") return false;
+      if (!row || !this.emAberto(row)) return false;
       const dias = this.diasUteisDesde(row.createdAt);
       const marco = this.marcoAlerta(dias);
       if (!marco || this.alertaVisto(row, dias)) return false;
@@ -979,7 +1251,9 @@ const DocAssinaturaApp = {
     return "O documento " + doc + doCliente + doTitulo + " foi emitido em " + quando + " e não foi concluído no Sienge ainda.";
   },
 
-  abrirAlertaPendentes(lista) {
+  /* previa = true: aberto pela tela de gestão de pop-ups. Fechar só fecha, sem marcar o marco como visto. */
+  abrirAlertaPendentes(lista, previa) {
+    if (!previa && typeof window.PopupAtivo === "function" && !window.PopupAtivo("documentos")) return;
     if (!lista.length || document.getElementById("docs-pend-alerta")) return;
     const linhas = lista.map((item) => `<p class="docs-pend-item">${this.esc(this.fraseAlerta(item))}</p>`).join("");
     const overlay = document.createElement("div");
@@ -1000,7 +1274,30 @@ const DocAssinaturaApp = {
     estilo.textContent = "#docs-pend-alerta .docs-pend-item{margin:0;padding:10px 12px;border:1px solid #fde68a;border-left:4px solid #d97706;background:#fffbeb;border-radius:10px;color:#1e293b;font-size:0.9rem;line-height:1.45;}";
     overlay.appendChild(estilo);
     document.body.appendChild(overlay);
-    overlay.querySelector("#docs-pend-fechar").addEventListener("click", () => this.fecharAlertaPendentes(lista));
+    overlay.querySelector("#docs-pend-fechar").addEventListener("click", () => {
+      if (previa) overlay.remove();
+      else this.fecharAlertaPendentes(lista);
+    });
+  },
+
+  /* Prévia: documentos em aberto já carregados na memória que estão num marco de aviso (sem olhar quem recebe
+     nem o "já visto"); sem nenhum, um exemplo emitido há 5 dias úteis. Não lê nem grava nada. */
+  previaAlertaPendentes() {
+    let lista = (this.itens || []).filter((row) => row && this.emAberto(row) && this.marcoAlerta(this.diasUteisDesde(row.createdAt)))
+      .map((row) => ({ row: row, dias: this.diasUteisDesde(row.createdAt) }));
+    if (!lista.length) {
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      const isoDe = (x) => x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0");
+      for (let guarda = 0; guarda < 30; guarda++) {
+        d.setDate(d.getDate() - 1);
+        if (this.diasUteisDesde(isoDe(d)) >= 5) break;
+      }
+      const iso = isoDe(d);
+      const row = { id: "previa", tipo: "cessao", cedenteNome: "ELISABETE FALCI", cliente: "ELISABETE FALCI", titulo: "6526", createdAt: iso + "T10:00:00-03:00", status: "emitido" };
+      lista = [{ row: row, dias: this.diasUteisDesde(row.createdAt) }];
+    }
+    this.abrirAlertaPendentes(lista, true);
   },
 
   fecharAlertaPendentes(lista) {
@@ -1058,7 +1355,9 @@ const DocAssinaturaApp = {
     }).join("")}</div>`;
     const opts = `<option value="">Todos os documentos</option>` + this.TIPOS.map((t) => `<option value="${t.id}"${this.tipo === t.id ? " selected" : ""}>${this.esc(t.label)}</option>`).join("");
     const rows = this.ordenar(this.visiveis());
-    const aviso = this.aviso ? `<p class="docs-aviso">${this.esc(this.aviso)}</p>` : "";
+    const pedidosBaixa = this.souAdmin() ? (this.itens || []).filter((r) => r && this.emAberto(r) && r.baixa && r.baixa.status === "pendente").length : 0;
+    const aviso = (this.aviso ? `<p class="docs-aviso">${this.esc(this.aviso)}</p>` : "")
+      + (pedidosBaixa ? `<p class="docs-aviso" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;"><strong>${pedidosBaixa} ${pedidosBaixa === 1 ? "pedido" : "pedidos"} de baixa</strong> aguardando sua aprovação (situação "Baixa pedida").</p>` : "");
     const grupos = new Map();
     rows.forEach((r) => {
       const id = this.centroDe(r) || "";
@@ -1073,12 +1372,12 @@ const DocAssinaturaApp = {
       return `<tr>
             <td>${this.esc(this.quando(r.createdAt))}</td>
             <td>${this.esc(this.tipoLabel(r.tipo))}</td>
-            <td>${this.esc(this.nomeExibido(r))}</td>
+            <td class="docs-cliente" title="${this.esc(this.nomeExibido(r))}">${this.esc(this.nomeExibido(r))}</td>
             <td>${this.esc(r.titulo || "—")}</td>
             <td>${this.esc(this.rotuloUnidade(r))}</td>
-            <td>${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
-            <td><span class="docs-sit${r.status === "lancado" ? " is-feito" : ""}">${r.status === "lancado" ? "Lançado no Sienge" : "Aguardando"}</span></td>
-            <td class="docs-acoes">${distrato}<button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button><button type="button" class="tvig-ico is-danger" title="Remover" onclick="DocAssinaturaApp.remover('${chave}')"><i data-lucide="trash-2" style="width:15px;height:15px;"></i></button></td>
+            <td title="${this.esc(r.userName || "")}">${this.esc(r.userName || "—")}${this.mesmoUsuario(r) ? ` <span class="docs-voce">você</span>` : ""}</td>
+            <td class="docs-sit-cel">${this.situacaoHtml(r)}</td>
+            <td><div class="docs-acoes-box"><div class="docs-acoes-btns">${this.botoesBaixaHtml(r)}${distrato}</div><div class="docs-acoes-ico"><button type="button" class="tvig-ico" title="${tem ? "Consultar documento" : "PDF não salvo para consulta"}" style="${tem ? "" : "opacity:.35"}" onclick="DocAssinaturaApp.consultar('${chave}')"><i data-lucide="paperclip" style="width:15px;height:15px;"></i></button>${this.botaoLixeiraHtml(r)}</div></div></td>
           </tr>`;
     };
     const corpo = ordem.map((id) => {
@@ -1089,6 +1388,7 @@ const DocAssinaturaApp = {
     }).join("");
     const tabela = rows.length
       ? `<div class="cc-scroll"><table class="cc-table docs-cc-table">
+          <colgroup><col style="width:118px"><col style="width:118px"><col><col style="width:70px"><col style="width:110px"><col style="width:16%"><col style="width:170px"><col style="width:250px"></colgroup>
           <thead><tr>
             ${this.th("quando", "Quando")}
             ${this.th("tipo", "Documento")}
@@ -1128,6 +1428,9 @@ const DocAssinaturaApp = {
 };
 
 window.DocAssinaturaApp = DocAssinaturaApp;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["documentos"] = function () { DocAssinaturaApp.previaAlertaPendentes(); };
 
 document.addEventListener("tabChanged", (e) => {
   if (e.detail === "relacionamento_assinaturas") DocAssinaturaApp.abrir();

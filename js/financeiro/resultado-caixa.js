@@ -211,13 +211,14 @@ const ResultadoCaixaApp = {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         try {
-          const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf.slice(0), { type: "array" });
           const f = this.lerForecast(wb);
           if (!Object.keys(f.contas || {}).length) {
             falhas.push(file.name);
             continue;
           }
-          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {} });
+          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {}, buf: buf });
         } catch (e) {
           falhas.push(file.name);
         }
@@ -260,6 +261,13 @@ const ResultadoCaixaApp = {
           });
         });
       });
+      const orfaos = {};
+      Object.keys(substituir).forEach((chave) => {
+        Object.keys(this.forecasts || {}).forEach((ym) => {
+          const item = ((this.forecasts[ym] || {}).porArquivo || {})[chave];
+          if (item && item.orig) orfaos[item.orig] = 1;
+        });
+      });
       seguintes.forEach((ym) => {
         const doc = this.garantirForecast(ym);
         Object.keys(substituir).forEach((nome) => { delete doc.porArquivo[nome]; });
@@ -278,9 +286,28 @@ const ResultadoCaixaApp = {
           this.apagarForecastNuvem(ym);
         }
       });
+      for (let i = 0; i < lidos.length; i++) {
+        const arq = lidos[i];
+        const orig = this.idOriginalForecast(base, arq.empresa, arq.nome);
+        try {
+          await this.salvarOriginal(orig, arq.nome, arq.buf);
+          seguintes.forEach((ym) => {
+            const item = ((this.forecasts[ym] || {}).porArquivo || {})[base + "|" + arq.nome];
+            if (!item) return;
+            item.orig = orig;
+            item.origNome = arq.nome;
+          });
+          delete orfaos[orig];
+        } catch (err) {
+          this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + arq.nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+        }
+      }
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       const gravados = Object.keys(mesesGravados).map((ym) => ({ ym: ym, doc: this.forecasts[ym] }));
       this.aplicarForecastVista();
-      if (falhas.length) this.aviso = "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".";
+      if (falhas.length) this.aviso = ((this.aviso ? this.aviso + " " : "") + "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".").trim();
       this.gravarForecastLocal();
       try {
         for (let i = 0; i < gravados.length; i++) await this.salvarForecastNuvem(gravados[i].ym, gravados[i].doc);
@@ -303,7 +330,14 @@ const ResultadoCaixaApp = {
       const por = (doc && doc.porArquivo) || {};
       const daqui = Object.keys(por).filter((chave) => this.forecastDaCompetencia(chave, por[chave]));
       if (!daqui.length) return;
-      daqui.forEach((chave) => { delete por[chave]; });
+      const orfaos = {};
+      daqui.forEach((chave) => {
+        if (por[chave] && por[chave].orig) orfaos[por[chave].orig] = 1;
+        delete por[chave];
+      });
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
       if (!Object.keys(por).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -323,7 +357,9 @@ const ResultadoCaixaApp = {
       const doc = this.forecasts[ym];
       if (!doc || !doc.porArquivo || !doc.porArquivo[nome]) return;
       if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+      const orig = doc.porArquivo[nome].orig || "";
       delete doc.porArquivo[nome];
+      if (orig && !this.origAindaUsado(orig)) this.apagarOriginal(orig);
       if (!Object.keys(doc.porArquivo).length) {
         delete this.forecasts[ym];
         this.apagarForecastNuvem(ym);
@@ -521,14 +557,14 @@ const ResultadoCaixaApp = {
   },
 
   async salvarForecastNuvem(ym, doc) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !doc) return false;
+    // resultado_caixa no Supabase (window.DadosFinanceiro): setDoc do doc inteiro vira upsert da linha.
+    const D = window.DadosFinanceiro;
+    if (!D || !doc) return false;
     const por = doc.porArquivo || {};
     const nomes = {};
     const contas = {};
     Object.keys(por).forEach((nome) => this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]));
-    await fx.setDoc(fx.doc(db, "resultado_caixa", this.docForecast(ym)), {
+    await D.gravarResultadoCaixa(this.docForecast(ym), {
       tipo: "forecast",
       slot: "fc-" + ym,
       competencia: ym,
@@ -546,12 +582,12 @@ const ResultadoCaixaApp = {
   },
 
   async carregarForecasts() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.where !== "function") return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = (this._fcToken = (this._fcToken || 0) + 1);
     try {
-      const snap = await fx.getDocs(fx.query(fx.collection(db, "resultado_caixa"), fx.where("tipo", "==", "forecast")));
+      // where("tipo", "==", "forecast"): snapshot de imitação com os docs no formato antigo.
+      const snap = await D.listarResultadoCaixa({ tipo: "forecast" });
       if (this._fcToken !== token) return;
       const nuvem = {};
       const semParte = {};
@@ -1210,8 +1246,390 @@ const ResultadoCaixaApp = {
     return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
       <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
       <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
+      <button type="button" class="rcx-baixar${arq && arq.orig ? "" : " is-sem"}" title="${arq && arq.orig ? "Baixar o arquivo original" : "Este envio não guardou o Excel original. Suba o arquivo de novo para baixar."}" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
       <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
     </span>`;
+  },
+
+  pacoteConferencia(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const contas = {};
+      const nomes = {};
+      const meses = {};
+      let meta = { nome: nome, empresa: 0, rotulo: "", base: "" };
+      let achou = false;
+      Object.keys(this.forecasts || {}).sort().forEach((ym) => {
+        const arq = ((this.forecasts[ym] || {}).porArquivo || {})[nome];
+        if (!arq) return;
+        achou = true;
+        meta = {
+          nome: arq.nome || meta.nome,
+          empresa: Number(arq.empresa) || meta.empresa || 0,
+          rotulo: arq.rotulo || meta.rotulo,
+          base: arq.base || meta.base
+        };
+        Object.keys(arq.contas || {}).forEach((cc) => {
+          if (arq.nomes && arq.nomes[cc]) nomes[cc] = arq.nomes[cc];
+          const bag = contas[cc] || (contas[cc] = {});
+          Object.keys(arq.contas[cc] || {}).forEach((code) => {
+            const info = arq.contas[cc][code] || {};
+            const linha = bag[code] || (bag[code] = { nome: info.nome || "", meses: {} });
+            if (info.nome) linha.nome = info.nome;
+            const v = Number((info.meses || {})[ym]) || 0;
+            if (!v) return;
+            linha.meses[ym] = (Number(linha.meses[ym]) || 0) + v;
+            meses[ym] = 1;
+          });
+        });
+      });
+      if (!achou) return null;
+      return { tipo: "fc", nome: nome, meta: meta, contas: contas, nomes: nomes, meses: Object.keys(meses).sort() };
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (!arq) return null;
+    return { tipo: "mes", nome: nome, meta: arq, ano: Number(tipo) || 0 };
+  },
+
+  linhasConferencia(p) {
+    const linhas = [];
+    const ordem = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    if (p.tipo === "fc") {
+      Object.keys(p.contas || {}).sort(ordem).forEach((cc) => {
+        const nomeCc = (p.nomes && p.nomes[cc]) || String(cc);
+        Object.keys(p.contas[cc] || {}).sort(ordem).forEach((code) => {
+          const info = p.contas[cc][code] || {};
+          linhas.push({ cc: nomeCc, code: code, nome: info.nome || "", meses: info.meses || {} });
+        });
+      });
+      return linhas;
+    }
+    const porCc = (p.meta && p.meta.contasPorCc) || {};
+    if (Object.keys(porCc).length) {
+      Object.keys(porCc).sort(ordem).forEach((cc) => {
+        const dono = porCc[cc] || {};
+        const rotulo = dono.nome ? (cc + " - " + dono.nome) : String(cc);
+        Object.keys(dono.contas || {}).sort(ordem).forEach((code) => {
+          const info = dono.contas[code] || {};
+          linhas.push({ cc: rotulo, code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+        });
+      });
+      return linhas;
+    }
+    Object.keys((p.meta && p.meta.contas) || {}).sort(ordem).forEach((code) => {
+      const info = p.meta.contas[code] || {};
+      linhas.push({ cc: "", code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+    });
+    return linhas;
+  },
+
+  colunasConferencia(p) {
+    const nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    if (p.tipo === "fc") {
+      const meses = (p.meses && p.meses.length) ? p.meses : [];
+      return {
+        heads: ["Centro de custo", "Código", "Conta"].concat(meses.map((ym) => {
+          const i = Number(ym.slice(5, 7)) - 1;
+          return (nomes[i] || ym) + "/" + ym.slice(0, 4);
+        })),
+        valores: (linha) => meses.map((ym) => Number(linha.meses[ym]) || 0)
+      };
+    }
+    const heads = ["Centro de custo", "Código", "Conta"];
+    for (let m = 0; m < 12; m++) {
+      heads.push(nomes[m] + " orçado");
+      heads.push(nomes[m] + " realizado");
+    }
+    return {
+      heads: heads,
+      valores: (linha) => {
+        const out = [];
+        for (let m = 1; m <= 12; m++) {
+          const cel = (linha.meses || {})[String(m)] || {};
+          out.push(Number(cel.o) || 0);
+          out.push(Number(cel.r) || 0);
+        }
+        return out;
+      }
+    };
+  },
+
+  nomeAbaConferencia(p, used, inv) {
+    const emp = Number(p.meta && p.meta.empresa) || this.empresaId(p.nome) || 0;
+    if (inv && emp && typeof inv.excelSheetName === "function") return inv.excelSheetName(emp, used);
+    let base = String((p.meta && (p.meta.rotulo || p.meta.nome)) || p.nome || "Arquivo")
+      .replace(/^\d{4}-\d{2}\|/, "")
+      .replace(/[:\\/?*\[\]]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Arquivo";
+    if (base.length > 31) base = base.slice(0, 31);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suf = "-" + (n++);
+      name = (base.slice(0, Math.max(1, 31 - suf.length)) + suf).slice(0, 31);
+    }
+    used.add(name.toLowerCase());
+    return name;
+  },
+
+  preencherConferencia(ws, inv, p, imgId, generatedAt) {
+    const moneyFmt = "#,##0.00";
+    const spec = this.colunasConferencia(p);
+    const linhas = this.linhasConferencia(p);
+    const heads = spec.heads;
+    const lastCol = Math.max(heads.length, 8);
+    const lastL = inv.excelColLetter(lastCol);
+    const nomeArquivo = String((p.meta && p.meta.nome) || p.nome || "").replace(/^\d{4}-\d{2}\|/, "");
+    const empresa = Number(p.meta && p.meta.empresa) || this.empresaId(nomeArquivo) || 0;
+    const comp = p.tipo === "fc"
+      ? (p.meta && p.meta.base ? p.meta.base : "")
+      : (p.ano ? String(p.ano) : "");
+    ws.properties.showGridLines = false;
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 4, topLeftCell: "B5", activeCell: "B5", showGridLines: false }];
+    ws.columns = [
+      { width: 42 },
+      { width: 18 },
+      { width: 42 },
+      ...Array.from({ length: lastCol - 3 }, () => ({ width: 16 }))
+    ];
+    ws.mergeCells("A1:A2");
+    ws.getRow(1).height = 28;
+    ws.getRow(2).height = 22;
+    const titulo = p.tipo === "fc" ? "Forecast gravado" : "Fechamento gravado";
+    const titleCell = ws.getCell("A1");
+    titleCell.value = {
+      richText: [
+        { font: { name: "Calibri", size: 14, bold: true, color: { argb: "FF475569" } }, text: titulo + "\n" },
+        { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nomeArquivo || "Arquivo" }
+      ]
+    };
+    inv.excelPaint(titleCell, {
+      fill: "FFFFFFFF",
+      align: { vertical: "middle", horizontal: "left", wrapText: true, indent: 8 }
+    });
+    if (imgId != null) {
+      try {
+        const logoPx = Math.round(1.54 * 96 / 2.54);
+        ws.addImage(imgId, { tl: { col: 0.04, row: 0.08 }, ext: { width: logoPx, height: logoPx } });
+      } catch (e) {}
+    }
+    const kpis = [
+      { label: "Arquivo", value: nomeArquivo || "—", texto: true },
+      { label: "Empresa", value: empresa ? String(empresa) : "—", texto: true },
+      { label: "Competência", value: comp || "—", texto: true },
+      { label: "Linhas", value: linhas.length, texto: false }
+    ];
+    kpis.forEach((k, i) => {
+      const col = 4 + i;
+      const cellL = ws.getRow(1).getCell(col);
+      const cellV = ws.getRow(2).getCell(col);
+      cellL.value = k.label;
+      cellV.value = k.value;
+      inv.excelPaint(cellL, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 8, color: { argb: "FF94A3B8" } },
+        align: { horizontal: "right", vertical: "bottom" }
+      });
+      inv.excelPaint(cellV, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 12, color: { argb: "FF0F172A" } },
+        align: { horizontal: "right", vertical: "middle" },
+        numFmt: k.texto ? undefined : "#,##0"
+      });
+    });
+    ws.getRow(3).height = 8;
+    const headRow = ws.getRow(4);
+    headRow.height = 20;
+    for (let c = 1; c <= lastCol; c++) {
+      const cell = headRow.getCell(c);
+      cell.value = heads[c - 1] || "";
+      inv.excelPaint(cell, {
+        fill: "FF334155",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: c <= 3 ? "left" : "right", vertical: "middle" },
+        border: true
+      });
+    }
+    const totais = Array(heads.length - 3).fill(0);
+    let rowIdx = 5;
+    linhas.forEach((linha) => {
+      const vals = spec.valores(linha);
+      const row = ws.getRow(rowIdx);
+      row.height = 18;
+      const textos = [linha.cc || "", linha.code || "", linha.nome || ""];
+      textos.forEach((texto, i) => {
+        const cell = row.getCell(i + 1);
+        cell.value = texto;
+        inv.excelPaint(cell, {
+          fill: i === 0 ? "FFE7F6EE" : "FFFFFFFF",
+          font: { bold: i === 0, size: 9, color: { argb: i === 0 ? "FF105436" : "FF0F172A" } },
+          align: { horizontal: "left", vertical: "middle" },
+          border: true
+        });
+      });
+      vals.forEach((n, i) => {
+        const cell = row.getCell(4 + i);
+        const num = Number(n) || 0;
+        totais[i] += num;
+        cell.value = num;
+        inv.excelPaint(cell, {
+          fill: "FFFFFFFF",
+          font: { size: 9, color: { argb: num < 0 ? "FFB91C1C" : (num ? "FF0F172A" : "FF94A3B8") } },
+          align: { horizontal: "right", vertical: "middle" },
+          border: true,
+          numFmt: moneyFmt
+        });
+      });
+      rowIdx += 1;
+    });
+    const total = ws.getRow(rowIdx);
+    total.height = 20;
+    ["", "", "Total"].forEach((texto, i) => {
+      const cell = total.getCell(i + 1);
+      cell.value = texto;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "left", vertical: "middle" },
+        border: true
+      });
+    });
+    totais.forEach((n, i) => {
+      const cell = total.getCell(4 + i);
+      cell.value = n;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "right", vertical: "middle" },
+        border: true,
+        numFmt: moneyFmt
+      });
+    });
+    for (let c = heads.length + 1; c <= lastCol; c++) {
+      inv.excelPaint(total.getCell(c), {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        border: true
+      });
+    }
+    const foot = ws.getRow(rowIdx + 2);
+    foot.getCell(1).value = generatedAt + " · Leitura gravada de " + (nomeArquivo || "arquivo") + ". O Excel original não fica armazenado; estes são os números que entraram na tela.";
+    inv.excelPaint(foot.getCell(1), {
+      font: { italic: true, size: 8, color: { argb: "FF64748B" } },
+      align: { horizontal: "left", vertical: "middle" }
+    });
+    ws.mergeCells(rowIdx + 2, 1, rowIdx + 2, lastCol);
+    if (lastL) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: Math.max(rowIdx - 1, 4), column: heads.length } };
+  },
+
+  async baixarPacotes(pacotes, arquivo) {
+    const lista = (pacotes || []).filter(Boolean);
+    if (!lista.length) {
+      alert("Nenhum arquivo gravado para baixar.");
+      return;
+    }
+    const inv = window.InvestimentoApp;
+    if (!inv || typeof inv.ensureExcelJS !== "function") {
+      alert("O Excel não está disponível nesta tela.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const ExcelJS = await inv.ensureExcelJS();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "CRM Moura Leite";
+      wb.created = new Date();
+      let imgId = null;
+      try {
+        const logo = await inv.logoDataUrl();
+        imgId = wb.addImage({ base64: logo.dataUrl, extension: logo.extension || "png" });
+      } catch (e) {}
+      const used = new Set();
+      const gerado = inv.generatedAtLabel(new Date());
+      lista.forEach((p) => {
+        const ws = wb.addWorksheet(this.nomeAbaConferencia(p, used, inv), { properties: { showGridLines: false } });
+        this.preencherConferencia(ws, inv, p, imgId, gerado);
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = arquivo || "conferencia.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+    } catch (e) {
+      alert((e && e.message) || "Não consegui gerar o Excel.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarArquivo(tipo, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    const ref = this.refOriginal(tipo, nome);
+    if (!ref) {
+      alert("Este arquivo foi enviado antes de guardar o Excel original. Suba o arquivo de novo para poder baixá-lo.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const dado = await this.lerOriginal(ref.id);
+      if (!dado || !dado.buf) throw new Error("vazio");
+      this.dispararDownload(dado.buf, dado.nome || ref.nome || nome);
+    } catch (e) {
+      alert("Não consegui baixar o arquivo original. Suba o arquivo de novo.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarColuna(qual) {
+    const atual = this.anoAtual();
+    const ant = atual > 1900 ? atual - 1 : 0;
+    const refs = [];
+    const sem = [];
+    const guardar = (tipo, nome) => {
+      const ref = this.refOriginal(tipo, nome);
+      if (ref) refs.push(ref);
+      else sem.push(nome);
+    };
+    if (qual === "forecast") {
+      const usados = {};
+      this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
+      const mapa = {};
+      Object.keys(this.forecasts || {}).forEach((ym) => {
+        if (!usados[ym]) return;
+        const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+        Object.keys(por).forEach((nome) => {
+          if (!this.forecastDaCompetencia(nome, por[nome])) return;
+          mapa[nome] = 1;
+        });
+      });
+      Object.keys(mapa).forEach((nome) => guardar("fc", nome));
+    } else {
+      const ano = qual === "anterior" ? ant : atual;
+      Object.keys(((this.anoDados(ano) || {}).arquivos) || {}).forEach((nome) => guardar(String(ano), nome));
+    }
+    if (!refs.length) {
+      alert("Estes arquivos foram enviados antes de guardar o Excel original. Suba de novo para poder baixá-los.");
+      return;
+    }
+    for (let i = 0; i < refs.length; i++) {
+      try {
+        const dado = await this.lerOriginal(refs[i].id);
+        if (!dado || !dado.buf) sem.push(refs[i].nome);
+        else this.dispararDownload(dado.buf, dado.nome || refs[i].nome);
+      } catch (e) {
+        sem.push(refs[i].nome);
+      }
+      if (i < refs.length - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (sem.length) alert("Sem o Excel original: " + sem.map((n) => String(n).replace(/^\d{4}-\d{2}\|/, "")).join(", ") + ". Suba esses arquivos de novo.");
   },
 
   nomeEmpresaArquivo(nome) {
@@ -1557,15 +1975,11 @@ const ResultadoCaixaApp = {
     let mapa = null;
     try { mapa = this.mapaDfc(FC); } catch (e) { mapa = null; }
     if (mapa && Object.keys(mapa.accToNode || {}).length) return mapa;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
     const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
-    if (!fx || !db || !fx.getDoc || !plano) return mapa;
+    if (!window.DadosNucleo || !plano) return mapa;
     try {
-      const snap = await fx.getDoc(fx.doc(db, "config", "global"));
-      const exists = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      if (!exists) return mapa;
-      const raw = (snap.data() || {}).crm_plano_visoes_v2;
+      // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+      const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
       if (!raw) return mapa;
       const visoes = JSON.parse(raw);
       if (!Array.isArray(visoes) || !visoes.length) return mapa;
@@ -1748,10 +2162,11 @@ const ResultadoCaixaApp = {
       this._mapa = await this.mapaPronto();
       for (let i = 0; i < files.length; i++) {
         const buf = await files[i].arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array" });
+        const wb = XLSX.read(buf.slice(0), { type: "array" });
         const blocos = this.lerPlanilha(wb);
         if (!blocos.length) throw new Error("Não reconheci centros de custo em " + files[i].name + ". Use o comparativo orçado × realizado por centro de custo.");
         this.aplicarBlocos(files[i].name, blocos);
+        await this.ligarOriginalEnviado(files[i].name, buf);
       }
       const fora = this._fora || [];
       if (fora.length) {
@@ -1939,10 +2354,144 @@ const ResultadoCaixaApp = {
     return out;
   },
 
+  idOriginalForecast(base, empresa, nome) {
+    const emp = Number(empresa) || 0;
+    const chave = emp ? String(emp) : String(nome || "arq").replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 60);
+    return "fc_" + String(base || "").replace(/[^0-9-]/g, "") + "_" + chave;
+  },
+
+  bufParaBase64(buf) {
+    const blob = new Blob([buf]);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+      reader.onerror = () => reject(reader.error || new Error("Não consegui ler o arquivo."));
+      reader.readAsDataURL(blob);
+    });
+  },
+
+  base64ParaBuf(b64) {
+    const bin = atob(String(b64 || ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  },
+
+  // Excel original de cada envio: no Supabase Storage (bucket "arquivos"), em resultado_caixa_orig/<id>.
+  // O nome do arquivo fica no próprio item (origNome).
+  caminhoOriginal(id) {
+    return "resultado_caixa_orig/" + String(id || "").replace(/[\\/]/g, "_");
+  },
+
+  async salvarOriginal(id, nome, buf) {
+    const A = window.ArquivosIntegra;
+    if (!A || !id || !buf) throw new Error("A nuvem não está disponível.");
+    if (!buf.byteLength) throw new Error("Arquivo vazio.");
+    await A.uploadBytes(A.ref(null, this.caminhoOriginal(id)), buf, { contentType: "application/octet-stream" });
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return true;
+  },
+
+  async lerOriginal(id) {
+    if (this._bytesOriginais && this._bytesOriginais[id]) {
+      return { nome: "", buf: this._bytesOriginais[id] };
+    }
+    const A = window.ArquivosIntegra;
+    if (!A || !id) return null;
+    const url = await A.getDownloadURL(A.ref(null, this.caminhoOriginal(id)));
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (!buf.byteLength) return null;
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return { nome: "", buf: buf };
+  },
+
+  apagarOriginal(id) {
+    if (!id) return;
+    if (this._bytesOriginais) delete this._bytesOriginais[id];
+    const A = window.ArquivosIntegra;
+    if (!A) return;
+    A.deleteObject(A.ref(null, this.caminhoOriginal(id))).catch(function() {});
+  },
+
+  origAindaUsado(id) {
+    if (!id) return false;
+    let achou = false;
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      Object.keys(por).forEach((nome) => {
+        if (por[nome] && por[nome].orig === id) achou = true;
+      });
+    });
+    const visitar = (bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        if (bag.arquivos[nome] && bag.arquivos[nome].orig === id) achou = true;
+      });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => visitar(this.acervo.anterior[k]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => visitar(this.acervo.meses[k]));
+    return achou;
+  },
+
+  async ligarOriginalEnviado(nome, buf) {
+    const lista = [];
+    const visitar = (slot, bag) => {
+      const arq = bag && bag.arquivos && bag.arquivos[nome];
+      if (!arq || !arq._pendente) return;
+      const id = arq._doc || this.docCaixa(arq._slot || slot, arq.empresa, nome);
+      arq._doc = id;
+      lista.push({ arq: arq, id: id });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    for (let i = 0; i < lista.length; i++) {
+      try {
+        await this.salvarOriginal(lista[i].id, nome, buf);
+        lista[i].arq.orig = lista[i].id;
+        lista[i].arq.origNome = nome;
+      } catch (err) {
+        this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+      }
+    }
+  },
+
+  refOriginal(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const chaves = Object.keys(this.forecasts || {});
+      for (let i = 0; i < chaves.length; i++) {
+        const arq = ((this.forecasts[chaves[i]] || {}).porArquivo || {})[nome];
+        if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || arq.nome || nome };
+      }
+      return null;
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || nome };
+    return null;
+  },
+
+  dispararDownload(buf, nome) {
+    const bruto = String(nome || "arquivo.xlsx").replace(/^\d{4}-\d{2}\|/, "").replace(/[\\/:*?"<>|]/g, " ").trim() || "arquivo.xlsx";
+    const arquivo = /\.(xlsx|xlsm)$/i.test(bruto) ? bruto : (bruto + ".xlsx");
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = arquivo;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  },
+
   async salvarArquivoNuvem(slot, nome, arq) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || !arq) return false;
+    // resultado_caixa no Supabase: o payload é aberto nas colunas jsonb (entradas, contas, contas_por_cc,
+    // planos_json) de uma linha só; as partes __pN (limite de 1 MB do Firestore) não existem mais.
+    const D = window.DadosFinanceiro;
+    if (!D || !arq) return false;
     const id = arq._doc || this.docCaixa(slot, arq.empresa, nome);
     const limpo = this.enxugarArq(arq);
     const detalhe = JSON.stringify({
@@ -1951,32 +2500,19 @@ const ResultadoCaixaApp = {
       contasPorCc: limpo.contasPorCc || {},
       planosJson: this.empacotarPlanos(limpo.planosPorCc)
     });
-    const LIM = 400000;
     const ids = [];
-    if (detalhe.length > LIM) {
-      for (let i = 0, n = 0; i < detalhe.length; i += LIM, n++) {
-        const pid = id + "__p" + n;
-        ids.push(pid);
-        await fx.setDoc(fx.doc(db, "resultado_caixa", pid), {
-          tipo: "parte",
-          pai: id,
-          texto: detalhe.slice(i, i + LIM)
-        });
-      }
-    }
     const base = {
       slot: slot,
       nome: nome,
       empresa: Number(arq.empresa) || 0,
       rotulo: arq.rotulo || "",
       em: new Date().toISOString(),
-      payload: ids.length ? "" : detalhe,
-      partes: ids
+      payload: detalhe,
+      partes: ids,
+      orig: arq.orig || "",
+      origNome: arq.origNome || ""
     };
-    await fx.setDoc(fx.doc(db, "resultado_caixa", id), base);
-    for (let n = ids.length; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", id + "__p" + n)).catch(function() {});
-    }
+    await D.gravarResultadoCaixa(id, base);
     arq._doc = id;
     arq._partes = ids;
     arq._pendente = false;
@@ -2021,15 +2557,13 @@ const ResultadoCaixaApp = {
   },
 
   apagarNuvem(docId) {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!docId || !fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!docId || !D) return;
     this._nuvemToken = (this._nuvemToken || 0) + 1;
-    fx.deleteDoc(fx.doc(db, "resultado_caixa", docId)).catch(() => {});
-    if (String(docId).indexOf("__p") >= 0 || String(docId).indexOf("fc-") === 0) return;
-    for (let n = 0; n < 40; n++) {
-      fx.deleteDoc(fx.doc(db, "resultado_caixa", docId + "__p" + n)).catch(function() {});
-    }
+    // Uma linha por arquivo/forecast (sem partes __pN para apagar).
+    D.excluirResultadoCaixa(docId).catch(() => {});
+    if (String(docId).indexOf("fc-") === 0) return;
+    this.apagarOriginal(docId);
   },
 
   aplicarDoc(acervo, id, x) {
@@ -2038,7 +2572,7 @@ const ResultadoCaixaApp = {
       acervo._partes[id] = x.texto || "";
       return;
     }
-    if (x && (x.tipo === "forecast" || String(x.slot || "").indexOf("fc-") === 0)) return;
+    if (x && (x.tipo === "forecast" || x.tipo === "original" || x.tipo === "original-parte" || String(x.slot || "").indexOf("fc-") === 0)) return;
     const nome = x.nome || id;
     let extra = null;
     if (typeof x.payload === "string" && x.payload && !(Array.isArray(x.partes) && x.partes.length)) {
@@ -2053,7 +2587,9 @@ const ResultadoCaixaApp = {
       planosPorCc: (extra && extra.planosJson) ? this.abrirPlanos(extra.planosJson) : ((x.planosPorCc && Object.keys(x.planosPorCc).length) ? x.planosPorCc : this.abrirPlanos(x.planosJson)),
       _doc: id,
       _slot: x.slot || "",
-      _partes: Array.isArray(x.partes) ? x.partes : []
+      _partes: Array.isArray(x.partes) ? x.partes : [],
+      orig: x.orig || "",
+      origNome: x.origNome || ""
     };
     const slot = String(x.slot || "");
     if (slot.indexOf("ant-") === 0) {
@@ -2136,9 +2672,8 @@ const ResultadoCaixaApp = {
   },
 
   async carregarNuvem() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) return;
+    const D = window.DadosFinanceiro;
+    if (!D) return;
     const token = this._nuvemToken || 0;
     const vazio = !this.temAcervo();
     if (vazio) {
@@ -2148,7 +2683,7 @@ const ResultadoCaixaApp = {
     const leituraVelha = () => (this._nuvemToken || 0) !== token;
     const forecastP = this.carregarForecasts();
     try {
-      const snap = await fx.getDocs(fx.collection(db, "resultado_caixa"));
+      const snap = await D.listarResultadoCaixa(); // snapshot de imitação (docs no formato que aplicarDoc lê)
       if (leituraVelha()) {
         if (!this._subindo) this.lendo = false;
         return;
@@ -2683,15 +3218,24 @@ const ResultadoCaixaApp = {
       </div>
       ${this.arqsAberto ? `<div class="rcx-arqs-box">
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais desta competência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAtual || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do ano anterior" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipsAnt || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
         </div>
         <div class="rcx-arqs-col">
-          <span class="rcx-arqs-label">Forecast</span>
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Forecast</span>
+            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do forecast" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
           <div class="rcx-arqs">${chipForecast}</div>
         </div>
       </div>` : ""}

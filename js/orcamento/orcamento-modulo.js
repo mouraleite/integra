@@ -469,18 +469,29 @@ const OrcamentoModuloApp = {
     }).sort((a, b) => a.centro.localeCompare(b.centro, "pt-BR"));
   },
 
+  // Orçamento no Supabase (orcamento_empreendimento, orcamento_receita, tabelas_vigentes via window.DadosEngenharia).
+  // null se a camada não carregou (o módulo segue só com o localStorage, como antes sem o Firebase).
+  tabelaNuvem(nome) {
+    return window.DadosEngenharia ? window.DadosEngenharia.tabela(nome) : null;
+  },
+
+  // Doc lido da tabela sem o "id" (como o data() do Firestore). null se não existir.
+  semId(obj) {
+    if (!obj) return null;
+    delete obj.id;
+    return obj;
+  },
+
   async carregarIndiceNuvem() {
     if (this._listaNuvem) return;
     this._listaNuvem = true;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.getDocs !== "function" || typeof fx.collection !== "function") return;
+    const t = this.tabelaNuvem("orcamento_empreendimento");
+    if (!t) return;
     try {
-      const snap = await fx.getDocs(fx.collection(db, "orcamento_empreendimento"));
-      const docs = snap && snap.docs ? snap.docs : [];
+      const docs = await t.listar();
       docs.forEach((d) => {
         if (!d || d.id === "_padrao") return;
-        const data = d.data ? (d.data() || {}) : {};
+        const data = d;
         const cc = String(data.ccId || d.id || "");
         if (!cc || cc === "_padrao") return;
         const atual = this.lerIndice()[cc] || {};
@@ -576,11 +587,11 @@ const OrcamentoModuloApp = {
     if (this._planos) delete this._planos[chave];
     if (String(this.novo.ccId) === chave) this.novo.ccId = "";
     try { localStorage.removeItem("orc_receita_v1_" + chave); } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (fx && db && typeof fx.deleteDoc === "function") {
-      fx.deleteDoc(fx.doc(db, "orcamento_empreendimento", chave)).catch(() => {});
-      fx.deleteDoc(fx.doc(db, "orcamento_receita", chave)).catch(() => {});
+    const tEmp = this.tabelaNuvem("orcamento_empreendimento");
+    const tRec = this.tabelaNuvem("orcamento_receita");
+    if (tEmp && tRec) {
+      tEmp.excluir(chave).catch(() => {});
+      tRec.excluir(chave).catch(() => {});
     }
     this.renderNovo();
   },
@@ -808,19 +819,18 @@ const OrcamentoModuloApp = {
     const local = this.lerPlanoLocal(cc);
     if (!this._planos) this._planos = {};
     this._planos[cc] = local;
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) {
+    const t = this.tabelaNuvem("orcamento_empreendimento");
+    if (!t) {
       this.novo.nuvem = local.em ? "neste navegador" : "";
       this.pintarNuvem();
       return;
     }
     try {
-      const snap = await fx.getDoc(fx.doc(db, "orcamento_empreendimento", cc));
-      if (snap.exists()) {
+      const lido = this.semId(await t.obter(cc));
+      if (lido) {
         const atual = this._planos[cc];
         if (atual && atual.em && atual.em > inicio) return;
-        const data = snap.data() || {};
+        const data = lido;
         const nuvemEm = String(data.em || "");
         if (!local.em || (nuvemEm && nuvemEm >= local.em)) {
           this._planos[cc] = this.normalizarPlano(data);
@@ -848,15 +858,14 @@ const OrcamentoModuloApp = {
     this.gravarPlanoLocal(cc);
     this.novo.nuvem = "salvando";
     this.pintarNuvem();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db) {
+    const t = this.tabelaNuvem("orcamento_empreendimento");
+    if (!t) {
       this.novo.nuvem = "neste navegador";
       this.pintarNuvem();
       return;
     }
     try {
-      await fx.setDoc(fx.doc(db, "orcamento_empreendimento", cc), {
+      await t.gravar(cc, {
         companyId: String(this.novo.companyId || plano.companyId || ""),
         ccId: cc,
         anoDe: Number(this.novo.anoDe) || Number(plano.anoDe) || this.anoSeguinte(),
@@ -995,12 +1004,11 @@ const OrcamentoModuloApp = {
       const raw = JSON.parse(localStorage.getItem("orc_venda_padrao") || "null");
       if (raw && Array.isArray(raw.planos)) lista = raw.planos;
     } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (fx && db) {
+    const t = this.tabelaNuvem("orcamento_empreendimento");
+    if (t) {
       try {
-        const snap = await fx.getDoc(fx.doc(db, "orcamento_empreendimento", "_padrao"));
-        if (snap.exists() && Array.isArray((snap.data() || {}).planos)) lista = snap.data().planos;
+        const padrao = await t.obter("_padrao");
+        if (padrao && Array.isArray(padrao.planos)) lista = padrao.planos;
       } catch (e) {}
     }
     this._padrao = this.normalizarPlano({ planos: lista }).planos;
@@ -1041,17 +1049,16 @@ const OrcamentoModuloApp = {
     this._padrao = planos;
     this._padraoEstado = "ok";
     try { localStorage.setItem("orc_venda_padrao", JSON.stringify({ planos: planos })); } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    const t = this.tabelaNuvem("orcamento_empreendimento");
     this.novo.nuvem = "salvando";
     this.pintarNuvem();
-    if (!fx || !db) {
+    if (!t) {
       this.novo.nuvem = "neste navegador";
       this.pintarNuvem();
       return;
     }
     try {
-      await fx.setDoc(fx.doc(db, "orcamento_empreendimento", "_padrao"), { planos: planos, em: new Date().toISOString() }, { merge: true });
+      await t.gravar("_padrao", { planos: planos, em: new Date().toISOString() }, { merge: true });
       this.novo.nuvem = "salvo";
     } catch (e) {
       this.novo.nuvem = "neste navegador";
@@ -1243,14 +1250,9 @@ const OrcamentoModuloApp = {
         if (!TabelasVigentesApp.state.tables || !TabelasVigentesApp.state.tables.length) TabelasVigentesApp.loadLocal();
         await TabelasVigentesApp.loadCloud();
         if (TabelasVigentesApp.state.tables && TabelasVigentesApp.state.tables.length) lista = TabelasVigentesApp.state.tables;
-      } else if (window.firebaseDb && window.firebaseCollections && window.firebaseCollections.getDocs) {
-        const fx = window.firebaseCollections;
-        const snap = await fx.getDocs(fx.collection(window.firebaseDb, "tabelas_vigentes"));
-        const nuvem = [];
-        snap.forEach((d) => {
-          if (!d.id || String(d.id).charAt(0) === "_") return;
-          nuvem.push(Object.assign({ id: d.id }, d.data() || {}));
-        });
+      } else if (this.tabelaNuvem("tabelas_vigentes")) {
+        const nuvem = (await this.tabelaNuvem("tabelas_vigentes").listar())
+          .filter((d) => d && d.id && String(d.id).charAt(0) !== "_");
         if (nuvem.length) lista = nuvem;
       }
     } catch (e) {}
@@ -2933,28 +2935,27 @@ const OrcamentoModuloApp = {
     if (!cc || !resultado) return false;
     const doc = this.receitaParaNuvem(resultado);
     try { localStorage.setItem("orc_receita_v1_" + cc, JSON.stringify(doc)); } catch (e) {}
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!fx || !db || typeof fx.setDoc !== "function") {
+    const t = this.tabelaNuvem("orcamento_receita");
+    if (!t) {
       this.novo.nuvem = "neste navegador";
-      this.novo.erro = "A receita foi montada, mas o Firebase não está disponível neste navegador.";
+      this.novo.erro = "A receita foi montada, mas o banco de dados não está disponível neste navegador.";
       return false;
     }
     this.novo.nuvem = "salvando";
     this.pintarNuvem();
     try {
-      await fx.setDoc(fx.doc(db, "orcamento_receita", cc), doc);
+      await t.gravar(cc, doc); // substitui (setDoc sem merge)
       this.novo.nuvem = "salvo";
       return true;
     } catch (e) {
       try {
         const semClientes = Object.assign({}, doc, { clientes: [] });
-        await fx.setDoc(fx.doc(db, "orcamento_receita", cc), semClientes);
+        await t.gravar(cc, semClientes);
         this.novo.nuvem = "salvo";
         return true;
       } catch (e2) {
         this.novo.nuvem = "neste navegador";
-        this.novo.erro = "A receita foi montada, mas não foi salva no Firebase.";
+        this.novo.erro = "A receita foi montada, mas não foi salva no banco de dados.";
         return false;
       }
     }
@@ -2964,13 +2965,11 @@ const OrcamentoModuloApp = {
     const pedido = String(cc || "");
     if (!pedido) return;
     const selo = (this._receitaSelo = (this._receitaSelo || 0) + 1);
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
+    const t = this.tabelaNuvem("orcamento_receita");
     let data = null;
-    if (fx && db && typeof fx.getDoc === "function") {
+    if (t) {
       try {
-        const snap = await fx.getDoc(fx.doc(db, "orcamento_receita", pedido));
-        if (snap && snap.exists && snap.exists()) data = snap.data() || {};
+        data = this.semId(await t.obter(pedido));
       } catch (e) {}
     }
     if (!data) {

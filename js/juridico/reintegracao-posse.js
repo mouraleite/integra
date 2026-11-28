@@ -195,9 +195,9 @@ window.ReintegracaoPosseApp = {
       }
     } catch (e) {}
     try {
-      const fc = window.firebaseCollections;
-      if (window.firebaseDb && fc && fc.getDoc && fc.doc) {
-        const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", this.DOC));
+      if (window.DadosNucleo) {
+        // config/<DOC>: documento inteiro numa linha de configuracoes.
+        const snap = await window.DadosNucleo.lerConfig(this.DOC);
         if (snap && typeof snap.exists === "function" && snap.exists()) {
           const data = snap.data() || {};
           const nuvem = data.fichas && typeof data.fichas === "object" ? data.fichas : null;
@@ -215,10 +215,9 @@ window.ReintegracaoPosseApp = {
     this.updatedAt = Date.now();
     const payload = { fichas: this.fichas, updatedAt: this.updatedAt };
     try { localStorage.setItem(this.KEY, JSON.stringify(payload)); } catch (e) {}
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.setDoc || !fc.doc) return;
+    if (!window.DadosNucleo) return;
     try {
-      await fc.setDoc(fc.doc(window.firebaseDb, "config", this.DOC), payload, { merge: true });
+      await window.DadosNucleo.gravarConfig(this.DOC, payload, { merge: true });
     } catch (e) {}
   },
 

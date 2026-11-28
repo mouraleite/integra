@@ -1,5 +1,4 @@
-const { initializeApp, getApps } = require("firebase/app");
-const { getFirestore, collection, doc, getDoc, setDoc, getDocs, writeBatch } = require("firebase/firestore");
+const { dados, tabela, checar } = require("../../lib/dados-servidor");
 const { todayIsoSP } = require("../../lib/br-calendar");
 
 const SIENGE_DOMAIN = "mouraleite";
@@ -8,18 +7,6 @@ const SIENGE_USER = process.env.SIENGE_API_USER || "";
 const SIENGE_PASS = process.env.SIENGE_API_PASSWORD || "";
 const SIENGE_AUTH = "Basic " + Buffer.from(`${SIENGE_USER}:${SIENGE_PASS}`).toString("base64");
 const SIENGE_API_BASE = `https://api.sienge.com.br/${SIENGE_DOMAIN}/public/api/v1`;
-
-const firebaseConfig = {
-  apiKey: "AIzaSyBlBCaXn4y3sJDENW0GXw3ck_D2h3qknHc",
-  authDomain: "crm-gestao-mldu.firebaseapp.com",
-  projectId: "crm-gestao-mldu",
-  storageBucket: "crm-gestao-mldu.firebasestorage.app",
-  messagingSenderId: "1040392341069",
-  appId: "1:1040392341069:web:6acf1beb34af663cfffe04"
-};
-
-const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-const db = getFirestore(app);
 
 const COL = "sienge_creditors";
 const STATE_COL = "sienge_sync_state";
@@ -82,44 +69,35 @@ async function siengeGet(path) {
   throw last;
 }
 
+// Estado da sincronização: linha "creditors" de sienge_sync_state (só servidor).
 async function loadState() {
-  const snap = await getDoc(doc(db, STATE_COL, STATE_ID));
-  return snap.exists() ? (snap.data() || {}) : null;
+  const o = await tabela(STATE_COL).obter(STATE_ID);
+  if (!o) return null;
+  delete o.id;
+  return o;
 }
 
 async function saveState(state) {
-  await setDoc(doc(db, STATE_COL, STATE_ID), state);
+  await tabela(STATE_COL).gravar(STATE_ID, state);
 }
 
 async function gravarPagina(rows, today) {
-  const batch = writeBatch(db);
-  let n = 0;
+  const t = tabela(COL);
+  const linhas = [];
   rows.forEach((row) => {
     if (!row || row.id == null || row.id === "") return;
-    batch.set(doc(db, COL, String(row.id)), Object.assign({}, row, { _batimentoDate: today }));
-    n++;
+    linhas.push(t.paraLinha(Object.assign({}, row, { _batimentoDate: today }), String(row.id)));
   });
-  if (n) await batch.commit();
-  return n;
+  if (linhas.length) checar(await dados().sb.from(COL).upsert(linhas, { onConflict: "id" }));
+  return linhas.length;
 }
 
+// Remove os credores que não vieram do Sienge hoje (batimento_date diferente de hoje ou vazio).
 async function limparForaDoDia(today) {
-  const snap = await getDocs(collection(db, COL));
-  const stale = [];
-  snap.forEach((d) => {
-    const data = (d && d.data && d.data()) || {};
-    if (data._batimentoDate === today) return;
-    stale.push(d.ref);
-  });
-  let removed = 0;
-  for (let i = 0; i < stale.length; i += 400) {
-    const batch = writeBatch(db);
-    const fatia = stale.slice(i, i + 400);
-    fatia.forEach((ref) => batch.delete(ref));
-    await batch.commit();
-    removed += fatia.length;
-  }
-  return removed;
+  const r = await dados().sb.from(COL).delete({ count: "exact" })
+    .or("batimento_date.is.null,batimento_date.neq." + today);
+  checar(r);
+  return r.count || 0;
 }
 
 async function avancar(state, today, started) {

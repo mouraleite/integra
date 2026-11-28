@@ -239,8 +239,8 @@
     carregandoObras = true;
     status.textContent = 'Carregando obras do Landbank…';
     try {
-      const { collection, getDocs } = window.firebaseCollections;
-      const snapshot = await getDocs(collection(window.firebaseDb, 'landbank'));
+      // Supabase: documentos do Landbank em configuracoes ("landbank/<id>").
+      const snapshot = await window.DadosNucleo.listarDocs('landbank');
       const obras = new Map();
       for (const doc of snapshot.docs) {
         const { idSienge, nomeSienge, nomeAprovacao, status: landbankStatus } = doc.data();

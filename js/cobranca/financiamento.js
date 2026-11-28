@@ -52,15 +52,14 @@ const FinanciamentoApp = {
   async puxarNuvem(forcar) {
     const agora = Date.now();
     if (!forcar && this._nuvemEm && agora - this._nuvemEm < 20000) return;
-    if (this._nuvemLendo) return;
-    const fc = window.firebaseCollections;
-    if (!fc || !window.firebaseDb || typeof fc.getDoc !== "function" || typeof window.crmFinanciamentosMesclar !== "function") return;
-    this._nuvemLendo = true;
+    if (this._nuvemLendo && typeof this._nuvemLendo.then === "function") return this._nuvemLendo;
+    if (!window.DadosNucleo || typeof window.crmFinanciamentosMesclar !== "function") return;
     this._nuvemEm = agora;
+    const leitura = (async () => {
     try {
-      const snap = await fc.getDoc(fc.doc(window.firebaseDb, "config", "global"));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
-      const nuvem = existe ? String((snap.data() || {})[FIN_PROC_KEY] || "{}") : "{}";
+      // Só a chave do config/global que interessa (linha de configuracoes; volta como texto JSON).
+      const valor = await window.DadosNucleo.lerConfiguracao(FIN_PROC_KEY);
+      const nuvem = String(valor || "{}");
       let local = "{}";
       try { local = localStorage.getItem(FIN_PROC_KEY) || "{}"; } catch (e) {}
       const junto = window.crmFinanciamentosMesclar(local, nuvem);
@@ -81,9 +80,11 @@ const FinanciamentoApp = {
       if (chegouNovo && FinanciamentoState.view !== "fluxo" && document.getElementById("financiamento-root")) this.render();
     } catch (e) {
       console.warn("[Financiamento] leitura da nuvem", e);
-    } finally {
-      this._nuvemLendo = false;
     }
+    })();
+    this._nuvemLendo = leitura;
+    try { await leitura; }
+    finally { if (this._nuvemLendo === leitura) this._nuvemLendo = null; }
   },
 
   render() {
@@ -185,17 +186,11 @@ const FinanciamentoApp = {
           <span id="fin-abertos-count" style="font-size:0.75rem;color:#64748b;font-weight:700;"></span>
         </div>
         <div class="crm-card-content" style="padding:0;">
-          <div style="overflow:auto;max-height:280px;border-bottom-left-radius:8px;border-bottom-right-radius:8px;">
-            <table class="crm-table" style="width:100%;border-collapse:separate;border-spacing:0;">
-              <thead style="position:sticky;top:0;background:#f3f4f6;z-index:10;">
-                <tr>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Cliente</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Contrato</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Título</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Unidade</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Etapa</th>
-                  <th style="text-align:left;padding:10px;font-size:0.6rem;color:#64748b;text-transform:uppercase;">Atualizado</th>
-                </tr>
+          <div class="cc-scroll" style="max-height:420px;border:0;border-radius:0 0 8px 8px;">
+            <table class="cc-table is-confortavel fin-abertos-table">
+              <colgroup><col style="width:24%"><col style="width:12%"><col style="width:70px"><col style="width:90px"><col><col style="width:96px"></colgroup>
+              <thead>
+                <tr><th>Cliente</th><th>Contrato</th><th class="is-center">Título</th><th>Unidade</th><th>Etapa</th><th class="is-center">Atualizado</th></tr>
               </thead>
               <tbody id="fin-abertos-tbody"></tbody>
             </table>
@@ -676,7 +671,7 @@ const FinanciamentoApp = {
         : "";
     }
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:22px;color:#94a3b8;">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;white-space:normal;">Nenhum financiamento em aberto. Pesquise um cliente e clique em Iniciar financiamento.</td></tr>';
       return;
     }
     const lista = rows.slice().sort((a, b) => {
@@ -687,15 +682,15 @@ const FinanciamentoApp = {
     tbody.innerHTML = lista.map(({ key, proc }) => {
       const safeKey = String(key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       const vencida = ordem.has(String(key));
-      const fundo = vencida ? "#fef2f2" : "";
-      const hover = vencida ? "#fee2e2" : "#f0fdf4";
-      return `<tr tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}" style="cursor:pointer;background:${fundo};${vencida ? "box-shadow:inset 4px 0 0 #b91c1c;" : ""}" onmouseover="this.style.background='${hover}'" onmouseout="this.style.background='${fundo}'">
-        <td style="padding:10px;font-weight:700;font-size:0.75rem;color:${vencida ? "#991b1b" : "#0f172a"};">${this.esc(proc.customerName || proc.customerId || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;">${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;font-weight:800;">${this.esc(proc.titulo || "—")}</td>
-        <td style="padding:10px;font-size:0.75rem;">${this.esc(this.formatUnidade(proc.unit || "—"))}</td>
-        <td style="padding:10px;font-size:0.75rem;color:${vencida ? "#b91c1c" : "#105436"};font-weight:700;">${this.esc(this.etapaLabel(proc))}${vencida ? ' <span style="display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;background:#fee2e2;color:#991b1b;font-size:0.65rem;font-weight:800;letter-spacing:0.02em;">VENCIDA</span>' : ""}</td>
-        <td style="padding:10px;font-size:0.75rem;color:#64748b;">${this.esc(this.fmtDate(proc.updatedAt || proc.startedAt))}</td>
+      const cliente = proc.customerName || proc.customerId || "—";
+      const etapa = this.etapaLabel(proc);
+      return `<tr class="is-clicavel${vencida ? " is-alerta" : ""}" tabindex="0" role="button" onclick="FinanciamentoApp.abrirAberto('${safeKey}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();FinanciamentoApp.abrirAberto('${safeKey}')}">
+        <td title="${this.esc(cliente)}" style="font-weight:700;">${this.esc(cliente)}</td>
+        <td>${this.esc(proc.contractNumber || proc.contractId || "—")}</td>
+        <td class="is-center" style="font-weight:700;">${this.esc(proc.titulo || "—")}</td>
+        <td>${this.esc(this.formatUnidade(proc.unit || "—"))}</td>
+        <td title="${this.esc(etapa)}">${this.esc(etapa)}${vencida ? '<span class="cc-selo-alerta">VENCIDA</span>' : ""}</td>
+        <td class="is-center">${this.esc(this.fmtDate(proc.updatedAt || proc.startedAt))}</td>
       </tr>`;
     }).join("");
   },
@@ -1053,24 +1048,230 @@ const FinanciamentoApp = {
     this._finAlertaTimer = setTimeout(() => this.agendarAlertaEsteira(), Math.max(1000, amanha.getTime() - Date.now()));
   },
 
-  abrirAlertaEsteira() {
+  fimDoMes(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    const y = Number(p[0]);
+    const m = Number(p[1]);
+    const d = new Date(y, m, 0, 12);
+    return this.hojePartes(d);
+  },
+
+  hojePartes(d) {
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  },
+
+  fimDoMesSeguinte(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    const d = new Date(Number(p[0]), Number(p[1]) + 1, 0, 12);
+    return this.hojePartes(d);
+  },
+
+  soDigitos(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  async lerBatimentoRemessa() {
+    // Supabase: o batimento das 7h fica em configuracoes ("remessa_avulsa_batimento/atual").
+    if (!window.DadosNucleo || typeof window.DadosNucleo.lerConfig !== "function") return null;
+    const snap = await window.DadosNucleo.lerConfig("atual", "remessa_avulsa_batimento");
+    const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+    if (!existe) return null;
+    return snap.data() || null;
+  },
+
+  parcelaEmAberto(inst) {
+    if (!inst) return false;
+    const bal = inst.currentBalance != null ? inst.currentBalance : inst.balance;
+    if (bal != null && bal !== "" && !isNaN(Number(bal))) return Number(bal) > 0.009;
+    const recs = inst.receipts;
+    if (!recs) return true;
+    const lista = Array.isArray(recs) ? recs : [recs];
+    if (!lista.length) return true;
+    return lista.every((r) => !r || r.type == null || String(r.type).trim() === "");
+  },
+
+  async extratoDoTitulo(titulo, ate) {
+    const once = window.siengeFetchWithRetry;
+    if (typeof once !== "function" || !titulo) return [];
+    const path = "/bulk-data/v1/customer-extract-history?startDueDate=1996-01-01&endDueDate=" + encodeURIComponent(ate)
+      + "&billReceivableId=" + encodeURIComponent(titulo)
+      + "&documentsId=" + encodeURIComponent("CT,TC")
+      + "&includeRemadeInstallments=false&includeCanceledInstallments=false&includeRevokedInstallments=false&includeRenegotiatedDischarge=false";
+    const payload = await once(path, 3);
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.data)) return payload.data;
+    if (Array.isArray(payload.results)) return payload.results;
+    return [];
+  },
+
+  resumirParcelas(proc, key, itens, hoje, fimMes, fimSeg) {
+    let vencidas = 0;
+    let mes = 0;
+    let seguinte = 0;
+    let maisAntiga = "";
+    let primeiraMes = "";
+    let primeiraSeguinte = "";
+    itens.forEach((inst) => {
+      if (!this.parcelaEmAberto(inst)) return;
+      const venc = String(inst.dueDate || inst.originalDueDate || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(venc) || venc > fimSeg) return;
+      if (venc < hoje) {
+        vencidas += 1;
+        if (!maisAntiga || venc < maisAntiga) maisAntiga = venc;
+      } else if (venc <= fimMes) {
+        mes += 1;
+        if (!primeiraMes || venc < primeiraMes) primeiraMes = venc;
+      } else {
+        seguinte += 1;
+        if (!primeiraSeguinte || venc < primeiraSeguinte) primeiraSeguinte = venc;
+      }
+    });
+    if (!vencidas && !mes && !seguinte) return null;
+    return {
+      key: key,
+      cliente: String(proc.customerName || ""),
+      titulo: String(proc.titulo || ""),
+      clienteId: String(proc.customerId || ""),
+      vencidas: vencidas,
+      mes: mes,
+      seguinte: seguinte,
+      maisAntiga: maisAntiga,
+      primeiraMes: primeiraMes,
+      primeiraSeguinte: primeiraSeguinte
+    };
+  },
+
+  async calcularParcelasAlerta() {
+    const hoje = this.hojeIso();
+    const fimMes = this.fimDoMes(hoje);
+    const fimSeg = this.fimDoMesSeguinte(hoje);
+    const fila = this.listOpenProcesses().filter((row) => this.soDigitos(row.proc && row.proc.titulo));
+    const out = [];
+    const limite = Date.now() + 14000;
+    for (let i = 0; i < fila.length; i += 3) {
+      if (Date.now() > limite) break;
+      const parte = fila.slice(i, i + 3);
+      const achados = await Promise.all(parte.map(async (row) => {
+        const proc = row.proc || {};
+        const titulo = this.soDigitos(proc.titulo);
+        try {
+          const extrato = await this.extratoDoTitulo(titulo, fimSeg);
+          const itens = [];
+          extrato.forEach((item) => {
+            const bills = item && (item.billReceivableId || item.receivableBillId || Array.isArray(item.installments))
+              ? [item]
+              : ((item && (item.billsReceivable || item.bills)) || []);
+            (Array.isArray(bills) ? bills : []).forEach((bill) => {
+              if (this.soDigitos(bill.billReceivableId || bill.receivableBillId) !== titulo) return;
+              (bill.installments || []).forEach((inst) => itens.push(inst));
+            });
+          });
+          return this.resumirParcelas(proc, row.key, itens, hoje, fimMes, fimSeg);
+        } catch (e) {
+          return null;
+        }
+      }));
+      achados.forEach((p) => { if (p) out.push(p); });
+    }
+    return out;
+  },
+
+  async parcelasDoAlerta() {
+    const hoje = this.hojeIso();
+    try {
+      const salvo = await this.lerBatimentoRemessa();
+      if (salvo && salvo.date === hoje && salvo.done && Array.isArray(salvo.parcelas)) return salvo.parcelas;
+    } catch (e) {}
+    return this.calcularParcelasAlerta();
+  },
+
+  textoContagem(n, uma, varias) {
+    return n + " " + (n === 1 ? uma : varias);
+  },
+
+  async abrirAlertaEsteira() {
     if (!this.usuarioVeAlertaEsteira()) return;
     const hoje = this.hojeIso();
     if (Date.now() < new Date(hoje + "T08:00:00").getTime()) return;
     const chave = this.chaveAlertaEsteira(hoje);
-    try { if (localStorage.getItem(chave) === "ciente") return; } catch (e) {}
-    const lista = this.atrasadosEsteira();
-    if (!lista.length || document.getElementById("fin-alerta")) return;
+    if (this.jaCienteHoje(chave)) return;
+    if (document.getElementById("fin-alerta") || this._alertaAbrindo) return;
+    this._alertaAbrindo = true;
+    try {
+      await this.puxarNuvem();
+      if (this.jaCienteHoje(chave)) return;
+      const lista = this.atrasadosEsteira();
+      let parcelas = [];
+      let parcelasErro = false;
+      try {
+        parcelas = await Promise.race([
+          this.parcelasDoAlerta(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("tempo")), 15000))
+        ]);
+      } catch (e) {
+        parcelasErro = true;
+        parcelas = [];
+      }
+      if (typeof window.PopupAtivo === "function" && !window.PopupAtivo("esteira")) return;
+      if (document.getElementById("fin-alerta")) return;
+      if (this.jaCienteHoje(chave)) return;
+      if (!lista.length && !parcelas.length && !parcelasErro) return;
+      if (!lista.length && parcelasErro) return;
+      const overlay = this.montarAlertaEsteira(lista, parcelas, parcelasErro, hoje, false);
+      // Fechar só fecha agora (volta ao recarregar); Ciente esconde até amanhã.
+      overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave, false));
+      overlay.querySelector("#fin-alerta-ciente").addEventListener("click", () => this.fecharAlertaEsteira(chave, true));
+    } finally {
+      this._alertaAbrindo = false;
+    }
+  },
+
+  /* Monta o aviso (mesmo HTML e CSS) e devolve o overlay. Quem chama liga Fechar e Ciente.
+     previa = true: aberto pela tela de gestão de pop-ups; os itens não abrem o financiamento. */
+  montarAlertaEsteira(lista, parcelas, parcelasErro, hoje, previa) {
     const linhas = lista.map((item) => {
       const proc = item.row.proc || {};
       const n = Math.abs(item.prazo.restantes || 0);
       const safe = String(item.row.key).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      return `<button type="button" class="fin-alerta-item" onclick="FinanciamentoApp.abrirDoAlerta('${safe}')">
+      return `<button type="button" class="fin-alerta-item" ${previa ? "" : `onclick="FinanciamentoApp.abrirDoAlerta('${safe}')"`}>
         <strong>${this.esc(proc.customerName || "—")}</strong>
         <span>Contrato ${this.esc(proc.contractNumber || proc.contractId || "—")} · ${this.esc(this.formatUnidade(proc.unit || "—"))}</span>
-        <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))} · ${n} dia${n === 1 ? "" : "s"}</span>
+        <span>${this.esc(item.etapa.label || item.etapa.nome)} · venceu em ${this.esc(this.fmtDate(item.prazo.limite))}</span>
+        <div class="fin-al-chips"><em class="fin-al-chip is-alerta">${this.textoEmAlerta(n)}</em></div>
       </button>`;
     }).join("");
+    // Parcelas: cada situação vira uma etiqueta (vencida em vermelho, este mês em âmbar, mês seguinte em cinza).
+    const cards = parcelas.map((p) => {
+      const safe = String(p.key || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      const chips = [];
+      const emAlerta = this.diasAlertaParcela(p, hoje);
+      if (emAlerta != null) chips.push(`<em class="fin-al-chip is-alerta">${this.textoEmAlerta(emAlerta)}</em>`);
+      if (p.vencidas) chips.push(`<em class="fin-al-chip is-venc">${this.esc(this.textoContagem(p.vencidas, "vencida", "vencidas"))}${p.maisAntiga ? " · desde " + this.esc(this.fmtDate(p.maisAntiga)) : ""}</em>`);
+      if (p.mes) chips.push(`<em class="fin-al-chip is-mes">${this.esc(this.textoContagem(p.mes, "vence neste mês", "vencem neste mês"))}${p.primeiraMes ? " · " + this.esc(this.fmtDate(p.primeiraMes)) : ""}</em>`);
+      if (p.seguinte) chips.push(`<em class="fin-al-chip is-seg">${this.esc(this.textoContagem(p.seguinte, "vence no mês seguinte", "vencem no mês seguinte"))}${p.primeiraSeguinte ? " · " + this.esc(this.fmtDate(p.primeiraSeguinte)) : ""}</em>`);
+      return `<button type="button" class="fin-alerta-item fin-alerta-item--parcela" ${previa ? "" : `onclick="FinanciamentoApp.abrirDoAlerta('${safe}')"`}>
+        <strong>${this.esc(p.cliente || "—")}</strong>
+        <span>Título ${this.esc(p.titulo || "—")}</span>
+        <div class="fin-al-chips">${chips.join("")}</div>
+      </button>`;
+    }).join("");
+    const cab = (tipo, titulo, qtd, explica) => `<div class="fin-al-cab fin-al-cab--${tipo}">
+        <span class="fin-al-tipo">${tipo === "etapa" ? "ESTEIRA" : "COBRANÇA"}</span>
+        <strong>${titulo}</strong>
+        <b class="fin-al-qtd">${qtd}</b>
+      </div>
+      <p class="fin-al-explica">${explica}</p>`;
+    const blocoEtapas = `<section class="fin-al-sec fin-al-sec--etapa">
+        ${cab("etapa", "Etapas vencidas do processo", lista.length, "A etapa atual do financiamento passou do prazo. O processo está parado e precisa andar na esteira.")}
+        ${lista.length ? `<div class="fin-al-lista">${linhas}</div>` : `<p class="fin-al-vazio">Nenhuma etapa da esteira está vencida.</p>`}
+      </section>`;
+    const blocoParcelas = `<section class="fin-al-sec fin-al-sec--parcela">
+        ${cab("parcela", "Parcelas dos clientes em financiamento", parcelas.length, "Parcelas do contrato (não são etapas): vencidas, que vencem neste mês ou no mês seguinte.")}
+        ${parcelas.length ? `<div class="fin-al-lista">${cards}</div>`
+          : `<p class="fin-al-vazio">${parcelasErro ? "A consulta das parcelas não terminou. O batimento das 7h traz essa lista." : "Nenhum cliente de financiamento com parcela vencida, a vencer neste mês ou no mês seguinte."}</p>`}
+      </section>`;
     const overlay = document.createElement("div");
     overlay.id = "fin-alerta";
     overlay.setAttribute("role", "dialog");
@@ -1078,23 +1279,129 @@ const FinanciamentoApp = {
     overlay.style.cssText = "position:fixed;inset:0;z-index:2147483004;display:flex;align-items:center;justify-content:center;background:rgba(12,41,29,0.55);padding:16px;";
     overlay.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 18px 40px rgba(0,0,0,0.22);border:1px solid rgba(16,84,54,0.12);font-family:inherit;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px 0;">
-        <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Etapas vencidas na esteira</h2>
+        <h2 id="fin-alerta-titulo" style="margin:0;font-size:1.05rem;color:#105436;">Financiamentos: etapas e parcelas</h2>
         <button type="button" class="btn btn-fechar" id="fin-alerta-fechar">Fechar</button>
       </div>
-      <div style="padding:12px 18px 18px;overflow:auto;">
-        <p style="margin:0 0 12px;color:#1e293b;font-size:0.92rem;line-height:1.45;">${lista.length} financiamento${lista.length === 1 ? "" : "s"} na esteira com a etapa atual fora do prazo.</p>
-        <div style="display:flex;flex-direction:column;gap:8px;">${linhas}</div>
+      <div style="padding:12px 18px 12px;overflow:auto;">
+        ${blocoEtapas}
+        ${blocoParcelas}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px 16px;border-top:1px solid #e2e8f0;">
+        <span style="color:#64748b;font-size:0.8rem;">Ao dar ciente, este aviso só volta amanhã.</span>
+        <button type="button" class="btn btn-primary" id="fin-alerta-ciente">Ciente</button>
       </div>
     </div>`;
     document.body.appendChild(overlay);
     const estilo = document.createElement("style");
-    estilo.textContent = "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}";
+    estilo.textContent = "#fin-alerta .fin-al-sec{border-radius:12px;padding:12px;margin-bottom:14px;}"
+      + "#fin-alerta .fin-al-sec--etapa{background:#fef2f2;border:1px solid #fecaca;}"
+      + "#fin-alerta .fin-al-sec--parcela{background:#eff6ff;border:1px solid #bfdbfe;}"
+      + "#fin-alerta .fin-al-cab{display:flex;align-items:center;gap:8px;}"
+      + "#fin-alerta .fin-al-cab strong{font-size:0.95rem;flex:1;}"
+      + "#fin-alerta .fin-al-cab--etapa strong{color:#991b1b;}#fin-alerta .fin-al-cab--parcela strong{color:#1e3a8a;}"
+      + "#fin-alerta .fin-al-tipo{font-size:0.62rem;font-weight:800;letter-spacing:0.05em;padding:2px 7px;border-radius:999px;color:#fff;}"
+      + "#fin-alerta .fin-al-cab--etapa .fin-al-tipo{background:#b91c1c;}#fin-alerta .fin-al-cab--parcela .fin-al-tipo{background:#1d4ed8;}"
+      + "#fin-alerta .fin-al-qtd{min-width:26px;text-align:center;padding:2px 8px;border-radius:999px;background:#fff;font-size:0.8rem;}"
+      + "#fin-alerta .fin-al-cab--etapa .fin-al-qtd{color:#991b1b;border:1px solid #fecaca;}#fin-alerta .fin-al-cab--parcela .fin-al-qtd{color:#1e3a8a;border:1px solid #bfdbfe;}"
+      + "#fin-alerta .fin-al-explica{margin:6px 0 10px;color:#475569;font-size:0.8rem;line-height:1.4;}"
+      + "#fin-alerta .fin-al-vazio{margin:0;color:#64748b;font-size:0.85rem;}"
+      + "#fin-alerta .fin-al-lista{display:flex;flex-direction:column;gap:8px;}"
+      + "#fin-alerta .fin-alerta-item{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;width:100%;border:1px solid #fecaca;border-left:4px solid #b91c1c;background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;}"
+      + "#fin-alerta .fin-alerta-item--parcela{border-color:#bfdbfe;border-left-color:#1d4ed8;}"
+      + "#fin-alerta .fin-alerta-item strong{color:#0f172a;font-size:0.9rem;}#fin-alerta .fin-alerta-item span{color:#64748b;font-size:0.78rem;}"
+      + "#fin-alerta .fin-al-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}"
+      + "#fin-alerta .fin-al-chip{font-style:normal;font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:999px;}"
+      + "#fin-alerta .fin-al-chip.is-alerta{background:#1e293b;color:#fff;}"
+      + "#fin-alerta .fin-al-chip.is-venc{background:#fee2e2;color:#991b1b;}#fin-alerta .fin-al-chip.is-mes{background:#fef3c7;color:#92400e;}#fin-alerta .fin-al-chip.is-seg{background:#f1f5f9;color:#475569;}";
     overlay.appendChild(estilo);
-    overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => this.fecharAlertaEsteira(chave));
+    return overlay;
   },
 
-  fecharAlertaEsteira(chave) {
-    try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+  /* Prévia pela tela de gestão de pop-ups: etapas vencidas da lista já carregada e parcelas do batimento de hoje
+     (só leitura); o que faltar vira exemplo. Fechar e Ciente só fecham, sem gravar. */
+  async previaAlertaEsteira() {
+    const hoje = this.hojeIso();
+    let lista = [];
+    try { lista = this.atrasadosEsteira(); } catch (e) { lista = []; }
+    if (!lista.length) {
+      const limite = this.somarDias(hoje, -4);
+      const entrada = this.somarDias(limite, -10);
+      lista = [{
+        row: { key: "previa", proc: { customerName: "BRUNA ALVES", contractNumber: "6526", unit: "QD 12 LT 08" } },
+        etapa: { label: "4. Validar minuta" },
+        prazo: { entrada: entrada, limite: limite, dias: 10, status: "atrasado", restantes: -4 }
+      }];
+    }
+    let parcelas = [];
+    try {
+      const salvo = await Promise.race([
+        this.lerBatimentoRemessa(),
+        new Promise((r) => setTimeout(() => r(null), 3000))
+      ]);
+      if (salvo && salvo.date === hoje && salvo.done && Array.isArray(salvo.parcelas)) parcelas = salvo.parcelas;
+    } catch (e) { parcelas = []; }
+    if (!parcelas.length) {
+      const fimMes = this.fimDoMes(hoje);
+      const fimSeg = this.fimDoMesSeguinte(hoje);
+      parcelas = [{
+        key: "previa", cliente: "ERICK HENRIQUE", titulo: "9336", vencidas: 8, mes: 1, seguinte: 1,
+        maisAntiga: this.somarDias(hoje, -240), primeiraMes: fimMes > hoje ? fimMes : "", primeiraSeguinte: fimSeg
+      }];
+    }
+    const overlay = this.montarAlertaEsteira(lista, parcelas, false, hoje, true);
+    overlay.querySelector("#fin-alerta-fechar").addEventListener("click", () => overlay.remove());
+    overlay.querySelector("#fin-alerta-ciente").addEventListener("click", () => overlay.remove());
+  },
+
+  textoEmAlerta(n) {
+    const d = Math.max(0, Number(n) || 0);
+    if (!d) return "Em alerta desde hoje";
+    return "Em alerta há " + d + (d === 1 ? " dia" : " dias");
+  },
+
+  /* Dias em alerta da parcela: ela entra no aviso quando fica "a vencer no mês seguinte", ou seja, no dia 1 do mês
+     anterior ao vencimento. Conta a partir da parcela mais antiga do aviso (vencida, deste mês ou do mês seguinte). */
+  diasAlertaParcela(p, hoje) {
+    const datas = [p && p.maisAntiga, p && p.primeiraMes, p && p.primeiraSeguinte]
+      .map((d) => String(d || "").slice(0, 10)).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+    if (!datas.length) return null;
+    const v = datas[0].split("-").map(Number);
+    let entrada = new Date(v[0], v[1] - 2, 1);
+    // O aviso de parcelas começou em 25/11/2026: antes disso ninguém foi avisado, então a conta não passa dessa data.
+    const inicioAviso = new Date(2026, 10, 25);
+    if (entrada < inicioAviso) entrada = inicioAviso;
+    const h = String(hoje || this.hojeIso()).split("-").map(Number);
+    const dias = Math.round((new Date(h[0], h[1] - 1, h[2]) - entrada) / 86400000);
+    return Math.max(0, dias);
+  },
+
+  /* "Ciente" do dia fica num cookie que vence à meia-noite: o localStorage do Integra costuma estar cheio e a
+     gravação falhava em silêncio, e o aviso voltava a cada Ctrl+F5. O localStorage fica como reserva. */
+  cookieCiente(chave) {
+    let h = 0;
+    const s = String(chave || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return "crm_fin_ciente_" + h.toString(36);
+  },
+
+  jaCienteHoje(chave) {
+    const nome = this.cookieCiente(chave);
+    try {
+      if (document.cookie.split(";").some((p) => p.trim() === nome + "=" + this.hojeIso())) return true;
+    } catch (e) {}
+    try { return localStorage.getItem(chave) === "ciente"; } catch (e) { return false; }
+  },
+
+  fecharAlertaEsteira(chave, ciente) {
+    if (ciente !== false) {
+      try {
+        const fim = new Date();
+        fim.setHours(23, 59, 59, 0);
+        document.cookie = this.cookieCiente(chave) + "=" + this.hojeIso() + "; expires=" + fim.toUTCString()
+          + "; path=/; SameSite=Lax" + (location.protocol === "https:" ? "; Secure" : "");
+      } catch (e) {}
+      try { localStorage.setItem(chave, "ciente"); } catch (e) {}
+    }
     const pop = document.getElementById("fin-alerta");
     if (pop) pop.remove();
   },
@@ -1224,7 +1531,16 @@ const FinanciamentoApp = {
   guardarPendentes(stageId, files) {
     this._pendentes = this._pendentes || {};
     const atual = this._pendentes[stageId] || [];
-    this._pendentes[stageId] = atual.concat(files || []);
+    const chave = (f) => [f && f.name, f && f.size, f && f.lastModified].join("|");
+    const tem = new Set(atual.map(chave));
+    const novos = [];
+    (files || []).forEach((f) => {
+      const k = chave(f);
+      if (!f || tem.has(k)) return;
+      tem.add(k);
+      novos.push(f);
+    });
+    this._pendentes[stageId] = atual.concat(novos);
     this.pintarPendentes(stageId);
   },
 
@@ -1300,6 +1616,8 @@ const FinanciamentoApp = {
     if (st) st.textContent = "";
     const restam = [];
     let falha = "";
+    let enviados = 0;
+    let repetidos = 0;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       try {
@@ -1319,6 +1637,11 @@ const FinanciamentoApp = {
           },
           context: "financiamento"
         });
+        if (resp && resp.already) {
+          repetidos++;
+          continue;
+        }
+        enviados++;
         proc.anexos = proc.anexos || {};
         const lista = Array.isArray(proc.anexos[stageId]) ? proc.anexos[stageId] : [];
         lista.push({
@@ -1343,6 +1666,8 @@ const FinanciamentoApp = {
     const st2 = document.getElementById("fin-st-" + stageId);
     const btn2 = document.getElementById("fin-env-" + stageId);
     if (falha && st2) st2.textContent = falha;
+    else if (st2 && repetidos && enviados) st2.textContent = "Enviei " + enviados + ". " + repetidos + " cópia(s) não foram de novo: o arquivo já estava na unidade.";
+    else if (st2 && repetidos) st2.textContent = "O arquivo já está na unidade. Não enviei outra cópia.";
     if (btn2 && restam.length) { btn2.disabled = false; btn2.textContent = "Enviar para a unidade"; }
     return !restam.length;
   },
@@ -1755,6 +2080,8 @@ const FinanciamentoApp = {
             #financiamento-root .fin-tag-box .ml-emp-filter { width: 100%; }
             #financiamento-root .fin-nota input[type="date"] { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 8px; background: #fff; font: inherit; }
             #financiamento-root .fin-nota-st { margin: 0; color: #105436; font-size: 0.78rem; font-weight: 700; }
+            #financiamento-root .fin-doc { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
+            #financiamento-root .fin-doc p { margin: 0; color: #166534; font-size: 0.75rem; flex: 1 1 220px; }
           </style>
           <p style="margin:0 0 12px;color:#64748b;font-size:0.82rem;">Só a etapa em andamento fica aberta. A nota e os anexos são gravados nela, sem concluir. Dá para incluir várias notas e vários documentos, cada um com a sua data. Para anexar, escolha o arquivo ou cole com Ctrl+V e clique em Enviar para a unidade. Quem concluiu pode desfazer o avanço em até 24 horas.</p>
           ${ativoIdx < 0 && this.podeDesfazer(proc) ? '<div style="margin:-4px 0 12px;"><button type="button" class="btn btn-outline btn-sm" onclick="FinanciamentoApp.desfazerAvanco()">Desfazer avanço</button></div>' : ""}
@@ -1767,6 +2094,8 @@ const FinanciamentoApp = {
             const atual = !encerrado && idx === ativoIdx;
             const passada = encerrado || idx < ativoIdx || !!concluidaEm;
             const sid = String(s.id).replace(/'/g, "");
+            const docKind = typeof this.docDaEtapa === "function" ? this.docDaEtapa(s, idx) : "";
+            const docBtn = (docKind && typeof this.botaoDocumentoEtapa === "function") ? this.botaoDocumentoEtapa(sid, docKind) : "";
             const notasEtapa = this.listaNotas(proc, s.id);
             const rascunho = notasEtapa.filter((n) => n.rascunho).pop() || {};
             const historico = this.historicoHtml(proc, s.id);
@@ -1784,11 +2113,13 @@ const FinanciamentoApp = {
                   </div>
                 </div>
                 ${passada ? historico : ""}
+                ${passada ? docBtn : ""}
               </div>`;
             }
             const iniciada = String(proc.currentStageId || "") === String(s.id);
             const desde = iniciada && proc.done && proc.done[s.id] ? " · desde " + this.fmtDate(proc.done[s.id]) : "";
             const corpo = iniciada ? `<div class="fin-etapa-corpo">
+              ${docBtn}
               ${historico}
               <div class="fin-nota">
                 <label for="fin-nota-${sid}">Nota interna</label>
@@ -1834,6 +2165,9 @@ const FinanciamentoApp = {
 };
 
 window.FinanciamentoApp = FinanciamentoApp;
+
+window.PopupPrevias = window.PopupPrevias || {};
+window.PopupPrevias["esteira"] = function () { return FinanciamentoApp.previaAlertaEsteira(); };
 
 /* Junta os financiamentos deste navegador com os da nuvem. Fica o registro mais novo de cada contrato, sem apagar o outro. */
 window.mergeFinanciamentosProc = function(localRaw, cloudRaw) {

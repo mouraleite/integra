@@ -7,7 +7,7 @@
 // Para um novo desenvolvedor: acrescentar uma linha em AMBIENTES, cadastrar o endereço no Entra ID (SPA) e no deploy.bat.
 (function () {
   const REPO = "mouraleite/integra";
-  const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
+  const URL_PRODUCAO = "https://integra-mouraleite.vercel.app/";
   const AMBIENTES = [
     { chave: "dani", nome: "Teste Dani", pessoa: "da Dani", branch: "develop", cor: "#2563eb" },
     { chave: "marcelo", nome: "Teste Marcelo", pessoa: "do Marcelo", branch: "Marcelo", cor: "#7c3aed" },
@@ -17,7 +17,8 @@
   ].map((a) => {
     // A Vercel tira o sublinhado do nome da branch (isabella_garcia vira isabellagarcia); slug fixo quando precisa.
     const slug = a.slug || a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    return Object.assign(a, { host: "crm-gestao-git-" + slug + "-", url: "https://crm-gestao-git-" + slug + "-crm-mldu.vercel.app/" });
+    // Bolhas no projeto novo da Vercel (time mouraleite): integra-git-<branch>-mouraleite1.vercel.app.
+    return Object.assign(a, { host: "integra-git-" + slug + "-", url: "https://integra-git-" + slug + "-mouraleite1.vercel.app/" });
   });
   const DISPENSADO = "integra_testes_dispensado";
   const INTERVALO = 5 * 60 * 1000;
@@ -250,7 +251,7 @@
   }
 
   // ===== Alternador para os desenvolvedores (não administradores) =====
-  // Quem entra numa bolha fica registrado em Firestore (ambientes_dev/<e-mail>). Assim, na produção,
+  // Quem entra numa bolha fica registrado no Supabase (ambientes_dev: uma linha por e-mail e bolha). Assim, na produção,
   // essa pessoa também vê a bolha "Produção | Teste X" para ir e voltar na mesma tela.
   const DEV_COLECAO = "ambientes_dev";
   let meusAmbientes = null; // lista de chaves; null = ainda não consultado
@@ -270,28 +271,32 @@
 
   async function sincronizarDev() {
     const email = emailReal();
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    if (!email || !fx || !db) return;
+    if (!email || !window.DadosNucleo) return;
+    await window.DadosNucleo.pronto;
+    const sb = window.sb;
+    if (!sb) return;
     const atual = ambienteAtual();
-    if (atual && !registrouDev && typeof fx.setDoc === "function") {
+    if (atual && !registrouDev) {
       registrouDev = true;
       try {
-        await fx.setDoc(fx.doc(db, DEV_COLECAO, email), { email, ambientes: { [atual.chave]: Date.now() } }, { merge: true });
+        const r = await sb.from(DEV_COLECAO).upsert(
+          { email, ambiente: atual.chave, acessado_em: new Date().toISOString() },
+          { onConflict: "email,ambiente" }
+        );
+        if (r.error) throw r.error;
       } catch (e) {
         console.warn("[Ambientes de teste] Não foi possível registrar o acesso à bolha:", e);
       }
     }
-    if (meusAmbientes !== null || typeof fx.getDoc !== "function") return;
+    if (meusAmbientes !== null) return;
     const cache = ler("integra_meus_ambientes", sessionStorage);
     if (cache) {
       try { meusAmbientes = JSON.parse(cache); return; } catch (e) {}
     }
     try {
-      const snap = await fx.getDoc(fx.doc(db, DEV_COLECAO, email));
-      const existe = snap && (typeof snap.exists === "function" ? snap.exists() : !!snap.exists);
-      const d = existe ? snap.data() : null;
-      meusAmbientes = Object.keys((d && d.ambientes) || {}).filter((k) => AMBIENTES.some((a) => a.chave === k));
+      const r = await sb.from(DEV_COLECAO).select("ambiente").eq("email", email);
+      if (r.error) throw r.error;
+      meusAmbientes = (r.data || []).map((l) => l.ambiente).filter((k) => AMBIENTES.some((a) => a.chave === k));
       gravar("integra_meus_ambientes", JSON.stringify(meusAmbientes), sessionStorage);
     } catch (e) {
       meusAmbientes = [];
@@ -483,7 +488,7 @@
 
   // ===== Solicitações de envio para a produção =====
   // O desenvolvedor, no ambiente de teste, clica em "Encaminhar para produção": grava um pedido em
-  // Firestore (coleção solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
+  // Supabase (tabela solicitacoes_producao) com o resumo do que mudou. O administrador de verdade
   // (não quem está em "Ver como administrador") recebe um pop-up com o pedido e aprova ou recusa.
   // Aprovar só registra a decisão: a publicação continua sendo "juntar <branch> na main" + deploy.bat.
   const SOLIC = "solicitacoes_producao";
@@ -492,10 +497,11 @@
   let minhaSolic = null;
   let ouvindoSolic = false;
 
+  // Solicitações no Supabase (tabela solicitacoes_producao, via window.DadosEngenharia). solicitante {email, nome}
+  // é achatado em solicitante_email / solicitante_nome (filtros usam o nome da coluna).
   function fb() {
-    const fx = window.firebaseCollections;
-    const db = window.firebaseDb;
-    return fx && db ? { fx, db } : null;
+    const DE = window.DadosEngenharia;
+    return DE ? { tab: DE.tabela(SOLIC) } : null;
   }
 
   function adminReal() {
@@ -585,25 +591,72 @@
     return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   }
 
-  // Sugestão automática: telas citadas no código alterado, nome do arquivo e palavras do texto.
+  // Nome da tela como frase comparável: sem acento, sem o que está entre parênteses, só letras e números.
+  function fraseTela(s) {
+    return " " + semAcento(String(s || "").replace(/\([^)]*\)/g, " ")).replace(/[^a-z0-9%]+/g, " ").trim() + " ";
+  }
+
+  // Telas cujo nome inteiro aparece no texto. Se um nome está dentro de outro que também apareceu
+  // ("Fluxo de caixa" dentro de "Fluxo de caixa diário"), fica só o mais longo.
+  function telasNoTexto(menu, texto, exigirCaminho) {
+    const t = fraseTela(texto);
+    if (t.trim().length < 3) return [];
+    const genericos = ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro", "geral", "configuracao"];
+    const achadas = menu.filter((m) => {
+      const nome = fraseTela(m.nome);
+      const palavras = nome.trim().split(" ").filter(Boolean);
+      if (!palavras.length) return false;
+      // Nome de uma palavra só e genérico ("Configurações") não identifica tela nenhuma.
+      if (palavras.length < 2 && genericos.indexOf(palavras[0]) >= 0) return false;
+      if (t.indexOf(nome) < 0) return false;
+      if (!exigirCaminho) return true;
+      // Na linha "Onde:", nome genérico só vale com o menu pai junto ("Caixa e Banco > Configurações").
+      const partes = String(m.caminho || "").split("›").map(fraseTela);
+      return palavras.length >= 2 || partes.length < 2 || t.indexOf(partes[partes.length - 2]) >= 0;
+    });
+    return achadas.filter((m) => !achadas.some((o) => o !== m
+      && fraseTela(o.nome).length > fraseTela(m.nome).length
+      && fraseTela(o.nome).indexOf(fraseTela(m.nome)) >= 0)).map((m) => m.tab);
+  }
+
+  // Linhas "Onde:" / "Onde fica:" dos commits (aceita "- Onde fica: ..." também).
+  function textoOnde(r) {
+    const linhas = [];
+    ((r && r.commits) || []).forEach((c) => {
+      String(c.corpo || "").split("\n").forEach((l) => {
+        const m = /^[\s\-•*]*onde( fica)?\s*:\s*(.+)$/i.exec(l);
+        if (m) linhas.push(m[2]);
+      });
+    });
+    return linhas.join(" \n ");
+  }
+
+  // Arquivo alterado -> aba. Igual ao id da aba vence; senão o id termina com o nome do arquivo
+  // (caixa-diario.js -> fluxo-caixa-diario) ou o arquivo começa com o id ("orcamento-dfc" -> "orcamento").
+  function telasDoArquivo(menu, nomeArquivo) {
+    const base = semAcento(String(nomeArquivo || "").split("/").pop().replace(/\.(js|css|html)$/i, "")).replace(/_/g, "-");
+    if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop", "config", "utils"].indexOf(base) >= 0) return [];
+    const ids = menu.map((t) => ({ tab: t.tab, tb: semAcento(t.tab).replace(/_/g, "-") }));
+    const iguais = ids.filter((x) => x.tb === base);
+    if (iguais.length) return iguais.map((x) => x.tab);
+    const fim = ids.filter((x) => x.tb.endsWith("-" + base));
+    if (fim.length) return fim.map((x) => x.tab);
+    return ids.filter((x) => base.indexOf(x.tb + "-") === 0).map((x) => x.tab);
+  }
+
+  // Sugestão automática de "Onde mudou", da mais confiável para a menos:
+  // 1) linha "Onde:" do commit; 2) telas citadas nas linhas alteradas; 3) nome do arquivo alterado.
+  // Só sem nada disso entra o texto (título e descrição), exigindo o nome inteiro da tela.
   function sugerirTelas(r, descricao) {
     const menu = menuTelas();
     const achadas = new Set();
+    telasNoTexto(menu, textoOnde(r), true).forEach((t) => achadas.add(t));
     ((r && r.abas) || []).forEach((t) => { if (telaPorTab(t)) achadas.add(t); });
-    ((r && r.arquivos) || []).forEach((f) => {
-      const base = semAcento(String(f.nome || "").split("/").pop().replace(/\.(js|css|html)$/i, ""));
-      if (!base || ["app", "index", "style", "data", "firebase-config", "aviso-develop"].indexOf(base) >= 0) return;
-      menu.forEach((t) => {
-        const tb = semAcento(t.tab).replace(/_/g, "-");
-        if (tb === base || base.indexOf(tb + "-") === 0 || tb.indexOf(base) === 0) achadas.add(t.tab);
-      });
-    });
-    const texto = semAcento([descricao || ""].concat(((r && r.commits) || []).map((c) => (c.titulo || "") + " " + (c.corpo || ""))).join(" "));
-    menu.forEach((t) => {
-      const palavras = semAcento(t.nome).split(/[^a-z0-9%]+/).filter((p) => p.length > 3);
-      if (palavras.length < 2 && ["configuracoes", "dashboard", "acompanhamento", "relatorios", "registro"].indexOf(palavras[0]) >= 0) return;
-      if (palavras.length && palavras.every((p) => texto.indexOf(p) >= 0)) achadas.add(t.tab);
-    });
+    ((r && r.arquivos) || []).forEach((f) => telasDoArquivo(menu, f.nome).forEach((t) => achadas.add(t)));
+    if (!achadas.size) {
+      const texto = [descricao || ""].concat(((r && r.commits) || []).map((c) => c.titulo || "")).join(" \n ");
+      telasNoTexto(menu, texto, false).forEach((t) => achadas.add(t));
+    }
     return Array.from(achadas).slice(0, 8);
   }
 
@@ -638,9 +691,11 @@
     return { topicos, resto: resto.join("\n") };
   }
 
-  // Só mostra imagem guardada no Firebase Storage do Integra.
+  // Só mostra imagem guardada no Storage do Integra (link /arquivo?p=...; o link antigo do Firebase ainda vale até a virada).
   function printSeguro(u) {
-    return /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(String(u || ""));
+    const s = String(u || "");
+    return /^\/arquivo\?p=[^"'<>\s]+$/.test(s)
+      || /^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/crm-gestao-mldu\.firebasestorage\.app\/o\//.test(s);
   }
 
   function htmlPrints(lista, editavel, sha) {
@@ -832,10 +887,9 @@
     const f = fb();
     if (!amb || !f) return;
     try {
-      const snap = await f.fx.getDocs(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("ambiente", "==", amb.chave)));
+      const lista = await f.tab.listar({ filtros: [["ambiente", "eq", amb.chave]] });
       let ultima = null;
-      snap.forEach((d) => {
-        const v = Object.assign({ id: d.id }, d.data());
+      lista.forEach((v) => {
         if (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm)) ultima = v;
       });
       minhaSolic = ultima;
@@ -911,8 +965,8 @@
         prints: {}
       }, r);
       try {
-        if (atualizando) await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, minhaSolic.id), pedido);
-        else await f.fx.addDoc(f.fx.collection(f.db, SOLIC), pedido);
+        if (atualizando) await f.tab.gravar(minhaSolic.id, pedido, { merge: true });
+        else await f.tab.criar(pedido);
       } catch (e) {
         console.warn("[Encaminhar para produção] Falha ao gravar:", e);
         alert("Não foi possível enviar a solicitação. Tente de novo; se continuar, avise o administrador.");
@@ -935,14 +989,13 @@
   function ouvirMinhasDecisoes() {
     const email = emailReal();
     const f = fb();
-    if (ouvindoMinhas || !email || !f || typeof f.fx.onSnapshot !== "function") return;
+    if (ouvindoMinhas || !email || !f) return;
     ouvindoMinhas = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("solicitante.email", "==", email)), (snap) => {
+      f.tab.ouvir(({ docs }) => {
         const novas = [];
         let ultima = null;
-        snap.forEach((d) => {
-          const v = Object.assign({ id: d.id }, d.data());
+        docs.forEach((v) => {
           if (v.status !== "pendente" && v.avisoVisto === false) novas.push(v);
           const amb = ambienteAtual();
           if (amb && v.ambiente === amb.chave && (!ultima || Number(v.criadoEm) > Number(ultima.criadoEm))) ultima = v;
@@ -952,9 +1005,12 @@
         try { fechadas = JSON.parse(ler(AVISO_FECHADO, sessionStorage) || "[]"); } catch (e) { fechadas = []; }
         const mostrar = novas.filter((v) => fechadas.indexOf(v.id + ":" + v.status) < 0);
         if (mostrar.length && !document.getElementById("avsol-dev-aviso")) avisarDev(mostrar);
-      }, (e) => {
-        console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
-        ouvindoMinhas = false;
+      }, {
+        filtros: [["solicitante_email", "eq", email]],
+        aoErro: (e) => {
+          console.warn("[Encaminhar para produção] Não foi possível acompanhar as respostas:", e);
+          ouvindoMinhas = false;
+        }
       });
     } catch (e) {
       ouvindoMinhas = false;
@@ -1009,7 +1065,7 @@
       const f = fb();
       if (!f) return;
       for (const s of lista) {
-        try { await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), { avisoVisto: true, avisoVistoEm: Date.now() }); } catch (e) {}
+        try { await f.tab.gravar(s.id, { avisoVisto: true, avisoVistoEm: Date.now() }, { merge: true }); } catch (e) {}
       }
     };
     if (typeof window.crmCriarIcones === "function") window.crmCriarIcones(fundo);
@@ -1049,21 +1105,23 @@
   function ouvirPendentes() {
     if (ouvindoSolic || !adminReal()) return;
     const f = fb();
-    if (!f || typeof f.fx.onSnapshot !== "function") return;
+    if (!f) return;
     ouvindoSolic = true;
     try {
-      f.fx.onSnapshot(f.fx.query(f.fx.collection(f.db, SOLIC), f.fx.where("status", "==", "pendente")), (snap) => {
-        const lista = [];
-        snap.forEach((d) => lista.push(Object.assign({ id: d.id }, d.data())));
+      f.tab.ouvir(({ docs }) => {
+        const lista = docs.slice();
         lista.sort((a, b) => Number(a.criadoEm) - Number(b.criadoEm));
         solicPendentes = lista;
         pintar();
         const vistos = vistas();
         const novas = lista.filter((s) => vistos.indexOf(s.id + ":" + s.criadoEm) < 0);
         if (novas.length && adminReal() && !document.getElementById("avsol-admin")) abrirSolicitacoes();
-      }, (e) => {
-        console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
-        ouvindoSolic = false;
+      }, {
+        filtros: [["status", "eq", "pendente"]],
+        aoErro: (e) => {
+          console.warn("[Solicitações de envio] Não foi possível acompanhar:", e);
+          ouvindoSolic = false;
+        }
       });
     } catch (e) {
       ouvindoSolic = false;
@@ -1075,8 +1133,10 @@
     const d = dados[s.ambiente];
     const mudouDepois = d && d.sha && s.sha && d.sha !== s.sha;
     const quem = (s.solicitante && (s.solicitante.nome || s.solicitante.email)) || "desenvolvedor";
-    const informadas = Array.isArray(s.telas) && s.telas.length;
-    const telas = informadas ? s.telas : sugerirTelas(s, s.descricao);
+    // As telas são sempre automáticas: recalcula com a regra atual (pedido antigo pode ter falso positivo gravado).
+    const recalculadas = s.semAlteracoesCodigo ? [] : sugerirTelas(s, s.descricao);
+    const informadas = !recalculadas.length && Array.isArray(s.telas) && s.telas.length;
+    const telas = recalculadas.length ? recalculadas : (informadas ? s.telas : []);
     const github = s.semAlteracoesCodigo ? "" : `<p style="margin:8px 0 0;"><a class="avdev-btn" href="https://github.com/${REPO}/compare/main...${encodeURIComponent(s.branch || amb.branch)}" target="_blank" rel="noopener">Ver no GitHub</a></p>`;
     return `<div class="avsol-pedido" style="color:${esc(amb.cor)};" data-id="${esc(s.id)}">
       <div class="avsol-cab">
@@ -1147,7 +1207,7 @@
   // Aprovar dentro de uma bolha de teste chamava a API da bolha e caía em "publicação não ligada".
   function naProducao() {
     const host = String(location.hostname || "").toLowerCase();
-    return host === "crm-gestao.vercel.app" || /^crm-gestao-[a-z0-9]+-crm-mldu\.vercel\.app$/.test(host);
+    return host === "integra-mouraleite.vercel.app" || host === "integra-sooty.vercel.app" || /^integra-[a-z0-9]+-mouraleite1\.vercel\.app$/.test(host);
   }
 
   async function decidir(caixa, s, status, motivo) {
@@ -1175,11 +1235,11 @@
         const resto = (s.commits || []).slice(0, escolha.k);
         const parte = { versao: resultado.versao, ate: escolha.ate, em: Date.now(), por: quem.nome || quem.email, quantas: (s.commits || []).length - escolha.k };
         try {
-          await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), {
+          await f.tab.gravar(s.id, {
             commits: resto,
             totais: Object.assign({}, s.totais || {}, { commits: resto.length }),
             publicacoesParciais: (s.publicacoesParciais || []).concat(parte)
-          });
+          }, { merge: true });
         } catch (e) {
           console.warn("[Solicitações de envio] Falha ao gravar a publicação parcial:", e);
         }
@@ -1205,7 +1265,7 @@
       }
     }
     try {
-      await f.fx.updateDoc(f.fx.doc(f.db, SOLIC, s.id), Object.assign({ status }, registro));
+      await f.tab.gravar(s.id, Object.assign({ status }, registro), { merge: true });
     } catch (e) {
       console.warn("[Solicitações de envio] Falha ao gravar a decisão:", e);
       if (status !== "publicado") {

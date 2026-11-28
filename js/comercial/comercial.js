@@ -243,34 +243,12 @@ const ComercialApp = {
     return allResults;
   },
 
+  // Batimento de vendas/distratos no Supabase (comercial_batimento: uma linha por mês com vendas/distratos já em
+  // lista; os shards _p<i> sumiram e as linhas _meta/_state ficam de fora). Já vem em ordem de ano/mês.
   async lerBatimento() {
-    const fc = window.firebaseCollections;
-    if (!window.firebaseDb || !fc || !fc.getDocs || !fc.collection) return [];
-    const snap = await fc.getDocs(fc.collection(window.firebaseDb, "comercial_batimento"));
-    const docs = [];
-    snap.forEach((d) => docs.push(d));
-    const byId = {};
-    docs.forEach((d) => { byId[d.id] = d; });
-    const rows = [];
-    docs.forEach((d) => {
-      if (!d.id || d.id.charAt(0) === "_" || /_p\d+$/.test(d.id)) return;
-      const data = d.data() || {};
-      if (data.year == null || data.month == null) return;
-      let distratos = [];
-      let vendas = [];
-      try { distratos = JSON.parse(data.distratos || "[]"); } catch (e) { distratos = []; }
-      if (data.splitVendas && Number(data.parts) > 0) {
-        for (let i = 0; i < Number(data.parts); i++) {
-          const part = byId[d.id + "_p" + i];
-          let chunk = [];
-          try { chunk = JSON.parse((part && part.data() && part.data().data) || "[]"); } catch (e) { chunk = []; }
-          vendas = vendas.concat(chunk);
-        }
-      } else {
-        try { vendas = JSON.parse(data.vendas || "[]"); } catch (e) { vendas = []; }
-      }
-      rows.push({ year: Number(data.year), month: Number(data.month), vendas: vendas, distratos: distratos });
-    });
+    const D = window.DadosEngenharia;
+    if (!D) return [];
+    const rows = await D.lerComercialBatimento();
     return rows.sort((a, b) => a.year - b.year || a.month - b.month);
   },
 
@@ -1159,10 +1137,11 @@ const ComercialApp = {
       porUnidade(raw && (raw.units || (raw.data && raw.data.units)));
     } catch (e) {}
     const vendas = new Set();
-    const fc = window.firebaseCollections;
-    if (window.firebaseDb && fc && fc.getDocs) {
+    // Estoque no Supabase (uma linha por unidade; lerEstoqueDocs devolve agrupado por empreendimento como os docs cc_*).
+    const D = window.DadosEngenharia;
+    if (D) {
       try {
-        const snap = await fc.getDocs(fc.collection(window.firebaseDb, 'estoque_comercial'));
+        const snap = await D.lerEstoqueDocs({ semControle: true });
         snap.forEach((d) => {
           const data = d.data() || {};
           if (d.id === '_meta' || !data.enterpriseId || !Array.isArray(data.units) || !data.units.length) return;

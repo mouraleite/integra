@@ -5,6 +5,10 @@ const rotas = {
   "sienge-upload": require("./_lib/sienge-upload"),
   "github-leitura": require("./_lib/github-leitura"),
   "central-email-enviar": require("./_lib/central-email-enviar"),
+  "remessa-avulsa-email": require("./_lib/remessa-avulsa-email"),
+  "central-email-confirmacoes": require("./_lib/central-email-confirmacoes"),
+  // Imagem de rastreio de abertura: pública (leitor de e-mail do cliente), protegida pela assinatura do id.
+  "email-aberto": require("./_lib/email-aberto"),
   "sienge-builder-proxy": require("./_lib/sienge-builder-proxy"),
   "sync-customers": require("./_lib/sync-customers"),
   "sync-creditors": require("./_lib/sync-creditors"),
@@ -23,19 +27,29 @@ const rotas = {
   "titulos-incompletos-batimento": require("./_lib/morning-warmup"),
   "reembolso-batimento": require("./_lib/morning-warmup"),
   "antecipacoes-batimento": require("./_lib/morning-warmup"),
+  "remessa-avulsa-batimento": require("./_lib/morning-warmup"),
   "estoque-batimento": require("./_lib/estoque-batimento"),
   "rydoo-email": require("./_lib/rydoo-email"),
+  // Login Microsoft -> token do Supabase. Confere o login dentro da própria rota (sempre bloqueia).
+  "supabase-token": require("./_lib/supabase-token"),
   // Publicar na produção: confere login + perfil ADMINISTRADOR dentro da própria rota.
-  "publicar": require("./_lib/publicar")
+  "publicar": require("./_lib/publicar"),
+  // Link público da vistoria (cliente sem login): fica FORA do ROTAS_COM_LOGIN de propósito.
+  // Protegido pelo id da vistoria + conferências na própria rota (status, caminho das fotos, limite por IP).
+  "vistoria-publica": require("./_lib/vistoria-publica"),
+  // Arquivos do bucket privado (link /arquivo?p=...): confere o token do Supabase (cookie) dentro da própria rota.
+  "arquivo": require("./_lib/arquivo")
 };
 
 const { conferirAcesso, modoBloqueio, usuarioAtivoIntegra } = require("../lib/integra-auth");
 
 // Rotas usadas pelas telas do Integra que acessam sistemas com senha (Sienge, SCOD, CV, Clicksign...).
 // As rotinas automáticas (morning-warmup, estoque-batimento...) seguem protegidas pelo CRON_SECRET.
+// proxy-download fica fora: o boleto/extrato abre numa aba nova, que não leva o login. Ele só aceita
+// links do próprio Sienge (que já trazem a chave do relatório), então não serve de passagem para outros sites.
 const ROTAS_COM_LOGIN = new Set([
-  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "sienge-builder-proxy", "sync-customers", "sync-creditors",
-  "cvcrm-proxy", "scod-proxy", "clicksign", "proxy-download",
+  "sienge-proxy", "sienge-upload", "github-leitura", "central-email-enviar", "central-email-confirmacoes", "remessa-avulsa-email", "sienge-builder-proxy", "sync-customers", "sync-creditors",
+  "cvcrm-proxy", "scod-proxy", "clicksign",
   "controle-comissao", "participacoes", "rydoo-email"
 ]);
 
@@ -84,6 +98,8 @@ module.exports = async function handler(req, res) {
       if (ativo === false) Object.assign(acesso, { ok: false, motivo: "nao-cadastrado-ou-inativo" });
     }
     try { res.setHeader("X-Integra-Auth", acesso.motivo); } catch (e) {}
+    // Quem fez o pedido (para o registro de quem enviou); só vale quando o login foi confirmado.
+    req.integraEmail = acesso.ok ? String(acesso.email || "") : "";
     if (!acesso.ok) {
       const bloquear = modoBloqueio();
       console.warn("[integra-auth] " + JSON.stringify({
