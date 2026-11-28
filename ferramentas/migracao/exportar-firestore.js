@@ -51,6 +51,8 @@ const CONHECIDAS = [
   "antecipacoes_mes", "cc_conta_parceria", "pagamento_lotes", "api_consumo", "usuarios_online",
   "suporte_chamados", "solicitacoes_producao", "ambientes_dev", "sienge_creditors", "sienge_sync_state",
   "anexos_juridicos", "cartao_clara", "acordo_email_tag", "resultado_caixa_orig", "followup_gestor",
+  // Coleções que só o código da main (Firebase) usa: a varredura lê o código desta branch e não as acha.
+  "central_email_envios", "participacoes_painel", "remessa_avulsa_envios", "registro_cadastro",
 ];
 
 function varrerCodigo() {

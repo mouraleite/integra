@@ -221,6 +221,7 @@ async function montar(pasta, opcoes) {
     ["cc_conta_parceria", (x) => [x.updatedAt, x.updatedAt]],
     ["sienge_creditors", () => [null, null]],
     ["participacoes_credores", (x) => [x.em, x.em]],
+    ["participacoes_painel", (x) => [x.em, x.em]],
     ["rydoo_arquivos", (x) => [x.importedAt, x.importedAt]],
     ["rydoo_meta", (x) => [x.updatedAt, x.updatedAt]],
     ["fiscal_notas_envio", (x) => [x.criadoEm, x.atualizadoEm]],
@@ -398,6 +399,7 @@ const GRAVACAO = {
   cc_conta_parceria: { conflito: "id" },
   sienge_creditors: { conflito: "id" },
   participacoes_credores: { conflito: "id" },
+  participacoes_painel: { conflito: "id" },
   participacoes_periods: { conflito: "id" },
   participacoes_periods_expenses: { pai: "participacoes_periods_id" },
   dfc_orcamento: { conflito: "id" },
@@ -425,11 +427,20 @@ async function gravar(sb, t, item) {
   const g = GRAVACAO[t];
   const linhas = item.linhas;
   const tam = g.lote || 500;
-  const apagar = async (col, valores) => {
-    for (let i = 0; i < valores.length; i += 200) {
-      const r = await sb.from(t).delete().in(col, valores.slice(i, i + 200));
-      if (r.error) throw new Error(t + " (apagar " + col + "): " + r.error.message);
+  // Tabelas grandes (caixa_movimentos_itens tem ~800 mil linhas): se o Supabase cortar por tempo, divide o lote ao meio.
+  const apagarLote = async (col, parte) => {
+    const r = await sb.from(t).delete().in(col, parte);
+    if (!r.error) return;
+    if (/statement timeout/i.test(r.error.message || "") && parte.length > 1) {
+      const meio = Math.ceil(parte.length / 2);
+      await apagarLote(col, parte.slice(0, meio));
+      await apagarLote(col, parte.slice(meio));
+      return;
     }
+    throw new Error(t + " (apagar " + col + "): " + r.error.message);
+  };
+  const apagar = async (col, valores) => {
+    for (let i = 0; i < valores.length; i += 200) await apagarLote(col, valores.slice(i, i + 200));
   };
   if (g.pai) await apagar(g.pai, Array.from(new Set(linhas.map((l) => l[g.pai]))));
   if (g.dia) await apagar(g.dia, item.dias || Array.from(new Set(linhas.map((l) => l[g.dia]))));
