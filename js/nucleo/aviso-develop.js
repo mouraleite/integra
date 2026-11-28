@@ -7,7 +7,7 @@
 // Para um novo desenvolvedor: acrescentar uma linha em AMBIENTES, cadastrar o endereço no Entra ID (SPA) e no deploy.bat.
 (function () {
   const REPO = "mouraleite/integra";
-  const URL_PRODUCAO = "https://crm-gestao.vercel.app/";
+  const URL_PRODUCAO = "https://integra-mouraleite.vercel.app/";
   const AMBIENTES = [
     { chave: "dani", nome: "Teste Dani", pessoa: "da Dani", branch: "develop", cor: "#2563eb" },
     { chave: "marcelo", nome: "Teste Marcelo", pessoa: "do Marcelo", branch: "Marcelo", cor: "#7c3aed" },
@@ -17,7 +17,8 @@
   ].map((a) => {
     // A Vercel tira o sublinhado do nome da branch (isabella_garcia vira isabellagarcia); slug fixo quando precisa.
     const slug = a.slug || a.branch.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    return Object.assign(a, { host: "crm-gestao-git-" + slug + "-", url: "https://crm-gestao-git-" + slug + "-crm-mldu.vercel.app/" });
+    // Bolhas no projeto novo da Vercel (time mouraleite): integra-git-<branch>-mouraleite1.vercel.app.
+    return Object.assign(a, { host: "integra-git-" + slug + "-", url: "https://integra-git-" + slug + "-mouraleite1.vercel.app/" });
   });
   const DISPENSADO = "integra_testes_dispensado";
   const INTERVALO = 5 * 60 * 1000;
@@ -1206,7 +1207,7 @@
   // Aprovar dentro de uma bolha de teste chamava a API da bolha e caía em "publicação não ligada".
   function naProducao() {
     const host = String(location.hostname || "").toLowerCase();
-    return host === "crm-gestao.vercel.app" || /^crm-gestao-[a-z0-9]+-crm-mldu\.vercel\.app$/.test(host);
+    return host === "integra-mouraleite.vercel.app" || host === "integra-sooty.vercel.app" || /^integra-[a-z0-9]+-mouraleite1\.vercel\.app$/.test(host);
   }
 
   async function decidir(caixa, s, status, motivo) {

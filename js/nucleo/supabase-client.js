@@ -33,13 +33,13 @@ function avisarAcessoRestrito(texto) {
   caixa.style.cssText = "width:500px;max-width:100%;background:#fff;border-radius:10px;border-top:5px solid #105436;box-shadow:0 18px 40px rgba(0,0,0,.25);padding:22px 24px;";
   const h = document.createElement("h3");
   h.style.cssText = "margin:0 0 10px;color:#105436;font-size:1.15rem;";
-  h.textContent = "O Integra novo ainda está em teste";
+  h.textContent = "Acesso ainda não liberado";
   const p = document.createElement("p");
   p.style.cssText = "margin:0 0 16px;color:#1c2e24;font-size:0.92rem;line-height:1.45;";
-  p.textContent = texto || "Continue usando o endereço atual do Integra até 30/11/2026.";
+  p.textContent = texto || "Seu acesso ao Integra ainda não foi liberado. Fale com o administrador.";
   const a = document.createElement("a");
-  a.href = "https://crm-gestao.vercel.app/";
-  a.textContent = "Ir para o endereço atual";
+  a.href = "https://integra-mouraleite.vercel.app/";
+  a.textContent = "Voltar ao início";
   a.style.cssText = "display:inline-flex;align-items:center;height:38px;padding:0 16px;border-radius:8px;background:#105436;color:#fff;font-weight:700;text-decoration:none;";
   caixa.appendChild(h); caixa.appendChild(p); caixa.appendChild(a);
   ov.appendChild(caixa);

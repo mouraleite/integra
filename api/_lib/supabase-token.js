@@ -41,7 +41,7 @@ module.exports = async function handler(req, res) {
   if (!acesso.ok && acesso.motivo === "acesso-restrito") {
     console.warn("[supabase-token] " + JSON.stringify({ motivo: acesso.motivo, email: acesso.email || "" }));
     return responder(res, 403, {
-      error: "O Integra novo ainda está em teste. Continue usando https://crm-gestao.vercel.app até 30/11/2026.",
+      error: "Seu acesso ao Integra ainda não foi liberado. Fale com o administrador.",
       motivo: acesso.motivo
     });
   }
