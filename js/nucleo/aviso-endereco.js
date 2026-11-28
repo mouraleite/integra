@@ -10,7 +10,7 @@
   var NOVO_TEXTO = "integra-mouraleite.vercel.app";
   var ANTIGOS = ["crm-gestao.vercel.app"];
   var DIA_VIRADA = "segunda-feira, 30/11/2026";
-  var BLOQUEAR = false;
+  var BLOQUEAR = true;
 
   /* Prévia pela tela de gestão de pop-ups: mesmo aviso, em qualquer endereço, sem marcar "já vi hoje". */
   window.PopupPrevias = window.PopupPrevias || {};
