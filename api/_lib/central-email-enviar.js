@@ -409,7 +409,6 @@ module.exports = async function handler(req, res) {
 module.exports.montarHtml = montarHtml;
 // Para as rotas de acompanhamento (abertura e confirmações).
 module.exports.lerDoc = lerDoc;
-module.exports.gravarDoc = gravarDoc;
 module.exports.gravarCampos = gravarCampos;
 module.exports.enviosDoPeriodo = enviosDoPeriodo;
 module.exports.tokenAbertura = tokenAbertura;
