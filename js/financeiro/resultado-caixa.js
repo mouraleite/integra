@@ -1,0 +1,5248 @@
+const ResultadoCaixaApp = {
+  aba: "entradas",
+  mes: 0,
+  date: "",
+  compareDate: "",
+  loading: false,
+  saving: false,
+  error: "",
+  rows: [],
+  compare: [],
+  dates: [],
+  anos: {},
+  acervo: { anterior: {}, meses: {} },
+  lendo: false,
+  escala: "milhoes",
+  agrupar: true,
+  outrosAberto: false,
+  arqsAberto: false,
+  forecast: null,
+  forecasts: {},
+  SOLTOS: { "14703": 1, "14704": 1, "14304": 1, "14305": 1 },
+  dfcLinhas: [],
+  dfcLendo: false,
+  dfcErro: "",
+  mlAbertos: {},
+  matrizAbertos: {},
+  matrizSort: null,
+  filtroLinha: null,
+  mlFatia: "",
+  mlDados: null,
+  mlLendo: false,
+  mlErro: "",
+  _mlSel: null,
+
+  FRASES_CARGA: ["Analisando resultados", "Cruzando informações", "Consolidando empresas"],
+
+  fraseCarga() {
+    const p = Number(this._cargaPct) || 0;
+    const i = p < 34 ? 0 : p < 68 ? 1 : 2;
+    return this.FRASES_CARGA[i];
+  },
+
+  iniciarCarga(reiniciar) {
+    if (reiniciar) this._cargaPct = 8;
+    if (this._cargaTimer) return;
+    if (!this._cargaPct) this._cargaPct = 8;
+    this._cargaTimer = setInterval(() => {
+      if (!this.dfcLendo && !this.lendo && !this.loading) {
+        this.pararCarga();
+        return;
+      }
+      const p = Number(this._cargaPct) || 8;
+      this._cargaPct = Math.min(92, p + (p < 40 ? 5 : p < 70 ? 2.4 : 0.7));
+      const txt = document.getElementById("rcx-load-text");
+      const bar = document.getElementById("rcx-load-bar");
+      if (txt) txt.textContent = this.fraseCarga();
+      if (bar) bar.style.width = this._cargaPct + "%";
+    }, 420);
+  },
+
+  pararCarga() {
+    if (this._cargaTimer) clearInterval(this._cargaTimer);
+    this._cargaTimer = null;
+  },
+
+  loaderHtml() {
+    const pct = Math.max(8, Math.min(92, Number(this._cargaPct) || 8));
+    return `<div class="ml-load" role="status" aria-live="polite">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div class="loading-status-text" id="rcx-load-text">${this.fraseCarga()}</div>
+      <div class="ml-load-track"><div class="loading-progress-bar" id="rcx-load-bar" style="width:${pct}%"></div></div>
+    </div>`;
+  },
+  MESES: ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"],
+
+  init() {
+    if (!this.date) this.date = new Date().toISOString().slice(0, 10);
+    if (!this._ok) {
+      this._ok = true;
+      if (!this.mes) this.mes = this.mesFechado();
+      this.lerLocal();
+      this.montarVista();
+    }
+    if (this.aba === "posicao") this.aba = "entradas";
+    this.render();
+    if (!this._nuvemPedida) {
+      this._nuvemPedida = true;
+      this.carregarNuvem();
+    }
+  },
+
+  setAba(id) {
+    const prox = id || "entradas";
+    if (prox !== this.aba) this.outrosAberto = false;
+    this.aba = prox === "posicao" ? "entradas" : prox;
+    this.render();
+    if (this.aba === "caixa") this.carregarMl();
+    if (window.lucide) lucide.createIcons();
+  },
+
+  lerLocal() {
+    this.carregarFora();
+    this.acervo = { anterior: {}, meses: {} };
+    let novo = null;
+    try { novo = JSON.parse(localStorage.getItem("rc_orc_v2") || "null"); } catch (e) { novo = null; }
+    if (novo && (novo.anterior || novo.meses)) {
+      this.acervo.anterior = novo.anterior || {};
+      this.acervo.meses = novo.meses || {};
+    } else {
+      try {
+        const legado = JSON.parse(localStorage.getItem("rc_orc_v1") || "null");
+        if (legado && typeof legado === "object") this.migrarLegado(legado);
+      } catch (e) {}
+    }
+    this.forecasts = {};
+    try {
+      const salvo = JSON.parse(localStorage.getItem("rc_forecast_comp") || "null");
+      if (salvo && typeof salvo === "object") this.forecasts = salvo;
+    } catch (e) {
+      this.forecasts = {};
+    }
+    this.normalizarForecastsMemoria();
+    this.aplicarForecastVista();
+  },
+
+  /** Relatório "Orçamento Empresarial Agrupado" do Sienge, por centro de custo, mensal. Guarda só as contas analíticas (tipo R). A empresa 1 detalha o plano um nível abaixo (2.02.02.04.03); o valor continua na conta do DFC. */
+  lerForecast(wb) {
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null });
+    const mesRe = /^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zç]*\/(\d{4})$/i;
+    const mesNum = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+    const txt = (v) => String(v == null ? "" : v).trim();
+    const contas = {};
+    const nomes = {};
+    let cc = null;
+    let meses = [];
+    let tipoCol = -1;
+    grid.forEach((row) => {
+      const r = row || [];
+      const c0 = txt(r[0]);
+      if (/^centro de custo$/i.test(c0)) {
+        cc = null;
+        meses = [];
+        r.slice(1).forEach((c) => {
+          const m = txt(c).match(/^(\d{4,6})\s*-\s*(.+)$/);
+          if (m && !cc) cc = { id: m[1], nome: txt(c) };
+        });
+        return;
+      }
+      if (/^c[oó]digo$/i.test(c0)) {
+        meses = [];
+        tipoCol = -1;
+        r.forEach((c, col) => {
+          const s = txt(c);
+          const m = s.toLowerCase().match(mesRe);
+          if (m) meses.push({ col, ym: m[2] + "-" + String(mesNum[m[1]]).padStart(2, "0") });
+          if (/^tipo$/i.test(s)) tipoCol = col;
+        });
+        return;
+      }
+      const code = c0.replace(/\s/g, "");
+      if (!cc || !meses.length || !/^\d+(\.\d+)*$/.test(code)) return;
+      if (tipoCol >= 0 && txt(r[tipoCol]).toUpperCase() !== "R") return;
+      const bag = contas[cc.id] || (contas[cc.id] = {});
+      nomes[cc.id] = cc.nome;
+      const conta = bag[code] || (bag[code] = { nome: txt(r[1]), meses: {} });
+      meses.forEach((m) => {
+        const v = Number(r[m.col]) || 0;
+        if (v) conta.meses[m.ym] = (conta.meses[m.ym] || 0) + v;
+      });
+    });
+    Object.keys(contas).forEach((id) => {
+      const codes = Object.keys(contas[id]);
+      codes.forEach((c) => { if (codes.some((o) => o !== c && o.startsWith(c + "."))) delete contas[id][c]; });
+    });
+    return { contas, nomes };
+  },
+
+  juntarForecast(dest, f) {
+    Object.keys((f && f.contas) || {}).forEach((cc) => {
+      const bag = dest.contas[cc] || (dest.contas[cc] = {});
+      if (f.nomes && f.nomes[cc]) dest.nomes[cc] = f.nomes[cc];
+      Object.keys(f.contas[cc] || {}).forEach((code) => {
+        const de = f.contas[cc][code] || {};
+        const para = bag[code] || (bag[code] = { nome: de.nome || "", meses: {} });
+        if (de.nome) para.nome = de.nome;
+        Object.keys(de.meses || {}).forEach((ym) => {
+          para.meses[ym] = (Number(para.meses[ym]) || 0) + (Number(de.meses[ym]) || 0);
+        });
+      });
+    });
+  },
+
+  async subirForecast(input) {
+    const files = input && input.files ? Array.from(input.files) : [];
+    if (!files.length) return;
+    this._nuvemToken = (this._nuvemToken || 0) + 1;
+    this._subindo = true;
+    if (typeof XLSX === "undefined") {
+      this._subindo = false;
+      this.error = "A biblioteca de Excel não carregou. Atualize a página.";
+      this.render();
+      return;
+    }
+    this.lendo = true;
+    this.error = "";
+    this.aviso = "";
+    this.render();
+    try {
+      const lidos = [];
+      const falhas = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          const buf = await file.arrayBuffer();
+          const wb = XLSX.read(buf.slice(0), { type: "array" });
+          const f = this.lerForecast(wb);
+          if (!Object.keys(f.contas || {}).length) {
+            falhas.push(file.name);
+            continue;
+          }
+          lidos.push({ nome: file.name, empresa: this.empresaId(file.name) || 0, contas: f.contas, nomes: f.nomes || {}, buf: buf });
+        } catch (e) {
+          falhas.push(file.name);
+        }
+      }
+      if (!lidos.length) throw new Error("Não reconheci o forecast. Use o relatório Orçamento Empresarial Agrupado por centro de custo, com periodicidade mensal.");
+      const seguintes = this.mesesSeguintes();
+      const nomesMes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+      const sel = Number(this.mes) || 1;
+      const ano = this.anoAtual();
+      if (!seguintes.length) {
+        throw new Error("Dezembro fecha o ano: o realizado já vai até o fim. Escolha o mês até onde o realizado entra e suba o forecast dos meses seguintes.");
+      }
+      const em = new Date().toISOString();
+      const planos = [];
+      lidos.forEach((arq) => {
+        seguintes.forEach((ym) => {
+          const fatia = this.recortarForecast(arq.contas, ym);
+          if (!Object.keys(fatia).length) return;
+          planos.push({ ym: ym, nome: arq.nome, empresa: arq.empresa, rotulo: this.nomeEmpresaArquivo(arq.nome), contas: fatia, nomes: arq.nomes });
+        });
+      });
+      if (!planos.length) {
+        const de = nomesMes[sel] || seguintes[0];
+        throw new Error("O mês escolhido é o realizado acumulado até " + (nomesMes[sel - 1] || "") + "/" + ano + ". O forecast precisa dos meses seguintes, de " + de + " a dezembro/" + ano + ".");
+      }
+      // O forecast fica na competência da tela. Substitui só o desta competência (mesmo arquivo ou mesma empresa).
+      const base = this.competenciaAtual();
+      const substituir = {};
+      lidos.forEach((arq) => {
+        substituir[base + "|" + arq.nome] = 1;
+        Object.keys(this.forecasts || {}).forEach((ym) => {
+          const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+          Object.keys(por).forEach((chave) => {
+            if (this.baseForecast(chave, por[chave]) !== base) return;
+            if (this.nomeForecast(chave, por[chave]) === arq.nome) { substituir[chave] = 1; return; }
+            if (!arq.empresa) return;
+            const nomeArq = this.nomeForecast(chave, por[chave]);
+            const emp = Number(por[chave].empresa) || this.empresaId(nomeArq) || this.empresaId(por[chave].rotulo);
+            if (emp && emp === arq.empresa) substituir[chave] = 1;
+          });
+        });
+      });
+      const orfaos = {};
+      Object.keys(substituir).forEach((chave) => {
+        Object.keys(this.forecasts || {}).forEach((ym) => {
+          const item = ((this.forecasts[ym] || {}).porArquivo || {})[chave];
+          if (item && item.orig) orfaos[item.orig] = 1;
+        });
+      });
+      seguintes.forEach((ym) => {
+        const doc = this.garantirForecast(ym);
+        Object.keys(substituir).forEach((nome) => { delete doc.porArquivo[nome]; });
+      });
+      const mesesGravados = {};
+      planos.forEach((p) => {
+        const doc = this.garantirForecast(p.ym);
+        doc.em = em;
+        doc.porArquivo[base + "|" + p.nome] = { nome: p.nome, base: base, rotulo: p.rotulo, empresa: p.empresa || 0, contas: p.contas, nomes: p.nomes, em: em };
+        mesesGravados[p.ym] = 1;
+      });
+      seguintes.forEach((ym) => {
+        const doc = this.forecasts[ym];
+        if (doc && doc.porArquivo && !Object.keys(doc.porArquivo).length) {
+          delete this.forecasts[ym];
+          this.apagarForecastNuvem(ym);
+        }
+      });
+      for (let i = 0; i < lidos.length; i++) {
+        const arq = lidos[i];
+        const orig = this.idOriginalForecast(base, arq.empresa, arq.nome);
+        try {
+          await this.salvarOriginal(orig, arq.nome, arq.buf);
+          seguintes.forEach((ym) => {
+            const item = ((this.forecasts[ym] || {}).porArquivo || {})[base + "|" + arq.nome];
+            if (!item) return;
+            item.orig = orig;
+            item.origNome = arq.nome;
+          });
+          delete orfaos[orig];
+        } catch (err) {
+          this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + arq.nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+        }
+      }
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
+      const gravados = Object.keys(mesesGravados).map((ym) => ({ ym: ym, doc: this.forecasts[ym] }));
+      this.aplicarForecastVista();
+      if (falhas.length) this.aviso = ((this.aviso ? this.aviso + " " : "") + "Não reconheci " + falhas.length + " arquivo(s): " + falhas.join(", ") + ".").trim();
+      this.gravarForecastLocal();
+      try {
+        for (let i = 0; i < gravados.length; i++) await this.salvarForecastNuvem(gravados[i].ym, gravados[i].doc);
+      } catch (err) {
+        this.aviso = ((this.aviso ? this.aviso + " " : "") + "O forecast ficou neste navegador, mas a nuvem não guardou: " + ((err && err.message) || err)).trim();
+      }
+    } catch (e) {
+      this.error = e.message || String(e);
+    }
+    this.lendo = false;
+    this._subindo = false;
+    if (input) input.value = "";
+    this.render();
+  },
+
+  /** Remove o forecast desta competência; o enviado em outras competências continua. */
+  removerForecast() {
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const doc = this.forecasts[ym];
+      const por = (doc && doc.porArquivo) || {};
+      const daqui = Object.keys(por).filter((chave) => this.forecastDaCompetencia(chave, por[chave]));
+      if (!daqui.length) return;
+      const orfaos = {};
+      daqui.forEach((chave) => {
+        if (por[chave] && por[chave].orig) orfaos[por[chave].orig] = 1;
+        delete por[chave];
+      });
+      Object.keys(orfaos).forEach((id) => {
+        if (!this.origAindaUsado(id)) this.apagarOriginal(id);
+      });
+      if (!Object.keys(por).length) {
+        delete this.forecasts[ym];
+        this.apagarForecastNuvem(ym);
+      } else {
+        this.salvarForecastNuvem(ym, doc);
+      }
+    });
+    this.aplicarForecastVista();
+    this.gravarForecastLocal();
+    this.render();
+  },
+
+  removerForecastArquivo(chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const doc = this.forecasts[ym];
+      if (!doc || !doc.porArquivo || !doc.porArquivo[nome]) return;
+      if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+      const orig = doc.porArquivo[nome].orig || "";
+      delete doc.porArquivo[nome];
+      if (orig && !this.origAindaUsado(orig)) this.apagarOriginal(orig);
+      if (!Object.keys(doc.porArquivo).length) {
+        delete this.forecasts[ym];
+        this.apagarForecastNuvem(ym);
+      } else {
+        this.salvarForecastNuvem(ym, doc);
+      }
+    });
+    this.aplicarForecastVista();
+    this.gravarForecastLocal();
+    this.render();
+  },
+
+  /**
+   * Competência em que o forecast foi enviado. Cada competência tem o seu forecast:
+   * o enviado em setembro não aparece em outubro, e apagar num mês não apaga no outro.
+   * Arquivo antigo, sem essa marca, é do mês anterior ao primeiro mês que ele projeta.
+   */
+  baseForecast(chave, arq) {
+    if (arq && /^\d{4}-\d{2}$/.test(String(arq.base || ""))) return String(arq.base);
+    const m = String(chave || "").match(/^(\d{4}-\d{2})\|/);
+    if (m) return m[1];
+    let menor = "";
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      if (por[chave] && (!menor || ym < menor)) menor = ym;
+    });
+    if (!menor) return "";
+    const y = Number(menor.slice(0, 4));
+    const mes = Number(menor.slice(5, 7)) - 1;
+    return mes >= 1 ? this.chaveMes(y, mes) : this.chaveMes(y - 1, 12);
+  },
+
+  /** Nome do arquivo de forecast (a chave guarda "competência|nome"). */
+  nomeForecast(chave, arq) {
+    if (arq && arq.nome) return String(arq.nome);
+    const s = String(chave || "");
+    const i = s.indexOf("|");
+    return i >= 0 ? s.slice(i + 1) : s;
+  },
+
+  forecastDaCompetencia(chave, arq) {
+    return this.baseForecast(chave, arq) === this.competenciaAtual();
+  },
+
+  garantirForecast(ym) {
+    const doc = this.forecasts[ym] || (this.forecasts[ym] = { em: "", porArquivo: {} });
+    if (!doc.porArquivo || typeof doc.porArquivo !== "object" || Array.isArray(doc.porArquivo)) {
+      doc.porArquivo = this.partirForecast(doc);
+    }
+    return doc;
+  },
+
+  /** Separa um forecast antigo (contas juntas) em um arquivo por empresa. */
+  partirForecast(doc) {
+    const contas = (doc && doc.contas) || {};
+    const nomesCc = (doc && doc.nomes) || {};
+    const nomesArquivo = Array.isArray(doc && doc.arquivos) ? doc.arquivos.filter(Boolean) : [];
+    if (doc && doc.porArquivo && typeof doc.porArquivo === "object" && !Array.isArray(doc.porArquivo) && Object.keys(doc.porArquivo).length) {
+      return doc.porArquivo;
+    }
+    const porEmp = {};
+    const solto = { contas: {}, nomes: {} };
+    Object.keys(contas).forEach((cc) => {
+      const emp = this.empresaDoCentro(cc, nomesCc[cc]);
+      const dest = emp ? (porEmp[emp] || (porEmp[emp] = { contas: {}, nomes: {} })) : solto;
+      dest.contas[cc] = contas[cc];
+      if (nomesCc[cc]) dest.nomes[cc] = nomesCc[cc];
+    });
+    const por = {};
+    const usados = {};
+    const listaNomes = nomesArquivo.length ? nomesArquivo : ["forecast"];
+    listaNomes.forEach((nome) => {
+      const emp = this.empresaId(nome);
+      if (!emp || !porEmp[emp] || usados[emp]) return;
+      usados[emp] = nome;
+      por[nome] = {
+        rotulo: this.nomeEmpresaArquivo(nome),
+        empresa: emp,
+        contas: porEmp[emp].contas,
+        nomes: porEmp[emp].nomes,
+        em: (doc && doc.em) || ""
+      };
+    });
+    Object.keys(porEmp).forEach((emp) => {
+      if (usados[emp]) return;
+      const nome = "empresa-" + emp;
+      por[nome] = {
+        rotulo: "Empresa " + emp,
+        empresa: Number(emp),
+        contas: porEmp[emp].contas,
+        nomes: porEmp[emp].nomes,
+        em: (doc && doc.em) || ""
+      };
+    });
+    if (Object.keys(solto.contas).length) {
+      const jaTem = Object.keys(por).length;
+      const unico = !jaTem && nomesArquivo.length === 1;
+      const nome = jaTem ? "sem-empresa" : (unico ? (nomesArquivo[0] || "forecast") : "forecast");
+      por[nome] = {
+        rotulo: jaTem ? "Sem empresa" : (unico ? this.nomeEmpresaArquivo(nome) : "Forecast"),
+        empresa: unico ? (this.empresaId(nome) || 0) : 0,
+        contas: solto.contas,
+        nomes: solto.nomes,
+        em: (doc && doc.em) || ""
+      };
+    }
+    if (!Object.keys(por).length && Object.keys(contas).length) {
+      const nome = nomesArquivo[0] || "forecast";
+      por[nome] = { rotulo: this.nomeEmpresaArquivo(nome), empresa: this.empresaId(nome) || 0, contas: contas, nomes: nomesCc, em: (doc && doc.em) || "" };
+    }
+    return por;
+  },
+
+  normalizarForecastsMemoria() {
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const doc = this.forecasts[ym];
+      if (!doc) return;
+      if (!doc.porArquivo || Array.isArray(doc.porArquivo) || !Object.keys(doc.porArquivo).length) {
+        doc.porArquivo = this.partirForecast(doc);
+      }
+      Object.keys(doc.porArquivo).forEach((nome) => {
+        const arq = doc.porArquivo[nome];
+        if (!arq) return;
+        if (!arq.rotulo) arq.rotulo = this.nomeEmpresaArquivo(nome);
+        if (!arq.empresa) arq.empresa = this.empresaId(nome) || this.empresaId(arq.rotulo) || 0;
+      });
+    });
+  },
+
+  competenciaAtual() {
+    return this.chaveMes(this.anoAtual(), this.mes);
+  },
+
+  /** Meses depois do escolhido, até dezembro. O mês da tela é realizado; o forecast começa no seguinte. */
+  mesesSeguintes() {
+    const ano = this.anoAtual();
+    const sel = Number(this.mes) || 1;
+    const out = [];
+    for (let m = sel + 1; m <= 12; m++) out.push(this.chaveMes(ano, m));
+    return out;
+  },
+
+  recortarForecast(contas, chave) {
+    const out = {};
+    Object.keys(contas || {}).forEach((cc) => {
+      Object.keys(contas[cc] || {}).forEach((code) => {
+        const de = contas[cc][code] || {};
+        const v = Number((de.meses || {})[chave]) || 0;
+        if (!v) return;
+        const bag = out[cc] || (out[cc] = {});
+        bag[code] = { nome: de.nome || "", meses: { [chave]: v } };
+      });
+    });
+    return out;
+  },
+
+  aplicarForecastVista() {
+    const contas = {};
+    const nomes = {};
+    const arquivos = [];
+    const meses = [];
+    let em = "";
+    this.mesesSeguintes().forEach((ym) => {
+      const fatia = this.contasMesForecast(ym);
+      if (!fatia) return;
+      const doc = this.forecasts[ym] || {};
+      meses.push(ym);
+      if (doc.em && doc.em > em) em = doc.em;
+      Object.keys(doc.porArquivo || {}).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, doc.porArquivo[nome])) return;
+        if (arquivos.indexOf(nome) < 0) arquivos.push(nome);
+      });
+      this.juntarForecast({ contas: contas, nomes: nomes }, fatia);
+    });
+    if (!meses.length) {
+      this.forecast = null;
+      return;
+    }
+    this.forecast = {
+      arquivo: arquivos.join(", "),
+      arquivos: arquivos,
+      em: em,
+      meses: meses,
+      contas: contas,
+      nomes: nomes
+    };
+  },
+
+  gravarForecastLocal() {
+    try { localStorage.setItem("rc_forecast_comp", JSON.stringify(this.forecasts || {})); } catch (e) {}
+  },
+
+  docForecast(ym) {
+    return "fc-" + ym;
+  },
+
+  async salvarForecastNuvem(ym, doc) {
+    // resultado_caixa no Supabase (window.DadosFinanceiro): setDoc do doc inteiro vira upsert da linha.
+    const D = window.DadosFinanceiro;
+    if (!D || !doc) return false;
+    const por = doc.porArquivo || {};
+    const nomes = {};
+    const contas = {};
+    Object.keys(por).forEach((nome) => this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]));
+    await D.gravarResultadoCaixa(this.docForecast(ym), {
+      tipo: "forecast",
+      slot: "fc-" + ym,
+      competencia: ym,
+      arquivos: Object.keys(por),
+      nomes: nomes,
+      contas: contas,
+      porArquivo: por,
+      em: doc.em || new Date().toISOString()
+    });
+    return true;
+  },
+
+  apagarForecastNuvem(ym) {
+    this.apagarNuvem(this.docForecast(ym));
+  },
+
+  async carregarForecasts() {
+    const D = window.DadosFinanceiro;
+    if (!D) return;
+    const token = (this._fcToken = (this._fcToken || 0) + 1);
+    try {
+      // where("tipo", "==", "forecast"): snapshot de imitação com os docs no formato antigo.
+      const snap = await D.listarResultadoCaixa({ tipo: "forecast" });
+      if (this._fcToken !== token) return;
+      const nuvem = {};
+      const semParte = {};
+      snap.forEach((docSnap) => {
+        const id = docSnap.id || "";
+        const x = docSnap.data() || {};
+        if (x.tipo !== "forecast" && id.indexOf("fc-") !== 0) return;
+        const ym = String(x.competencia || id.replace(/^fc-/, ""));
+        if (!/^\d{4}-\d{2}$/.test(ym)) return;
+        const jaPartido = x.porArquivo && typeof x.porArquivo === "object" && !Array.isArray(x.porArquivo) && Object.keys(x.porArquivo).length;
+        if (!jaPartido) semParte[ym] = 1;
+        nuvem[ym] = {
+          arquivos: x.arquivos || [],
+          em: x.em || "",
+          contas: x.contas || {},
+          nomes: x.nomes || {},
+          porArquivo: jaPartido ? x.porArquivo : null
+        };
+      });
+      if (Object.keys(nuvem).length) {
+        const local = this.forecasts || {};
+        Object.keys(local).forEach((ym) => {
+          const porL = (local[ym] && local[ym].porArquivo) || {};
+          if (!Object.keys(porL).length) return;
+          if (!nuvem[ym] || !nuvem[ym].porArquivo || !Object.keys(nuvem[ym].porArquivo).length) {
+            nuvem[ym] = local[ym];
+            return;
+          }
+          const por = nuvem[ym].porArquivo;
+          Object.keys(porL).forEach((nome) => {
+            const loc = porL[nome];
+            const rem = por[nome];
+            if (!rem || (loc && loc.em && String(loc.em) > String(rem.em || ""))) por[nome] = loc;
+          });
+        });
+        this.forecasts = nuvem;
+        this.normalizarForecastsMemoria();
+        this.gravarForecastLocal();
+        Object.keys(semParte).forEach((ym) => {
+          const doc = this.forecasts[ym];
+          if (doc && doc.porArquivo && Object.keys(doc.porArquivo).length) this.salvarForecastNuvem(ym, doc);
+        });
+      }
+      this.aplicarForecastVista();
+    } catch (e) {
+      if (!Object.keys(this.forecasts || {}).length) this.aviso = "Não consegui ler o forecast salvo.";
+    }
+  },
+
+  empresaDoForecast(cc, nome) {
+    const peloArquivo = this.empresaDoCc(cc);
+    if (peloArquivo) return peloArquivo;
+    return this.empresaId(nome || "");
+  },
+
+  /* Bases de PIS/COFINS e lucro presumido de uma competência, por empresa, a partir do forecast daquele mês. */
+  contasMesForecast(ym) {
+    const doc = this.forecasts && this.forecasts[ym];
+    if (!doc) return null;
+    const contas = {};
+    const nomes = {};
+    const por = doc.porArquivo;
+    if (por && typeof por === "object" && !Array.isArray(por) && Object.keys(por).length) {
+      Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
+        if (this.estaFora("fc", nome)) return;
+        this.juntarForecast({ contas: contas, nomes: nomes }, por[nome]);
+      });
+    } else if (doc.contas) {
+      this.juntarForecast({ contas: contas, nomes: nomes }, doc);
+    }
+    return Object.keys(contas).length ? { contas: contas, nomes: nomes } : null;
+  },
+
+  basesForecast(ym) {
+    const doc = this.forecasts && this.forecasts[ym];
+    if (!doc) return null;
+    const est = typeof OrcEst !== "undefined" ? OrcEst : null;
+    if (!est) return null;
+    const cfg = est.taxConfig();
+    const lista = [];
+    const por = doc.porArquivo;
+    if (por && typeof por === "object" && !Array.isArray(por) && Object.keys(por).length) {
+      Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
+        lista.push(Object.assign({}, por[nome], { nome: nome }));
+      });
+    } else if (doc.contas) {
+      lista.push({ nome: "", empresa: 0, contas: doc.contas, nomes: doc.nomes || {} });
+    }
+    const porEmp = {};
+    lista.forEach((arq) => {
+      if (arq.nome && this.estaFora("fc", arq.nome)) return;
+      const empArq = Number(arq.empresa) || this.empresaId(arq.nome) || this.empresaId(arq.rotulo) || 0;
+      Object.keys(arq.contas || {}).forEach((cc) => {
+        const nomeCc = (arq.nomes || {})[cc] || "";
+        const emp = empArq || this.empresaDoCentro(cc, nomeCc);
+        if (!emp) return;
+        if (est.entraNoImposto && !est.entraNoImposto(cc, nomeCc, emp)) return;
+        const row = porEmp[emp] || (porEmp[emp] = {
+          vendas: 0, servicos: 0, financeiras: 0, redV: 0, redS: 0, redF: 0,
+          deds: { redV: new Map(), redS: new Map(), redF: new Map() }
+        });
+        Object.keys(arq.contas[cc] || {}).forEach((code) => {
+          const info = arq.contas[cc][code] || {};
+          const valor = Number((info.meses || {})[ym]) || 0;
+          if (!valor) return;
+          const cl = est.classe({ e: emp, conta: code, cn: info.nome || "" }, cfg);
+          if (!cl) return;
+          let s = est.sinal(est.grupoEfetivo ? est.grupoEfetivo(code, info.nome || "") : est.grupo(code, info.nome || ""), code, info.nome || "", valor);
+          if (cl.red && s > 0) s = -Math.abs(s);
+          row[cl.bucket] += s;
+          if (cl.red && s) {
+            const chave = cl.bucket === "servicos" ? "redS" : (cl.bucket === "financeiras" ? "redF" : "redV");
+            row[chave] += s;
+            const mapa = row.deds[chave];
+            const k = String(code) + "|" + String(cc);
+            const item = mapa.get(k) || {
+              conta: String(code || ""),
+              nome: String(info.nome || "").replace(/\s+/g, " ").trim(),
+              cc: String(cc || ""),
+              cn: String(nomeCc || "").replace(/\s+/g, " ").trim(),
+              v: 0
+            };
+            item.v += s;
+            mapa.set(k, item);
+          }
+        });
+      });
+    });
+    Object.keys(porEmp).forEach((emp) => {
+      const row = porEmp[emp];
+      if (!row.deds) return;
+      ["redV", "redS", "redF"].forEach((chave) => {
+        const mapa = row.deds[chave];
+        row.deds[chave] = mapa && typeof mapa.values === "function"
+          ? [...mapa.values()].filter((x) => Math.abs(x.v) >= 0.5)
+          : [];
+      });
+    });
+    return Object.keys(porEmp).length ? porEmp : null;
+  },
+
+  /** Forecast do ano pelas contas da visão DFC do lado (entradas ou saídas), no % Consolidação quando agrupado. */
+  forecastLado(ano, lado) {
+    const out = {};
+    for (let m = 1; m <= 12; m++) {
+      const chave = Number(ano) + "-" + String(m).padStart(2, "0");
+      const f = this.contasMesForecast(chave);
+      if (!f || !f.contas) continue;
+      const parcial = this.somarForecastMes(f, ano, lado, chave);
+      if (parcial != null) out[m] = parcial;
+    }
+    return out;
+  },
+
+  somarForecastMes(f, ano, lado, chave) {
+    const FC = window.FluxoCaixaApp;
+    let mapa = null;
+    try {
+      if (FC && typeof FC.visao === "function") {
+        mapa = this.mapaDfc(FC);
+        if (!Object.keys(mapa.accToNode).length) mapa = null;
+      }
+    } catch (e) {
+      mapa = null;
+    }
+    const aceita = this.noAceito(lado);
+    const ajuste = 1;
+    let total = 0;
+    let algum = false;
+    Object.keys(f.contas).forEach((cc) => {
+      const fator = this.agrupar ? this.pctMl(cc) : 1;
+      Object.keys(f.contas[cc]).forEach((code) => {
+        let entra;
+        if (mapa) {
+          const node = this.noDaLinha(FC, mapa, { code: code, nome: (f.contas[cc][code] && f.contas[cc][code].nome) || "" });
+          entra = !!(node && aceita(node.id));
+        } else if (lado === "saidas") {
+          entra = /^2\./.test(code);
+        } else {
+          entra = /^1\.0[123](\.|$)/.test(code);
+        }
+        if (!entra) return;
+        const sinal = code.charAt(0) === "2" ? -1 : 1;
+        const v = Number((f.contas[cc][code].meses || {})[chave]) || 0;
+        if (!v || Number(chave.slice(0, 4)) !== Number(ano)) return;
+        algum = true;
+        total += ajuste * sinal * v * fator;
+      });
+    });
+    return algum ? total : null;
+  },
+
+  forecastEntradas(ano) {
+    return this.forecastLado(ano, "entradas");
+  },
+
+  gravarLocal() {
+    try {
+      localStorage.setItem("rc_orc_v2", JSON.stringify(this.acervo || { anterior: {}, meses: {} }));
+    } catch (e) {
+      if (!this._nuvemOk) this.error = "Não coube no navegador guardar o orçamento. Ele fica na nuvem quando o envio concluir.";
+    }
+  },
+
+  anoBase() {
+    const ys = [];
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => {
+      const y = Number(String(k).slice(0, 4));
+      if (y > 1900) ys.push(y);
+    });
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => {
+      const y = Number(k);
+      if (y > 1900) ys.push(y + 1);
+    });
+    if (ys.length) return Math.max.apply(null, ys);
+    return new Date().getFullYear();
+  },
+
+  anoAtual() {
+    return this.anoBase();
+  },
+
+  chaveMes(ano, mes) {
+    const y = Number(ano) || this.anoBase();
+    const m = Number(mes != null ? mes : this.mes) || 1;
+    return y + "-" + String(m).padStart(2, "0");
+  },
+
+  /** Último mês já fechado. Em novembro o realizado vai até outubro; novembro e dezembro ficam no forecast. */
+  mesFechado() {
+    const hoje = new Date().getMonth();
+    return hoje === 0 ? 12 : hoje;
+  },
+
+  migrarLegado(anos) {
+    const base = new Date().getFullYear();
+    const mes = String(Number(this.mes) || (new Date().getMonth() + 1)).padStart(2, "0");
+    Object.keys(anos || {}).forEach((y) => {
+      const ano = Number(y);
+      const arquivos = (anos[y] && anos[y].arquivos) || {};
+      if (!ano || !Object.keys(arquivos).length) return;
+      if (ano < base) this.acervo.anterior[String(ano)] = { arquivos: arquivos };
+      else this.acervo.meses[ano + "-" + mes] = { arquivos: arquivos };
+    });
+  },
+
+  temAcervo() {
+    const ant = this.acervo && this.acervo.anterior;
+    const mes = this.acervo && this.acervo.meses;
+    const cheio = (bag) => Object.keys(bag || {}).some((k) => Object.keys((bag[k] && bag[k].arquivos) || {}).length);
+    return cheio(ant) || cheio(mes);
+  },
+
+  /**
+   * Arquivos da competência escolhida: só os que foram enviados nela.
+   * Cada competência é independente (antes, um mês sem envio mostrava os do mês anterior).
+   */
+  arquivosVigentes(ano) {
+    const y = String(ano);
+    const base = String(this.anoBase());
+    if (y !== base) {
+      const ant = this.acervo && this.acervo.anterior && this.acervo.anterior[y];
+      return (ant && ant.arquivos) || {};
+    }
+    const teto = this.chaveMes(base);
+    const chaves = Object.keys((this.acervo && this.acervo.meses) || {})
+      .filter((k) => k === teto);
+    const porEmp = new Map();
+    chaves.forEach((slot) => {
+      const arquivos = (this.acervo.meses[slot] && this.acervo.meses[slot].arquivos) || {};
+      Object.keys(arquivos).forEach((nome) => {
+        const arq = arquivos[nome];
+        if (!arq) return;
+        const emp = Number(arq.empresa) || this.empresaId(nome) || 0;
+        porEmp.set(emp ? ("e:" + emp) : ("n:" + nome), { nome: nome, arq: arq, slot: slot });
+      });
+    });
+    const out = {};
+    porEmp.forEach((item) => {
+      item.arq._vigencia = item.slot;
+      out[item.nome] = item.arq;
+    });
+    return out;
+  },
+
+  montarVista() {
+    const ano = this.anoBase();
+    const vista = {};
+    const ant = this.arquivosVigentes(ano - 1);
+    if (Object.keys(ant).length) vista[String(ano - 1)] = { arquivos: ant };
+    const cur = this.arquivosVigentes(ano);
+    if (Object.keys(cur).length) vista[String(ano)] = { arquivos: cur };
+    this.anos = vista;
+  },
+
+  slotDoAno(ano) {
+    const y = Number(ano);
+    const base = this.anoBase();
+    if (y && y < base) return { tipo: "anterior", chave: String(y), id: "ant-" + y };
+    const chave = this.chaveMes(y || base);
+    return { tipo: "mes", chave: chave, id: chave };
+  },
+
+  pegarSlot(slot) {
+    if (!this.acervo) this.acervo = { anterior: {}, meses: {} };
+    if (slot.tipo === "anterior") {
+      if (!this.acervo.anterior[slot.chave]) this.acervo.anterior[slot.chave] = { arquivos: {} };
+      return this.acervo.anterior[slot.chave];
+    }
+    if (!this.acervo.meses[slot.chave]) this.acervo.meses[slot.chave] = { arquivos: {} };
+    return this.acervo.meses[slot.chave];
+  },
+
+  grupoCc(id) {
+    const s = String(id || "").replace(/\D/g, "");
+    if (this.SOLTOS && this.SOLTOS[s]) return s;
+    if (s.length >= 5) return s.slice(0, 3) + "00";
+    return s;
+  },
+
+  SIGLAS: {
+    BOTUCATU: "BTU",
+    AVARE: "AVR",
+    TAGUAI: "TAG",
+    ITATINGA: "ITA",
+    "CERQUEIRA CESAR": "CCS",
+    PARDINHO: "PAR",
+    PIRAJU: "PRJ",
+    FARTURA: "FAR",
+    ARACARIGUAMA: "ARA",
+    BOITUVA: "BOI"
+  },
+
+  rotulo(id, nome, solto) {
+    const partes = String(nome || "").split(/\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+    let cidade = "";
+    let n = nome || id;
+    if (partes.length >= 2 && /^\d+$/.test(partes[0])) {
+      if (partes.length >= 3) {
+        cidade = partes[1];
+        n = partes.slice(2).join(" - ");
+      } else {
+        n = partes.slice(1).join(" - ");
+      }
+    }
+    n = String(n || "").replace(/\s+MLDU$/i, "").trim();
+    if (!solto) n = n.replace(/\s*-\s*PARCERIA\b.*$/i, "").trim();
+    return { nome: this.nomeVisao(n || id), cidade };
+  },
+
+  fold(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9()]+/g, " ").trim();
+  },
+
+  nomeVisao(nome) {
+    const f = this.fold(nome);
+    if (f === "MLDU" || f === "CORPORATIVO") return "CORPORATIVO";
+    if (/^LIVIA( I{1,3}| [123])?$/.test(f)) return "CENTRAL PARQUE";
+    return String(nome || "").trim();
+  },
+
+  siglaCidade(cidade) {
+    const f = this.fold(cidade);
+    if (!f) return "";
+    if (this.SIGLAS[f]) return this.SIGLAS[f];
+    const palavras = f.split(" ").filter(Boolean);
+    if (palavras.length >= 2) return palavras.map((w) => w.charAt(0)).join("").slice(0, 3);
+    return f.slice(0, 3);
+  },
+
+  distinguirCidades(rows) {
+    const porNome = {};
+    rows.forEach((r) => {
+      const k = this.fold(r.nome);
+      if (!porNome[k]) porNome[k] = {};
+      const cid = this.fold(r.cidade);
+      if (cid) porNome[k][cid] = r.cidade;
+    });
+    rows.forEach((r) => {
+      const cidades = Object.keys(porNome[this.fold(r.nome)] || {});
+      if (cidades.length > 1 && r.cidade) r.nome = r.nome + " (" + this.siglaCidade(r.cidade) + ")";
+    });
+    return rows;
+  },
+
+  empresasCustom() {
+    try {
+      if (typeof EmpresasState !== "undefined" && EmpresasState.customFields) return EmpresasState.customFields;
+      return JSON.parse(localStorage.getItem("crm_empresas_custom") || "{}") || {};
+    } catch (e) { return {}; }
+  },
+
+  parceriasSalvas() {
+    const PP = window.ParametrizacaoParceiroApp;
+    if (PP && Array.isArray(PP.items) && PP.items.length) return PP.items;
+    try { return JSON.parse(localStorage.getItem("crm_parcerias_v1") || "[]") || []; }
+    catch (e) { return []; }
+  },
+
+  /* Sociedade sem percentual na empresa: usa a fatia dos sócios Moura Leite / MLDU. */
+  pctSocioMoura(empId) {
+    const id = String(empId || "");
+    if (!id) return 0;
+    let melhor = 0;
+    this.parceriasSalvas().forEach((p) => {
+      if (!p || String(p.companyId) !== id || String(p.kind || "") !== "sociedade") return;
+      const vistos = {};
+      let pct = 0;
+      const pessoas = (p.socios || []).concat(p.creditor ? [p.creditor] : []);
+      pessoas.forEach((s) => {
+        if (!s) return;
+        const chave = String(s.id || s.name || "");
+        if (chave && vistos[chave]) return;
+        if (chave) vistos[chave] = 1;
+        const n = this.fold(s.name || s.nome || "");
+        if (n.indexOf("MOURA") < 0 && n.indexOf("MLDU") < 0) return;
+        const v = Number(s.sharePct);
+        if (v > 0) pct += v;
+      });
+      if (pct > melhor) melhor = pct;
+    });
+    if (!(melhor > 0)) return 0;
+    return melhor > 1 ? Math.min(melhor, 100) / 100 : melhor;
+  },
+
+  pctEmpresaId(empId) {
+    if (!this.agrupar) return 1;
+    const id = Number(empId) || 0;
+    if (!id) return 0;
+    const custom = this.empresasCustom();
+    const cfg = custom[id] || custom[String(id)] || {};
+    if (Number(cfg.consolidacao_padrao) !== 1) return 0;
+    const bruto = cfg.percentual_mldu; // coluna % Consolidação; o % Líquido MLDU fica de fora
+    const pct = typeof bruto === "string" ? Number(String(bruto).replace(/\s|%/g, "").replace(",", ".")) : Number(bruto);
+    if (!(pct > 0) || pct > 100) return 0;
+    return pct / 100;
+  },
+
+  /** Texto do % Consolidação usado na consolidação padrão. */
+  rotuloPctMoura(empId) {
+    if (!this.agrupar) return "";
+    const id = Number(empId) || 0;
+    if (!id) return "";
+    const fator = this.pctEmpresaId(id);
+    const pct = fator > 0 ? (fator <= 1 ? fator * 100 : fator) : 0;
+    return pct.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "%";
+  },
+
+  empresaDoCc(ccId) {
+    return this.empresaDoCentro(ccId, "");
+  },
+
+  /** Empresa do centro de custo: cadastro, arquivo da competência que já tem esse centro, ou o nome. */
+  empresaDoCentro(ccId, nomeCc) {
+    const id = String(ccId || "").replace(/\D/g, "");
+    if (!id && !nomeCc) return 0;
+    const app = window.AppState;
+    const listas = app ? [app.cachedCostCenters, app.costCenters] : [];
+    for (let i = 0; i < listas.length; i++) {
+      const lista = listas[i];
+      if (!Array.isArray(lista)) continue;
+      const hit = lista.find((c) => c && String(c.id || "").replace(/\D/g, "") === id);
+      const emp = hit ? (Number(hit.idCompany || hit.companyId) || 0) : 0;
+      if (emp) return emp;
+    }
+    const bolsas = [];
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => bolsas.push(this.acervo.meses[k]));
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => bolsas.push(this.acervo.anterior[k]));
+    Object.keys(this.anos || {}).forEach((y) => bolsas.push(this.anos[y]));
+    for (let i = 0; i < bolsas.length; i++) {
+      const arquivos = (bolsas[i] && bolsas[i].arquivos) || {};
+      const nomes = Object.keys(arquivos);
+      for (let j = 0; j < nomes.length; j++) {
+        const arq = arquivos[nomes[j]];
+        if (!arq) continue;
+        const tem = (arq.entradas && arq.entradas[id]) || (arq.contasPorCc && arq.contasPorCc[id]);
+        if (!tem) continue;
+        const emp = Number(arq.empresa) || this.empresaId(nomes[j]);
+        if (emp) return emp;
+      }
+    }
+    return this.empresaId(nomeCc || "");
+  },
+
+  /** % Consolidação da empresa dona do arquivo (1 sem agrupar). */
+  pctArquivo(arq, nome) {
+    if (!this.agrupar) return 1;
+    const emp = Number(arq && arq.empresa) || this.empresaId(nome);
+    return emp ? this.pctEmpresaId(emp) : 0;
+  },
+
+  defsDoLado(lado) {
+    return lado === "saidas" ? this.contasSaida() : this.contasEntrada();
+  },
+
+  codigoNoLado(code, lado) {
+    const c = String(code || "");
+    return this.defsDoLado(lado).some((def) => (def.codigos || []).indexOf(c) >= 0 || (def.filhos && def.filhos.test(c)));
+  },
+
+  /** Soma o centro pelas mesmas contas da matriz do DFC. Null se o arquivo não guardou esse detalhe. */
+  valorContas(arq, lado, ccId, mes, campo, ate) {
+    const dono = arq && arq.contasPorCc && arq.contasPorCc[ccId];
+    if (!dono || !dono.contas) return null;
+    let s = 0;
+    this.defsDoLado(lado).forEach((def) => {
+      s += this.somaCodigos(dono.contas, def, mes, campo, ate);
+    });
+    return s;
+  },
+
+  /** Entradas no recorte do Power BI: receitas, cancelamentos (01.04) e receitas financeiras. */
+  defsEntradaPowerBi() {
+    return this.contasEntrada().concat([
+      { id: "cancelamentos", nome: "CANCELAMENTOS DE VENDAS", codigos: ["01.04"], filhos: /^01\.04\./, nodes: ["g_01_04"] }
+    ]);
+  },
+
+  valorPowerBi(arq, ccId, mes, campo, ate) {
+    const dono = arq && arq.contasPorCc && arq.contasPorCc[ccId];
+    if (!dono || !dono.contas) return null;
+    let s = 0;
+    this.defsEntradaPowerBi().forEach((def) => { s += this.somaCodigos(dono.contas, def, mes, campo, ate); });
+    return s;
+  },
+
+  /** Valor gravado na importação, quando o arquivo não trouxe o detalhe das contas. */
+  valorImportado(arq, lado, ccId, mes, campo, ate) {
+    const bag = arq && arq[lado] && arq[lado][ccId];
+    if (!bag || !bag.meses) return null;
+    const fim = Number(mes);
+    const ini = ate ? 1 : fim;
+    let s = 0;
+    let achou = false;
+    for (let m = ini; m <= fim; m++) {
+      const cel = bag.meses[String(m)];
+      if (!cel) continue;
+      achou = true;
+      s += Number(cel[campo]) || 0;
+    }
+    return achou ? s : null;
+  },
+
+  /** Valor do centro de custo somando arquivo por arquivo, cada um no percentual da sua empresa. */
+  valorAgrupado(lado, ano, ccId, mes, campo, ate) {
+    const a = this.anoDados(ano);
+    if (!a) return 0;
+    const fim = Number(mes);
+    const ini = ate ? 1 : fim;
+    const anoAnterior = String(ano) !== String(this.anoAtual());
+    let s = 0;
+    Object.keys(a.arquivos || {}).forEach((nome) => {
+      const arq = a.arquivos[nome];
+      if (!arq || this.estaFora(String(ano), nome)) return;
+      const pct = this.agrupar ? this.pctArquivo(arq, nome) : 1;
+      if (lado === "entradas") {
+        const pb = this.valorPowerBi(arq, ccId, mes, campo, ate);
+        if (pb != null) {
+          if (pb) s += pb * pct;
+          return;
+        }
+      }
+      if (anoAnterior) {
+        const gravado = this.valorImportado(arq, lado, ccId, mes, campo, ate);
+        if (gravado != null) {
+          if (gravado) s += gravado * pct;
+          return;
+        }
+      }
+      const pelasContas = this.valorContas(arq, lado, ccId, mes, campo, ate);
+      if (pelasContas != null) {
+        if (pelasContas) s += pelasContas * pct;
+        return;
+      }
+      const bag = arq[lado] && arq[lado][ccId];
+      if (bag) {
+        for (let m = ini; m <= fim; m++) {
+          const cel = (bag.meses || {})[String(m)];
+          if (cel) s += (Number(cel[campo]) || 0) * pct;
+        }
+      }
+    });
+    return s;
+  },
+
+  pctMl(id) {
+    if (!this.agrupar) return 1;
+    const emp = this.empresaDoCc(id);
+    if (!emp) return 0;
+    return this.pctEmpresaId(emp);
+  },
+
+  normCode(v) {
+    return String(v == null ? "" : v).trim().replace(/\s+/g, "");
+  },
+
+  carregarFora() {
+    try { this.foraMap = JSON.parse(localStorage.getItem("rc_arq_fora") || "{}") || {}; }
+    catch (e) { this.foraMap = {}; }
+    if (!this.foraMap || typeof this.foraMap !== "object") this.foraMap = {};
+  },
+
+  chaveFora(tipo, nome) {
+    return String(tipo || "") + "|" + String(nome || "");
+  },
+
+  estaFora(tipo, nome) {
+    return !!(this.foraMap && this.foraMap[this.chaveFora(tipo, nome)]);
+  },
+
+  alternarOlho(tipo, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    if (!this.foraMap) this.foraMap = {};
+    const k = this.chaveFora(tipo, nome);
+    if (this.foraMap[k]) delete this.foraMap[k];
+    else this.foraMap[k] = 1;
+    try { localStorage.setItem("rc_arq_fora", JSON.stringify(this.foraMap)); } catch (e) {}
+    this._dfcKey = "";
+    this._dfcPedido = "";
+    this.aplicarForecastVista();
+    this.render();
+  },
+
+  nomeUsualEmpresa(id) {
+    const n = Number(id) || 0;
+    if (!n) return "";
+    const custom = this.empresasCustom();
+    const cfg = custom[n] || custom[String(n)] || {};
+    return String(cfg.nome_usual || "").trim();
+  },
+
+  rotuloArquivo(nome, arq) {
+    const emp = Number(arq && arq.empresa) || this.empresaId(nome) || this.empresaId(arq && arq.rotulo) || 0;
+    let curto = emp ? this.nomeUsualEmpresa(emp) : "";
+    if (!curto) {
+      curto = String((arq && arq.rotulo) || this.nomeEmpresaArquivo(nome) || "")
+        .replace(/^empresa\s+\d+$/i, "")
+        .trim();
+    }
+    if (emp && curto) return emp + " - " + curto;
+    if (emp) return String(emp);
+    return curto || String(nome || "");
+  },
+
+  chipArquivo(tipo, nome, arq, extra) {
+    const fora = this.estaFora(tipo, nome);
+    const chave = encodeURIComponent(nome);
+    const rotulo = this.rotuloArquivo(nome, arq);
+    const remover = String(tipo) === "fc"
+      ? "ResultadoCaixaApp.removerForecastArquivo('" + chave + "')"
+      : "ResultadoCaixaApp.removerArquivo('" + tipo + "','" + chave + "')";
+    const dica = fora ? "Fora do resultado. Clique para incluir." : "Entra no resultado. Clique para deixar de fora.";
+    return `<span class="rcx-arq${fora ? " is-off" : ""}" title="${caixaEsc((arq && arq.nome) || String(nome || "").replace(/^\d{4}-\d{2}\|/, ""))}">
+      <button type="button" class="rcx-olho" title="${dica}" onclick="ResultadoCaixaApp.alternarOlho('${tipo}','${chave}')"><i data-lucide="${fora ? "eye-off" : "eye"}"></i></button>
+      <span class="rcx-arq-nome">${caixaEsc(rotulo)}${extra ? " · " + caixaEsc(extra) : ""}</span>
+      <button type="button" class="rcx-baixar${arq && arq.orig ? "" : " is-sem"}" title="${arq && arq.orig ? "Baixar o arquivo original" : "Este envio não guardou o Excel original. Suba o arquivo de novo para baixar."}" onclick="ResultadoCaixaApp.baixarArquivo('${tipo}','${chave}')"><i data-lucide="download"></i></button>
+      <button type="button" class="rcx-x" title="Remover" onclick="${remover}"><i data-lucide="x"></i></button>
+    </span>`;
+  },
+
+  pacoteConferencia(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const contas = {};
+      const nomes = {};
+      const meses = {};
+      let meta = { nome: nome, empresa: 0, rotulo: "", base: "" };
+      let achou = false;
+      Object.keys(this.forecasts || {}).sort().forEach((ym) => {
+        const arq = ((this.forecasts[ym] || {}).porArquivo || {})[nome];
+        if (!arq) return;
+        achou = true;
+        meta = {
+          nome: arq.nome || meta.nome,
+          empresa: Number(arq.empresa) || meta.empresa || 0,
+          rotulo: arq.rotulo || meta.rotulo,
+          base: arq.base || meta.base
+        };
+        Object.keys(arq.contas || {}).forEach((cc) => {
+          if (arq.nomes && arq.nomes[cc]) nomes[cc] = arq.nomes[cc];
+          const bag = contas[cc] || (contas[cc] = {});
+          Object.keys(arq.contas[cc] || {}).forEach((code) => {
+            const info = arq.contas[cc][code] || {};
+            const linha = bag[code] || (bag[code] = { nome: info.nome || "", meses: {} });
+            if (info.nome) linha.nome = info.nome;
+            const v = Number((info.meses || {})[ym]) || 0;
+            if (!v) return;
+            linha.meses[ym] = (Number(linha.meses[ym]) || 0) + v;
+            meses[ym] = 1;
+          });
+        });
+      });
+      if (!achou) return null;
+      return { tipo: "fc", nome: nome, meta: meta, contas: contas, nomes: nomes, meses: Object.keys(meses).sort() };
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (!arq) return null;
+    return { tipo: "mes", nome: nome, meta: arq, ano: Number(tipo) || 0 };
+  },
+
+  linhasConferencia(p) {
+    const linhas = [];
+    const ordem = (a, b) => String(a).localeCompare(String(b), "pt-BR", { numeric: true });
+    if (p.tipo === "fc") {
+      Object.keys(p.contas || {}).sort(ordem).forEach((cc) => {
+        const nomeCc = (p.nomes && p.nomes[cc]) || String(cc);
+        Object.keys(p.contas[cc] || {}).sort(ordem).forEach((code) => {
+          const info = p.contas[cc][code] || {};
+          linhas.push({ cc: nomeCc, code: code, nome: info.nome || "", meses: info.meses || {} });
+        });
+      });
+      return linhas;
+    }
+    const porCc = (p.meta && p.meta.contasPorCc) || {};
+    if (Object.keys(porCc).length) {
+      Object.keys(porCc).sort(ordem).forEach((cc) => {
+        const dono = porCc[cc] || {};
+        const rotulo = dono.nome ? (cc + " - " + dono.nome) : String(cc);
+        Object.keys(dono.contas || {}).sort(ordem).forEach((code) => {
+          const info = dono.contas[code] || {};
+          linhas.push({ cc: rotulo, code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+        });
+      });
+      return linhas;
+    }
+    Object.keys((p.meta && p.meta.contas) || {}).sort(ordem).forEach((code) => {
+      const info = p.meta.contas[code] || {};
+      linhas.push({ cc: "", code: code, nome: info.nome || "", meses: info.meses || {}, par: true });
+    });
+    return linhas;
+  },
+
+  colunasConferencia(p) {
+    const nomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    if (p.tipo === "fc") {
+      const meses = (p.meses && p.meses.length) ? p.meses : [];
+      return {
+        heads: ["Centro de custo", "Código", "Conta"].concat(meses.map((ym) => {
+          const i = Number(ym.slice(5, 7)) - 1;
+          return (nomes[i] || ym) + "/" + ym.slice(0, 4);
+        })),
+        valores: (linha) => meses.map((ym) => Number(linha.meses[ym]) || 0)
+      };
+    }
+    const heads = ["Centro de custo", "Código", "Conta"];
+    for (let m = 0; m < 12; m++) {
+      heads.push(nomes[m] + " orçado");
+      heads.push(nomes[m] + " realizado");
+    }
+    return {
+      heads: heads,
+      valores: (linha) => {
+        const out = [];
+        for (let m = 1; m <= 12; m++) {
+          const cel = (linha.meses || {})[String(m)] || {};
+          out.push(Number(cel.o) || 0);
+          out.push(Number(cel.r) || 0);
+        }
+        return out;
+      }
+    };
+  },
+
+  nomeAbaConferencia(p, used, inv) {
+    const emp = Number(p.meta && p.meta.empresa) || this.empresaId(p.nome) || 0;
+    if (inv && emp && typeof inv.excelSheetName === "function") return inv.excelSheetName(emp, used);
+    let base = String((p.meta && (p.meta.rotulo || p.meta.nome)) || p.nome || "Arquivo")
+      .replace(/^\d{4}-\d{2}\|/, "")
+      .replace(/[:\\/?*\[\]]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "Arquivo";
+    if (base.length > 31) base = base.slice(0, 31);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suf = "-" + (n++);
+      name = (base.slice(0, Math.max(1, 31 - suf.length)) + suf).slice(0, 31);
+    }
+    used.add(name.toLowerCase());
+    return name;
+  },
+
+  preencherConferencia(ws, inv, p, imgId, generatedAt) {
+    const moneyFmt = "#,##0.00";
+    const spec = this.colunasConferencia(p);
+    const linhas = this.linhasConferencia(p);
+    const heads = spec.heads;
+    const lastCol = Math.max(heads.length, 8);
+    const lastL = inv.excelColLetter(lastCol);
+    const nomeArquivo = String((p.meta && p.meta.nome) || p.nome || "").replace(/^\d{4}-\d{2}\|/, "");
+    const empresa = Number(p.meta && p.meta.empresa) || this.empresaId(nomeArquivo) || 0;
+    const comp = p.tipo === "fc"
+      ? (p.meta && p.meta.base ? p.meta.base : "")
+      : (p.ano ? String(p.ano) : "");
+    ws.properties.showGridLines = false;
+    ws.views = [{ state: "frozen", xSplit: 1, ySplit: 4, topLeftCell: "B5", activeCell: "B5", showGridLines: false }];
+    ws.columns = [
+      { width: 42 },
+      { width: 18 },
+      { width: 42 },
+      ...Array.from({ length: lastCol - 3 }, () => ({ width: 16 }))
+    ];
+    ws.mergeCells("A1:A2");
+    ws.getRow(1).height = 28;
+    ws.getRow(2).height = 22;
+    const titulo = p.tipo === "fc" ? "Forecast gravado" : "Fechamento gravado";
+    const titleCell = ws.getCell("A1");
+    titleCell.value = {
+      richText: [
+        { font: { name: "Calibri", size: 14, bold: true, color: { argb: "FF475569" } }, text: titulo + "\n" },
+        { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: nomeArquivo || "Arquivo" }
+      ]
+    };
+    inv.excelPaint(titleCell, {
+      fill: "FFFFFFFF",
+      align: { vertical: "middle", horizontal: "left", wrapText: true, indent: 8 }
+    });
+    if (imgId != null) {
+      try {
+        const logoPx = Math.round(1.54 * 96 / 2.54);
+        ws.addImage(imgId, { tl: { col: 0.04, row: 0.08 }, ext: { width: logoPx, height: logoPx } });
+      } catch (e) {}
+    }
+    const kpis = [
+      { label: "Arquivo", value: nomeArquivo || "—", texto: true },
+      { label: "Empresa", value: empresa ? String(empresa) : "—", texto: true },
+      { label: "Competência", value: comp || "—", texto: true },
+      { label: "Linhas", value: linhas.length, texto: false }
+    ];
+    kpis.forEach((k, i) => {
+      const col = 4 + i;
+      const cellL = ws.getRow(1).getCell(col);
+      const cellV = ws.getRow(2).getCell(col);
+      cellL.value = k.label;
+      cellV.value = k.value;
+      inv.excelPaint(cellL, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 8, color: { argb: "FF94A3B8" } },
+        align: { horizontal: "right", vertical: "bottom" }
+      });
+      inv.excelPaint(cellV, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 12, color: { argb: "FF0F172A" } },
+        align: { horizontal: "right", vertical: "middle" },
+        numFmt: k.texto ? undefined : "#,##0"
+      });
+    });
+    ws.getRow(3).height = 8;
+    const headRow = ws.getRow(4);
+    headRow.height = 20;
+    for (let c = 1; c <= lastCol; c++) {
+      const cell = headRow.getCell(c);
+      cell.value = heads[c - 1] || "";
+      inv.excelPaint(cell, {
+        fill: "FF334155",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: c <= 3 ? "left" : "right", vertical: "middle" },
+        border: true
+      });
+    }
+    const totais = Array(heads.length - 3).fill(0);
+    let rowIdx = 5;
+    linhas.forEach((linha) => {
+      const vals = spec.valores(linha);
+      const row = ws.getRow(rowIdx);
+      row.height = 18;
+      const textos = [linha.cc || "", linha.code || "", linha.nome || ""];
+      textos.forEach((texto, i) => {
+        const cell = row.getCell(i + 1);
+        cell.value = texto;
+        inv.excelPaint(cell, {
+          fill: i === 0 ? "FFE7F6EE" : "FFFFFFFF",
+          font: { bold: i === 0, size: 9, color: { argb: i === 0 ? "FF105436" : "FF0F172A" } },
+          align: { horizontal: "left", vertical: "middle" },
+          border: true
+        });
+      });
+      vals.forEach((n, i) => {
+        const cell = row.getCell(4 + i);
+        const num = Number(n) || 0;
+        totais[i] += num;
+        cell.value = num;
+        inv.excelPaint(cell, {
+          fill: "FFFFFFFF",
+          font: { size: 9, color: { argb: num < 0 ? "FFB91C1C" : (num ? "FF0F172A" : "FF94A3B8") } },
+          align: { horizontal: "right", vertical: "middle" },
+          border: true,
+          numFmt: moneyFmt
+        });
+      });
+      rowIdx += 1;
+    });
+    const total = ws.getRow(rowIdx);
+    total.height = 20;
+    ["", "", "Total"].forEach((texto, i) => {
+      const cell = total.getCell(i + 1);
+      cell.value = texto;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "left", vertical: "middle" },
+        border: true
+      });
+    });
+    totais.forEach((n, i) => {
+      const cell = total.getCell(4 + i);
+      cell.value = n;
+      inv.excelPaint(cell, {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: "right", vertical: "middle" },
+        border: true,
+        numFmt: moneyFmt
+      });
+    });
+    for (let c = heads.length + 1; c <= lastCol; c++) {
+      inv.excelPaint(total.getCell(c), {
+        fill: "FF475569",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        border: true
+      });
+    }
+    const foot = ws.getRow(rowIdx + 2);
+    foot.getCell(1).value = generatedAt + " · Leitura gravada de " + (nomeArquivo || "arquivo") + ". O Excel original não fica armazenado; estes são os números que entraram na tela.";
+    inv.excelPaint(foot.getCell(1), {
+      font: { italic: true, size: 8, color: { argb: "FF64748B" } },
+      align: { horizontal: "left", vertical: "middle" }
+    });
+    ws.mergeCells(rowIdx + 2, 1, rowIdx + 2, lastCol);
+    if (lastL) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: Math.max(rowIdx - 1, 4), column: heads.length } };
+  },
+
+  async baixarPacotes(pacotes, arquivo) {
+    const lista = (pacotes || []).filter(Boolean);
+    if (!lista.length) {
+      alert("Nenhum arquivo gravado para baixar.");
+      return;
+    }
+    const inv = window.InvestimentoApp;
+    if (!inv || typeof inv.ensureExcelJS !== "function") {
+      alert("O Excel não está disponível nesta tela.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const ExcelJS = await inv.ensureExcelJS();
+      const wb = new ExcelJS.Workbook();
+      wb.creator = "CRM Moura Leite";
+      wb.created = new Date();
+      let imgId = null;
+      try {
+        const logo = await inv.logoDataUrl();
+        imgId = wb.addImage({ base64: logo.dataUrl, extension: logo.extension || "png" });
+      } catch (e) {}
+      const used = new Set();
+      const gerado = inv.generatedAtLabel(new Date());
+      lista.forEach((p) => {
+        const ws = wb.addWorksheet(this.nomeAbaConferencia(p, used, inv), { properties: { showGridLines: false } });
+        this.preencherConferencia(ws, inv, p, imgId, gerado);
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = arquivo || "conferencia.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+    } catch (e) {
+      alert((e && e.message) || "Não consegui gerar o Excel.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarArquivo(tipo, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    const ref = this.refOriginal(tipo, nome);
+    if (!ref) {
+      alert("Este arquivo foi enviado antes de guardar o Excel original. Suba o arquivo de novo para poder baixá-lo.");
+      return;
+    }
+    if (this._baixando) return;
+    this._baixando = true;
+    try {
+      const dado = await this.lerOriginal(ref.id);
+      if (!dado || !dado.buf) throw new Error("vazio");
+      this.dispararDownload(dado.buf, dado.nome || ref.nome || nome);
+    } catch (e) {
+      alert("Não consegui baixar o arquivo original. Suba o arquivo de novo.");
+    }
+    this._baixando = false;
+  },
+
+  async baixarColuna(qual) {
+    const atual = this.anoAtual();
+    const ant = atual > 1900 ? atual - 1 : 0;
+    const refs = [];
+    const sem = [];
+    const guardar = (tipo, nome) => {
+      const ref = this.refOriginal(tipo, nome);
+      if (ref) refs.push(ref);
+      else sem.push(nome);
+    };
+    if (qual === "forecast") {
+      const usados = {};
+      this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
+      const mapa = {};
+      Object.keys(this.forecasts || {}).forEach((ym) => {
+        if (!usados[ym]) return;
+        const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+        Object.keys(por).forEach((nome) => {
+          if (!this.forecastDaCompetencia(nome, por[nome])) return;
+          mapa[nome] = 1;
+        });
+      });
+      Object.keys(mapa).forEach((nome) => guardar("fc", nome));
+    } else {
+      const ano = qual === "anterior" ? ant : atual;
+      Object.keys(((this.anoDados(ano) || {}).arquivos) || {}).forEach((nome) => guardar(String(ano), nome));
+    }
+    if (!refs.length) {
+      alert("Estes arquivos foram enviados antes de guardar o Excel original. Suba de novo para poder baixá-los.");
+      return;
+    }
+    for (let i = 0; i < refs.length; i++) {
+      try {
+        const dado = await this.lerOriginal(refs[i].id);
+        if (!dado || !dado.buf) sem.push(refs[i].nome);
+        else this.dispararDownload(dado.buf, dado.nome || refs[i].nome);
+      } catch (e) {
+        sem.push(refs[i].nome);
+      }
+      if (i < refs.length - 1) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (sem.length) alert("Sem o Excel original: " + sem.map((n) => String(n).replace(/^\d{4}-\d{2}\|/, "")).join(", ") + ". Suba esses arquivos de novo.");
+  },
+
+  nomeEmpresaArquivo(nome) {
+    let base = String(nome || "").replace(/^\d{4}-\d{2}\|/, "").replace(/\.(xlsx|xlsm)$/i, "").trim();
+    base = base.replace(/^\d+\s*-\s*\d{4}_/i, "");
+    base = base.replace(/^\d+\s*[ªa°º]?\s*vers[aã]o_/i, "");
+    return base.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  },
+
+  catalogoEmpresas() {
+    const map = {};
+    const add = (id, nome) => {
+      const n = Number(id);
+      if (!n || !nome) return;
+      if (!map[n]) map[n] = [];
+      map[n].push(String(nome));
+    };
+    try {
+      const raw = JSON.parse(localStorage.getItem("crm_empresas_custom") || "{}");
+      Object.keys(raw || {}).forEach((k) => {
+        const item = raw[k];
+        if (item && item.company_id != null) add(item.company_id, item.nome_usual);
+      });
+    } catch (e) {}
+    const lista = (window.AppState && AppState.companies) || [];
+    lista.forEach((c) => {
+      if (!c) return;
+      add(c.id, c.name);
+      add(c.id, c.tradeName);
+    });
+    return map;
+  },
+
+  empresaId(nomeArquivo) {
+    const rot = this.fold(this.nomeEmpresaArquivo(nomeArquivo));
+    if (!rot) return 0;
+    const peloNumero = rot.match(/^EMPRESA\s+(\d+)$/);
+    if (peloNumero) return Number(peloNumero[1]);
+    const aliases = [
+      ["ELLENCO", 12],
+      ["TERRA DO ARACARI", 3],
+      ["ARACARI SPE", 6],
+      ["TERRAS DE ITU", 4],
+      ["VERCELLINO", 13],
+      ["PIRAPITINGUI", 14],
+      ["JARDIM DOS IPES", 36],
+      ["JARDIM IPES", 36],
+      ["TAGUAI", 36],
+      ["NOVO HORIZONTE", 32],
+      ["CHACARA", 2],
+      ["RAMOS", 28],
+      ["MLDU", 1],
+      ["ITATINGA", 32],
+      ["MLES", 5]
+    ];
+    for (let i = 0; i < aliases.length; i++) {
+      if (rot.indexOf(this.fold(aliases[i][0])) >= 0) return aliases[i][1];
+    }
+    const cat = this.catalogoEmpresas();
+    const alvo = rot.split(" ").filter((t) => t.length > 2);
+    let best = 0;
+    let bestScore = 0;
+    Object.keys(cat).forEach((id) => {
+      (cat[id] || []).forEach((n) => {
+        const f = this.fold(n);
+        if (!f) return;
+        if (f === rot) { best = Number(id); bestScore = 100; return; }
+        const toks = f.split(" ").filter((t) => t.length > 2);
+        let score = 0;
+        alvo.forEach((t) => { if (toks.indexOf(t) >= 0) score += 1; });
+        if (rot.indexOf(f) >= 0 || f.indexOf(rot) >= 0) score += 3;
+        if (score > bestScore) { bestScore = score; best = Number(id); }
+      });
+    });
+    return bestScore >= 2 ? best : 0;
+  },
+
+  garantirAno(ano) {
+    const k = String(ano);
+    if (!this.anos[k]) this.anos[k] = { arquivos: {} };
+    const a = this.anos[k];
+    if (!a.arquivos) {
+      const nome = a.file || ("planilha " + ano);
+      a.arquivos = {};
+      a.arquivos[nome] = {
+        empresa: this.empresaId(nome),
+        rotulo: this.nomeEmpresaArquivo(nome),
+        entradas: a.entradas || {},
+        contas: null
+      };
+      delete a.file;
+      delete a.entradas;
+      delete a.saidas;
+    }
+    return a;
+  },
+
+  anoDados(ano) {
+    if (!this.anos[String(ano)]) return null;
+    return this.garantirAno(ano);
+  },
+
+  empresasUsadas() {
+    const ids = new Set();
+    const faltou = [];
+    Object.keys(this.anos || {}).forEach((y) => {
+      const a = this.anoDados(y);
+      if (!a) return;
+      Object.keys(a.arquivos || {}).forEach((nome) => {
+        const arq = a.arquivos[nome] || {};
+        let id = Number(arq.empresa) || 0;
+        if (!id) {
+          id = this.empresaId(nome);
+          if (id) arq.empresa = id;
+        }
+        const rotulo = arq.rotulo || this.nomeEmpresaArquivo(nome);
+        if (id) ids.add(id);
+        else if (faltou.indexOf(rotulo || nome) < 0) faltou.push(rotulo || nome);
+      });
+    });
+    return { ids: Array.from(ids).sort((x, y) => x - y), faltou: faltou };
+  },
+
+  nomesEmpresas() {
+    const uso = this.empresasUsadas();
+    if (!uso.ids.length) return "";
+    const cat = this.catalogoEmpresas();
+    return uso.ids.map((id) => {
+      const nomes = cat[id] || [];
+      return nomes[0] || ("Empresa " + id);
+    }).join(", ");
+  },
+
+  contasSaida() {
+    return [
+      { id: "obras", nome: "OBRAS", codigos: ["04.03"], filhos: /^04\.03\./, nodes: ["g_04_03"] },
+      { id: "repasses", nome: "REPASSES TERRENISTAS", codigos: ["04.01"], filhos: /^04\.01\./, nodes: ["g_04_01"] },
+      { id: "pessoal", nome: "PESSOAL", codigos: ["05.04"], filhos: /^05\.04\./, nodes: ["g_05_04"] },
+      { id: "administrativas", nome: "ADMINISTRATIVAS", codigos: ["05.03"], filhos: /^05\.03\./, nodes: ["g_05_03"] },
+      { id: "marketing", nome: "MARKETING", codigos: ["05.02"], filhos: /^05\.02\./, nodes: ["g_05_02"] },
+      { id: "cancelamentos", nome: "CANCELAMENTOS DE VENDAS", codigos: ["01.04"], filhos: /^01\.04\./, nodes: ["g_01_04"] },
+      { id: "aquisicao", nome: "AQUISIÇÃO DE NOVAS ÁREAS", codigos: ["04.05"], filhos: /^04\.05\./, nodes: ["g_04_05"] },
+      { id: "projetos", nome: "PROJETOS E APROVAÇÕES", codigos: ["04.02"], filhos: /^04\.02\./, nodes: ["g_04_02"] },
+      { id: "impostos", nome: "IMPOSTOS", codigos: ["02"], filhos: /^02\./, nodes: ["g_02_01", "g_02_02"] },
+      { id: "comerciais", nome: "DESPESAS COMERCIAIS", codigos: ["05.01"], filhos: /^05\.01\./, nodes: ["g_05_01"] },
+      { id: "naoop", nome: "DESPESAS NAO OPERACIONAIS", codigos: ["05.06"], filhos: /^05\.06\./, nodes: ["g_05_06"] },
+      { id: "estoque", nome: "DESPESAS COM ESTOQUE", codigos: ["05.05"], filhos: /^05\.05\./, nodes: ["g_05_05"] },
+      { id: "custoadm", nome: "CUSTO ADM DE EMPREENDIMENTOS", codigos: ["04.04"], filhos: /^04\.04\./, nodes: ["g_04_04"] },
+      { id: "financeiras", nome: "DESPESAS FINANCEIRAS", codigos: ["09.02"], filhos: /^09\.02\./, nodes: ["g_09_02"] },
+      { id: "donativos", nome: "DONATIVOS E CONTRIBUIÇÕES", codigos: ["05.07"], filhos: /^05\.07\./, nodes: ["g_05_07"] },
+      { id: "capex", nome: "CAPEX", codigos: ["07"], filhos: /^07\./, nodes: ["g_07"] },
+      { id: "adiantamento", nome: "ADIANTAMENTO A FORNECEDORES", codigos: ["05.08"], filhos: /^05\.08\./, nodes: ["g_05_08"] },
+      { id: "manutencao", nome: "DESPESAS COM MANUTENÇÃO DE EMPREENDIMENTO", codigos: ["05.11"], filhos: /^05\.11\./, nodes: ["g_05_11"] },
+      { id: "retencoes", nome: "RETENÇÕES", codigos: ["05.09"], filhos: /^05\.09\./, nodes: ["g_05_09"] },
+      { id: "outrosmov", nome: "OUTROS MOVIMENTOS", codigos: ["05.10"], filhos: /^05\.10\./, nodes: ["g_05_10"] }
+    ];
+  },
+
+  contasEntrada() {
+    return [
+      { id: "venda", nome: "VENDA DE IMÓVEIS", codigos: ["01.01"], filhos: /^01\.01\./, nodes: ["g_01_01"] },
+      { id: "servicos", nome: "RECEITA DE SERVIÇOS", codigos: ["01.02"], filhos: /^01\.02\./, nodes: ["g_01_02"] },
+      { id: "naooprec", nome: "RECEITAS NÃO OPERACIONAIS", codigos: ["01.03"], filhos: /^01\.03\./, nodes: ["g_01_03"] },
+      { id: "recfin", nome: "RECEITAS FINANCEIRAS", codigos: ["09.01"], filhos: /^09\.01\./, nodes: ["g_09_01"] }
+    ];
+  },
+
+  casaNo(nodeId, def) {
+    const s = String(nodeId || "");
+    return (def.nodes || []).some((n) => s === n || s.startsWith(n + "_"));
+  },
+
+  somarLinhas(linhas, lado) {
+    const acc = {};
+    const lista = linhas || [];
+    this.defsDoLado(lado).forEach((def) => {
+      const tem = lista.filter((l) => (def.codigos || []).indexOf(l.code) >= 0);
+      const fonte = tem.length ? tem : lista.filter((l) => def.filhos && def.filhos.test(l.code));
+      fonte.forEach((l) => {
+        (l.months || []).forEach((m) => {
+          if (!acc[m.ym]) acc[m.ym] = { o: 0, r: 0 };
+          acc[m.ym].o += Number(m.orc) || 0;
+          acc[m.ym].r += Number(m.real) || 0;
+        });
+      });
+    });
+    return acc;
+  },
+
+  lerPlanilha(wb) {
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
+    const blocos = [];
+    const mesRe = /^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\/(\d{4})$/i;
+    const mesNum = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+    for (let i = 0; i < grid.length; i++) {
+      const row = grid[i] || [];
+      const texto = row.map((c) => String(c == null ? "" : c)).join(" ");
+      if (!/centro de custo/i.test(texto)) continue;
+      let cc = null;
+      row.forEach((c) => {
+        const s = String(c == null ? "" : c).trim();
+        const m = s.match(/^(\d{4,6})\s*-\s*(.+)$/);
+        if (m) cc = { id: m[1], nome: s };
+      });
+      if (!cc) continue;
+      let head = -1;
+      for (let j = i + 1; j < Math.min(i + 12, grid.length); j++) {
+        const r = grid[j] || [];
+        if (r.some((c) => mesRe.test(String(c == null ? "" : c).trim()))) { head = j; break; }
+      }
+      if (head < 0) continue;
+      const labels = grid[head + 1] || [];
+      const meses = this.mesesDoCabecalho(grid[head], labels, mesRe, mesNum);
+      let tipoCol = -1;
+      labels.forEach((c, col) => {
+        if (/^tipo$/i.test(String(c == null ? "" : c).trim())) tipoCol = col;
+      });
+      const linhas = [];
+      for (let j = head + 2; j < grid.length; j++) {
+        const r = grid[j] || [];
+        const code = this.normCode(r[0]);
+        if (!code) {
+          if (j > head + 3) break;
+          continue;
+        }
+        if (/^(agrupar|diferen|super)/i.test(code)) break;
+        if (!/^\d/.test(code)) continue;
+        linhas.push({
+          code,
+          nome: String(r[1] == null ? "" : r[1]).trim(),
+          tipo: tipoCol >= 0 ? String(r[tipoCol] == null ? "" : r[tipoCol]).trim().toUpperCase() : "",
+          months: meses.map((mes) => ({
+            ym: mes.ym,
+            orc: Number(r[mes.colOrc]) || 0,
+            real: Number(r[mes.colReal]) || 0
+          }))
+        });
+      }
+      blocos.push({ id: cc.id, nome: cc.nome, linhas });
+    }
+    return blocos;
+  },
+
+  mesesDoCabecalho(head, labels, mesRe, mesNum) {
+    const nomes = [];
+    (head || []).forEach((c, col) => {
+      const bruto = String(c == null ? "" : c).trim();
+      if (/total/i.test(bruto)) return;
+      const m = bruto.toLowerCase().match(mesRe);
+      if (!m) return;
+      const mm = mesNum[m[1].slice(0, 3)];
+      nomes.push({ ym: m[2] + "-" + String(mm).padStart(2, "0"), col: col });
+    });
+    const pares = [];
+    const labs = labels || [];
+    for (let k = 0; k < labs.length; k++) {
+      const s = String(labs[k] == null ? "" : labs[k]).trim();
+      if (!/^or[cç]ado$/i.test(s)) continue;
+      let realCol = -1;
+      for (let j = k + 1; j < Math.min(labs.length, k + 6); j++) {
+        const t = String(labs[j] == null ? "" : labs[j]).trim();
+        if (/^or[cç]ado$/i.test(t)) break;
+        if (/realizado/i.test(t)) { realCol = j; break; }
+      }
+      if (realCol >= 0) pares.push({ colOrc: k, colReal: realCol });
+    }
+    if (pares.length && pares.length >= nomes.length && nomes.length) {
+      return nomes.map((m, i) => ({ ym: m.ym, colOrc: pares[i].colOrc, colReal: pares[i].colReal }));
+    }
+    return nomes.map((m) => {
+      let realCol = m.col;
+      for (let k = m.col; k < m.col + 6 && k < labs.length; k++) {
+        if (/realizado/i.test(String(labs[k] == null ? "" : labs[k]))) { realCol = k; break; }
+      }
+      return { ym: m.ym, colOrc: m.col, colReal: realCol };
+    });
+  },
+
+  ehAnalitico(linhas) {
+    return (linhas || []).some((l) => {
+      const seg = String(l.code || "").split(".")[0];
+      return seg.length === 1 && /^\d$/.test(seg);
+    });
+  },
+
+  noPorId(gid) {
+    const FC = window.FluxoCaixaApp;
+    let groups = [];
+    try { groups = ((FC && FC.visao && FC.visao()) || {}).groups || []; } catch (e) { groups = []; }
+    return (groups || []).find((g) => g.id === gid) || null;
+  },
+
+  noDaLinha(FC, mapa, linha) {
+    let node = null;
+    if (mapa && FC && typeof this.noDaConta === "function") node = this.noDaConta(FC, mapa, linha.code);
+    const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
+    if (!node && plano && typeof plano.lookupDfcByCode === "function") {
+      const gid = plano.lookupDfcByCode(linha.code);
+      if (gid) node = this.noPorId(gid);
+    }
+    if (!node && plano && typeof plano.suggestGroup === "function") {
+      const gid = plano.suggestGroup({ id: linha.code, name: linha.nome || "" });
+      if (gid) node = this.noPorId(gid);
+    }
+    return node;
+  },
+
+  codigoVisao(node) {
+    if (!node) return "";
+    const m = String(node.name || "").match(/^(\d{2}(?:\.\d{2})*)\b/);
+    if (m) return m[1];
+    const id = String(node.id || "");
+    const p = id.match(/^g_(\d{2})(?:_(\d{2}))?(?:_(\d{2}))?/);
+    if (!p) return "";
+    return [p[1], p[2], p[3]].filter(Boolean).join(".");
+  },
+
+  codigoPlano(code) {
+    const bruto = String(code || "").trim().replace(/\s/g, "");
+    const FC = window.FluxoCaixaApp;
+    if (!bruto || !FC || typeof FC.formatAccountCode !== "function") return bruto;
+    try {
+      return FC.formatAccountCode(bruto) || bruto;
+    } catch (e) {
+      return bruto;
+    }
+  },
+
+  ehContaFinanceira(code) {
+    return /^\d\.\d{2}(\.\d{2})*$/.test(this.codigoPlano(code));
+  },
+
+  folhasAnaliticas(linhas) {
+    const comTipo = (linhas || []).some((l) => l.tipo);
+    if (comTipo) return (linhas || []).filter((l) => l.tipo === "R");
+    return (linhas || []).filter((l) => !(linhas || []).some((o) => o.code !== l.code && String(o.code).indexOf(l.code + ".") === 0));
+  },
+
+  async mapaPronto() {
+    const FC = window.FluxoCaixaApp;
+    if (!FC || typeof FC.visao !== "function") return null;
+    let mapa = null;
+    try { mapa = this.mapaDfc(FC); } catch (e) { mapa = null; }
+    if (mapa && Object.keys(mapa.accToNode || {}).length) return mapa;
+    const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
+    if (!window.DadosNucleo || !plano) return mapa;
+    try {
+      // Só a chave crm_plano_visoes_v2 da tabela configuracoes (texto JSON, como no config/global).
+      const raw = await window.DadosNucleo.lerConfiguracao("crm_plano_visoes_v2");
+      if (!raw) return mapa;
+      const visoes = JSON.parse(raw);
+      if (!Array.isArray(visoes) || !visoes.length) return mapa;
+      const prev = plano.visoes;
+      plano.visoes = visoes;
+      let novo = null;
+      try { novo = this.mapaDfc(FC); } catch (e) { novo = null; }
+      if (!novo || !Object.keys(novo.accToNode || {}).length) plano.visoes = prev;
+      return novo || mapa;
+    } catch (e) {
+      return mapa;
+    }
+  },
+
+  paraVisao(linhas) {
+    if (!this.ehAnalitico(linhas)) return { linhas: linhas || [], fora: [] };
+    const folhas = this.folhasAnaliticas(linhas);
+    const FC = window.FluxoCaixaApp;
+    let mapa = this._mapa || null;
+    if (!mapa) {
+      try {
+        if (FC && typeof FC.visao === "function") mapa = this.mapaDfc(FC);
+      } catch (e) {
+        mapa = null;
+      }
+    }
+    const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
+    const temMapa = !!(mapa && Object.keys(mapa.accToNode || {}).length);
+    const temPrefixo = !!(plano && typeof plano.suggestGroup === "function");
+    if (!temMapa && !temPrefixo) {
+      throw new Error("A visão DFC ainda não tem as contas financeiras. Abra o Fluxo de Caixa uma vez para carregar o plano e suba o arquivo de novo.");
+    }
+    const fora = [];
+    const porCodigo = {};
+    const planos = [];
+    folhas.forEach((l) => {
+      const node = this.noDaLinha(FC, mapa, l);
+      const cod = this.codigoVisao(node);
+      const temValor = (l.months || []).some((m) => Math.abs(Number(m.orc) || 0) > 0.5 || Math.abs(Number(m.real) || 0) > 0.5);
+      if (!cod) {
+        if (temValor && fora.indexOf(l.code) < 0) fora.push(l.code + (l.nome ? " " + l.nome : ""));
+        return;
+      }
+      if (!temValor) return;
+      if (!porCodigo[cod]) porCodigo[cod] = { code: cod, nome: node.name || cod, months: {} };
+      const sinal = (valor) => {
+        const n = Number(valor) || 0;
+        if (!n || !FC || typeof FC.signedAmount !== "function") return n;
+        return FC.signedAmount(node, l.code, l.nome || "", n, "", "", null);
+      };
+      const mesesPlano = [];
+      (l.months || []).forEach((m) => {
+        const cel = porCodigo[cod].months[m.ym] || { ym: m.ym, orc: 0, real: 0 };
+        const orc = sinal(m.orc);
+        const real = sinal(m.real);
+        cel.orc += orc;
+        cel.real += real;
+        porCodigo[cod].months[m.ym] = cel;
+        if (Math.abs(orc) > 0.005 || Math.abs(real) > 0.005) mesesPlano.push({ ym: m.ym, orc: orc, real: real });
+      });
+      if (mesesPlano.length && this.ehContaFinanceira(l.code)) {
+        planos.push({ code: this.codigoPlano(l.code), nome: l.nome || "", nodeId: node.id, months: mesesPlano });
+      }
+    });
+    const out = Object.keys(porCodigo).map((c) => ({
+      code: c,
+      nome: porCodigo[c].nome,
+      months: Object.keys(porCodigo[c].months).map((ym) => porCodigo[c].months[ym])
+    }));
+    return { linhas: out, fora: fora, planos: planos };
+  },
+
+  aplicarBlocos(nomeArquivo, blocos) {
+    const fora = [];
+    const prontos = (blocos || []).map((b) => {
+      const conv = this.paraVisao(b.linhas);
+      (conv.fora || []).forEach((item) => { if (fora.indexOf(item) < 0) fora.push(item); });
+      return { id: b.id, nome: b.nome, linhas: conv.linhas, planos: conv.planos || [] };
+    }).filter((b) => b.linhas.length);
+    if (!prontos.length) throw new Error("Nenhuma conta de " + nomeArquivo + " entrou na visão DFC.");
+    const porAno = {};
+    const slot = (ano) => {
+      if (!porAno[ano]) porAno[ano] = { entradas: {}, contas: {}, contasPorCc: {}, planosPorCc: {} };
+      return porAno[ano];
+    };
+    prontos.forEach((b) => {
+      const mapa = this.somarLinhas(b.linhas, "entradas");
+      Object.keys(mapa).forEach((ym) => {
+        const ano = ym.slice(0, 4);
+        const mm = String(Number(ym.slice(5, 7)));
+        const bag = slot(ano).entradas;
+        if (!bag[b.id]) bag[b.id] = { nome: b.nome, meses: {} };
+        const cel = bag[b.id].meses[mm] || { o: 0, r: 0 };
+        cel.o += mapa[ym].o;
+        cel.r += mapa[ym].r;
+        bag[b.id].meses[mm] = cel;
+      });
+      b.linhas.forEach((l) => {
+        (l.months || []).forEach((m) => {
+          const ano = m.ym.slice(0, 4);
+          const mm = String(Number(m.ym.slice(5, 7)));
+          const contas = slot(ano).contas;
+          if (!contas[l.code]) contas[l.code] = { nome: l.nome || l.code, meses: {} };
+          const cel = contas[l.code].meses[mm] || { o: 0, r: 0 };
+          cel.o += Number(m.orc) || 0;
+          cel.r += Number(m.real) || 0;
+          contas[l.code].meses[mm] = cel;
+          const dono = slot(ano).contasPorCc;
+          if (!dono[b.id]) dono[b.id] = { nome: b.nome, contas: {} };
+          if (!dono[b.id].contas[l.code]) dono[b.id].contas[l.code] = { nome: l.nome || l.code, meses: {} };
+          const celCc = dono[b.id].contas[l.code].meses[mm] || { o: 0, r: 0 };
+          celCc.o += Number(m.orc) || 0;
+          celCc.r += Number(m.real) || 0;
+          dono[b.id].contas[l.code].meses[mm] = celCc;
+        });
+      });
+      (b.planos || []).forEach((p) => {
+        (p.months || []).forEach((m) => {
+          const ano = m.ym.slice(0, 4);
+          const mm = String(Number(m.ym.slice(5, 7)));
+          const dono = slot(ano).planosPorCc;
+          if (!dono[b.id]) dono[b.id] = { nome: b.nome, contas: {} };
+          if (!dono[b.id].contas[p.code]) dono[b.id].contas[p.code] = { nome: p.nome || p.code, node: p.nodeId || "", meses: {} };
+          const cel = dono[b.id].contas[p.code].meses[mm] || { o: 0, r: 0 };
+          cel.o += Number(m.orc) || 0;
+          cel.r += Number(m.real) || 0;
+          dono[b.id].contas[p.code].meses[mm] = cel;
+        });
+      });
+    });
+    const empresa = this.empresaId(nomeArquivo);
+    const rotulo = this.nomeEmpresaArquivo(nomeArquivo);
+    Object.keys(porAno).forEach((ano) => {
+      const destino = this.slotDoAno(ano);
+      const atual = this.pegarSlot(destino);
+      const docId = this.docCaixa(destino.id, empresa, nomeArquivo);
+      Object.keys(atual.arquivos || {}).forEach((nome) => {
+        const outro = atual.arquivos[nome];
+        if (nome !== nomeArquivo && empresa && Number(outro && outro.empresa) === empresa) {
+          if (outro && outro._doc && outro._doc !== docId) this.apagarNuvem(outro._doc);
+          delete atual.arquivos[nome];
+        }
+      });
+      atual.arquivos[nomeArquivo] = {
+        empresa: empresa,
+        rotulo: rotulo,
+        entradas: porAno[ano].entradas,
+        contas: porAno[ano].contas,
+        contasPorCc: porAno[ano].contasPorCc,
+        planosPorCc: porAno[ano].planosPorCc,
+        _pendente: true,
+        _slot: destino.id,
+        _doc: docId
+      };
+      // Cada competência guarda os seus arquivos: enviar em outubro não mexe no que foi enviado em setembro.
+    });
+    this._dfcKey = "";
+    this._dfcPedido = "";
+    this._fora = fora;
+    this.montarVista();
+    this.gravarLocal();
+  },
+
+  async subir(input) {
+    const files = input && input.files ? Array.from(input.files) : [];
+    if (!files.length) return;
+    this._nuvemToken = (this._nuvemToken || 0) + 1;
+    this._subindo = true;
+    if (typeof XLSX === "undefined") {
+      this._subindo = false;
+      this.error = "A biblioteca de Excel não carregou. Atualize a página.";
+      this.render();
+      return;
+    }
+    this.lendo = true;
+    this.error = "";
+    this.aviso = "";
+    this.render();
+    try {
+      this._mapa = await this.mapaPronto();
+      for (let i = 0; i < files.length; i++) {
+        const buf = await files[i].arrayBuffer();
+        const wb = XLSX.read(buf.slice(0), { type: "array" });
+        const blocos = this.lerPlanilha(wb);
+        if (!blocos.length) throw new Error("Não reconheci centros de custo em " + files[i].name + ". Use o comparativo orçado × realizado por centro de custo.");
+        this.aplicarBlocos(files[i].name, blocos);
+        await this.ligarOriginalEnviado(files[i].name, buf);
+      }
+      const fora = this._fora || [];
+      if (fora.length) {
+        const amostra = fora.slice(0, 6).join(", ");
+        this.aviso = fora.length + " contas com valor ficaram de fora da visão DFC: " + amostra + (fora.length > 6 ? "…" : ".");
+      } else {
+        this.aviso = "";
+      }
+      await this.enviarPendentes();
+    } catch (e) {
+      this.error = e.message || String(e);
+    }
+    this._mapa = null;
+    this.lendo = false;
+    this._subindo = false;
+    if (input) input.value = "";
+    this.render();
+  },
+
+  removerAno(ano) {
+    const y = Number(ano);
+    const base = this.anoBase();
+    if (y === base) {
+      const chave = this.chaveMes(base);
+      const bag = this.acervo.meses[chave];
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        const arq = bag.arquivos[nome];
+        this.apagarNuvem(arq && arq._doc);
+      });
+      delete this.acervo.meses[chave];
+    } else if (this.acervo.anterior[String(y)]) {
+      const bag = this.acervo.anterior[String(y)];
+      Object.keys(bag.arquivos || {}).forEach((nome) => this.apagarNuvem(bag.arquivos[nome] && bag.arquivos[nome]._doc));
+      delete this.acervo.anterior[String(y)];
+    }
+    this._dfcKey = "";
+    this._dfcPedido = "";
+    this.montarVista();
+    this.gravarLocal();
+    this.render();
+  },
+
+  removerArquivo(ano, chave) {
+    let nome = chave;
+    try { nome = decodeURIComponent(chave); } catch (e) {}
+    const y = Number(ano);
+    const base = this.anoBase();
+    if (y === base) {
+      // Só a competência da tela: o mesmo arquivo enviado em outro mês continua lá.
+      const atual = this.chaveMes(base);
+      const slots = Object.keys(this.acervo.meses || {}).filter((k) => k === atual);
+      let achou = false;
+      slots.forEach((k) => {
+        const bolsa = this.acervo.meses[k];
+        if (!bolsa || !bolsa.arquivos || !bolsa.arquivos[nome]) return;
+        achou = true;
+        this.apagarNuvem(bolsa.arquivos[nome]._doc);
+        delete bolsa.arquivos[nome];
+        if (!Object.keys(bolsa.arquivos).length) delete this.acervo.meses[k];
+      });
+      if (!achou) console.warn("[Resultado de caixa] Arquivo não encontrado nesta competência:", nome);
+      this._dfcKey = "";
+      this._dfcPedido = "";
+      this.montarVista();
+      this.gravarLocal();
+      this.render();
+      return;
+    }
+    const bolsa = this.acervo.anterior[String(y)] || null;
+    if (!bolsa || !bolsa.arquivos || !bolsa.arquivos[nome]) {
+      this.removerAno(ano);
+      return;
+    }
+    const docId = bolsa.arquivos[nome]._doc;
+    delete bolsa.arquivos[nome];
+    if (!Object.keys(bolsa.arquivos).length) delete this.acervo.anterior[String(y)];
+    this.apagarNuvem(docId);
+    this._dfcKey = "";
+    this._dfcPedido = "";
+    this.montarVista();
+    this.gravarLocal();
+    this.render();
+  },
+
+  docCaixa(slot, empresa, nome) {
+    const emp = Number(empresa) || 0;
+    const base = emp ? String(emp) : String(nome || "arq").replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 48);
+    return String(slot || "slot") + "_" + base;
+  },
+
+  enxugarMeses(meses) {
+    const out = {};
+    Object.keys(meses || {}).forEach((mm) => {
+      const cel = meses[mm] || {};
+      if (Math.abs(Number(cel.o) || 0) < 0.005 && Math.abs(Number(cel.r) || 0) < 0.005) return;
+      out[mm] = { o: Number(cel.o) || 0, r: Number(cel.r) || 0 };
+    });
+    return out;
+  },
+
+  enxugarArq(arq) {
+    const entradas = {};
+    Object.keys(arq.entradas || {}).forEach((id) => {
+      const meses = this.enxugarMeses(arq.entradas[id].meses);
+      if (Object.keys(meses).length) entradas[id] = { nome: arq.entradas[id].nome || "", meses: meses };
+    });
+    const contas = {};
+    Object.keys(arq.contas || {}).forEach((code) => {
+      const meses = this.enxugarMeses(arq.contas[code].meses);
+      if (Object.keys(meses).length) contas[code] = { nome: arq.contas[code].nome || code, meses: meses };
+    });
+    const contasPorCc = {};
+    Object.keys(arq.contasPorCc || {}).forEach((id) => {
+      const dono = arq.contasPorCc[id] || {};
+      const bag = {};
+      Object.keys(dono.contas || {}).forEach((code) => {
+        const meses = this.enxugarMeses(dono.contas[code].meses);
+        if (Object.keys(meses).length) bag[code] = { nome: dono.contas[code].nome || code, meses: meses };
+      });
+      if (Object.keys(bag).length) contasPorCc[id] = { nome: dono.nome || "", contas: bag };
+    });
+    const planosPorCc = {};
+    Object.keys(arq.planosPorCc || {}).forEach((id) => {
+      const dono = arq.planosPorCc[id] || {};
+      const bag = {};
+      Object.keys(dono.contas || {}).forEach((code) => {
+        const meses = this.enxugarMeses(dono.contas[code].meses);
+        if (Object.keys(meses).length) bag[code] = { nome: dono.contas[code].nome || code, node: dono.contas[code].node || "", meses: meses };
+      });
+      if (Object.keys(bag).length) planosPorCc[id] = { nome: dono.nome || "", contas: bag };
+    });
+    return { entradas: entradas, contas: contas, contasPorCc: contasPorCc, planosPorCc: planosPorCc };
+  },
+
+  empacotarPlanos(planosPorCc) {
+    const out = {};
+    Object.keys(planosPorCc || {}).forEach((id) => {
+      const dono = planosPorCc[id] || {};
+      const contas = {};
+      Object.keys(dono.contas || {}).forEach((code) => {
+        const info = dono.contas[code] || {};
+        const meses = {};
+        Object.keys(info.meses || {}).forEach((mm) => {
+          const o = Math.round((Number(info.meses[mm].o) || 0) * 100) / 100;
+          const r = Math.round((Number(info.meses[mm].r) || 0) * 100) / 100;
+          if (Math.abs(o) < 0.005 && Math.abs(r) < 0.005) return;
+          meses[mm] = Math.abs(r) >= 0.005 ? [o, r] : o;
+        });
+        if (Object.keys(meses).length) contas[code] = { nome: info.nome || "", node: info.node || "", meses: meses };
+      });
+      if (Object.keys(contas).length) out[id] = { nome: dono.nome || "", contas: contas };
+    });
+    try { return JSON.stringify(out); } catch (e) { return ""; }
+  },
+
+  abrirPlanos(texto) {
+    let cru = null;
+    try { cru = JSON.parse(texto || ""); } catch (e) { cru = null; }
+    const out = {};
+    Object.keys(cru || {}).forEach((id) => {
+      const dono = cru[id] || {};
+      const contas = {};
+      Object.keys(dono.contas || {}).forEach((code) => {
+        const info = dono.contas[code] || {};
+        const meses = {};
+        Object.keys(info.meses || {}).forEach((mm) => {
+          const cru = info.meses[mm];
+          let o = 0;
+          let r = 0;
+          if (Array.isArray(cru)) {
+            o = Number(cru[0]) || 0;
+            r = Number(cru[1]) || 0;
+          } else if (cru && typeof cru === "object") {
+            o = Number(cru.o) || 0;
+            r = Number(cru.r) || 0;
+          } else {
+            o = Number(cru) || 0;
+          }
+          if (Math.abs(o) >= 0.005 || Math.abs(r) >= 0.005) meses[mm] = { o: o, r: r };
+        });
+        if (Object.keys(meses).length) contas[code] = { nome: info.nome || code, node: info.node || "", meses: meses };
+      });
+      if (Object.keys(contas).length) out[id] = { nome: dono.nome || "", contas: contas };
+    });
+    return out;
+  },
+
+  idOriginalForecast(base, empresa, nome) {
+    const emp = Number(empresa) || 0;
+    const chave = emp ? String(emp) : String(nome || "arq").replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 60);
+    return "fc_" + String(base || "").replace(/[^0-9-]/g, "") + "_" + chave;
+  },
+
+  bufParaBase64(buf) {
+    const blob = new Blob([buf]);
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || "").split(",")[1] || "");
+      reader.onerror = () => reject(reader.error || new Error("Não consegui ler o arquivo."));
+      reader.readAsDataURL(blob);
+    });
+  },
+
+  base64ParaBuf(b64) {
+    const bin = atob(String(b64 || ""));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  },
+
+  // Excel original de cada envio: no Supabase Storage (bucket "arquivos"), em resultado_caixa_orig/<id>.
+  // O nome do arquivo fica no próprio item (origNome).
+  caminhoOriginal(id) {
+    return "resultado_caixa_orig/" + String(id || "").replace(/[\\/]/g, "_");
+  },
+
+  async salvarOriginal(id, nome, buf) {
+    const A = window.ArquivosIntegra;
+    if (!A || !id || !buf) throw new Error("A nuvem não está disponível.");
+    if (!buf.byteLength) throw new Error("Arquivo vazio.");
+    await A.uploadBytes(A.ref(null, this.caminhoOriginal(id)), buf, { contentType: "application/octet-stream" });
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return true;
+  },
+
+  async lerOriginal(id) {
+    if (this._bytesOriginais && this._bytesOriginais[id]) {
+      return { nome: "", buf: this._bytesOriginais[id] };
+    }
+    const A = window.ArquivosIntegra;
+    if (!A || !id) return null;
+    const url = await A.getDownloadURL(A.ref(null, this.caminhoOriginal(id)));
+    const resp = await fetch(url, { credentials: "same-origin" });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (!buf.byteLength) return null;
+    if (!this._bytesOriginais) this._bytesOriginais = {};
+    this._bytesOriginais[id] = buf;
+    return { nome: "", buf: buf };
+  },
+
+  apagarOriginal(id) {
+    if (!id) return;
+    if (this._bytesOriginais) delete this._bytesOriginais[id];
+    const A = window.ArquivosIntegra;
+    if (!A) return;
+    A.deleteObject(A.ref(null, this.caminhoOriginal(id))).catch(function() {});
+  },
+
+  origAindaUsado(id) {
+    if (!id) return false;
+    let achou = false;
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      Object.keys(por).forEach((nome) => {
+        if (por[nome] && por[nome].orig === id) achou = true;
+      });
+    });
+    const visitar = (bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        if (bag.arquivos[nome] && bag.arquivos[nome].orig === id) achou = true;
+      });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((k) => visitar(this.acervo.anterior[k]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((k) => visitar(this.acervo.meses[k]));
+    return achou;
+  },
+
+  async ligarOriginalEnviado(nome, buf) {
+    const lista = [];
+    const visitar = (slot, bag) => {
+      const arq = bag && bag.arquivos && bag.arquivos[nome];
+      if (!arq || !arq._pendente) return;
+      const id = arq._doc || this.docCaixa(arq._slot || slot, arq.empresa, nome);
+      arq._doc = id;
+      lista.push({ arq: arq, id: id });
+    };
+    Object.keys((this.acervo && this.acervo.anterior) || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys((this.acervo && this.acervo.meses) || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    for (let i = 0; i < lista.length; i++) {
+      try {
+        await this.salvarOriginal(lista[i].id, nome, buf);
+        lista[i].arq.orig = lista[i].id;
+        lista[i].arq.origNome = nome;
+      } catch (err) {
+        this.aviso = ((this.aviso ? this.aviso + " " : "") + "O Excel original de " + nome + " não ficou guardado: " + ((err && err.message) || err)).trim();
+      }
+    }
+  },
+
+  refOriginal(tipo, nome) {
+    if (String(tipo) === "fc") {
+      const chaves = Object.keys(this.forecasts || {});
+      for (let i = 0; i < chaves.length; i++) {
+        const arq = ((this.forecasts[chaves[i]] || {}).porArquivo || {})[nome];
+        if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || arq.nome || nome };
+      }
+      return null;
+    }
+    const arq = (((this.anoDados(Number(tipo)) || {}).arquivos) || {})[nome];
+    if (arq && arq.orig) return { id: arq.orig, nome: arq.origNome || nome };
+    return null;
+  },
+
+  dispararDownload(buf, nome) {
+    const bruto = String(nome || "arquivo.xlsx").replace(/^\d{4}-\d{2}\|/, "").replace(/[\\/:*?"<>|]/g, " ").trim() || "arquivo.xlsx";
+    const arquivo = /\.(xlsx|xlsm)$/i.test(bruto) ? bruto : (bruto + ".xlsx");
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = arquivo;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  },
+
+  async salvarArquivoNuvem(slot, nome, arq) {
+    // resultado_caixa no Supabase: o payload é aberto nas colunas jsonb (entradas, contas, contas_por_cc,
+    // planos_json) de uma linha só; as partes __pN (limite de 1 MB do Firestore) não existem mais.
+    const D = window.DadosFinanceiro;
+    if (!D || !arq) return false;
+    const id = arq._doc || this.docCaixa(slot, arq.empresa, nome);
+    const limpo = this.enxugarArq(arq);
+    const detalhe = JSON.stringify({
+      entradas: limpo.entradas || {},
+      contas: limpo.contas || {},
+      contasPorCc: limpo.contasPorCc || {},
+      planosJson: this.empacotarPlanos(limpo.planosPorCc)
+    });
+    const ids = [];
+    const base = {
+      slot: slot,
+      nome: nome,
+      empresa: Number(arq.empresa) || 0,
+      rotulo: arq.rotulo || "",
+      em: new Date().toISOString(),
+      payload: detalhe,
+      partes: ids,
+      orig: arq.orig || "",
+      origNome: arq.origNome || ""
+    };
+    await D.gravarResultadoCaixa(id, base);
+    arq._doc = id;
+    arq._partes = ids;
+    arq._pendente = false;
+    this._nuvemOk = true;
+    return true;
+  },
+
+  async enviarPendentes() {
+    const tarefas = [];
+    const visitar = (slot, bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        const arq = bag.arquivos[nome];
+        if (arq && arq._pendente) tarefas.push(this.salvarArquivoNuvem(arq._slot || slot, nome, arq));
+      });
+    };
+    Object.keys(this.acervo.anterior || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys(this.acervo.meses || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    if (!tarefas.length) return;
+    this._nuvemToken = (this._nuvemToken || 0) + 1;
+    try {
+      await Promise.all(tarefas);
+      this.gravarLocal();
+    } catch (e) {
+      this.error = "O arquivo entrou na tela, mas não ficou salvo na nuvem: " + ((e && e.message) || e);
+    }
+  },
+
+  async enviarAcervo() {
+    const tarefas = [];
+    const visitar = (slot, bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        const arq = bag.arquivos[nome];
+        if (arq) tarefas.push(this.salvarArquivoNuvem(slot, nome, arq));
+      });
+    };
+    Object.keys(this.acervo.anterior || {}).forEach((ano) => visitar("ant-" + ano, this.acervo.anterior[ano]));
+    Object.keys(this.acervo.meses || {}).forEach((chave) => visitar(chave, this.acervo.meses[chave]));
+    if (!tarefas.length) return;
+    this._nuvemToken = (this._nuvemToken || 0) + 1;
+    await Promise.all(tarefas);
+    this.gravarLocal();
+  },
+
+  apagarNuvem(docId) {
+    const D = window.DadosFinanceiro;
+    if (!docId || !D) return;
+    this._nuvemToken = (this._nuvemToken || 0) + 1;
+    // Uma linha por arquivo/forecast (sem partes __pN para apagar).
+    D.excluirResultadoCaixa(docId).catch(() => {});
+    if (String(docId).indexOf("fc-") === 0) return;
+    this.apagarOriginal(docId);
+  },
+
+  aplicarDoc(acervo, id, x) {
+    if (x && x.tipo === "parte") {
+      if (!acervo._partes) acervo._partes = {};
+      acervo._partes[id] = x.texto || "";
+      return;
+    }
+    if (x && (x.tipo === "forecast" || x.tipo === "original" || x.tipo === "original-parte" || String(x.slot || "").indexOf("fc-") === 0)) return;
+    const nome = x.nome || id;
+    let extra = null;
+    if (typeof x.payload === "string" && x.payload && !(Array.isArray(x.partes) && x.partes.length)) {
+      try { extra = JSON.parse(x.payload); } catch (e) { extra = null; }
+    }
+    const arq = {
+      empresa: Number(x.empresa) || 0,
+      rotulo: x.rotulo || "",
+      entradas: (extra && extra.entradas) || x.entradas || {},
+      contas: (extra && extra.contas) || x.contas || {},
+      contasPorCc: (extra && extra.contasPorCc) || x.contasPorCc || {},
+      planosPorCc: (extra && extra.planosJson) ? this.abrirPlanos(extra.planosJson) : ((x.planosPorCc && Object.keys(x.planosPorCc).length) ? x.planosPorCc : this.abrirPlanos(x.planosJson)),
+      _doc: id,
+      _slot: x.slot || "",
+      _partes: Array.isArray(x.partes) ? x.partes : [],
+      orig: x.orig || "",
+      origNome: x.origNome || ""
+    };
+    const slot = String(x.slot || "");
+    if (slot.indexOf("ant-") === 0) {
+      const ano = slot.slice(4);
+      if (!acervo.anterior[ano]) acervo.anterior[ano] = { arquivos: {} };
+      acervo.anterior[ano].arquivos[nome] = arq;
+      return;
+    }
+    if (/^\d{4}-\d{2}$/.test(slot)) {
+      if (!acervo.meses[slot]) acervo.meses[slot] = { arquivos: {} };
+      acervo.meses[slot].arquivos[nome] = arq;
+    }
+  },
+
+  juntarPartes(acervo) {
+    const partes = (acervo && acervo._partes) || {};
+    const visitar = (bag) => {
+      Object.keys((bag && bag.arquivos) || {}).forEach((nome) => {
+        const arq = bag.arquivos[nome];
+        const ids = arq && arq._partes;
+        if (!ids || !ids.length) return;
+        let texto = "";
+        let ok = true;
+        ids.forEach((pid) => {
+          if (!partes[pid]) ok = false;
+          else texto += partes[pid];
+        });
+        if (!ok || !texto) {
+          arq._pendente = true;
+          return;
+        }
+        try {
+          const det = JSON.parse(texto);
+          if (det.entradas) arq.entradas = det.entradas;
+          if (det.contas) arq.contas = det.contas;
+          if (det.contasPorCc) arq.contasPorCc = det.contasPorCc;
+          if (det.planosJson) arq.planosPorCc = this.abrirPlanos(det.planosJson);
+          else if (det.planosPorCc) arq.planosPorCc = det.planosPorCc;
+          delete arq._partes;
+        } catch (e) {
+          arq._pendente = true;
+        }
+      });
+    };
+    Object.keys((acervo && acervo.anterior) || {}).forEach((k) => visitar(acervo.anterior[k]));
+    Object.keys((acervo && acervo.meses) || {}).forEach((k) => visitar(acervo.meses[k]));
+    if (acervo) delete acervo._partes;
+  },
+
+  /* O snapshot da nuvem também traz o forecast. Ele não pode substituir setembro nem 2025 que ainda estão só nesta tela. */
+  fundirAcervo(remoto) {
+    const local = this.acervo || { anterior: {}, meses: {} };
+    const cheio = (bag) => Object.keys(bag || {}).some((k) => Object.keys((bag[k] && bag[k].arquivos) || {}).length);
+    const manterLocal = !cheio(remoto && remoto.anterior) && !cheio(remoto && remoto.meses);
+    const fundir = (locMap, remMap) => {
+      const out = {};
+      Object.keys(remMap || {}).forEach((k) => {
+        out[k] = { arquivos: Object.assign({}, (remMap[k] && remMap[k].arquivos) || {}) };
+      });
+      Object.keys(locMap || {}).forEach((k) => {
+        const la = (locMap[k] && locMap[k].arquivos) || {};
+        if (!Object.keys(la).length) return;
+        if (!out[k]) out[k] = { arquivos: {} };
+        Object.keys(la).forEach((nome) => {
+          const arq = la[nome];
+          if (!arq) return;
+          const temNaNuvem = !!out[k].arquivos[nome];
+          if (arq._pendente || (!temNaNuvem && manterLocal)) {
+            if (!temNaNuvem) arq._pendente = true;
+            out[k].arquivos[nome] = arq;
+          }
+        });
+      });
+      return out;
+    };
+    this.acervo = {
+      anterior: fundir(local.anterior, remoto && remoto.anterior),
+      meses: fundir(local.meses, remoto && remoto.meses)
+    };
+  },
+
+  async carregarNuvem() {
+    const D = window.DadosFinanceiro;
+    if (!D) return;
+    const token = this._nuvemToken || 0;
+    const vazio = !this.temAcervo();
+    if (vazio) {
+      this.lendo = true;
+      this.render();
+    }
+    const leituraVelha = () => (this._nuvemToken || 0) !== token;
+    const forecastP = this.carregarForecasts();
+    try {
+      const snap = await D.listarResultadoCaixa(); // snapshot de imitação (docs no formato que aplicarDoc lê)
+      if (leituraVelha()) {
+        if (!this._subindo) this.lendo = false;
+        return;
+      }
+      if (snap.empty) {
+        if (this.temAcervo()) await this.enviarAcervo();
+        try { await forecastP; } catch (e) {}
+        this.lendo = false;
+        if (!this._subindo) this.render();
+        return;
+      }
+      const remoto = { anterior: {}, meses: {} };
+      snap.forEach((docSnap) => this.aplicarDoc(remoto, docSnap.id, docSnap.data() || {}));
+      this.juntarPartes(remoto);
+      if (leituraVelha()) {
+        if (!this._subindo) this.lendo = false;
+        return;
+      }
+      this.fundirAcervo(remoto);
+      this._nuvemOk = true;
+      this.montarVista();
+      this.gravarLocal();
+      await this.enviarPendentes();
+    } catch (e) {
+      if (!this.temAcervo()) this.error = "Não consegui ler os arquivos salvos: " + ((e && e.message) || e);
+    }
+    try { await forecastP; } catch (e) {}
+    this.lendo = false;
+    if (!this._subindo) this.render();
+  },
+
+  bagLado(ano, lado) {
+    const a = this.anoDados(ano);
+    const out = {};
+    if (!a) return out;
+    Object.keys(a.arquivos || {}).forEach((nome) => {
+      const arq = a.arquivos[nome] || {};
+      const extra = arq.contasPorCc || {};
+      Object.keys(extra).forEach((id) => {
+        const contas = (extra[id] && extra[id].contas) || {};
+        if (!Object.keys(contas).some((code) => this.codigoNoLado(code, lado))) return;
+        if (!out[id]) out[id] = { nome: extra[id].nome || id, meses: {} };
+      });
+      const bag = arq[lado] || {};
+      Object.keys(bag).forEach((id) => {
+        if (!out[id]) out[id] = { nome: bag[id].nome, meses: {} };
+        const meses = bag[id].meses || {};
+        Object.keys(meses).forEach((mm) => {
+          const cel = out[id].meses[mm] || { o: 0, r: 0 };
+          cel.o += Number(meses[mm].o) || 0;
+          cel.r += Number(meses[mm].r) || 0;
+          out[id].meses[mm] = cel;
+        });
+      });
+    });
+    return out;
+  },
+
+  valor(lado, ano, ccId, mes, campo, ate) {
+    const bag = this.bagLado(ano, lado)[ccId];
+    let s = 0;
+    const fim = ate ? Number(mes) : Number(mes);
+    const ini = ate ? 1 : fim;
+    if (bag) {
+      for (let m = ini; m <= fim; m++) {
+        const cel = bag.meses[String(m)];
+        if (cel) s += Number(cel[campo]) || 0;
+      }
+    }
+    return s;
+  },
+
+  noAceito(lado) {
+    return (id) => {
+      const s = String(id || "");
+      if (lado === "entradas") return s === "g_01" || s.startsWith("g_01_") || s === "g_09_01" || s.startsWith("g_09_01_");
+      return this.contasSaida().some((def) => this.casaNo(s, def));
+    };
+  },
+
+  mapaDfc(FC) {
+    const visao = FC.visao();
+    const accToNode = {};
+    const nodes = {};
+    (visao.groups || []).forEach((g) => {
+      nodes[g.id] = g;
+      (g.accounts || []).forEach((id) => {
+        const sid = String(id || "").trim();
+        if (!sid) return;
+        accToNode[sid] = g.id;
+        const nk = FC.normAccountKey(sid);
+        if (nk) accToNode[nk] = g.id;
+        const dotted = FC.formatAccountCode(sid);
+        if (dotted) {
+          accToNode[dotted] = g.id;
+          const nk2 = FC.normAccountKey(dotted);
+          if (nk2) accToNode[nk2] = g.id;
+        }
+      });
+    });
+    return { accToNode, nodes };
+  },
+
+  noDaConta(FC, mapa, id) {
+    const achar = (code) => {
+      if (!code) return null;
+      const nk = FC.normAccountKey(code);
+      const dotted = FC.formatAccountCode(code);
+      const nid = mapa.accToNode[code] || (nk && mapa.accToNode[nk]) || (dotted && mapa.accToNode[dotted]) || "";
+      return nid && mapa.nodes[nid] ? mapa.nodes[nid] : null;
+    };
+    let sid = String(id || "").trim().replace(/\s/g, "");
+    const original = sid;
+    const visto = {};
+    while (sid && !visto[sid]) {
+      visto[sid] = true;
+      const node = achar(sid);
+      if (node) return node;
+      const partes = sid.split(".").filter(Boolean);
+      if (partes.length <= 2) break;
+      sid = partes.slice(0, -1).join(".");
+    }
+    const plano = (typeof PlanoFinanceiroApp !== "undefined" ? PlanoFinanceiroApp : null);
+    if (original && plano && typeof plano.lookupDfcByCode === "function") {
+      const gid = plano.lookupDfcByCode(original);
+      if (gid) {
+        const node = this.noPorId(gid);
+        if (node) return node;
+      }
+    }
+    return null;
+  },
+
+  nomeCc(id, nomeApi) {
+    const direto = String(nomeApi || "").trim();
+    if (direto) return direto;
+    try {
+      const lista = JSON.parse(localStorage.getItem("crm_cost_centers_data") || "[]");
+      const hit = Array.isArray(lista) && lista.find((c) => c && String(c.id) === String(id));
+      if (hit && hit.name) return String(id) + " - " + hit.name;
+    } catch (e) {}
+    return String(id || "");
+  },
+
+  async lerDfc(ano, mesFim, lado) {
+    const FC = window.FluxoCaixaApp;
+    const uso = this.empresasUsadas();
+    const ids = uso.ids;
+    if (!ids.length) return [];
+    const start = ano + "-01-01";
+    const last = new Date(ano, mesFim, 0).getDate();
+    const end = ano + "-" + String(mesFim).padStart(2, "0") + "-" + String(last).padStart(2, "0");
+    const chunks = await Promise.all(ids.map(async (id) => {
+      try {
+        const data = await SiengeApiService.getBankMovements(start, end, { selectionType: "M", companyId: id });
+        return (data || []).map((m) => Object.assign({}, m, { companyId: m.companyId || id }));
+      } catch (e) {
+        return [];
+      }
+    }));
+    let movements = chunks.reduce((acc, list) => acc.concat(list), []);
+    if (typeof window.siengeDedupeBankMovements === "function") movements = siengeDedupeBankMovements(movements || []);
+    const aceitos = {};
+    ids.forEach((id) => { aceitos[id] = 1; });
+    movements = (movements || []).filter((m) => {
+      const d = FC.cashDate(m);
+      return d && d >= start && d <= end && aceitos[Number(m.companyId)];
+    });
+    const mapa = this.mapaDfc(FC);
+    const aceita = this.noAceito(lado);
+    const out = [];
+    movements.forEach((mov) => {
+      const mm = Number(String(FC.movMonth(mov) || "").slice(5, 7));
+      if (!mm || mm > mesFim) return;
+      FC.allocate(mov, 1).forEach((a) => {
+        const node = this.noDaConta(FC, mapa, a.categoryId);
+        if (!node || !aceita(node.id)) return;
+        const valor = FC.signedAmount(node, a.categoryId, a.categoryName, a.amount, a.reducer, a.categoryType, a.mov);
+        if (!valor) return;
+        const ccId = String(a.costCenterId || "").replace(/\D/g, "");
+        const nome = this.nomeCc(ccId, a.costCenterName);
+        out.push({ ccId, nome, mes: mm, valor, node: node.id, empresa: Number(mov.companyId) || 0 });
+      });
+    });
+    return out;
+  },
+
+  garantirDfc(lado) {
+    const ano = this.anoAtual();
+    if (!ano || !window.FluxoCaixaApp || !window.SiengeApiService) return;
+    const uso = this.empresasUsadas();
+    const key = (ano - 1) + "|12|" + lado + "|" + uso.ids.join(",");
+    if (this._dfcKey === key || this._dfcPedido === key) return;
+    this._dfcPedido = key;
+    this.pedirDfc(lado, key);
+  },
+
+  async pedirDfc(lado, key) {
+    const token = (this._dfcToken || 0) + 1;
+    this._dfcToken = token;
+    this.dfcLendo = true;
+    this.dfcErro = "";
+    this.iniciarCarga(true);
+    this.render();
+    try {
+      const ant = this.anoAtual() - 1;
+      const linhas = await this.lerDfc(ant, 12, lado);
+      if (this._dfcToken !== token) return;
+      this.dfcLinhas = linhas;
+      this._dfcKey = key;
+    } catch (e) {
+      if (this._dfcToken !== token) return;
+      this.dfcLinhas = [];
+      this.dfcErro = "Não consegui ler o ano anterior no DFC: " + ((e && e.message) || e);
+      this._dfcKey = key;
+    }
+    this.dfcLendo = false;
+    this.pararCarga();
+    const bar = document.getElementById("rcx-load-bar");
+    const txt = document.getElementById("rcx-load-text");
+    if (bar) bar.style.width = "100%";
+    if (txt) txt.textContent = "Consolidando empresas";
+    if (this._dfcToken === token) {
+      setTimeout(() => { if (this._dfcToken === token) this.render(); }, 280);
+    }
+  },
+
+  aplicarDfc(rows, mes) {
+    const porId = {};
+    const porNome = {};
+    rows.forEach((r) => {
+      porNome[this.fold(r.nome)] = r;
+      (r.ids || []).forEach((id) => {
+        const limpo = String(id).replace(/\D/g, "");
+        porId[limpo] = r;
+        porId[this.grupoCc(limpo)] = r;
+      });
+    });
+    const extra = {};
+    (this.dfcLinhas || []).forEach((l) => {
+      const id = String(l.ccId || "");
+      let row = porId[id] || porId[this.grupoCc(id)] || porNome[this.fold(l.nome)];
+      if (!row) {
+        const bruto = this.rotulo(id, l.nome || id, false);
+        const chave = this.fold(bruto.nome) + "|" + this.fold(bruto.cidade);
+        row = extra[chave];
+        if (!row) {
+          row = extra[chave] = {
+            key: "dfc-" + chave,
+            nome: bruto.nome,
+            cidade: bruto.cidade,
+            ids: id ? [id] : [],
+            mensal: { ant: 0, orc: 0, real: 0 },
+            acum: { ant: 0, orc: 0, real: 0 }
+          };
+          porNome[this.fold(bruto.nome)] = row;
+        }
+      }
+      const fator = l.empresa ? this.pctEmpresaId(l.empresa) : this.pctMl(id);
+      if (l.mes === mes) row.mensal.ant += l.valor * fator;
+      if (l.mes >= 1 && l.mes <= mes) row.acum.ant += l.valor * fator;
+    });
+    return rows.concat(Object.values(extra)).filter((r) => {
+      const z = (b) => Math.abs(b.ant) + Math.abs(b.orc) + Math.abs(b.real);
+      return z(r.mensal) + z(r.acum) > 0.5;
+    });
+  },
+
+  linhasTabela(lado) {
+    const ano = this.anoAtual();
+    const ant = ano - 1;
+    const mes = Number(this.mes) || 1;
+    const fontes = [];
+    [ano, ant].forEach((y) => {
+      const bag = this.bagLado(y, lado);
+      Object.keys(bag).forEach((id) => fontes.push({ id, nome: bag[id].nome || id }));
+    });
+    const grupos = {};
+    fontes.forEach((f) => {
+      const key = this.grupoCc(f.id);
+      if (!grupos[key]) grupos[key] = { key, nome: "", solto: !!(this.SOLTOS && this.SOLTOS[key]), ids: [] };
+      const g = grupos[key];
+      g.ids.push(f.id);
+      if (f.id === key || !g.nome) g.nome = f.nome;
+    });
+    const base = Object.keys(grupos).map((key) => {
+      const g = grupos[key];
+      const uniq = [...new Set(g.ids)];
+      const rot = this.rotulo(key, g.nome, g.solto);
+      const soma = (y, campo, ate) => uniq.reduce((s, id) => s + this.valorAgrupado(lado, y, id, mes, campo, ate), 0);
+      const rec = (ate) => ({ ant: soma(ant, "r", ate), orc: soma(ano, "o", ate), real: soma(ano, "r", ate) });
+      return { key, nome: rot.nome, cidade: rot.cidade, ids: uniq, mensal: rec(false), acum: rec(true) };
+    });
+    const distintos = this.distinguirCidades(base);
+    const fundidos = {};
+    distintos.forEach((r) => {
+      const nome = r.nome;
+      const g = fundidos[this.fold(nome)];
+      if (!g) { fundidos[this.fold(nome)] = r; return; }
+      g.ids = g.ids.concat(r.ids);
+      ["mensal", "acum"].forEach((b) => ["ant", "orc", "real"].forEach((k) => { g[b][k] += r[b][k]; }));
+    });
+    const rows = Object.values(fundidos).filter((r) => {
+      const z = (b) => Math.abs(b.ant) + Math.abs(b.orc) + Math.abs(b.real);
+      return z(r.mensal) + z(r.acum) > 0.5;
+    });
+    return { ano, ant, rows: rows };
+  },
+
+  destacar(rows) {
+    const variacao = (r) => r.acum.real - r.acum.orc;
+    const pos = rows.filter((r) => variacao(r) > 0.5).sort((a, b) => variacao(b) - variacao(a)).slice(0, 4);
+    const neg = rows.filter((r) => variacao(r) < -0.5).sort((a, b) => variacao(a) - variacao(b)).slice(0, 4)
+      .sort((a, b) => variacao(b) - variacao(a));
+    const escolhidos = new Set(pos.concat(neg));
+    const outros = rows.filter((r) => !escolhidos.has(r)).sort((a, b) => (b.acum.real - a.acum.real) || (b.mensal.real - a.mensal.real) || a.nome.localeCompare(b.nome, "pt"));
+    return { pos, neg, outros };
+  },
+
+  fmt(n, absoluto) {
+    let v = Number(n) || 0;
+    if (absoluto) v = Math.abs(v);
+    if (this.escala === "milhoes") v = v / 1000000;
+    return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  setEscala(id) {
+    this.escala = id === "milhoes" ? "milhoes" : "real";
+    this.render();
+  },
+
+  setMes(v) {
+    this.mes = Number(v) || 1;
+    this.aplicarForecastVista();
+    this.montarVista();
+    this._dfcKey = "";
+    this._dfcPedido = "";
+    this.render();
+    if (this.aba === "caixa") this.carregarMl();
+  },
+
+  toggleOutros() {
+    this.outrosAberto = !this.outrosAberto;
+    this.render();
+  },
+
+  toggleAgrupar() {
+    this.agrupar = !this.agrupar;
+    this.render();
+  },
+
+  setAgrupar(v) {
+    this.agrupar = !!v;
+    this.render();
+  },
+
+  toggleArqs() {
+    this.arqsAberto = !this.arqsAberto;
+    this.render();
+  },
+
+  pct(real, orc) {
+    const base = Number(orc) || 0;
+    const r = Number(real) || 0;
+    if (Math.abs(base) < 0.5) return Math.abs(r) < 0.5 ? 0 : -100;
+    return ((r - base) / base) * 100;
+  },
+
+  celVar(real, orc, saida) {
+    const v = real - orc;
+    const ruim = v < -0.5;
+    const bom = v > 0.5;
+    const cls = ruim ? "is-neg" : (bom ? "is-pos" : "");
+    const p = this.pct(real, orc);
+    const pNum = saida && p != null ? Math.abs(p) : p;
+    const pTxt = pNum == null ? "—" : (pNum.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
+    return `<td class="rcx-num ${cls}">${this.fmt(v, saida)}</td><td class="rcx-num ${cls}">${pTxt}</td>`;
+  },
+
+  blocoNums(b, saida) {
+    const ant = this.fmt(b.ant, saida);
+    return `<td class="rcx-num rcx-sep rcx-ant">${ant}</td><td class="rcx-num">${this.fmt(b.orc, saida)}</td><td class="rcx-num rcx-real">${this.fmt(b.real, saida)}</td>${this.celVar(b.real, b.orc, saida)}`;
+  },
+
+  somaBloco(lista, qual) {
+    const t = { ant: 0, orc: 0, real: 0 };
+    lista.forEach((r) => ["ant", "orc", "real"].forEach((k) => { t[k] += r[qual][k]; }));
+    return t;
+  },
+
+  chipsForecast() {
+    const usados = {};
+    this.mesesSeguintes().forEach((ym) => { usados[ym] = 1; });
+    const mapa = new Map();
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      if (!usados[ym]) return;
+      const por = (this.forecasts[ym] && this.forecasts[ym].porArquivo) || {};
+      Object.keys(por).forEach((nome) => {
+        if (!this.forecastDaCompetencia(nome, por[nome])) return;
+        if (!mapa.has(nome)) mapa.set(nome, { arq: por[nome] || {}, meses: [] });
+        mapa.get(nome).meses.push(ym);
+      });
+    });
+    if (!mapa.size) return `<span class="rcx-muted">Nenhum forecast.</span>`;
+    return Array.from(mapa.entries()).sort((a, b) => {
+      const ia = Number(a[1].arq.empresa) || this.empresaId(a[0]) || 9999;
+      const ib = Number(b[1].arq.empresa) || this.empresaId(b[0]) || 9999;
+      if (ia !== ib) return ia - ib;
+      return this.rotuloArquivo(a[0], a[1].arq).localeCompare(this.rotuloArquivo(b[0], b[1].arq), "pt");
+    }).map(([nome, info]) => {
+      const meses = info.meses.slice().sort();
+      const faixa = meses.map((ym) => (this.MESES[Number(ym.slice(5, 7)) - 1] || ym) + "/" + ym.slice(0, 4));
+      const periodo = faixa.length > 1 ? (faixa[0] + " a " + faixa[faixa.length - 1]) : (faixa[0] || "");
+      return this.chipArquivo("fc", nome, info.arq, periodo);
+    }).join("");
+  },
+
+  chipsDoAno(y) {
+    const a = this.anoDados(y);
+    const arquivos = (a && a.arquivos) || {};
+    return Object.keys(arquivos).map((nome) => ({ nome: nome, arq: arquivos[nome] || {} })).sort((a, b) => {
+      const ia = Number(a.arq.empresa) || this.empresaId(a.nome) || 9999;
+      const ib = Number(b.arq.empresa) || this.empresaId(b.nome) || 9999;
+      if (ia !== ib) return ia - ib;
+      return this.rotuloArquivo(a.nome, a.arq).localeCompare(this.rotuloArquivo(b.nome, b.arq), "pt");
+    }).map((item) => {
+      let extra = "";
+      const slot = String((item.arq && item.arq._vigencia) || "");
+      if (/^\d{4}-\d{2}$/.test(slot)) {
+        extra = (this.MESES[Number(slot.slice(5, 7)) - 1] || "") + "/" + slot.slice(0, 4);
+      }
+      return this.chipArquivo(String(y), item.nome, item.arq, extra);
+    }).join("");
+  },
+
+  faltaCentroNasSaidas() {
+    if (!this.agrupar) return false;
+    const anos = [this.anoAtual(), this.anoAtual() - 1];
+    return anos.some((y) => {
+      const a = this.anoDados(y);
+      if (!a) return false;
+      return Object.keys(a.arquivos || {}).some((n) => {
+        if (this.estaFora(String(y), n)) return false;
+        const arq = a.arquivos[n];
+        return arq && arq.contas && !(arq.contasPorCc && Object.keys(arq.contasPorCc).length);
+      });
+    });
+  },
+
+  faixaHtml(lado) {
+    const anos = Object.keys(this.anos || {}).sort();
+    const nomesMes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const mesOpts = nomesMes.map((n, i) => `<option value="${i + 1}" ${Number(this.mes) === i + 1 ? "selected" : ""}>${n}</option>`).join("");
+    const realOn = this.escala !== "milhoes";
+    const atual = this.anoAtual();
+    const antN = atual > 1900 ? atual - 1 : 0;
+    const chipsAtual = atual ? this.chipsDoAno(atual) : "";
+    const chipsAnt = antN ? this.chipsDoAno(antN) : "";
+    const nomesFc = {};
+    const seguintes = {};
+    this.mesesSeguintes().forEach((ym) => { seguintes[ym] = 1; });
+    Object.keys(this.forecasts || {}).forEach((ym) => {
+      if (!seguintes[ym]) return;
+      Object.keys((this.forecasts[ym] && this.forecasts[ym].porArquivo) || {}).forEach((nome) => { nomesFc[nome] = 1; });
+    });
+    const qtdArq = [atual, antN].reduce((s, y) => {
+      const a = y ? this.anoDados(y) : null;
+      return s + (a ? Object.keys(a.arquivos || {}).length : 0);
+    }, 0) + Object.keys(nomesFc).length;
+    const chipForecast = this.chipsForecast();
+    const agrupa = this.agrupar ? " Com “% Consolidação”, cada valor está no % Consolidação da empresa, e só entra quem tem a consolidação padrão ligada." : "";
+    const mesNomeFaixa = nomesMes[(Number(this.mes) || 1) - 1] || "";
+    const base = "Orçado e realizado de " + (atual || "—") + " vêm do arquivo mais recente de cada empresa, até " + mesNomeFaixa + ". A coluna de " + (antN || "o ano anterior") + " é o realizado do arquivo mais recente dessa empresa, de janeiro até o mês escolhido, no mesmo % Consolidação.";
+    const nota = lado === "entradas"
+      ? base + " Livia, Livia I e Livia II aparecem como Central Parque. Empreendimentos com o mesmo nome ganham a sigla da cidade. MLDU aparece como Corporativo. Os quatro maiores desvios positivos e os quatro negativos do acumulado ficam à vista; o restante abre ao clicar em Outros."
+        + " Clique num produto para ver só os centros de custo dele na tabela de baixo; clique de novo para ver todas as empresas."
+        + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC (Receitas e receitas financeiras)." + agrupa
+      : base + " As saídas são as contas da visão DFC, da maior saída para a menor pelo realizado acumulado. Gastar acima do orçado fica em vermelho."
+        + " Clique numa conta para ver só ela na tabela de baixo; clique de novo para ver todas."
+        + " No gráfico de linhas, a linha do ano atual é o realizado até o mês escolhido. Cada mês seguinte, até dezembro, usa o forecast enviado nesta tela, pelas mesmas contas da visão DFC das saídas." + agrupa;
+    const avisoRateio = lado === "saidas" && this.faltaCentroNasSaidas()
+      ? `<div class="rcx-erro">Para aplicar o % Consolidação nas saídas destes arquivos, suba o Excel de novo. O arquivo que já estava salvo não guarda o centro de custo de cada conta.</div>`
+      : "";
+    const avisoAnt = chipsAtual && !chipsAnt
+      ? `<div class="rcx-aviso">Nenhum arquivo de ${antN} ainda. A coluna do ano anterior fica zerada até você subir essa competência. Ela vale para todos os meses.</div>`
+      : "";
+    const outrosMeses = Object.keys((this.acervo && this.acervo.meses) || {}).some((k) => k !== this.chaveMes(atual) && Object.keys((((this.acervo.meses || {})[k] || {}).arquivos) || {}).length);
+    const avisoMes = atual && !chipsAtual && (chipsAnt || outrosMeses)
+      ? `<div class="rcx-aviso">Nenhum arquivo de ${mesNomeFaixa}/${atual}. Suba o comparativo desta competência. O de ${antN || "o ano anterior"} permanece salvo.</div>`
+      : "";
+    const seg = (on, txt, click, title) => `<button type="button" class="${on ? "is-on" : ""}" onclick="${click}"${title ? ` title="${title}"` : ""}>${txt}</button>`;
+    return `
+      <div class="cc-toolbar rcx-toolbar">
+        <label class="rcx-field">
+          <span class="ml-emp-filter-label">Mês</span>
+          <select class="rcx-select" onchange="ResultadoCaixaApp.setMes(this.value)">${mesOpts}</select>
+        </label>
+        <div class="rcx-field">
+          <span class="ml-emp-filter-label">Valores em</span>
+          <div class="rcx-escala">
+            ${seg(realOn, "R$", "ResultadoCaixaApp.setEscala('real')")}
+            ${seg(!realOn, "R$ milhões", "ResultadoCaixaApp.setEscala('milhoes')")}
+          </div>
+        </div>
+        <div class="rcx-field">
+          <span class="ml-emp-filter-label">Participação</span>
+          <div class="rcx-escala">
+            ${seg(!this.agrupar, "100%", "ResultadoCaixaApp.setAgrupar(false)", "Valores cheios dos arquivos")}
+            ${seg(this.agrupar, "% Consolidação", "ResultadoCaixaApp.setAgrupar(true)", "Aplica a coluna % Consolidação só nas empresas com consolidação padrão ligada")}
+          </div>
+        </div>
+        <div class="cc-toolbar-actions">
+          ${(lado === "entradas" || lado === "saidas") && Object.keys(this.anos || {}).length ? `<button type="button" class="rcx-arq-btn" title="Copia os gráficos e a tabela no padrão do slide do conselho. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+            <i data-lucide="image"></i> Copiar para o PowerPoint
+          </button>
+          <button type="button" class="rcx-arq-btn" title="Copia as linhas da tabela (só os valores) para colar no relatório em Excel: clique na célula B da primeira linha e Ctrl+V." onclick="ResultadoCaixaApp.copiarExcel(this)">
+            <i data-lucide="sheet"></i> Copiar para o Excel
+          </button>` : ""}
+          <button type="button" class="rcx-arq-btn${this.arqsAberto ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleArqs()">
+            <i data-lucide="files"></i> Arquivos <span class="ml-tab-count">${qtdArq}</span>
+            <i data-lucide="${this.arqsAberto ? "chevron-up" : "chevron-down"}"></i>
+          </button>
+          ${lado === "entradas" || lado === "saidas" ? `<label class="rcx-arq-btn rcx-fc-btn" title="Pode escolher vários relatórios de uma vez. Orçamento Empresarial Agrupado por centro de custo, mensal. O mês escolhido é o realizado; o arquivo entra como forecast dos meses seguintes, até dezembro.">
+            <i data-lucide="trending-up"></i> ${this.forecast ? "Trocar forecast" : "Subir forecast"}
+            <input type="file" multiple accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="ResultadoCaixaApp.subirForecast(this)">
+          </label>` : ""}
+          <label class="rcx-file">
+            <i data-lucide="upload"></i> Subir orçamento
+            <input type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple onchange="ResultadoCaixaApp.subir(this)">
+          </label>
+        </div>
+      </div>
+      ${this.arqsAberto ? `<div class="rcx-arqs-box">
+        <div class="rcx-arqs-col">
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Competência atual${atual ? " · " + mesNomeFaixa + "/" + atual : ""}</span>
+            ${chipsAtual ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais desta competência" onclick="ResultadoCaixaApp.baixarColuna('mes')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
+          <div class="rcx-arqs">${chipsAtual || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
+        </div>
+        <div class="rcx-arqs-col">
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Ano anterior${antN ? " · " + antN : ""}</span>
+            ${chipsAnt ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do ano anterior" onclick="ResultadoCaixaApp.baixarColuna('anterior')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
+          <div class="rcx-arqs">${chipsAnt || `<span class="rcx-muted">Nenhum arquivo desta competência.</span>`}</div>
+        </div>
+        <div class="rcx-arqs-col">
+          <div class="rcx-arqs-head">
+            <span class="rcx-arqs-label">Forecast</span>
+            ${chipForecast.indexOf("rcx-arq") >= 0 ? `<button type="button" class="btn btn-sm btn-excel" title="Baixar os arquivos originais do forecast" onclick="ResultadoCaixaApp.baixarColuna('forecast')"><i data-lucide="download" style="width:14px;height:14px;"></i> Excel</button>` : ""}
+          </div>
+          <div class="rcx-arqs">${chipForecast}</div>
+        </div>
+      </div>` : ""}
+      ${this.error ? `<div class="rcx-erro">${caixaEsc(this.error)}</div>` : ""}
+      ${this.aviso ? `<div class="rcx-aviso">${caixaEsc(this.aviso)}</div>` : ""}
+      ${avisoRateio}
+      ${avisoMes}
+      ${avisoAnt}
+      ${this.dfcErro ? `<div class="rcx-erro">${caixaEsc(this.dfcErro)}</div>` : ""}
+      ${anos.length ? `<details class="rcx-ajuda"><summary><i data-lucide="info"></i> Como ler esta tabela</summary><p>${nota}</p></details>` : `<p class="rcx-vazio">Suba o comparativo orçado × realizado por centro de custo. Pode ser o arquivo analítico das contas financeiras: ele entra na visão DFC. O de ${antN || "o ano anterior"} e o de ${atual || "o ano corrente"} ficam pelo arquivo mais recente de cada empresa. O mês escolhido é o último realizado; os meses seguintes vêm do forecast mais novo.</p>`}
+    `;
+  },
+
+  /** Barras do mês selecionado: realizado do ano anterior, orçado e realizado do ano atual. */
+  graficoMesHtml(total, saida) {
+    const atual = this.anoAtual();
+    const antN = atual > 1900 ? atual - 1 : 0;
+    const nomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const mesNome = nomes[(Number(this.mes) || 1) - 1] || "";
+    const barras = [
+      { cls: "is-ant", rotulo: antN ? String(antN) : "Ano ant.", valor: total.ant, espera: false },
+      { cls: "is-orc", rotulo: "Orçado", valor: total.orc },
+      { cls: "is-real", rotulo: atual ? String(atual) : "Atual", valor: total.real }
+    ];
+    const maior = Math.max(...barras.map((b) => (b.espera ? 0 : Math.abs(Number(b.valor) || 0))), 1);
+    return `<div class="rcx-graf">
+      <div class="rcx-graf-tit">${caixaEsc(mesNome.toUpperCase())}</div>
+      <div class="rcx-graf-area">
+        ${barras.map((b) => {
+          const h = b.espera ? 0 : Math.abs(Number(b.valor) || 0) / maior * 100;
+          return `<div class="rcx-graf-col ${b.cls}">
+            <div class="rcx-graf-track">
+              <span class="rcx-graf-val" style="bottom:${h.toFixed(2)}%">${b.espera ? "…" : this.fmt(b.valor, saida)}</span>
+              <div class="rcx-graf-bar" style="height:${h.toFixed(2)}%"></div>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+      <div class="rcx-graf-eixo">${barras.map((b) => `<span>${caixaEsc(b.rotulo)}</span>`).join("")}</div>
+    </div>`;
+  },
+
+  /** Totais do ano em colunas empilhadas: a parte escura vai de janeiro até o mês escolhido e a clara segue até dezembro. */
+  graficoTotaisHtml(lado) {
+    const s = lado === "saidas" ? this.serieSaidas() : this.serieEntradas();
+    const ano = this.anoAtual();
+    const antN = ano > 1900 ? ano - 1 : 0;
+    const sel = Number(this.mes) || 1;
+    const soma = (serie, de, ate) => serie.slice(de - 1, ate).reduce((t, v) => t + (Number(v) || 0), 0);
+    const colunas = [
+      { cls: "is-ant", rotulo: antN ? String(antN) : "Ano ant.", escuro: soma(s.ant, 1, sel), claro: soma(s.ant, sel + 1, 12) },
+      { cls: "is-orc", rotulo: "Orçado", escuro: soma(s.orc, 1, sel), claro: soma(s.orc, sel + 1, 12) },
+      { cls: "is-fc", rotulo: "Forecast", escuro: soma(s.real, 1, sel), claro: sel < 12 ? soma(s.forecast, sel + 1, 12) : 0, marca: sel < 12 && (!this.forecast || s.semForecast.length) }
+    ];
+    colunas.forEach((c) => {
+      c.rotuloValor = c.escuro + c.claro;
+      c.escuro = Math.abs(c.escuro);
+      c.claro = Math.abs(c.claro);
+      c.total = c.escuro + c.claro;
+    });
+    const maior = Math.max(...colunas.map((c) => c.total), 1);
+    const pedaco = (valor, total, cls) => {
+      if (!(valor > 0)) return "";
+      const p = valor / total;
+      return `<div class="rcx-tot-seg ${cls}" style="flex:${p.toFixed(4)} 1 0"${p >= 0.14 ? "" : " data-curto"}><span>${this.fmt(valor)}</span></div>`;
+    };
+    const mesCurto = (this.MESES[sel - 1] || "").toLowerCase();
+    const proximo = sel < 12 ? (this.MESES[sel] || "").toLowerCase() : "";
+    let nota = sel < 12
+      ? `Escuro: jan a ${mesCurto} (realizado ${antN || "anterior"}, orçado e realizado ${ano || ""}). Claro: ${proximo} a dez (realizado ${antN || "anterior"}, orçado e previsão do forecast).`
+      : `Ano fechado em dezembro: as colunas mostram só o acumulado.`;
+    if (sel < 12 && !this.forecast) nota += " * Sem forecast: suba o relatório para preencher a parte clara.";
+    else if (sel < 12 && s.semForecast.length) nota += ` * O forecast não tem ${s.semForecast.map((m) => (this.MESES[m - 1] || "").toLowerCase()).join(", ")}: nesses meses entra o orçado.`;
+    return `<div class="rcx-graf rcx-tot">
+      <div class="rcx-graf-tit">TOTAIS</div>
+      <div class="rcx-graf-area rcx-tot-area">
+        ${colunas.map((c) => {
+          const h = (c.total / maior * 100).toFixed(2);
+          return `<div class="rcx-graf-col ${c.cls}">
+          <div class="rcx-graf-track">
+          <span class="rcx-graf-val" style="bottom:${h}%">${this.fmt(c.rotuloValor, lado === "saidas")}${c.marca ? " *" : ""}</span>
+          <div class="rcx-tot-pilha" style="height:${h}%" title="${caixaEsc(c.rotulo)}: ${this.fmt(c.escuro)} até ${mesCurto} + ${this.fmt(c.claro)} até dezembro">
+            ${pedaco(c.claro, c.total, "is-claro")}${pedaco(c.escuro, c.total, "is-escuro")}
+          </div></div>
+        </div>`;
+        }).join("")}
+      </div>
+      <div class="rcx-graf-eixo">${colunas.map((c) => `<span>${caixaEsc(c.rotulo)}</span>`).join("")}</div>
+      <div class="rcx-tot-tip" role="tooltip">${caixaEsc(nota)}</div>
+    </div>`;
+  },
+
+  /** Séries mensais das entradas (12 meses): ano anterior, orçado, realizado até o mês e forecast dali em diante. */
+  serieEntradas() {
+    const ano = this.anoAtual();
+    const ant = ano - 1;
+    const sel = Number(this.mes) || 1;
+    const bagAno = this.bagLado(ano, "entradas");
+    const bagAnt = this.bagLado(ant, "entradas");
+    const tem = (bag, m) => Object.keys(bag).some((id) => (bag[id].meses || {})[String(m)]);
+    const soma = (y, bag, m, campo) => Object.keys(bag).reduce((s, id) => s + this.valorAgrupado("entradas", y, id, m, campo, false), 0);
+    const fc = this.forecastEntradas(ano);
+    const meses = Array.from({ length: 12 }, (_, i) => i + 1);
+    const real = meses.map((m) => (m <= sel && tem(bagAno, m) ? soma(ano, bagAno, m, "r") : null));
+    const orc = meses.map((m) => (tem(bagAno, m) ? soma(ano, bagAno, m, "o") : null));
+    const semForecast = [];
+    const forecast = meses.map((m, i) => {
+      if (m <= sel) return real[i];
+      if (fc[m] != null) return fc[m];
+      const algum = meses.some((mm) => mm > sel && fc[mm] != null);
+      if (!algum) return null;
+      semForecast.push(m);
+      return orc[i];
+    });
+    return {
+      ant: meses.map((m) => (tem(bagAnt, m) ? soma(ant, bagAnt, m, "r") : null)),
+      orc,
+      real,
+      forecast,
+      semForecast
+    };
+  },
+
+  temMesConta(ano, m) {
+    const a = this.anoDados(ano);
+    if (!a) return false;
+    const chave = String(m);
+    return Object.keys(a.arquivos || {}).some((nome) => {
+      if (this.estaFora(String(ano), nome)) return false;
+      const arq = a.arquivos[nome] || {};
+      const listas = [];
+      if (arq.contasPorCc && Object.keys(arq.contasPorCc).length) {
+        Object.keys(arq.contasPorCc).forEach((id) => listas.push((arq.contasPorCc[id] || {}).contas || {}));
+      } else if (arq.contas) listas.push(arq.contas);
+      return listas.some((contas) => Object.keys(contas).some((code) => {
+        const meses = (contas[code] && contas[code].meses) || {};
+        return !!meses[chave];
+      }));
+    });
+  },
+
+  /** Séries mensais das saídas, no mesmo desenho das entradas: realizado até o mês e forecast até dezembro. */
+  serieSaidas() {
+    const ano = this.anoAtual();
+    const ant = ano - 1;
+    const sel = Number(this.mes) || 1;
+    const defs = this.contasSaida();
+    const soma = (y, m, campo) => defs.reduce((s, def) => s + this.somaSaidaDef(y, def, m, campo, false), 0);
+    const fc = this.forecastLado(ano, "saidas");
+    const meses = Array.from({ length: 12 }, (_, i) => i + 1);
+    const real = meses.map((m) => (m <= sel && this.temMesConta(ano, m) ? soma(ano, m, "r") : null));
+    const orc = meses.map((m) => (this.temMesConta(ano, m) ? soma(ano, m, "o") : null));
+    const semForecast = [];
+    const forecast = meses.map((m, i) => {
+      if (m <= sel) return real[i];
+      if (fc[m] != null) return fc[m];
+      const algum = meses.some((mm) => mm > sel && fc[mm] != null);
+      if (!algum) return null;
+      semForecast.push(m);
+      return orc[i];
+    });
+    return {
+      ant: meses.map((m) => (this.temMesConta(ant, m) ? soma(ant, m, "r") : null)),
+      orc,
+      real,
+      forecast,
+      semForecast
+    };
+  },
+
+  passoEixo(bruto) {
+    if (!(bruto > 0)) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(bruto)));
+    const n = bruto / p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+  },
+
+  graficoLinhasHtml(lado) {
+    const s = lado === "saidas" ? this.serieSaidas() : this.serieEntradas();
+    if (lado === "saidas") {
+      ["ant", "orc", "real", "forecast"].forEach((k) => {
+        s[k] = (s[k] || []).map((v) => (v == null ? null : Math.abs(v)));
+      });
+    }
+    const ano = this.anoAtual();
+    const antN = ano > 1900 ? ano - 1 : 0;
+    const sel = Number(this.mes) || 1;
+    const milhoes = this.escala === "milhoes";
+    const div = milhoes ? 1000000 : 1;
+    const valores = [].concat(s.ant, s.orc, s.real, s.forecast).filter((v) => v != null).map((v) => v / div);
+    const maxV = Math.max(0, ...valores);
+    const minV = Math.min(0, ...valores);
+    const passo = this.passoEixo((maxV - minV) / 6);
+    const topo = Math.max(passo, Math.ceil(maxV / passo) * passo);
+    const base = Math.floor(minV / passo) * passo;
+    const W = 640, H = 240, L = milhoes ? 48 : 64, R = 10, T = 10, B = 28;
+    const x = (m) => L + (m - 0.5) * (W - L - R) / 12;
+    const y = (v) => T + (topo - v / div) / (topo - base) * (H - T - B);
+    const eixoTxt = (t) => milhoes
+      ? t.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : (Math.abs(t) >= 1000000 ? (t / 1000000).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + " mi" : (t / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 0 }) + " mil");
+    const caminho = (serie) => {
+      let d = "";
+      let aberto = false;
+      serie.forEach((v, i) => {
+        if (v == null) { aberto = false; return; }
+        d += (aberto ? " L" : " M") + x(i + 1).toFixed(1) + " " + y(v).toFixed(1);
+        aberto = true;
+      });
+      return d.trim();
+    };
+    const grade = [];
+    for (let t = base, i = 0; t <= topo + passo / 1000 && i < 30; t += passo, i++) {
+      const yy = y(t * div).toFixed(1);
+      grade.push(`<text x="${L - 6}" y="${yy}" class="rcx-ln-eixo-y">${eixoTxt(t)}</text>`);
+    }
+    const letras = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+    const series = [
+      { k: "ant", cls: "is-ant", nome: antN ? String(antN) : "Ano anterior" },
+      { k: "orc", cls: "is-orc", nome: "Orçado" },
+      { k: "forecast", cls: "is-fc", nome: "Forecast" },
+      { k: "real", cls: "is-real", nome: ano ? String(ano) : "Realizado" }
+    ];
+    // Tooltip por mês: a faixa inteira do mês responde ao mouse e mostra ano anterior, orçado, realizado e forecast.
+    this._lnSerie = this._lnSerie || {};
+    this._lnSerie[lado] = { s: s, nomes: { ant: series[0].nome, real: series[3].nome }, ano: ano, sel: sel };
+    const larg = (W - L - R) / 12;
+    const pontos = `<line x1="0" x2="0" y1="${T}" y2="${H - B}" class="rcx-ln-guia" style="display:none"></line>`
+      + letras.map((l, i) => `<rect x="${(L + i * larg).toFixed(1)}" y="${T}" width="${larg.toFixed(1)}" height="${H - T - B}" class="rcx-ln-faixa"`
+        + ` onmouseenter="ResultadoCaixaApp.lnTip(this,'${lado}',${i + 1},${x(i + 1).toFixed(1)})" onmouseleave="ResultadoCaixaApp.lnTipFechar(this)"></rect>`).join("");
+    const legenda = series.filter((se) => s[se.k].some((v) => v != null)).map((se) => `<span class="rcx-ln-leg ${se.cls}"><i></i>${caixaEsc(se.nome)}</span>`).join("");
+    const nomesMes = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    let nota = "";
+    if (!this.forecast) nota = "Suba o forecast para projetar os meses seguintes até dezembro.";
+    else if (s.semForecast.length) nota = `O forecast não tem ${s.semForecast.map((m) => nomesMes[m - 1]).join(", ")}: nesses meses a linha usa o orçado.`;
+    return `<div class="rcx-linhas">
+      <div class="rcx-graf-tit">EVOLUÇÃO MENSAL/${ano || ""}</div>
+      <svg viewBox="0 0 ${W} ${H}" class="rcx-ln-svg" role="img" aria-label="${lado === "saidas" ? "Saídas" : "Entradas"} por mês: ano anterior, orçado, realizado e forecast">
+        ${grade.join("")}
+        <line x1="${x(sel).toFixed(1)}" x2="${x(sel).toFixed(1)}" y1="${T}" y2="${H - B}" class="rcx-ln-sel"></line>
+        ${letras.map((l, i) => `<text x="${x(i + 1).toFixed(1)}" y="${H - 8}" class="rcx-ln-eixo-x${i + 1 === sel ? " is-sel" : ""}">${l}</text>`).join("")}
+        ${series.map((se) => `<path d="${caminho(s[se.k])}" class="rcx-ln ${se.cls}"></path>`).join("")}
+        ${pontos}
+      </svg>
+      <div class="rcx-ln-legenda">${legenda}</div>
+      ${nota ? `<div class="rcx-ln-nota">${caixaEsc(nota)}</div>` : ""}
+      <div class="rcx-ln-tip" role="tooltip" hidden></div>
+    </div>`;
+  },
+
+  /** Mostra o quadro do mês no gráfico de evolução mensal. */
+  lnTip(faixa, lado, m, cx) {
+    const pack = this._lnSerie && this._lnSerie[lado];
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (!pack || !tip) return;
+    const s = pack.s;
+    const i = m - 1;
+    const val = (arr) => (arr && arr[i] != null ? this.fmt(arr[i]) : "—");
+    const fc = m > pack.sel ? val(s.forecast) : "—";
+    const real = m <= pack.sel ? val(s.real) : "—";
+    const linha = (cls, nome, v) => `<div class="rcx-ln-tip-l"><span class="rcx-ln-leg ${cls}"><i></i>${caixaEsc(nome)}</span><b>${v}</b></div>`;
+    const v = (arr) => (arr && arr[i] != null ? Number(arr[i]) : null);
+    let dif = "";
+    const realN = m <= pack.sel ? v(s.real) : v(s.forecast);
+    const orcN = v(s.orc);
+    if (realN != null && orcN != null && Math.abs(orcN) > 0.5) {
+      const p = (realN - orcN) / Math.abs(orcN) * 100;
+      const bom = lado === "saidas" ? realN - orcN <= 0 : realN - orcN >= 0;
+      const pTxt = (lado === "saidas" ? Math.abs(p) : p).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      dif = `<div class="rcx-ln-tip-dif ${bom ? "is-pos" : "is-neg"}">${m <= pack.sel ? "Realizado" : "Forecast"} x orçado: ${this.fmt(realN - orcN, lado === "saidas")} (${pTxt}%)</div>`;
+    }
+    tip.innerHTML = `<div class="rcx-ln-tip-tit">${caixaEsc((this.MESES[i] || "") + "/" + (pack.ano || ""))}</div>`
+      + linha("is-ant", pack.nomes.ant, val(s.ant))
+      + linha("is-orc", "Orçado", val(s.orc))
+      + linha("is-real", "Realizado", real)
+      + linha("is-fc", "Forecast", fc)
+      + dif;
+    tip.hidden = false;
+    const svg = faixa.ownerSVGElement;
+    const guia = svg && svg.querySelector(".rcx-ln-guia");
+    if (guia) {
+      guia.setAttribute("x1", cx);
+      guia.setAttribute("x2", cx);
+      guia.style.display = "";
+    }
+    const rb = box.getBoundingClientRect();
+    const rf = faixa.getBoundingClientRect();
+    const meio = rf.left - rb.left + rf.width / 2;
+    const largTip = tip.offsetWidth || 190;
+    let left = meio + 14;
+    if (left + largTip > rb.width - 6) left = meio - largTip - 14;
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = Math.max(4, rf.top - rb.top + 6) + "px";
+  },
+
+  lnTipFechar(faixa) {
+    const box = faixa && faixa.closest(".rcx-linhas");
+    const tip = box && box.querySelector(".rcx-ln-tip");
+    if (tip) tip.hidden = true;
+    const guia = faixa && faixa.ownerSVGElement && faixa.ownerSVGElement.querySelector(".rcx-ln-guia");
+    if (guia) guia.style.display = "none";
+  },
+
+  gradeHtml(rotulo, body, total, totalA, saida, ordemAcumReal) {
+    if (!body) return "";
+    const atual = this.anoAtual();
+    const antH = atual > 1900 ? String(atual - 1) : "Ano ant.";
+    const mesNome = this.MESES[(Number(this.mes) || 1) - 1] || "";
+    const seta = `<i data-lucide="arrow-down" class="rcx-ordem"></i>`;
+    const sub = (acum) => `<th class="rcx-sep">${caixaEsc(antH)}</th><th>Orçado</th>${acum && ordemAcumReal
+      ? `<th class="rcx-th-ordem" title="Ordenado pelo realizado acumulado, da maior saída para a menor">${seta} Real</th>`
+      : "<th>Real</th>"}<th>Var.</th><th>Var. %</th>`;
+    return `<div class="rcx-scroll">
+      <table class="rcx-grid">
+        <colgroup><col class="rcx-c-nome">${"<col>".repeat(10)}</colgroup>
+        <thead>
+          <tr class="rcx-h1">
+            <th rowspan="2" class="rcx-h-nome">${caixaEsc(rotulo)}</th>
+            <th colspan="5" class="rcx-sep">Mensal · ${mesNome}/${atual || ""}</th>
+            <th colspan="5" class="rcx-sep">Acumulado · Jan a ${mesNome}</th>
+          </tr>
+          <tr class="rcx-h2">${sub(false)}${sub(true)}</tr>
+        </thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr>
+          <td class="rcx-nome">Total</td>
+          ${this.blocoNums(total, saida)}
+          ${this.blocoNums(totalA, saida)}
+        </tr></tfoot>
+      </table>
+    </div>`;
+  },
+
+  secaoHtml(icone, texto, cls) {
+    return `<tr class="rcx-secao ${cls || ""}"><td colspan="11"><i data-lucide="${icone}"></i> ${texto}</td></tr>`;
+  },
+
+  outrosNome(qtd) {
+    return `<i data-lucide="${this.outrosAberto ? "chevron-down" : "chevron-right"}"></i> Outros <span class="rcx-qtd">${qtd}</span>`;
+  },
+
+  linhaPronta(r, cls, nomeHtml, click, saida, dica) {
+    const title = dica ? (r.nome + " — " + dica) : r.nome;
+    return `<tr class="${cls || ""}"${click ? ` onclick="${click}"` : ""}>
+      <td class="rcx-nome" title="${caixaEsc(title)}">${nomeHtml || caixaEsc(r.nome)}</td>
+      ${this.blocoNums(r.mensal, saida)}
+      ${this.blocoNums(r.acum, saida)}
+    </tr>`;
+  },
+
+  selecionarLinha(lado, chaveEnc) {
+    let chave = "";
+    try { chave = decodeURIComponent(String(chaveEnc || "")); } catch (e) { chave = String(chaveEnc || ""); }
+    if (!chave) return;
+    const atual = this.filtroLinha;
+    if (atual && atual.lado === lado && atual.chave === chave) this.filtroLinha = null;
+    else this.filtroLinha = { lado: lado, chave: chave, nome: this.nomeDaLinha(lado, chave) };
+    this.renderMantendoScroll();
+  },
+
+  limparFiltroLinha() {
+    if (!this.filtroLinha) return;
+    this.filtroLinha = null;
+    this.renderMantendoScroll();
+  },
+
+  nomeDaLinha(lado, chave) {
+    if (lado === "saidas") {
+      const def = this.contasSaida().find((d) => d.id === chave);
+      return (def && def.nome) || chave;
+    }
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === chave);
+    return (row && row.nome) || chave;
+  },
+
+  filtroMatriz(lado) {
+    const f = this.filtroLinha;
+    if (!f || f.lado !== lado) return null;
+    if (lado === "saidas") return { conta: f.chave, nome: f.nome || this.nomeDaLinha(lado, f.chave), ccs: null };
+    const pack = this._packEntrada || this.linhasTabela("entradas");
+    const row = (pack.rows || []).find((r) => this.fold(r.nome) === f.chave);
+    const ccs = new Set();
+    if (row) (row.ids || []).forEach((id) => {
+      const s = String(id);
+      ccs.add(s);
+      const d = s.replace(/\D/g, "");
+      if (d) ccs.add(d);
+    });
+    return { conta: "", nome: (row && row.nome) || f.nome || "", ccs: ccs };
+  },
+
+  ccNoConjunto(set, ccId) {
+    if (!set) return true;
+    const s = String(ccId);
+    if (set.has(s)) return true;
+    const d = s.replace(/\D/g, "");
+    return !!(d && set.has(d));
+  },
+
+  botaoVerTodas() {
+    return `<button type="button" class="rcx-matriz-limpar" onclick="ResultadoCaixaApp.limparFiltroLinha()">Ver todas</button>`;
+  },
+
+  somaCodigos(contas, def, mes, campo, ate) {
+    const tem = (def.codigos || []).filter((c) => contas[c]);
+    let codes = tem;
+    if (!codes.length && def.filhos) codes = Object.keys(contas).filter((c) => def.filhos.test(c));
+    if (!codes.length && def.pai && contas[def.pai]) codes = [def.pai];
+    let s = 0;
+    const fim = Number(mes);
+    const ini = ate ? 1 : fim;
+    codes.forEach((code) => {
+      const bag = contas[code];
+      if (!bag || !bag.meses) return;
+      for (let m = ini; m <= fim; m++) {
+        const cel = bag.meses[String(m)];
+        if (cel) s += Number(cel[campo]) || 0;
+      }
+    });
+    return s;
+  },
+
+  semContas(ano) {
+    const a = this.anoDados(ano);
+    if (!a) return false;
+    const nomes = Object.keys(a.arquivos || {}).filter((n) => !this.estaFora(String(ano), n));
+    if (!nomes.length) return false;
+    return nomes.every((n) => !a.arquivos[n].contas);
+  },
+
+  somaSaidaDef(ano, def, mes, campo, ate) {
+    const a = this.anoDados(ano);
+    if (!a) return 0;
+    let s = 0;
+    Object.keys(a.arquivos || {}).forEach((nome) => {
+      if (this.estaFora(String(ano), nome)) return;
+      const arq = a.arquivos[nome] || {};
+      const pct = this.pctArquivo(arq, nome);
+      const porCc = arq.contasPorCc;
+      if (porCc && Object.keys(porCc).length) {
+        Object.keys(porCc).forEach((ccId) => {
+          s += this.somaCodigos(porCc[ccId].contas || {}, def, mes, campo, ate) * pct;
+        });
+      } else if (arq.contas) {
+        s += this.somaCodigos(arq.contas, def, mes, campo, ate) * pct;
+      }
+    });
+    return s;
+  },
+
+  dfcTem(lado) {
+    const ano = this.anoAtual();
+    const uso = this.empresasUsadas();
+    const key = (ano - 1) + "|12|" + lado + "|" + uso.ids.join(",");
+    return this._dfcKey === key && !this.dfcLendo && (this.dfcLinhas || []).length > 0;
+  },
+
+  valorDfc(def, mes, ate) {
+    const fim = Number(mes) || 1;
+    const ini = ate ? 1 : fim;
+    let s = 0;
+    (this.dfcLinhas || []).forEach((l) => {
+      if (!l || !this.casaNo(l.node, def)) return;
+      if (l.mes < ini || l.mes > fim) return;
+      const fator = this.agrupar ? (l.empresa ? this.pctEmpresaId(l.empresa) : 0) : 1;
+      s += (Number(l.valor) || 0) * fator;
+    });
+    return s;
+  },
+
+  linhasSaida() {
+    const ano = this.anoAtual();
+    const ant = ano - 1;
+    const mes = Number(this.mes) || 1;
+    const rows = this.contasSaida().map((def) => {
+      const valor = (y, campo, ate) => this.somaSaidaDef(y, def, mes, campo, ate);
+      return {
+        key: def.id,
+        nome: def.nome,
+        destaque: !!def.destaque,
+        def: def,
+        mensal: { ant: valor(ant, "r", false), orc: valor(ano, "o", false), real: valor(ano, "r", false) },
+        acum: { ant: valor(ant, "r", true), orc: valor(ano, "o", true), real: valor(ano, "r", true) }
+      };
+    });
+    return { ano, ant, rows };
+  },
+
+  aplicarDfcContas(rows, mes) {
+    (this.dfcLinhas || []).forEach((l) => {
+      const id = String(l.node || "");
+      let row = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (this.casaNo(id, rows[i].def)) { row = rows[i]; break; }
+      }
+      if (!row) return;
+      const v = -(Number(l.valor) || 0);
+      if (l.mes === mes) row.mensal.ant += v;
+      if (l.mes >= 1 && l.mes <= mes) row.acum.ant += v;
+    });
+  },
+
+  orcamentoHtml(lado) {
+    const faixa = this.faixaHtml(lado);
+    if (this.lendo) return faixa + this.loaderHtml();
+    if (!Object.keys(this.anos || {}).length) return faixa;
+    if (lado === "saidas") return faixa + this.saidasHtml();
+    const pack = this.linhasTabela(lado);
+    this._packEntrada = pack;
+    if (this.filtroLinha && this.filtroLinha.lado === "entradas" && !pack.rows.some((r) => this.fold(r.nome) === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
+    if (!pack.rows.length) return faixa + `<p class="rcx-vazio">Nenhum valor nesse mês para os grupos desta aba.</p>`;
+    const vista = this.destacar(pack.rows);
+    const linha = (r, cls) => {
+      const chave = this.fold(r.nome);
+      const sel = this.filtroLinha && this.filtroLinha.lado === "entradas" && this.filtroLinha.chave === chave;
+      const click = `ResultadoCaixaApp.selecionarLinha('entradas','${encodeURIComponent(chave)}')`;
+      const dica = sel ? "Clique para ver todas as empresas de novo" : "Clique para ver só este produto na tabela de baixo";
+      return this.linhaPronta(r, ((cls || "") + " rcx-clicavel" + (sel ? " is-sel" : "")).trim(), "", click, false, dica);
+    };
+    let corpo = "";
+    if (vista.pos.length) corpo += this.secaoHtml("trending-up", "Acima do orçado no acumulado", "is-pos") + vista.pos.map((r) => linha(r)).join("");
+    if (vista.neg.length) corpo += this.secaoHtml("trending-down", "Abaixo do orçado no acumulado", "is-neg") + vista.neg.map((r) => linha(r)).join("");
+    if (vista.outros.length) {
+      const soma = { nome: "Outros", mensal: this.somaBloco(vista.outros, "mensal"), acum: this.somaBloco(vista.outros, "acum") };
+      corpo += this.linhaPronta(soma, "rcx-outros", this.outrosNome(vista.outros.length), "ResultadoCaixaApp.toggleOutros()", false);
+      if (this.outrosAberto) corpo += vista.outros.map((r) => linha(r, "rcx-filho")).join("");
+    }
+    const total = this.somaBloco(pack.rows, "mensal");
+    const totalA = this.somaBloco(pack.rows, "acum");
+    return faixa
+      + `<div class="rcx-topo">${this.graficoMesHtml(total)}${this.graficoLinhasHtml("entradas")}${this.graficoTotaisHtml("entradas")}</div>`
+      + this.gradeHtml("Produto", corpo, total, totalA, false)
+      + this.matrizDfcHtml("entradas");
+  },
+
+  /* ===== Imagem para o PowerPoint =====
+   * Desenha os gráficos e a tabela no mesmo padrão do slide "Entradas/Saídas consolidadas"
+   * (tabela estilo Excel: cabeçalho cinza, variação acumulada verde/vermelha, total cinza) e copia como PNG.
+   * Medidas tiradas do slide: o bloco ocupa ~22,8 cm de largura, na proporção ~1,46 : 1 (com 8 linhas + Outros + Total).
+   */
+  dadosImagemPpt(lado) {
+    if (lado === "saidas") {
+      const pack = this.linhasSaida();
+      const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
+      // Saídas em valor positivo (como no slide); as 7 maiores pelo realizado acumulado e o resto em OUTROS.
+      // Inverte o sinal (saída = positivo; estorno/devolução dentro da conta = negativo) em vez de tirar o sinal:
+      // assim OUTROS e TOTAL abatem o que voltou, igual à tela.
+      const giro = (b) => ({ ant: -(Number(b.ant) || 0), orc: -(Number(b.orc) || 0), real: -(Number(b.real) || 0) });
+      const todos = pack.rows.filter(vivo).map((r) => ({ nome: r.nome, mensal: giro(r.mensal), acum: giro(r.acum) }))
+        .sort((a, b) => (b.acum.real - a.acum.real) || String(a.nome || "").localeCompare(String(b.nome || ""), "pt"));
+      const top = todos.slice(0, 7);
+      const resto = todos.slice(7);
+      return {
+        titulo: "Saídas por Conta",
+        rotulo: "CONTA",
+        rows: top,
+        outros: resto.length ? { nome: "OUTROS", mensal: this.somaBloco(resto, "mensal"), acum: this.somaBloco(resto, "acum") } : null,
+        total: this.somaBloco(todos, "mensal"),
+        totalA: this.somaBloco(todos, "acum"),
+        ordem: "real",
+        saida: true
+      };
+    }
+    const pack = this.linhasTabela("entradas");
+    const vista = this.destacar(pack.rows);
+    const rows = vista.pos.concat(vista.neg);
+    const outros = vista.outros.length
+      ? { nome: "OUTROS", mensal: this.somaBloco(vista.outros, "mensal"), acum: this.somaBloco(vista.outros, "acum") }
+      : null;
+    return {
+      titulo: "Entradas por Empreendimento",
+      rotulo: "PRODUTO",
+      rows: rows,
+      outros: outros,
+      total: this.somaBloco(pack.rows, "mensal"),
+      totalA: this.somaBloco(pack.rows, "acum"),
+      ordem: "var"
+    };
+  },
+
+  desenharImagemPpt(lado) {
+    const d = this.dadosImagemPpt(lado);
+    const serie = lado === "saidas" ? this.serieSaidas() : this.serieEntradas();
+    if (lado === "saidas") {
+      ["ant", "orc", "real", "forecast"].forEach((k) => { serie[k] = (serie[k] || []).map((v) => (v == null ? null : Math.abs(v))); });
+    }
+    const ano = this.anoAtual();
+    const antN = ano > 1900 ? ano - 1 : 0;
+    const sel = Number(this.mes) || 1;
+    const MES = ["JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"];
+    const COR = {
+      verdeTit: "#1E5E3E", cinza: "#A6A6A6", cinzaClaro: "#D9D9D9", laranja: "#ED7D31", laranjaClaro: "#F8CBAD",
+      verde: "#0E4B2E", verdeClaro: "#CDEBD6", verdeFc: "#00B050", texto: "#000000", textoSuave: "#595959",
+      pos: "#00B050", neg: "#FF0000", cabec: "#D9D9D9", linhaTab: "#7F7F7F"
+    };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n2 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // Medidas em "px de slide" (96 por polegada); a imagem sai 3x maior para ficar nítida no projetor.
+    const W = 861;
+    const RH = 25;
+    const linhasTab = d.rows.length + (d.outros ? 1 : 0) + 1;
+    const TOPO_TAB = 297;
+    const H = TOPO_TAB + 47 + linhasTab * RH + 4;
+    const S = 3;
+    const cv = document.createElement("canvas");
+    cv.width = W * S;
+    cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF";
+    g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 14) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto;
+      g.textAlign = o.al || "left";
+      g.textBaseline = o.base || "middle";
+      g.fillText(t, x, y);
+    };
+
+    // 1) Mês: três barras
+    const total = d.total;
+    txt(MES[sel - 1] + "/" + ano, 97, 16, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const barras = [
+      { v: Math.abs(mi(total.ant)), rot: String(antN || "Ano ant."), cor: COR.cinza, corVal: COR.textoSuave, txt: n2(Math.abs(total.ant)) },
+      { v: Math.abs(mi(total.orc)), rot: "Orçado", cor: COR.laranja, corVal: COR.laranja, txt: n2(Math.abs(total.orc)) },
+      { v: Math.abs(mi(total.real)), rot: String(ano || "Atual"), cor: COR.verde, corVal: COR.verde, txt: n2(Math.abs(total.real)) }
+    ];
+    const maiorMes = Math.max(...barras.map((b) => b.v), 0.0001);
+    const BASE = 205;
+    [49, 107, 171].forEach((cx, i) => {
+      const b = barras[i];
+      const h = b.v / maiorMes * 112;
+      g.fillStyle = b.cor;
+      g.fillRect(cx - 21, BASE - h, 42, h);
+      txt(b.txt, cx, BASE - h - 10, { peso: "bold", tam: 14, cor: b.corVal, al: "center" });
+      txt(b.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 2) Evolução mensal: linhas
+    const PX0 = 277, PX1 = 576, PY0 = 22, PY1 = 171;
+    const vals = [].concat(serie.ant, serie.orc, serie.real, serie.forecast).filter((v) => v != null).map(mi);
+    const passo = this.passoEixo((Math.max(...vals, 0.0001)) / 5);
+    const topo = Math.max(passo * 6, Math.ceil(Math.max(...vals, 0.0001) / passo) * passo);
+    const yDe = (v) => PY1 - (v / topo) * (PY1 - PY0);
+    const xDe = (i) => PX0 + (i + 0.5) * ((PX1 - PX0) / 12);
+    for (let v = 0; v <= topo + 1e-9; v += passo) {
+      txt(v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), PX0 - 8, yDe(v), { tam: 9, cor: COR.textoSuave, al: "right" });
+    }
+    g.strokeStyle = "#D9D9D9";
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(PX0, PY1 + 0.5); g.lineTo(PX1, PY1 + 0.5); g.stroke();
+    ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"].forEach((l, i) => txt(l, xDe(i), 189, { tam: 10, cor: COR.textoSuave, al: "center" }));
+    const linha = (arr, cor, larg, ate) => {
+      g.strokeStyle = cor;
+      g.lineWidth = larg;
+      g.lineJoin = "round";
+      g.beginPath();
+      let aberto = false;
+      arr.forEach((v, i) => {
+        if (v == null || (ate && i + 1 > ate)) { aberto = false; return; }
+        const x = xDe(i), y = yDe(mi(v));
+        if (!aberto) { g.moveTo(x, y); aberto = true; } else g.lineTo(x, y);
+      });
+      g.stroke();
+    };
+    linha(serie.ant, "#BFBFBF", 2.2);
+    linha(serie.orc, COR.laranja, 2.4);
+    const fc = serie.forecast.map((v, i) => (i + 1 >= sel ? v : null));
+    if (sel < 12) linha(fc, COR.verdeFc, 2.4);
+    linha(serie.real, COR.verde, 2.6, sel);
+    const legenda = [["Orçado", COR.laranja], [String(ano || ""), COR.verde], ["Forecast", COR.verdeFc]];
+    g.font = "normal 13px " + FONTE;
+    const largs = legenda.map(([t]) => 26 + g.measureText(t).width + 16);
+    let lx = 426 - largs.reduce((a, b) => a + b, 0) / 2;
+    legenda.forEach(([t, cor], i) => {
+      g.strokeStyle = cor; g.lineWidth = 2.6;
+      g.beginPath(); g.moveTo(lx, 215); g.lineTo(lx + 20, 215); g.stroke();
+      txt(t, lx + 26, 215, { tam: 13, cor: COR.textoSuave });
+      lx += largs[i];
+    });
+
+    // 3) Totais: colunas empilhadas (escuro = jan até o mês; claro = até dezembro)
+    txt("TOTAIS", 729, 30, { peso: "bold", tam: 18, cor: COR.verdeTit, al: "center" });
+    const soma = (s, de, ate) => (s || []).slice(de - 1, ate).reduce((t, v) => t + (Number(v) || 0), 0);
+    const cols = [
+      { rot: String(antN || "Ano ant."), e: soma(serie.ant, 1, sel), c: soma(serie.ant, sel + 1, 12), ce: COR.cinza, cc: COR.cinzaClaro, cv: COR.textoSuave },
+      { rot: "Orçado", e: soma(serie.orc, 1, sel), c: soma(serie.orc, sel + 1, 12), ce: COR.laranja, cc: COR.laranjaClaro, cv: COR.laranja },
+      { rot: "Forecast", e: soma(serie.real, 1, sel), c: sel < 12 ? soma(serie.forecast, sel + 1, 12) : 0, ce: COR.verde, cc: COR.verdeClaro, cv: COR.verdeFc,
+        marca: sel < 12 && (!this.forecast || (serie.semForecast || []).length) }
+    ];
+    const maiorTot = Math.max(...cols.map((c) => Math.abs(mi(c.e)) + Math.abs(mi(c.c))), 0.0001);
+    [657, 729, 801].forEach((cx, i) => {
+      const c = cols[i];
+      const he = Math.abs(mi(c.e)) / maiorTot * 136;
+      const hc = Math.abs(mi(c.c)) / maiorTot * 136;
+      g.fillStyle = c.ce; g.fillRect(cx - 23, BASE - he, 46, he);
+      g.fillStyle = c.cc; g.fillRect(cx - 23, BASE - he - hc, 46, hc);
+      if (he >= 16) txt(n2(Math.abs(c.e)), cx, BASE - he / 2, { peso: "bold", tam: 10, cor: "#FFFFFF", al: "center" });
+      if (hc >= 16) txt(n2(Math.abs(c.c)), cx, BASE - he - hc / 2, { peso: "bold", tam: 10, cor: "#404040", al: "center" });
+      txt(n2(Math.abs(c.e) + Math.abs(c.c)) + (c.marca ? " *" : ""), cx, BASE - he - hc - 10, { peso: "bold", tam: 14, cor: c.cv, al: "center" });
+      txt(c.rot, cx, 223, { tam: 14, al: "center" });
+    });
+
+    // 4) Tabela no padrão Excel do slide
+    txt(d.titulo, W / 2, 273, { peso: "bold", tam: 19, cor: COR.verdeTit, al: "center" });
+    const X = [0, 241];
+    for (let i = 0; i < 5; i++) X.push(241 + (i + 1) * 59.2);
+    for (let i = 0; i < 5; i++) X.push(537 + (i + 1) * 64.8);
+    const yH1 = TOPO_TAB, yH2 = TOPO_TAB + 23, yB = TOPO_TAB + 47;
+    g.fillStyle = COR.cabec;
+    g.fillRect(0, yH1, W, 47);
+    txt(d.rotulo, X[1] / 2, yH1 + 23.5, { peso: "bold", tam: 14, al: "center" });
+    txt("MENSAL", (X[1] + X[6]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    txt("ACUMULADO", (X[6] + X[11]) / 2, yH1 + 12, { peso: "bold", tam: 14, al: "center" });
+    const sub = [String(antN || "Ano ant."), "Orç.", "Real", "Var. R$", "Var. %"];
+    [1, 6].forEach((ini, bloco) => {
+      sub.forEach((s, j) => {
+        let rot = s;
+        if (bloco === 1 && d.ordem === "var" && j === 3) rot = s + " ↓";
+        if (bloco === 1 && d.ordem === "real" && j === 2) rot = s + " ↓";
+        txt(rot, X[ini + j + 1] - 6, yH2 + 12, { peso: "bold", tam: 14, al: "right" });
+      });
+    });
+    const linhas = d.rows.map((r) => ({ r, tipo: "" }));
+    if (d.outros) linhas.push({ r: d.outros, tipo: "outros" });
+    linhas.push({ r: { nome: "TOTAL", mensal: d.total, acum: d.totalA }, tipo: "total" });
+    const recortar = (t, max) => {
+      let s = String(t || "");
+      g.font = "normal 14px " + FONTE;
+      if (g.measureText(s).width <= max) return s;
+      while (s.length > 1 && g.measureText(s + "…").width > max) s = s.slice(0, -1);
+      return s + "…";
+    };
+    linhas.forEach(({ r, tipo }, i) => {
+      const y = yB + i * RH;
+      const total = tipo === "total";
+      if (total) { g.fillStyle = COR.cabec; g.fillRect(0, y, W, RH); }
+      const peso = total ? "bold" : "normal";
+      txt(total ? "TOTAL" : recortar(String(r.nome || "").toUpperCase(), X[1] - 12), 6, y + RH / 2, { peso, tam: 14 });
+      [[r.mensal, 1, false], [r.acum, 6, true]].forEach(([b, ini, acum]) => {
+        const v = b.real - b.orc;
+        // Entradas: realizar acima do orçado é bom (verde). Saídas: gastar acima do orçado é ruim (vermelho).
+        const bom = d.saida ? v < -0.5 : v > 0.5;
+        const ruim = d.saida ? v > 0.5 : v < -0.5;
+        const corVar = acum && !total ? (bom ? COR.pos : (ruim ? COR.neg : COR.texto)) : COR.texto;
+        const pesoVar = acum ? "bold" : peso;
+        // Saídas já chegam em valor positivo (dadosImagemPpt); a variação mantém o sinal, como no slide:
+        // gastou menos que o orçado = negativo (verde), gastou mais = positivo (vermelho).
+        const pRaw = this.pct(b.real, b.orc);
+        const pctTxt = pRaw == null ? "—" : pRaw.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+        const cel = [n2(b.ant), n2(b.orc), n2(b.real), n2(v), pctTxt];
+        cel.forEach((c, j) => txt(c, X[ini + j + 1] - 6, y + RH / 2, { peso: j >= 3 ? pesoVar : peso, tam: 14, cor: j >= 3 ? corVar : COR.texto, al: "right" }));
+      });
+    });
+    // Linhas da tabela: separadores dos blocos e borda do cabeçalho
+    g.strokeStyle = COR.linhaTab;
+    g.lineWidth = 1;
+    const fimTab = yB + linhas.length * RH;
+    [X[1], X[6]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, yH1); g.lineTo(x + 0.5, fimTab); g.stroke(); });
+    g.beginPath(); g.moveTo(X[1], yH2 + 0.5); g.lineTo(W, yH2 + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, yB + 0.5); g.lineTo(W, yB + 0.5); g.stroke();
+    g.beginPath(); g.moveTo(0, fimTab - RH + 0.5); g.lineTo(W, fimTab - RH + 0.5); g.stroke();
+    return cv;
+  },
+
+  /**
+   * Caixa ML no padrão do slide "Fluxo de caixa MLDU": cartões Orçamento/Forecast e a tabela
+   * (acumulado, mês, meses seguintes em forecast, total orçado e total forecast).
+   * Saldo inicial de janeiro = contas correntes marcadas; cada coluna começa no saldo final da anterior.
+   * Medidas do slide: bloco ~32 cm de largura, proporção ~1,96 : 1.
+   */
+  desenharImagemCaixaPpt() {
+    const dados = this.mlDados;
+    if (!dados || !(dados.linhas || []).length) throw new Error("Abra a aba Caixa ML e espere carregar antes de copiar.");
+    const sel = Number(this.mes) || 1;
+    const MES = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+    const COR = { verde: "#1D5A36", verdeTxt: "#1E6B3A", laranja: "#E26B0A", cinzaNum: "#595959", linhaClara: "#F2F2F2",
+      cinzaFcf: "#C9C9C9", cinzaSaldo: "#D9D9D9", pos: "#00A651", neg: "#FF0000", texto: "#000000", borda: "#1D5A36" };
+    const FONTE = "Calibri, 'Segoe UI', Arial, sans-serif";
+    const mi = (v) => (Number(v) || 0) / 1000000;
+    const n3 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+    const m1 = (v) => mi(v).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + " M";
+    const soma = (meses, de, ate, k) => { let t = 0; for (let i = de; i <= ate; i++) t += Number((meses[i - 1] || {})[k]) || 0; return t; };
+
+    // Linhas: grupos de 1º nível do DFC (a variação de caixa vai no rodapé)
+    const varLinha = (dados.linhas || []).find((l) => l.id === "g_12");
+    const grupos = (dados.linhas || []).filter((l) => l.level === 0 && l.id !== "g_12");
+    const escolhidas = new Set(this.mlSelecionadas(dados).map(String));
+    const abertura = (dados.contas || []).filter((c) => escolhidas.has(String(c.numero))).reduce((s, c) => s + (Number(c.abertura) || 0), 0);
+    const vm = (varLinha && varLinha.meses) || Array.from({ length: 12 }, () => ({ o: 0, r: 0, f: 0 }));
+
+    // Colunas
+    const cols = [];
+    if (sel > 1) cols.push({ tipo: "acum", rot: "ACUMULADO JAN - " + MES[sel - 2], sub: true });
+    cols.push({ tipo: "mes", rot: MES[sel - 1], sub: true });
+    const futuros = [];
+    for (let m = sel + 1; m <= 12; m++) futuros.push(m);
+    // Saldos: orçado em cadeia pelo orçado; realizado em cadeia pelo realizado e, depois do mês, pelo forecast
+    const ini = { acumO: abertura, acumR: abertura };
+    const varAcumO = sel > 1 ? soma(vm, 1, sel - 1, "o") : 0;
+    const varAcumR = sel > 1 ? soma(vm, 1, sel - 1, "r") : 0;
+    const iniMesO = abertura + varAcumO, iniMesR = abertura + varAcumR;
+    const varMesO = Number(vm[sel - 1].o) || 0, varMesR = Number(vm[sel - 1].r) || 0;
+    let corrente = iniMesR + varMesR;
+    const fut = futuros.map((m) => { const i0 = corrente; const v = Number(vm[m - 1].f) || 0; corrente = i0 + v; return { m, ini: i0, fim: corrente, v }; });
+    const totOrcVar = soma(vm, 1, 12, "o");
+    const totFcVar = soma(vm, 1, sel, "r") + soma(vm, sel + 1, 12, "f");
+
+    // Medidas em px de slide (96/pol.), imagem 3x para nitidez
+    const W = 1218, S = 3;
+    const CW = { conta: 277, n: 66.5, tOrc: 70, tFc: 98 };
+    const nNum = (sel > 1 ? 3 : 0) + 3 + futuros.length;
+    const TW = CW.conta + nNum * CW.n + CW.tOrc + CW.tFc;
+    const X0 = Math.max(0, (W - TW) / 2);
+    const RH = 26.4, HDR = 53, TOPO = 183, GAP = 9;
+    const nLinhas = grupos.length + 3;
+    const H = Math.ceil(TOPO + HDR + nLinhas * RH + 2 * GAP + 4);
+    const cv = document.createElement("canvas");
+    cv.width = W * S; cv.height = H * S;
+    const g = cv.getContext("2d");
+    g.scale(S, S);
+    g.fillStyle = "#FFFFFF"; g.fillRect(0, 0, W, H);
+    const txt = (t, x, y, o) => {
+      o = o || {};
+      g.font = (o.peso || "normal") + " " + (o.tam || 13) + "px " + FONTE;
+      g.fillStyle = o.cor || COR.texto; g.textAlign = o.al || "left"; g.textBaseline = "middle";
+      g.fillText(t, x, y);
+    };
+    const caixaArred = (x, y, w, h, r) => {
+      g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+      g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+    };
+    const seta = (x, y, sobe, cor) => {
+      g.fillStyle = cor; g.beginPath();
+      if (sobe) { g.moveTo(x, y - 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y + 7); g.lineTo(x + 2.5, y + 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      else { g.moveTo(x, y + 7); g.lineTo(x - 6, y); g.lineTo(x - 2.5, y); g.lineTo(x - 2.5, y - 7); g.lineTo(x + 2.5, y - 7); g.lineTo(x + 2.5, y); g.lineTo(x + 6, y); }
+      g.closePath(); g.fill();
+    };
+
+    // 1) Cartões Orçamento / Forecast
+    const cartao = (x0, titulo, varTotal) => {
+      const w = 596, h = 158;
+      caixaArred(x0 + 0.5, 0.5, w - 1, h - 1, 22);
+      g.strokeStyle = COR.borda; g.lineWidth = 1.2; g.stroke();
+      txt(titulo, x0 + w / 2, 18, { peso: "bold", tam: 21, cor: COR.verde, al: "center" });
+      const fim = abertura + varTotal;
+      const pct = Math.abs(abertura) > 0.5 ? (fim / abertura - 1) * 100 : 0;
+      const terco = w / 3;
+      [1, 2].forEach((k) => { g.strokeStyle = COR.borda; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0 + terco * k, 40); g.lineTo(x0 + terco * k, 145); g.stroke(); });
+      const cx = (k) => x0 + terco * k + terco / 2;
+      txt("Saldo inicial", cx(0), 49, { tam: 14, al: "center" });
+      txt("Variação de Caixa", cx(1), 49, { tam: 14, al: "center" });
+      txt("Saldo Final", cx(2), 49, { tam: 14, al: "center" });
+      txt(m1(abertura), cx(0), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt(m1(varTotal), cx(1), 92, { peso: "bold", tam: 44, cor: varTotal >= 0 ? COR.pos : COR.neg, al: "center" });
+      txt(m1(fim), cx(2), 92, { tam: 44, cor: COR.cinzaNum, al: "center" });
+      txt("100%", cx(0), 132, { peso: "bold", tam: 18, cor: COR.cinzaNum, al: "center" });
+      const pctTxt = Math.round(pct).toLocaleString("pt-BR") + "%";
+      const corPct = pct >= 0 ? COR.pos : COR.neg;
+      g.font = "bold 18px " + FONTE;
+      const lw = g.measureText(pctTxt).width;
+      seta(cx(2) - lw / 2 - 14, 132, pct >= 0, corPct);
+      txt(pctTxt, cx(2) + 6, 132, { peso: "bold", tam: 18, cor: corPct, al: "center" });
+    };
+    cartao(0, "ORÇAMENTO", totOrcVar);
+    cartao(W - 596, "FORECAST", totFcVar);
+
+    // 2) Tabela
+    const xs = [X0, X0 + CW.conta];
+    for (let i = 0; i < nNum; i++) xs.push(xs[xs.length - 1] + CW.n);
+    xs.push(xs[xs.length - 1] + CW.tOrc);
+    xs.push(xs[xs.length - 1] + CW.tFc);
+    const iFut = 1 + (sel > 1 ? 3 : 0) + 3;          // índice em xs onde começam os meses futuros
+    const iTot = iFut + futuros.length;               // TOTAL ORÇ.
+    const y0 = TOPO;
+    g.fillStyle = COR.verde; g.fillRect(xs[0], y0, xs[iFut] - xs[0], HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iFut], y0, xs[iTot] - xs[iFut], HDR);
+    g.fillStyle = COR.verde; g.fillRect(xs[iTot], y0, CW.tOrc, HDR);
+    g.fillStyle = COR.laranja; g.fillRect(xs[iTot + 1], y0, CW.tFc, HDR);
+    const branco = { peso: "bold", tam: 12.5, cor: "#FFFFFF", al: "center" };
+    txt("Conta", xs[0] + 4, y0 + 40, Object.assign({}, branco, { al: "left" }));
+    let k = 1;
+    if (sel > 1) {
+      txt(cols[0].rot, (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+      ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+      k += 3;
+    }
+    txt(MES[sel - 1], (xs[k] + xs[k + 3]) / 2, y0 + 15, branco);
+    ["ORÇ.", "REAL", "Var. $"].forEach((s, j) => txt(s, xs[k + j + 1] - 5, y0 + 40, Object.assign({}, branco, { al: "right" })));
+    futuros.forEach((m, j) => txt(MES[m - 1], (xs[iFut + j] + xs[iFut + j + 1]) / 2, y0 + 15, branco));
+    txt("TOTAL", xs[iTot] + CW.tOrc / 2, y0 + 15, branco);
+    txt("ORÇ.", xs[iTot] + CW.tOrc / 2, y0 + 40, branco);
+    txt("TOTAL", xs[iTot + 1] + CW.tFc / 2, y0 + 15, branco);
+    txt("FORECAST", xs[iTot + 1] + CW.tFc / 2, y0 + 40, branco);
+
+    const valores = (meses) => {
+      const out = [];
+      if (sel > 1) { const o = soma(meses, 1, sel - 1, "o"), r = soma(meses, 1, sel - 1, "r"); out.push(o, r, r - o); }
+      const o = Number(meses[sel - 1].o) || 0, r = Number(meses[sel - 1].r) || 0;
+      out.push(o, r, r - o);
+      futuros.forEach((m) => out.push(Number(meses[m - 1].f) || 0));
+      out.push(soma(meses, 1, 12, "o"), soma(meses, 1, sel, "r") + soma(meses, sel + 1, 12, "f"));
+      return out;
+    };
+    let y = y0 + HDR;
+    const linha = (nome, vals, estilo) => {
+      if (estilo.fundo) { g.fillStyle = estilo.fundo; g.fillRect(xs[0], y, xs[xs.length - 1] - xs[0], RH); }
+      txt(nome, xs[0] + 4, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNome || COR.texto });
+      vals.forEach((v, j) => txt(n3(v), xs[j + 2] - 5, y + RH / 2, { peso: "bold", tam: 12.5, cor: estilo.corNum || COR.texto, al: "right" }));
+      y += RH;
+    };
+    grupos.forEach((l, i) => {
+      const fcf = l.tipo === "formula";
+      linha(String(l.nome || "").toUpperCase(), valores(l.meses || []), fcf
+        ? { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt }
+        : { fundo: i % 2 ? "" : COR.linhaClara });
+    });
+    y += GAP;
+    const saldoIni = [];
+    const saldoFim = [];
+    if (sel > 1) { saldoIni.push(ini.acumO, ini.acumR, ini.acumR - ini.acumO); saldoFim.push(iniMesO, iniMesR, iniMesR - iniMesO); }
+    saldoIni.push(iniMesO, iniMesR, iniMesR - iniMesO);
+    saldoFim.push(iniMesO + varMesO, iniMesR + varMesR, (iniMesR + varMesR) - (iniMesO + varMesO));
+    fut.forEach((f) => { saldoIni.push(f.ini); saldoFim.push(f.fim); });
+    saldoIni.push(abertura, abertura);
+    saldoFim.push(abertura + totOrcVar, abertura + totFcVar);
+    linha("SALDO INICIAL", saldoIni, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    linha("SALDO FINAL", saldoFim, { fundo: COR.cinzaSaldo, corNome: COR.verdeTxt });
+    y += GAP;
+    const varVals = saldoFim.map((v, j) => v - saldoIni[j]);
+    linha("VARIAÇÃO DE CAIXA", varVals, { fundo: COR.cinzaFcf, corNome: COR.verdeTxt, corNum: COR.verdeTxt });
+    // Separadores verticais antes do TOTAL ORÇ. e do TOTAL FORECAST
+    g.strokeStyle = "#000000"; g.lineWidth = 1;
+    [xs[iTot], xs[iTot + 1]].forEach((x) => { g.beginPath(); g.moveTo(x + 0.5, y0); g.lineTo(x + 0.5, y); g.stroke(); });
+    return cv;
+  },
+
+  /**
+   * Botão "Copiar para o Excel": copia as linhas da tabela (as mesmas da imagem) como texto em colunas,
+   * no layout do relatório "Principais entradas / saídas": B = nome, C:E vazias, F:J mensal, K:O acumulado.
+   * Só valores: a formatação, as bolinhas e as cores do relatório continuam as da planilha.
+   */
+  copiarExcel(btn) {
+    const lado = this.aba === "saidas" ? "saidas" : "entradas";
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let d;
+    try { d = this.dadosImagemPpt(lado); } catch (e) {
+      alert("Não consegui montar a tabela: " + ((e && e.message) || e));
+      return;
+    }
+    const num = (v) => (Math.round((Number(v) || 0) / 10000) / 100).toFixed(2).replace(".", ",");
+    const pct = (real, orc) => {
+      const p = this.pct(real, orc);
+      return p == null ? "" : Math.round(p) + "%";
+    };
+    const bloco = (b) => [num(b.ant), num(b.orc), num(b.real), num(b.real - b.orc), pct(b.real, b.orc)];
+    const linhas = d.rows.map((r) => ({ nome: String(r.nome || "").toUpperCase(), mensal: r.mensal, acum: r.acum }));
+    if (d.outros) linhas.push({ nome: "OUTROS", mensal: d.outros.mensal, acum: d.outros.acum });
+    linhas.push({ nome: "TOTAL", mensal: d.total, acum: d.totalA });
+    const tsv = linhas.map((l) => [l.nome, "", "", ""].concat(bloco(l.mensal), bloco(l.acum)).join("\t")).join("\r\n");
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = tsv;
+      ta.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      ta.remove();
+      if (ok) avisar("Copiado! Cole no Excel (Ctrl+V)");
+      else alert("O navegador não deixou copiar. Tente de novo.");
+    };
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      navigator.clipboard.writeText(tsv).then(() => avisar("Copiado! Cole no Excel (Ctrl+V)")).catch(fallback);
+    } else {
+      fallback();
+    }
+  },
+
+  /** Botão "Copiar para o PowerPoint": copia a imagem; sem permissão de área de transferência, baixa o PNG. */
+  copiarImagemPpt(btn) {
+    const lado = this.aba === "caixa" ? "caixa" : (this.aba === "saidas" ? "saidas" : "entradas");
+    const original = btn ? btn.innerHTML : "";
+    const avisar = (texto) => {
+      if (!btn) return;
+      btn.innerHTML = texto;
+      setTimeout(() => { btn.innerHTML = original; if (window.lucide) lucide.createIcons(); }, 3500);
+    };
+    let canvas;
+    try {
+      canvas = lado === "caixa" ? this.desenharImagemCaixaPpt() : this.desenharImagemPpt(lado);
+    } catch (e) {
+      console.error("[Resultado de caixa] Imagem:", e);
+      alert("Não consegui montar a imagem: " + ((e && e.message) || e));
+      return;
+    }
+    const nome = lado + "-" + this.chaveMes(this.anoAtual(), this.mes) + ".png";
+    const baixar = () => {
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = nome;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      avisar("Imagem baixada");
+    };
+    const blob = new Promise((ok, erro) => canvas.toBlob((b) => (b ? ok(b) : erro(new Error("PNG vazio"))), "image/png"));
+    if (navigator.clipboard && typeof navigator.clipboard.write === "function" && typeof window.ClipboardItem === "function") {
+      navigator.clipboard.write([new ClipboardItem({ "image/png": blob })])
+        .then(() => avisar("Copiado! Cole no PowerPoint (Ctrl+V)"))
+        .catch((e) => {
+          console.warn("[Resultado de caixa] Área de transferência:", e);
+          baixar();
+        });
+    } else {
+      baixar();
+    }
+  },
+
+  saidasHtml() {
+    const ano = this.anoAtual();
+    if (this.semContas(ano)) {
+      return `<p class="rcx-vazio">O arquivo que já estava salvo não guarda as contas. Suba de novo os Excel — pode escolher vários de uma vez — para montar Obras, Repasses, Pessoal e as demais.</p>`;
+    }
+    const pack = this.linhasSaida();
+    const vivo = (r) => ["mensal", "acum"].some((b) => ["ant", "orc", "real"].some((k) => Math.abs(r[b][k]) > 0.5));
+    const todos = pack.rows.filter(vivo).sort((a, b) => {
+      const d = (Number(a.acum && a.acum.real) || 0) - (Number(b.acum && b.acum.real) || 0);
+      if (d) return d;
+      return String(a.nome || "").localeCompare(String(b.nome || ""), "pt");
+    });
+    if (this.filtroLinha && this.filtroLinha.lado === "saidas" && !todos.some((r) => r.key === this.filtroLinha.chave)) {
+      this.filtroLinha = null;
+    }
+    const corpo = todos.map((r) => {
+      const sel = this.filtroLinha && this.filtroLinha.lado === "saidas" && this.filtroLinha.chave === r.key;
+      const click = `ResultadoCaixaApp.selecionarLinha('saidas','${encodeURIComponent(r.key)}')`;
+      const dica = sel ? "Clique para ver todas as contas de novo" : "Clique para ver só esta conta na tabela de baixo";
+      return this.linhaPronta(r, "rcx-clicavel" + (sel ? " is-sel" : ""), "", click, true, dica);
+    }).join("");
+    const total = this.somaBloco(todos, "mensal");
+    const totalA = this.somaBloco(todos, "acum");
+    return `<div class="rcx-topo">${this.graficoMesHtml(total, true)}${this.graficoLinhasHtml("saidas")}${this.graficoTotaisHtml("saidas")}</div>`
+      + this.gradeHtml("Conta", corpo, total, totalA, true, true)
+      + this.matrizDfcHtml("saidas");
+  },
+
+  toggleMatriz(id) {
+    const k = String(id || "");
+    if (!k) return;
+    if (!this.matrizAbertos) this.matrizAbertos = {};
+    this.matrizAbertos[k] = !this.matrizAbertos[k];
+    this.renderMantendoScroll();
+  },
+
+  ordenarMatriz(campo) {
+    if (campo !== "orc" && campo !== "real" && campo !== "var") return;
+    const atual = this.matrizSort;
+    this.matrizSort = atual && atual.campo === campo
+      ? { campo: campo, dir: (Number(atual.dir) || -1) * -1 }
+      : { campo: campo, dir: -1 };
+    this.render();
+  },
+
+  /** Acumulado de janeiro ao mês, por empresa e por centro de custo, na mesma base da aba aberta. */
+  matrizDfcDados(lado) {
+    const saida = lado !== "entradas";
+    const ano = this.anoAtual();
+    const mes = Number(this.mes) || 1;
+    const a = this.anoDados(ano);
+    if (!a || this.semContas(ano)) return null;
+    const cat = this.catalogoEmpresas();
+    const empresas = {};
+    const filtro = this.filtroMatriz(saida ? "saidas" : "entradas");
+    let defs = saida ? this.contasSaida() : this.defsEntradaPowerBi();
+    if (filtro && filtro.conta) defs = defs.filter((def) => def.id === filtro.conta);
+    const grupos = defs.map((def) => ({ def: def, porEmp: {}, ccs: {} }));
+    const vivo = (o, r) => Math.abs(o) > 0.5 || Math.abs(r) > 0.5;
+    Object.keys(a.arquivos || {}).forEach((nome) => {
+      if (this.estaFora(String(ano), nome)) return;
+      const arq = a.arquivos[nome] || {};
+      const empNum = Number(arq.empresa) || this.empresaId(nome) || 0;
+      const key = empNum ? String(empNum) : ("arq:" + nome);
+      if (!empresas[key]) {
+        const nomes = empNum && cat[empNum] ? cat[empNum] : [];
+        empresas[key] = {
+          id: key,
+          nome: nomes[0] || arq.rotulo || this.nomeEmpresaArquivo(nome) || ("Empresa " + key),
+          pctLabel: empNum ? this.rotuloPctMoura(empNum) : ""
+        };
+      }
+      const pct = this.pctArquivo(arq, nome);
+      const porCc = arq.contasPorCc;
+      const temCc = porCc && Object.keys(porCc).length;
+      grupos.forEach((g) => {
+        const slot = g.porEmp[key] || (g.porEmp[key] = { orc: 0, real: 0 });
+        if (temCc) {
+          Object.keys(porCc).forEach((ccId) => {
+            if (filtro && filtro.ccs && !this.ccNoConjunto(filtro.ccs, ccId)) return;
+            const bloco = porCc[ccId] || {};
+            const o = this.somaCodigos(bloco.contas || {}, g.def, mes, "o", true) * pct;
+            const r = this.somaCodigos(bloco.contas || {}, g.def, mes, "r", true) * pct;
+            if (!vivo(o, r)) return;
+            slot.orc += o;
+            slot.real += r;
+            const cc = g.ccs[ccId] || (g.ccs[ccId] = { id: ccId, nome: bloco.nome || "", porEmp: {}, planos: {} });
+            if (!cc.nome && bloco.nome) cc.nome = bloco.nome;
+            if (!cc.planos) cc.planos = {};
+            const cel = cc.porEmp[key] || (cc.porEmp[key] = { orc: 0, real: 0 });
+            cel.orc += o;
+            cel.real += r;
+            const fontePlano = (arq.planosPorCc && arq.planosPorCc[ccId] && arq.planosPorCc[ccId].contas) || {};
+            Object.keys(fontePlano).forEach((code) => {
+              const info = fontePlano[code] || {};
+              if (!this.casaNo(info.node, g.def)) return;
+              let po = 0;
+              let pr = 0;
+              for (let m = 1; m <= mes; m++) {
+                const celPlano = (info.meses || {})[String(m)];
+                if (!celPlano) continue;
+                po += Number(celPlano.o) || 0;
+                pr += Number(celPlano.r) || 0;
+              }
+              po *= pct;
+              pr *= pct;
+              if (!vivo(po, pr)) return;
+              const pl = cc.planos[code] || (cc.planos[code] = { code: code, nome: info.nome || "", porEmp: {} });
+              if (info.nome && !pl.nome) pl.nome = info.nome;
+              const pcel = pl.porEmp[key] || (pl.porEmp[key] = { orc: 0, real: 0 });
+              pcel.orc += po;
+              pcel.real += pr;
+            });
+          });
+        } else if (arq.contas && !(filtro && filtro.ccs)) {
+          slot.orc += this.somaCodigos(arq.contas, g.def, mes, "o", true) * pct;
+          slot.real += this.somaCodigos(arq.contas, g.def, mes, "r", true) * pct;
+        }
+      });
+    });
+    const cols = Object.keys(empresas)
+      .filter((id) => grupos.some((g) => g.porEmp[id] && vivo(g.porEmp[id].orc, g.porEmp[id].real)))
+      .map((id) => empresas[id])
+      .sort((x, y) => x.nome.localeCompare(y.nome, "pt"));
+    const linhas = grupos
+      .map((g) => {
+        const ccs = Object.keys(g.ccs).map((id) => {
+          const cc = g.ccs[id];
+          const planos = Object.keys(cc.planos || {}).map((code) => cc.planos[code]).filter((pl) => {
+            return cols.some((e) => {
+              const cel = pl.porEmp[e.id];
+              return cel && vivo(cel.orc, cel.real);
+            });
+          }).sort((x, y) => String(x.code || "").localeCompare(String(y.code || ""), "pt", { numeric: true }));
+          cc.planos = planos;
+          return cc;
+        }).filter((cc) => {
+          return cols.some((e) => {
+            const cel = cc.porEmp[e.id];
+            return cel && vivo(cel.orc, cel.real);
+          });
+        }).sort((x, y) => {
+          const nx = (x.id ? x.id + " - " : "") + (x.nome || "");
+          const ny = (y.id ? y.id + " - " : "") + (y.nome || "");
+          if (saida && this.matrizSort && this.matrizSort.campo) {
+            const pa = this.totalMatriz(x.porEmp, cols);
+            const pb = this.totalMatriz(y.porEmp, cols);
+            const d = (pa[this.matrizSort.campo] - pb[this.matrizSort.campo]) * (Number(this.matrizSort.dir) || 1);
+            if (d) return d;
+          }
+          return nx.localeCompare(ny, "pt");
+        });
+        return { def: g.def, porEmp: g.porEmp, ccs: ccs };
+      })
+      .filter((g) => cols.some((e) => g.porEmp[e.id] && vivo(g.porEmp[e.id].orc, g.porEmp[e.id].real)))
+      .sort((a, b) => {
+        if (saida && this.matrizSort && this.matrizSort.campo) {
+          const pa = this.totalMatriz(a.porEmp, cols);
+          const pb = this.totalMatriz(b.porEmp, cols);
+          const d = (pa[this.matrizSort.campo] - pb[this.matrizSort.campo]) * (Number(this.matrizSort.dir) || 1);
+          if (d) return d;
+        } else {
+          const soma = (g) => cols.reduce((s, e) => s + ((g.porEmp[e.id] && g.porEmp[e.id].real) || 0), 0);
+          const d = saida ? soma(a) - soma(b) : soma(b) - soma(a);
+          if (d) return d;
+        }
+        return String(a.def.nome || "").localeCompare(String(b.def.nome || ""), "pt");
+      });
+    const ladoMatriz = saida ? "saidas" : "entradas";
+    if (!cols.length || !linhas.length) {
+      if (filtro) return { cols: [], linhas: [], mes: mes, lado: ladoMatriz, filtro: filtro, vazio: true };
+      return null;
+    }
+    return { cols: cols, linhas: linhas, mes: mes, lado: ladoMatriz, filtro: filtro || null };
+  },
+
+  totalMatriz(porEmp, cols) {
+    let orc = 0;
+    let real = 0;
+    (cols || []).forEach((e) => {
+      const cel = porEmp && porEmp[e.id];
+      orc += (cel && cel.orc) || 0;
+      real += (cel && cel.real) || 0;
+    });
+    return { orc: orc, real: real, var: real - orc };
+  },
+
+  cabecaTotalMatriz(saida) {
+    if (!saida) return `<th class="rcx-sep">Orç.</th><th>Real.</th><th>Variação</th><th>Variação</th>`;
+    const ico = `<i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i>`;
+    const th = (campo, rotulo, cls, title) => `<th class="${cls}" title="${title}" onclick="ResultadoCaixaApp.ordenarMatriz('${campo}')" style="cursor:pointer;user-select:none;">${rotulo} ${ico}</th>`;
+    return th("orc", "Orç.", "rcx-sep", "Ordenar pelo orçado do total")
+      + th("real", "Real.", "", "Ordenar pelo realizado do total")
+      + th("var", "Var. R$", "", "Ordenar pela variação em R$ do total")
+      + `<th title="Variação percentual">Var. %</th>`;
+  },
+
+  matrizCelulas(orc, real, sep, saida) {
+    const o = Number(orc) || 0;
+    const r = Number(real) || 0;
+    return `<td class="rcx-num${sep ? " rcx-sep" : ""}">${this.fmt(o, saida)}</td><td class="rcx-num">${this.fmt(r, saida)}</td>${this.celVar(r, o, !!saida)}`;
+  },
+
+  matrizDfcHtml(lado) {
+    const saida = lado !== "entradas";
+    const dados = this.matrizDfcDados(saida ? "saidas" : "entradas");
+    if (!dados) return "";
+    const mesNome = (this.MESES[dados.mes - 1] || "").toLowerCase();
+    const tituloBloco = saida ? "Saídas do DFC por empresa" : "Entradas do DFC por empresa";
+    const filtro = dados.filtro;
+    const tituloFiltro = filtro && filtro.nome ? `${tituloBloco} — ${caixaEsc(filtro.nome)}` : tituloBloco;
+    if (dados.vazio) {
+      const quem = filtro && filtro.nome ? caixaEsc(filtro.nome) : "esta linha";
+      return `<div class="rcx-matriz-bloco">
+        <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+        <div class="rcx-matriz-sub">Nenhum valor de ${quem} nesta tabela. ${this.botaoVerTodas()}</div>
+      </div>`;
+    }
+    const abertos = this.matrizAbertos || {};
+    const cabEmp = dados.cols.map((e) => {
+      const pct = e.pctLabel ? `<span class="rcx-matriz-pct">${caixaEsc(e.pctLabel)}</span>` : "";
+      const titulo = e.nome + (e.pctLabel ? " · " + e.pctLabel + " de % Consolidação" : "");
+      return `<th class="rcx-sep" colspan="4" title="${caixaEsc(titulo)}"><span class="rcx-matriz-emp">${caixaEsc(e.nome)}</span>${pct}</th>`;
+    }).join("");
+    const totNome = this.agrupar ? "Consolidado" : "Total";
+    const totTitle = this.agrupar
+      ? "Soma das empresas com consolidação padrão ligada, cada uma no % Consolidação"
+      : "Soma dos valores cheios";
+    const cabVal = dados.cols.map(() => `<th class="rcx-sep">Orç.</th><th>Real.</th><th>Variação</th><th>Variação</th>`).join("")
+      + this.cabecaTotalMatriz(saida);
+    const totEmp = {};
+    dados.cols.forEach((e) => { totEmp[e.id] = { orc: 0, real: 0 }; });
+    const totGeral = { orc: 0, real: 0 };
+    const corpo = dados.linhas.map((g) => {
+      dados.cols.forEach((e) => {
+        const cel = g.porEmp[e.id] || { orc: 0, real: 0 };
+        totEmp[e.id].orc += cel.orc;
+        totEmp[e.id].real += cel.real;
+        totGeral.orc += cel.orc;
+        totGeral.real += cel.real;
+      });
+      const aberto = !!abertos[g.def.id];
+      const pode = g.ccs.length > 0;
+      const nome = pode
+        ? `<button type="button" class="rcx-matriz-abre" onclick="ResultadoCaixaApp.toggleMatriz('${caixaEsc(g.def.id)}')"><i data-lucide="${aberto ? "chevron-down" : "chevron-right"}"></i>${caixaEsc(g.def.nome)}</button>`
+        : caixaEsc(g.def.nome);
+      const cells = dados.cols.map((e) => {
+        const cel = g.porEmp[e.id] || { orc: 0, real: 0 };
+        return this.matrizCelulas(cel.orc, cel.real, true, saida);
+      }).join("");
+      let html = `<tr class="rcx-matriz-grupo">${`<td class="rcx-nome">${nome}</td>`}${cells}${this.matrizCelulas(
+        dados.cols.reduce((s, e) => s + ((g.porEmp[e.id] && g.porEmp[e.id].orc) || 0), 0),
+        dados.cols.reduce((s, e) => s + ((g.porEmp[e.id] && g.porEmp[e.id].real) || 0), 0),
+        true,
+        saida
+      )}</tr>`;
+      if (aberto) {
+        html += g.ccs.map((cc) => {
+          const jaTemId = cc.nome && cc.id && String(cc.nome).indexOf(String(cc.id)) === 0;
+          const rot = jaTemId ? cc.nome : ((cc.id ? cc.id + " - " : "") + (cc.nome || "Centro de custo"));
+          const chavePlano = "cc:" + g.def.id + ":" + String(cc.id || "").replace(/[^A-Za-z0-9_-]/g, "");
+          const abertoPlano = !!abertos[chavePlano];
+          const planos = cc.planos || [];
+          const nomeCc = planos.length
+            ? `<button type="button" class="rcx-matriz-abre" onclick="ResultadoCaixaApp.toggleMatriz('${chavePlano}')"><i data-lucide="${abertoPlano ? "chevron-down" : "chevron-right"}"></i>${caixaEsc(rot)}</button>`
+            : caixaEsc(rot);
+          const ccCells = dados.cols.map((e) => {
+            const cel = cc.porEmp[e.id] || { orc: 0, real: 0 };
+            return this.matrizCelulas(cel.orc, cel.real, true, saida);
+          }).join("");
+          const o = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].orc) || 0), 0);
+          const r = dados.cols.reduce((s, e) => s + ((cc.porEmp[e.id] && cc.porEmp[e.id].real) || 0), 0);
+          let linhaCc = `<tr class="rcx-filho rcx-matriz-cc"><td class="rcx-nome">${nomeCc}</td>${ccCells}${this.matrizCelulas(o, r, true, saida)}</tr>`;
+          if (abertoPlano) {
+            linhaCc += planos.map((pl) => {
+              const jaTemCodigo = pl.nome && pl.code && String(pl.nome).indexOf(String(pl.code)) === 0;
+              const rotPlano = jaTemCodigo ? pl.nome : ((pl.code ? pl.code + " - " : "") + (pl.nome || "Conta"));
+              const plCells = dados.cols.map((e) => {
+                const cel = pl.porEmp[e.id] || { orc: 0, real: 0 };
+                return this.matrizCelulas(cel.orc, cel.real, true, saida);
+              }).join("");
+              const po = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].orc) || 0), 0);
+              const pr = dados.cols.reduce((s, e) => s + ((pl.porEmp[e.id] && pl.porEmp[e.id].real) || 0), 0);
+              return `<tr class="rcx-matriz-plano"><td class="rcx-nome" title="${caixaEsc(rotPlano)}">${caixaEsc(rotPlano)}</td>${plCells}${this.matrizCelulas(po, pr, true, saida)}</tr>`;
+            }).join("");
+          }
+          return linhaCc;
+        }).join("");
+      }
+      return html;
+    }).join("");
+    const totCells = dados.cols.map((e) => this.matrizCelulas(totEmp[e.id].orc, totEmp[e.id].real, true, saida)).join("");
+    const pctNota = this.agrupar ? " Cada empresa entra no consolidado pelo % Consolidação." : "";
+    const recorte = filtro && filtro.nome
+      ? (saida
+        ? ` Só a conta ${caixaEsc(filtro.nome)}.`
+        : ` Só os centros de custo de ${caixaEsc(filtro.nome)}.`)
+      : "";
+    const limpar = filtro ? " " + this.botaoVerTodas() : "";
+    return `<div class="rcx-matriz-bloco">
+      <div class="rcx-matriz-titulo">${tituloFiltro}</div>
+      <div class="rcx-matriz-sub">Acumulado de janeiro a ${caixaEsc(mesNome)}.${recorte} Clique no grupo para abrir os centros de custo e no centro para abrir o plano financeiro.${pctNota}${limpar}</div>
+      <div class="rcx-scroll rcx-matriz-scroll">
+        <table class="rcx-grid rcx-matriz">
+          <thead>
+            <tr class="rcx-h1">
+              <th class="rcx-h-nome" rowspan="2">Conta DFC</th>
+              ${cabEmp}
+              <th class="rcx-sep" colspan="4" title="${caixaEsc(totTitle)}">${totNome}</th>
+            </tr>
+            <tr class="rcx-h2">${cabVal}</tr>
+          </thead>
+          <tbody>${corpo}</tbody>
+          <tfoot><tr><td class="rcx-nome">${totNome}</td>${totCells}${this.matrizCelulas(totGeral.orc, totGeral.real, true, saida)}</tr></tfoot>
+        </table>
+      </div>
+    </div>`;
+  },
+
+  arquivoMl() {
+    const ano = String(this.anoBase());
+    const meses = (this.acervo && this.acervo.meses) || {};
+    const chaves = Object.keys(meses).filter((k) => k.indexOf(ano + "-") === 0).sort();
+    const pref = this.chaveMes(ano);
+    const ordem = chaves.filter((k) => k === pref).concat(chaves.filter((k) => k !== pref).reverse());
+    for (let i = 0; i < ordem.length; i++) {
+      const arquivos = (meses[ordem[i]] && meses[ordem[i]].arquivos) || {};
+      const nomes = Object.keys(arquivos);
+      for (let j = 0; j < nomes.length; j++) {
+        const arq = arquivos[nomes[j]];
+        if (this.estaFora(String(ordem[i]).slice(0, 4), nomes[j])) continue;
+        if (this.empresaDoArquivoMl(nomes[j], arq) === 1) return arq;
+      }
+    }
+    return null;
+  },
+
+  empresaDoArquivoMl(nome, arq) {
+    return Number(arq && arq.empresa) || this.empresaId(nome) || this.empresaId(arq && arq.rotulo) || 0;
+  },
+
+  bagMes() {
+    const meses = [];
+    for (let i = 0; i < 12; i++) meses.push({ o: 0, r: 0, f: 0 });
+    return meses;
+  },
+
+  somaMeses(dest, src) {
+    for (let i = 0; i < 12; i++) {
+      dest[i].o += Number(src[i].o) || 0;
+      dest[i].r += Number(src[i].r) || 0;
+      dest[i].f += Number(src[i].f) || 0;
+    }
+  },
+
+  juntarNo(dest, src) {
+    this.somaMeses(dest.meses, src.meses);
+    Object.keys(src.ccs || {}).forEach((id) => {
+      const de = src.ccs[id];
+      const para = dest.ccs[id] || (dest.ccs[id] = { nome: de.nome || id, meses: this.bagMes() });
+      if (de.nome) para.nome = de.nome;
+      this.somaMeses(para.meses, de.meses);
+    });
+  },
+
+  porCodigoVisao(groups) {
+    const map = {};
+    (groups || []).forEach((g) => {
+      const cod = this.codigoVisao(g);
+      if (cod && !map[cod]) map[cod] = g;
+    });
+    return map;
+  },
+
+  somarGuardado(node, meses, campo) {
+    Object.keys(meses || {}).forEach((mm) => {
+      const i = Number(mm) - 1;
+      if (i < 0 || i > 11) return;
+      node.meses[i][campo] += Number(meses[mm].o) || 0;
+    });
+  },
+
+  async carregarMl(forcar) {
+    const ano = this.anoBase();
+    const mes = Number(this.mes) || 1;
+    const arq = this.arquivoMl();
+    const key = [ano, mes, (arq && arq._doc) || "", (this.forecast && this.forecast.em) || ""].join("|");
+    if (!forcar && this.mlDados && this.mlDados.key === key) return;
+    const token = (this._mlToken || 0) + 1;
+    this._mlToken = token;
+    this.mlLendo = true;
+    this.mlErro = "";
+    this.render();
+    try {
+      const dados = await this.lerCaixaMl(ano, mes, arq);
+      if (this._mlToken !== token) return;
+      dados.key = key;
+      this.mlDados = dados;
+      if (!this._mlExpand) {
+        (dados.linhas || []).forEach((n) => { if (n.level === 0 && n.hasKids) this.mlAbertos[n.id] = true; });
+        this._mlExpand = true;
+      }
+    } catch (e) {
+      if (this._mlToken !== token) return;
+      this.mlErro = (e && e.message) || String(e);
+    }
+    this.mlLendo = false;
+    if (this._mlToken === token && this.aba === "caixa") this.render();
+  },
+
+  async lerCaixaMl(ano, mes, arq) {
+    const FC = window.FluxoCaixaApp;
+    if (!FC || typeof FC.visao !== "function" || typeof FC.allocate !== "function") {
+      throw new Error("A visão do DFC não está disponível nesta tela.");
+    }
+    const groups = (FC.visao().groups || []).slice();
+    const byId = {};
+    groups.forEach((g) => {
+      byId[g.id] = { id: g.id, nome: g.name || g.id, tipo: g.type || "", parentId: g.parentId || "", meses: this.bagMes(), ccs: {}, planos: {} };
+    });
+    const porCod = this.porCodigoVisao(groups);
+    const porCc = (node, ccId, nome) => {
+      const id = String(ccId || "—");
+      const bag = node.ccs[id] || (node.ccs[id] = { nome: nome || id, meses: this.bagMes() });
+      if (nome) bag.nome = nome;
+      return bag;
+    };
+    const planoDe = (node, code, nome) => {
+      const key = this.codigoPlano(code);
+      if (!node || !this.ehContaFinanceira(key)) return null;
+      const bag = node.planos[key] || (node.planos[key] = { code: key, nome: nome || key, meses: this.bagMes(), ccs: {} });
+      if (nome && nome !== key) bag.nome = nome;
+      return bag;
+    };
+    const ccDoPlano = (plano, ccId, nome) => {
+      if (!plano) return null;
+      const id = String(ccId || "—").replace(/\D/g, "") || String(ccId || "—");
+      const bag = plano.ccs[id] || (plano.ccs[id] = { nome: nome || id, meses: this.bagMes() });
+      if (nome) bag.nome = nome;
+      return bag;
+    };
+    if (arq && arq.contas) {
+      Object.keys(arq.contas).forEach((code) => {
+        const g = porCod[code];
+        if (!g || !byId[g.id] || g.type === "formula") return;
+        this.somarGuardado(byId[g.id], arq.contas[code].meses, "o");
+      });
+      Object.keys(arq.contasPorCc || {}).forEach((cc) => {
+        const bloco = arq.contasPorCc[cc] || {};
+        Object.keys(bloco.contas || {}).forEach((code) => {
+          const g = porCod[code];
+          if (!g || !byId[g.id] || g.type === "formula") return;
+          const bag = porCc(byId[g.id], cc, bloco.nome);
+          Object.keys(bloco.contas[code].meses || {}).forEach((mm) => {
+            const i = Number(mm) - 1;
+            if (i >= 0 && i < 12) bag.meses[i].o += Number(bloco.contas[code].meses[mm].o) || 0;
+          });
+        });
+      });
+    }
+    Object.keys((arq && arq.planosPorCc) || {}).forEach((cc) => {
+      const bloco = arq.planosPorCc[cc] || {};
+      Object.keys(bloco.contas || {}).forEach((code) => {
+        const info = bloco.contas[code] || {};
+        const alvo = info.node && byId[info.node];
+        if (!alvo || alvo.tipo === "formula") return;
+        const plano = planoDe(alvo, code, info.nome);
+        const ccBag = ccDoPlano(plano, cc, bloco.nome);
+        Object.keys(info.meses || {}).forEach((mm) => {
+          const i = Number(mm) - 1;
+          if (i < 0 || i > 11) return;
+          const o = Number(info.meses[mm].o) || 0;
+          if (plano) plano.meses[i].o += o;
+          if (ccBag) ccBag.meses[i].o += o;
+        });
+      });
+    });
+    const mapa = await this.mapaPronto();
+    const forecastsAno = Object.keys(this.forecasts || {}).filter((ym) => Number(ym.slice(0, 4)) === Number(ano)).map((ym) => this.forecasts[ym]);
+    const fontesForecast = [];
+    forecastsAno.forEach((fcDoc) => {
+      const por = fcDoc && fcDoc.porArquivo;
+      if (por && typeof por === "object" && !Array.isArray(por)) {
+        Object.keys(por).forEach((nome) => {
+          const fatia = por[nome];
+          if (fatia && this.empresaDoArquivoMl(nome, fatia) === 1) fontesForecast.push({ doc: fatia, filtrarCc: false });
+        });
+        return;
+      }
+      if (fcDoc && fcDoc.contas) fontesForecast.push({ doc: fcDoc, filtrarCc: true });
+    });
+    fontesForecast.forEach((fonte) => {
+      const fcDoc = fonte.doc;
+      Object.keys(fcDoc.contas || {}).forEach((cc) => {
+        const nomeCc = (fcDoc.nomes && fcDoc.nomes[cc]) || cc;
+        if (fonte.filtrarCc && this.empresaDoCentro(cc, nomeCc) !== 1) return;
+        Object.keys(fcDoc.contas[cc] || {}).forEach((code) => {
+          const conta = fcDoc.contas[cc][code];
+          const node = this.noDaLinha(FC, mapa, { code: code, nome: conta.nome || "" });
+          if (!node || !byId[node.id]) return;
+          const plano = planoDe(byId[node.id], code, conta.nome || "");
+          const bag = porCc(byId[node.id], cc, nomeCc);
+          const ccPlano = ccDoPlano(plano, cc, nomeCc);
+          Object.keys(conta.meses || {}).forEach((ym) => {
+            if (Number(ym.slice(0, 4)) !== Number(ano)) return;
+            const i = Number(ym.slice(5, 7)) - 1;
+            if (i < 0 || i > 11) return;
+            let valor = Number(conta.meses[ym]) || 0;
+            if (valor && typeof FC.signedAmount === "function") {
+              valor = FC.signedAmount(node, code, conta.nome || "", valor, "", "", null);
+            }
+            byId[node.id].meses[i].f += valor;
+            bag.meses[i].f += valor;
+            if (plano) plano.meses[i].f += valor;
+            if (ccPlano) ccPlano.meses[i].f += valor;
+          });
+        });
+      });
+    });
+    const fimMes = new Date(ano, mes, 0).getDate();
+    const start = ano + "-01-01";
+    const end = ano + "-" + String(mes).padStart(2, "0") + "-" + String(fimMes).padStart(2, "0");
+    let movimentos = [];
+    let contas = [];
+    if (window.SiengeApiService && typeof SiengeApiService.getBankMovements === "function") {
+      let movs = await SiengeApiService.getBankMovements(start, end, { selectionType: "M", companyId: 1 });
+      movs = movs || [];
+      if (typeof window.siengeDedupeBankMovements === "function") movs = siengeDedupeBankMovements(movs);
+      movs.forEach((mov) => {
+        const d = FC.cashDate(mov);
+        if (!d || d < start || d > end || Number(mov.companyId || 1) !== 1) return;
+        const ym = d.slice(0, 7);
+        const mi = Number(ym.slice(5, 7)) - 1;
+        FC.allocate(mov, 1).forEach((a) => {
+          if (a.month && String(a.month).slice(0, 7) !== ym) return;
+          const node = this.noDaLinha(FC, mapa, { code: a.categoryId, nome: a.categoryName || "" });
+          if (!node || !byId[node.id]) return;
+          const signed = FC.signedAmount(node, a.categoryId, a.categoryName, a.amount, a.reducer, a.categoryType, a.mov);
+          if (!signed || mi < 0) return;
+          const plano = planoDe(byId[node.id], a.categoryId, a.categoryName || "");
+          const ccPlano = ccDoPlano(plano, a.costCenterId, a.costCenterName);
+          byId[node.id].meses[mi].r += signed;
+          porCc(byId[node.id], a.costCenterId, a.costCenterName).meses[mi].r += signed;
+          if (plano) plano.meses[mi].r += signed;
+          if (ccPlano) ccPlano.meses[mi].r += signed;
+        });
+        const valor = this.sinalMovimento(mov);
+        if (!valor) return;
+        movimentos.push({
+          conta: String(mov.accountNumber || mov.account || "").trim(),
+          mes: mi + 1,
+          valor: valor
+        });
+      });
+    }
+    if (window.SiengeApiService && typeof SiengeApiService.getCheckingAccounts === "function") {
+      const res = await SiengeApiService.getCheckingAccounts(1, { allStatuses: true });
+      const bals = typeof SiengeApiService.getAccountBalances === "function"
+        ? await SiengeApiService.getAccountBalances(start, { companyId: 1, showLast: true })
+        : [];
+      const abertura = {};
+      (bals || []).forEach((b) => {
+        const num = String(b.accountNumber || b.number || "").trim();
+        const dt = String(b.balanceDate || "").slice(0, 10);
+        if (!num || (dt && dt > start)) return;
+        const valor = this.valorSaldo(b);
+        if (valor == null) return;
+        const prev = abertura[num];
+        if (!prev || (dt && dt >= prev.dt)) abertura[num] = { valor: valor, dt: dt || start };
+      });
+      contas = ((res && res.results) || []).map((raw) => {
+        const type = raw && raw.accountType;
+        const typeId = String((type && typeof type === "object" ? type.id : raw.accountTypeId) || "").trim().toUpperCase();
+        const desc = String((type && typeof type === "object" ? (type.description || type.name) : type) || "");
+        const invest = typeId === "I" || typeId === "A" || /invest|aplic/i.test(desc);
+        if (invest) return null;
+        const numero = String(raw.accountNumber || raw.number || "").trim();
+        if (!numero) return null;
+        const ab = abertura[numero];
+        return {
+          numero: numero,
+          nome: String(raw.accountName || raw.name || numero).trim(),
+          abertura: ab ? ab.valor : 0,
+          desdeInicio: !!(ab && (!ab.dt || ab.dt <= start))
+        };
+      }).filter(Boolean);
+    }
+    const depthOf = (g) => {
+      let d = 0;
+      let cur = g;
+      while (cur && cur.parentId && byId[cur.parentId]) { d += 1; cur = byId[cur.parentId]; }
+      return d;
+    };
+    groups.filter((g) => g.type !== "formula").sort((a, b) => depthOf(b) - depthOf(a)).forEach((g) => {
+      groups.filter((c) => c.parentId === g.id && c.type !== "formula").forEach((ch) => {
+        if (byId[g.id] && byId[ch.id]) this.juntarNo(byId[g.id], byId[ch.id]);
+      });
+    });
+    const aplicar = (id, partes) => {
+      if (!byId[id]) return;
+      byId[id].meses = this.bagMes();
+      byId[id].ccs = {};
+      partes.forEach((pid) => { if (byId[pid]) this.juntarNo(byId[id], byId[pid]); });
+    };
+    aplicar("g_03", ["g_04", "g_05"]);
+    aplicar("g_06", ["g_01", "g_02", "g_03"]);
+    aplicar("g_08", ["g_06", "g_07"]);
+    aplicar("g_10", ["g_08", "g_09"]);
+    aplicar("g_12", ["g_10", "g_11"]);
+    const linhas = [];
+    const walk = (node, level) => {
+      const filhos = groups.filter((g) => g.parentId === node.id);
+      const item = byId[node.id];
+      if (!item) return;
+      const vivo = (meses) => (meses || []).some((m) => Math.abs(m.o) > 0.5 || Math.abs(m.r) > 0.5 || Math.abs(m.f) > 0.5);
+      const planos = Object.keys(item.planos || {}).map((k) => {
+        const p = item.planos[k];
+        const ccs = Object.keys(p.ccs || {}).map((id) => ({ id: id, nome: p.ccs[id].nome || id, meses: p.ccs[id].meses }))
+          .filter((c) => vivo(c.meses))
+          .sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt"));
+        return { code: p.code, nome: p.nome || p.code, meses: p.meses, ccs: ccs };
+      }).filter((p) => vivo(p.meses) || p.ccs.length)
+        .sort((a, b) => String(a.code).localeCompare(String(b.code), "pt", { numeric: true }));
+      linhas.push({ id: item.id, nome: item.nome, tipo: item.tipo, level: level, hasKids: filhos.length > 0, planos: filhos.length ? [] : planos, meses: item.meses, ccs: item.ccs });
+      filhos.forEach((ch) => walk(ch, level + 1));
+    };
+    groups.filter((g) => !g.parentId).forEach((g) => walk(g, 0));
+    const padrao = contas.filter((c) => c.desdeInicio).map((c) => c.numero);
+    return { ano: ano, mes: mes, linhas: linhas, contas: contas, movimentos: movimentos, padrao: padrao, temArquivo: !!arq, temForecast: !!(this.forecast && this.forecast.contas) };
+  },
+
+  sinalMovimento(m) {
+    const CD = window.CaixaDiarioApp;
+    if (CD && typeof CD.valorMov === "function") return CD.valorMov(m);
+    const raw = Number(m.bankMovementAmount) || 0;
+    const tipo = String(m.bankMovementOperationType || m.operationType || "").toUpperCase();
+    if (/^(S|D)$/.test(tipo) || /DEBIT|SAIDA/.test(tipo)) return -Math.abs(raw);
+    if (/^(E|C)$/.test(tipo) || /CREDIT|ENTRADA/.test(tipo)) return Math.abs(raw);
+    return raw;
+  },
+
+  valorSaldo(b) {
+    const list = [b.amount, b.balance, b.balanceAmount, b.currentBalance, b.lastBalance, b.lastBalanceAmount, b.availableAmount, b.availableBalance, b.value];
+    for (let i = 0; i < list.length; i++) {
+      const n = Number(list[i]);
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  },
+
+  contaCorrenteMl(c) {
+    const nome = this.fold(((c && c.nome) || "") + " " + ((c && c.numero) || ""));
+    if (/MUTUO|JUDICIAL|BLOQUEIO|BLOQ|CHEQUE|EMISSAO|TRANSITOR|REAPROP|ADIANTAMENTO/.test(nome)) return false;
+    return /\bC C\b|CONTA CORRENTE/.test(nome);
+  },
+
+  mlSelecionadas(dados) {
+    if (!this._mlSel) {
+      try { this._mlSel = JSON.parse(localStorage.getItem("rc_ml_contas_v2") || "null"); } catch (e) { this._mlSel = null; }
+    }
+    if (Array.isArray(this._mlSel)) return this._mlSel;
+    const base = (dados && dados.contas) || [];
+    const cc = base.filter((c) => this.contaCorrenteMl(c)).map((c) => c.numero);
+    return cc.length ? cc : ((dados && dados.padrao) || []);
+  },
+
+  toggleContaMl(num, on) {
+    const set = new Set(this.mlSelecionadas(this.mlDados));
+    if (on) set.add(String(num));
+    else set.delete(String(num));
+    this._mlSel = Array.from(set);
+    try { localStorage.setItem("rc_ml_contas_v2", JSON.stringify(this._mlSel)); } catch (e) {}
+    this.render();
+  },
+
+  toggleNoMl(id) {
+    this.mlAbertos[id] = !this.mlAbertos[id];
+    this.render();
+  },
+
+  toggleFatia(id) {
+    this.mlFatia = this.mlFatia === id ? "" : id;
+    this.render();
+  },
+
+  setGrupoMl(qual, on) {
+    if (qual === "orc") this.mlGrupoOrc = !!on;
+    else this.mlGrupoFc = !!on;
+    this.render();
+  },
+
+  mlVisivel(linha) {
+    if (!linha) return false;
+    if (linha.tipo === "formula" || linha.level === 0) return true;
+    return (linha.meses || []).some((m) => Math.abs(m.o) > 0.5 || Math.abs(m.r) > 0.5 || Math.abs(m.f) > 0.5);
+  },
+
+  mlNum(v) {
+    const n = Number(v) || 0;
+    const x = this.escala === "milhoes" ? n / 1000000 : n;
+    return x.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  mlPct(o, b) {
+    if (Math.abs(o) < 0.5) return "—";
+    return ((b - o) / Math.abs(o) * 100).toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+  },
+
+  fatiaMl(meses, id, sel) {
+    if (id === "acum") {
+      let o = 0;
+      let b = 0;
+      for (let i = 0; i < sel - 1; i++) { o += meses[i].o; b += meses[i].r; }
+      return { a: o, b: b, futuro: false };
+    }
+    const i = Number(id) - 1;
+    if (i < 0 || i > 11) return { a: 0, b: 0, futuro: false };
+    if (i + 1 > sel) return { a: meses[i].o, b: meses[i].f, futuro: true };
+    return { a: meses[i].o, b: meses[i].r, futuro: false };
+  },
+
+  totaisMl(meses, sel) {
+    let oAno = 0;
+    let real = 0;
+    let com = 0;
+    for (let i = 0; i < 12; i++) {
+      oAno += meses[i].o;
+      if (i + 1 <= sel) { real += meses[i].r; com += meses[i].r; }
+      else com += meses[i].f;
+    }
+    return { oAno: oAno, real: real, com: com };
+  },
+
+  caixaHtml() {
+    const ano = this.anoBase();
+    const sel = Number(this.mes) || 1;
+    const mesOpts = this.MESES.map((nome, i) => `<option value="${i + 1}"${i + 1 === sel ? " selected" : ""}>${nome}</option>`).join("");
+    const realOn = this.escala !== "milhoes";
+    const seg = (on, rotulo, acao) => `<button type="button" class="${on ? "is-on" : ""}" onclick="${acao}">${rotulo}</button>`;
+    const barra = `<div class="rcx-toolbar">
+      <label class="rcx-field">Competência
+        <select class="rcx-select" onchange="ResultadoCaixaApp.setMes(this.value)">${mesOpts}</select>
+        <span class="rcx-ml-ano">${ano}</span>
+      </label>
+      <div class="rcx-escala" role="group">
+        ${seg(realOn, "R$", "ResultadoCaixaApp.setEscala('real')")}
+        ${seg(!realOn, "R$ milhões", "ResultadoCaixaApp.setEscala('milhoes')")}
+      </div>
+      <label class="moura-switch rcx-ml-switch">
+        <input type="checkbox" ${this.mlGrupoOrc !== false ? "checked" : ""} onchange="ResultadoCaixaApp.setGrupoMl('orc', this.checked)">
+        <span class="moura-switch-track" aria-hidden="true"></span>
+        <span class="moura-switch-text">Mostrar orçamento</span>
+      </label>
+      <label class="moura-switch rcx-ml-switch">
+        <input type="checkbox" ${this.mlGrupoFc !== false ? "checked" : ""} onchange="ResultadoCaixaApp.setGrupoMl('fc', this.checked)">
+        <span class="moura-switch-track" aria-hidden="true"></span>
+        <span class="moura-switch-text">Mostrar forecast</span>
+      </label>
+      <button type="button" class="rcx-arq-btn" onclick="ResultadoCaixaApp.carregarMl(true)">Atualizar</button>
+      ${this.mlDados && !this.mlLendo ? `<button type="button" class="rcx-arq-btn" title="Copia os cartões e a tabela no padrão do slide Fluxo de caixa MLDU. No PowerPoint, Ctrl+V." onclick="ResultadoCaixaApp.copiarImagemPpt(this)">
+        <i data-lucide="image"></i> Copiar para o PowerPoint
+      </button>` : ""}
+    </div>
+    <p class="rcx-ajuda">Empresa 1, exercício ${ano}. Até ${this.MESES[sel - 1]} o realizado sai do Sienge, só desta empresa. O acumulado anterior compara o orçado da empresa 1 com esse realizado. Os meses seguintes comparam o orçado com o forecast da empresa 1.</p>`;
+    if (this.mlLendo) return barra + this.loaderHtml();
+    if (this.mlErro) return barra + `<div class="rcx-erro">${caixaEsc(this.mlErro)}</div>`;
+    const dados = this.mlDados;
+    if (!dados) return barra;
+    const avisos = [];
+    if (!dados.temArquivo) avisos.push("Ainda não há relatório orçado da Moura Leite neste exercício.");
+    if (sel < 12 && !dados.temForecast) avisos.push("Sem forecast: os meses seguintes ficam só com o orçado.");
+    const cols = [];
+    if (sel > 1) cols.push({ id: "acum", nome: "Acumulado jan–" + this.MESES[sel - 2].toLowerCase(), futuro: false });
+    cols.push({ id: String(sel), nome: this.MESES[sel - 1], futuro: false });
+    for (let m = sel + 1; m <= 12; m++) cols.push({ id: String(m), nome: this.MESES[m - 1], futuro: true });
+    const passados = cols.filter((c) => !c.futuro);
+    const futuros = cols.filter((c) => c.futuro);
+    const orcAberto = this.mlGrupoOrc !== false && futuros.length > 0;
+    const fcAberto = this.mlGrupoFc !== false && futuros.length > 0;
+    const head1 = passados.map((c, i) => `<th colspan="4" class="rcx-ml-grupo${i ? " is-sep" : ""}"><button type="button" class="rcx-ml-abre${this.mlFatia === c.id ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleFatia('${c.id}')">${caixaEsc(c.nome)}</button></th>`).join("")
+      + (orcAberto ? `<th colspan="${futuros.length}" class="rcx-ml-grupo is-orc is-sep">Orçado</th>` : "")
+      + (fcAberto ? `<th colspan="${futuros.length}" class="rcx-ml-grupo is-fcst">Forecast</th>` : "");
+    const head2 = passados.map((c, i) => {
+      const sep = i ? " is-sep" : "";
+      return `<th class="${sep}">Orçado</th><th>Realizado</th><th>Var. %</th><th>Var. R$</th>`;
+    }).join("")
+      + (orcAberto
+        ? futuros.map((c, i) => `<th class="is-orc${i ? "" : " is-sep"}"><button type="button" class="rcx-ml-abre${this.mlFatia === c.id ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleFatia('${c.id}')">${caixaEsc(c.nome)}</button><span class="rcx-ml-sub">ORÇ.</span></th>`).join("")
+        : "")
+      + (fcAberto
+        ? futuros.map((c) => `<th class="is-fcst"><span class="rcx-ml-f">F</span><button type="button" class="rcx-ml-abre${this.mlFatia === c.id ? " is-on" : ""}" onclick="ResultadoCaixaApp.toggleFatia('${c.id}')">${caixaEsc(c.nome)}</button><span class="rcx-ml-sub">FORECAST</span></th>`).join("")
+        : "");
+    const cel = (v, cls) => `<td class="${cls || ""}">${this.mlNum(v)}</td>`;
+    const bloco = (meses) => {
+      const pedacos = passados.map((c, i) => {
+        const f = this.fatiaMl(meses, c.id, sel);
+        const sep = i ? "is-sep" : "";
+        const neg = (f.b - f.a) < -0.5 ? "is-neg" : "";
+        return cel(f.a, sep) + cel(f.b) + `<td>${this.mlPct(f.a, f.b)}</td>` + cel(f.b - f.a, neg);
+      }).join("");
+      let futurosHtml = "";
+      if (orcAberto) futurosHtml += futuros.map((c, i) => cel(this.fatiaMl(meses, c.id, sel).a, "is-orc" + (i ? "" : " is-sep"))).join("");
+      if (fcAberto) futurosHtml += futuros.map((c) => cel(this.fatiaMl(meses, c.id, sel).b, "is-fcst")).join("");
+      const t = this.totaisMl(meses, sel);
+      const ytg = futuros.reduce((s, c) => s + (Number(this.fatiaMl(meses, c.id, sel).b) || 0), 0);
+      return pedacos + futurosHtml + cel(t.oAno, "is-tot is-sep") + cel(t.real, "is-tot") + cel(t.com, "is-tot is-tot-fc") + cel(ytg, "is-tot is-ytg");
+    };
+    const abertos = this.mlAbertos || {};
+    const linhas = [];
+    let ocultar = -1;
+    (dados.linhas || []).forEach((linha) => {
+      if (ocultar >= 0 && linha.level > ocultar) return;
+      ocultar = -1;
+      if (!this.mlVisivel(linha)) return;
+      const aberto = !!abertos[linha.id];
+      const temPlano = !linha.hasKids && (linha.planos || []).length > 0;
+      if (linha.hasKids && !aberto) ocultar = linha.level;
+      const nome = (linha.hasKids || temPlano)
+        ? `<button type="button" class="rcx-ml-no" onclick="ResultadoCaixaApp.toggleNoMl('${linha.id}')">${aberto ? "▾" : "▸"} ${caixaEsc(linha.nome)}</button>`
+        : `<span class="rcx-ml-no">${caixaEsc(linha.nome)}</span>`;
+      linhas.push(`<tr class="is-n${linha.level}${linha.tipo === "formula" ? " is-formula" : ""}"><th>${nome}</th>${bloco(linha.meses)}</tr>`);
+      if (!(aberto && temPlano)) return;
+      (linha.planos || []).forEach((p) => {
+        const pid = linha.id + "||" + p.code;
+        const pAberto = !!abertos[pid];
+        const temCc = (p.ccs || []).length > 0;
+        const rotulo = p.code + (p.nome && p.nome !== p.code ? " - " + p.nome : "");
+        const nomeP = temCc
+          ? `<button type="button" class="rcx-ml-no" onclick="ResultadoCaixaApp.toggleNoMl('${pid}')">${pAberto ? "▾" : "▸"} ${caixaEsc(rotulo)}</button>`
+          : `<span class="rcx-ml-no">${caixaEsc(rotulo)}</span>`;
+        linhas.push(`<tr class="is-plano"><th>${nomeP}</th>${bloco(p.meses)}</tr>`);
+        if (!pAberto) return;
+        (p.ccs || []).forEach((cc) => {
+          const bruto = String(cc.nome || "").trim();
+          const rotuloCc = !bruto || bruto === cc.id ? cc.id : (bruto.indexOf(String(cc.id)) === 0 ? bruto : cc.id + " — " + bruto);
+          linhas.push(`<tr class="is-cc"><th><span class="rcx-ml-no">${caixaEsc(rotuloCc)}</span></th>${bloco(cc.meses)}</tr>`);
+        });
+      });
+    });
+    const span = passados.length * 4
+      + (orcAberto ? futuros.length : 0)
+      + (fcAberto ? futuros.length : 0)
+      + 4;
+    let painel = "";
+    if (this.mlFatia) {
+      const col = cols.find((c) => c.id === this.mlFatia);
+      const mapa = {};
+      (dados.linhas || []).filter((l) => l.tipo !== "formula" && !l.hasKids).forEach((l) => {
+        Object.keys(l.ccs || {}).forEach((id) => {
+          const cc = l.ccs[id];
+          const alvo = mapa[id] || (mapa[id] = { nome: cc.nome || id, meses: this.bagMes() });
+          this.somaMeses(alvo.meses, cc.meses);
+        });
+      });
+      const corpoCc = Object.keys(mapa).map((id) => ({ id: id, nome: mapa[id].nome, fatia: this.fatiaMl(mapa[id].meses, this.mlFatia, sel) }))
+        .filter((r) => Math.abs(r.fatia.a) > 0.5 || Math.abs(r.fatia.b) > 0.5)
+        .sort((a, b) => Math.abs(b.fatia.b) - Math.abs(a.fatia.b))
+        .map((r) => `<tr><td>${caixaEsc(r.id)} ${caixaEsc(r.nome)}</td>${cel(r.fatia.a)}${cel(r.fatia.b)}<td>${this.mlPct(r.fatia.a, r.fatia.b)}</td>${cel(r.fatia.b - r.fatia.a, (r.fatia.b - r.fatia.a) < -0.5 ? "is-neg" : "")}</tr>`)
+        .join("");
+      painel = `<h3 class="rcx-ml-tit">${caixaEsc(col ? col.nome : "")} por centro de custo</h3>
+        <div class="rcx-ml-scroll"><table class="rcx-ml">
+          <thead><tr><th>Centro de custo</th><th>${col && col.futuro ? "Orçado" : "Orçado"}</th><th>${col && col.futuro ? "Forecast" : "Realizado"}</th><th>Var. %</th><th>Var. R$</th></tr></thead>
+          <tbody>${corpoCc || `<tr><td colspan="5">Nenhum centro de custo com valor neste período.</td></tr>`}</tbody>
+        </table></div>`;
+    }
+    const escolhidas = new Set(this.mlSelecionadas(dados).map(String));
+    const contasOrd = (dados.contas || []).slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt"));
+    const checks = contasOrd.map((c) => {
+      const on = escolhidas.has(String(c.numero));
+      const ruim = !this.contaCorrenteMl(c);
+      return `<label class="rcx-ml-conta${ruim ? " is-fora" : ""}"><input type="checkbox" ${on ? "checked" : ""} onchange="ResultadoCaixaApp.toggleContaMl('${caixaEsc(c.numero)}', this.checked)"> <b>${caixaEsc(c.numero)}</b> ${caixaEsc(c.nome)}</label>`;
+    }).join("");
+    const contasSel = (dados.contas || []).filter((c) => escolhidas.has(String(c.numero)));
+    const abertura = contasSel.reduce((s, c) => s + (Number(c.abertura) || 0), 0);
+    const varOrc = (dados.linhas || []).find((l) => l.id === "g_12");
+    const celS = (v) => cel(v, Number(v) < -0.5 ? "is-neg" : "");
+    const snaps = [];
+    let iniO = abertura;
+    let iniR = abertura;
+    for (let m = 1; m <= sel; m++) {
+      const o = varOrc && varOrc.meses ? (Number(varOrc.meses[m - 1].o) || 0) : 0;
+      const r = (dados.movimentos || []).filter((mv) => mv.mes === m && escolhidas.has(String(mv.conta))).reduce((s, mv) => s + mv.valor, 0);
+      const fimO = iniO + o;
+      const fimR = iniR + r;
+      snaps.push({ nome: this.MESES[m - 1], iniO: iniO, iniR: iniR, fimO: fimO, fimR: fimR, varO: fimO - iniO, varR: fimR - iniR });
+      iniO = fimO;
+      iniR = fimR;
+    }
+    const atual = snaps[snaps.length - 1] || { iniO: abertura, iniR: abertura, fimO: abertura, fimR: abertura, varO: 0, varR: 0, nome: "" };
+    const par = (a, b) => celS(a) + celS(b);
+    const trilha = snaps.map((s) => `<th colspan="2">${s.nome}</th>`).join("");
+    const trilhaSub = snaps.map(() => `<th>Orçado</th><th>Realizado</th>`).join("");
+    const linhaSnap = (rotulo, chaveO, chaveR) => `<tr class="is-formula"><th>${rotulo}</th>${snaps.map((s) => par(s[chaveO], s[chaveR])).join("")}</tr>`;
+    const caixaContas = `<h3 class="rcx-ml-tit">Variação de caixa · ${caixaEsc(atual.nome)}/${ano}</h3>
+      <div class="rcx-ml-scroll"><table class="rcx-ml rcx-ml-var">
+        <thead><tr><th></th><th>Orçado</th><th>Realizado</th></tr></thead>
+        <tbody>
+          <tr class="is-formula"><th>Saldo inicial</th>${par(atual.iniO, atual.iniR)}</tr>
+          <tr class="is-formula"><th>Saldo final</th>${par(atual.fimO, atual.fimR)}</tr>
+          <tr class="is-formula"><th>Variação</th>${par(atual.varO, atual.varR)}</tr>
+        </tbody>
+      </table></div>
+      <p class="rcx-ajuda">Variação = saldo final − saldo inicial. O saldo inicial de janeiro é o caixa das contas correntes em 01/01. O orçado soma a linha 12 do DFC. O realizado soma o extrato das contas marcadas.</p>
+      <div class="rcx-ml-scroll"><table class="rcx-ml">
+        <thead><tr><th>Mês</th>${trilha}</tr><tr><th></th>${trilhaSub}</tr></thead>
+        <tbody>
+          ${linhaSnap("Saldo inicial", "iniO", "iniR")}
+          ${linhaSnap("Saldo final", "fimO", "fimR")}
+          ${linhaSnap("Variação", "varO", "varR")}
+        </tbody>
+      </table></div>
+      <details class="rcx-ml-contas">
+        <summary>Contas correntes do saldo <span class="rcx-qtd">${contasSel.length}</span></summary>
+        <div class="rcx-ml-checks">${checks || `<span class="rcx-muted">Nenhuma conta corrente da empresa 1 voltou da API.</span>`}</div>
+      </details>`;
+    return `${barra}
+      ${avisos.map((t) => `<div class="rcx-aviso">${caixaEsc(t)}</div>`).join("")}
+      <div class="rcx-ml-scroll"><table class="rcx-ml">
+        <thead>
+          <tr><th>Conta</th>${head1}<th rowspan="2" class="rcx-ml-grupo is-tot-orc is-sep">TOTAL<br>ORÇ.</th><th rowspan="2" class="rcx-ml-grupo is-ano">Realizado</th><th rowspan="2" class="rcx-ml-grupo is-tot-fc">TOTAL<br>FORECAST</th><th rowspan="2" class="rcx-ml-grupo is-ytg">YTG</th></tr>
+          <tr><th></th>${head2}</tr>
+        </thead>
+        <tbody>${linhas.join("") || `<tr><td colspan="${span}">Sem linhas da visão DFC.</td></tr>`}</tbody>
+      </table></div>
+      ${painel}
+      ${caixaContas}`;
+  },
+
+  renderMantendoScroll() {
+    const se = document.scrollingElement || document.documentElement;
+    const win = se ? se.scrollTop : 0;
+    const boxes = Array.from(document.querySelectorAll("#resultado-caixa-root .rcx-scroll")).map((el) => ({
+      top: el.scrollTop,
+      left: el.scrollLeft
+    }));
+    this.render();
+    if (se) se.scrollTop = win;
+    const novos = document.querySelectorAll("#resultado-caixa-root .rcx-scroll");
+    novos.forEach((el, i) => {
+      const g = boxes[i];
+      if (!g) return;
+      el.scrollTop = g.top;
+      el.scrollLeft = g.left;
+    });
+  },
+
+  render() {
+    const root = document.getElementById("resultado-caixa-root");
+    if (!root) return;
+    const aba = this.aba || "entradas";
+    const tab = (id, label, icon) => `<button type="button" role="tab" aria-selected="${aba === id}" class="ml-tab${aba === id ? " is-active" : ""}" onclick="ResultadoCaixaApp.setAba('${id}')"><i data-lucide="${icon}"></i> ${label}</button>`;
+    let corpo = "";
+    try {
+      corpo = aba === "caixa" ? this.caixaHtml() : this.orcamentoHtml(aba);
+    } catch (e) {
+      console.error("[Resultado de caixa]", e);
+      const msg = String((e && e.message) || e || "erro ao montar a tela");
+      corpo = `<div class="rcx-erro">${msg.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))}</div>`;
+    }
+    root.innerHTML = `
+      <div class="rcx-page">
+        <div class="ml-tabs rcx-tabs" role="tablist">
+          ${tab("entradas", "Entradas", "trending-up")}
+          ${tab("saidas", "Saídas", "trending-down")}
+          ${tab("caixa", "Caixa ML", "landmark")}
+        </div>
+        ${corpo}
+      </div>`;
+    if (window.lucide) lucide.createIcons();
+    if (this.dfcLendo || this.lendo || this.loading || this.mlLendo) this.iniciarCarga(false);
+    else this.pararCarga();
+  }
+};
+
+window.ResultadoCaixaApp = ResultadoCaixaApp;
+
+document.addEventListener("tabChanged", (e) => {
+  if (e.detail === "resultado-caixa") ResultadoCaixaApp.init();
+});

@@ -32,7 +32,7 @@ jobs:
         id: versao
         shell: pwsh
         run: |
-          $saida = & ./_version_bump.ps1
+          $saida = & ./ferramentas/_version_bump.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $ver = "$saida".Trim()
           if ($ver -notmatch '^\d+\.\d+\.\d+$') { throw "Versao inesperada: $ver" }

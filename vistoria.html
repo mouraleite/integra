@@ -45,9 +45,11 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     
-    <!-- O Firebase Modular será importado dentro dos scripts -->
-    <script type="module" src="firebase-config.js"></script>
-    <script type="module" src="vistoria.js?v=6"></script>
+    <!-- Dados da vistoria e envio das fotos pela rota /api/vistoria-publica (Supabase; página sem login). -->
+    <script>window.STORAGE_SEM_LOGIN = true;</script>
+    <script src="js/nucleo/dados-base.js?v=2"></script>
+    <script src="js/nucleo/storage-supabase.js?v=1"></script>
+    <script type="module" src="js/engenharia/vistoria.js?v=8"></script>
 </head>
 <body>
     <div class="container">

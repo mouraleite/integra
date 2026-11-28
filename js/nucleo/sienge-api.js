@@ -1,0 +1,4789 @@
+// Módulo de integração com as APIs GET do Sienge ERP
+// Moura Leite Loteamentos - CRM de Cobrança
+
+const SIENGE_CONFIG = {
+  domain: "mouraleite",
+  // Sem senha no navegador: o /api/sienge-proxy autentica com as variáveis da Vercel.
+  user: "integra",
+  pass: "",
+  baseUrl: (() => {
+    if (window.location.protocol === "file:") {
+      return "/api/sienge-proxy";
+    }
+    if (window.location.port === "3000") {
+      return "/api/sienge-proxy";
+    }
+    const isLocalHost = window.location.hostname === "localhost" || 
+                        window.location.hostname === "127.0.0.1" || 
+                        window.location.hostname.startsWith("192.168.") || 
+                        window.location.hostname.startsWith("10.");
+    if (isLocalHost && window.location.port !== "3000") {
+      return "/api/sienge-proxy";
+    }
+    return "/api/sienge-proxy";
+  })()
+};
+
+// Fallback alinhado ao default de Cobrança Interna (empresas.js).
+// Nunca usar só [1, 2] — isso gravava cache incompleto no 1º acesso de FDS/feriado.
+const ALLOWED_COMPANY_IDS = [1, 2, 3, 6, 13, 28, 32];
+
+function isCompanyCobrancaInterna(company) {
+  if (!company || typeof company !== 'object') return false;
+  const value = company.cobranca_interna;
+  return value === 1 || value === true || value === '1' || value === 'true';
+}
+
+function filaLocalTodayStr() {
+  if (typeof window.localDateStr === 'function') return window.localDateStr(new Date());
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+}
+
+function isFilaNonBusinessDay(dayStr) {
+  const key = String(dayStr || filaLocalTodayStr()).slice(0, 10);
+  if (typeof window.isBusinessDayIso === 'function') return !window.isBusinessDayIso(key);
+  const d = new Date(key + 'T12:00:00');
+  if (Number.isNaN(d.getTime())) return false;
+  const dow = d.getDay();
+  if (dow === 0 || dow === 6) return true;
+  if (typeof window.isHoliday === 'function') return !!window.isHoliday(d);
+  return false;
+}
+
+function filaFullRefreshFlagKey(dayStr) {
+  return `crm_fila_full_refresh_${String(dayStr || filaLocalTodayStr()).slice(0, 10)}`;
+}
+
+function shouldForceFilaFullRefreshOnAccess(forceRefresh) {
+  if (forceRefresh) return true;
+  const today = filaLocalTodayStr();
+  if (!isFilaNonBusinessDay(today)) return false;
+  try {
+    return localStorage.getItem(filaFullRefreshFlagKey(today)) !== 'done';
+  } catch (e) {
+    return true;
+  }
+}
+
+function markFilaFullRefreshDone(dayStr) {
+  try {
+    localStorage.setItem(filaFullRefreshFlagKey(dayStr || filaLocalTodayStr()), 'done');
+  } catch (e) {}
+}
+
+window.shouldForceFilaRefreshOnNonBusinessAccess = function() {
+  return shouldForceFilaFullRefreshOnAccess(false);
+};
+
+function collectInternalIdsFromCustomMap(customData) {
+  if (!customData || typeof customData !== 'object') return [];
+  return Object.entries(customData)
+    .filter(([id, c]) => id !== '_v2' && isCompanyCobrancaInterna(c))
+    .map(([id, c]) => Number(c.company_id ?? c.id ?? id))
+    .filter(Number.isFinite);
+}
+
+function getConfiguredInternalCompanyIds() {
+  try {
+    if (window.EmpresasApp && typeof window.EmpresasApp.ensureDefaultCobrancaFlags === 'function') {
+      window.EmpresasApp.ensureDefaultCobrancaFlags();
+    }
+
+    if (window.EmpresasState && window.EmpresasState.customFields) {
+      const fromState = collectInternalIdsFromCustomMap(window.EmpresasState.customFields);
+      if (fromState.length > 0) return [...new Set(fromState)];
+    }
+
+    const localCustom = localStorage.getItem('crm_empresas_custom');
+    if (localCustom) {
+      const customData = JSON.parse(localCustom);
+      const internalIds = collectInternalIdsFromCustomMap(customData);
+      if (internalIds.length > 0) return [...new Set(internalIds)];
+    }
+  } catch (e) {
+    console.warn('[Sienge] Erro ao ler crm_empresas_custom para empresas internas:', e);
+  }
+
+  return [...ALLOWED_COMPANY_IDS];
+}
+
+/** Revisão 6 busca a fila de novo: baixa parcial deixava de entrar no saldo em aberto. */
+function filaCacheDoDiaServe(rev) {
+  return Number(rev) === 6;
+}
+
+/** Cache do dia só vale se cobriu as empresas internas esperadas (evita base só 1+2). */
+function defaultersCacheLooksIncomplete(data, meta, expectedIds) {
+  const expected = [...new Set((expectedIds || getConfiguredInternalCompanyIds()).map(Number).filter(Number.isFinite))];
+  if (expected.length <= 2) return false;
+
+  const metaIds = meta && Array.isArray(meta.companyIds)
+    ? meta.companyIds.map(Number).filter(Number.isFinite)
+    : null;
+  const contagem = {};
+  (Array.isArray(data) ? data : []).forEach((b) => {
+    const id = Number(b && b.companyId);
+    if (!Number.isFinite(id)) return;
+    contagem[id] = (contagem[id] || 0) + 1;
+  });
+  // A empresa 1 é a maior carteira. Três títulos e valor zerado, como na carga de 25/11, não é a fila do dia.
+  if ((contagem[1] || 0) > 0 && (contagem[1] || 0) < 50) return true;
+  if (expected.indexOf(1) >= 0 && (contagem[1] || 0) < 50 && (Array.isArray(data) ? data.length : 0) > 0) return true;
+
+  if (metaIds && metaIds.length) {
+    // companyIds são as empresas que responderam na carga (as que falharam ficam de fora). Empresa que respondeu
+    // sem título vencido (ex.: 4 e 14, sempre zeradas) não é carga incompleta; antes isso recusava todo cache do dia.
+    const have = new Set(metaIds);
+    return expected.some((id) => !have.has(id));
+  }
+
+  const found = new Set();
+  Object.keys(contagem).forEach((id) => found.add(Number(id)));
+  const beyond12 = expected.filter((id) => id !== 1 && id !== 2);
+  if (!beyond12.length) return false;
+  const only12 = [...found].every((id) => id === 1 || id === 2);
+  return only12;
+}
+
+function installmentDueIso(inst) {
+  return String((inst && inst.dueDate) || "").slice(0, 10);
+}
+
+function valorNumero() {
+  for (let i = 0; i < arguments.length; i++) {
+    const n = Number(arguments[i]);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
+}
+
+function faceParcela(inst) {
+  if (!inst) return 0;
+  const n = valorNumero(inst.originalValue, inst.originalAmount, inst.installmentValue, inst.value, inst.baseValue);
+  return Number.isFinite(n) && n > 0.009 ? n : 0;
+}
+
+function valorRecebidoRecibo(r) {
+  if (!r) return 0;
+  const n = valorNumero(r.netAmount, r.receiptNetAmount, r.netReceiptValue, r.grossAmount, r.correctedNetAmount, r.receiptValue, r.receivedAmount);
+  if (Number.isFinite(n) && n > 0) return n;
+  const temData = r.paymentDate || r.receiptDate || r.operationTypeId;
+  const v = Number(r.value);
+  if (temData && Number.isFinite(v) && v > 0) return v;
+  return 0;
+}
+
+function valorRecebidoParcela(inst) {
+  const recs = Array.isArray(inst && inst.receipts) ? inst.receipts : [];
+  return recs.reduce((s, r) => s + valorRecebidoRecibo(r), 0);
+}
+
+/* Saldo que o Sienge ainda deixa em aberto. Baixa parcial não zera a parcela. */
+function saldoCorrigidoParcela(inst) {
+  if (!inst) return 0;
+  const cb = inst.currentBalance;
+  if (cb !== undefined && cb !== null && Number(cb) > 0.009) return Number(cb);
+  const sem = Number(inst.correctedValueWithoutAdditions);
+  if (Number.isFinite(sem) && sem > 0.009) return sem;
+  const com = Number(inst.correctedValueWithAdditions);
+  if (Number.isFinite(com) && com > 0.009) return com;
+  return 0;
+}
+
+function baixaQuitaParcela(face, pago) {
+  return face > 0.009 && pago + 0.05 >= face;
+}
+
+function installmentIsSettled(inst) {
+  if (!inst) return true;
+  const sit = String(inst.installmentSituation || inst.situation || inst.status || "").toLowerCase();
+  if (sit === "2" || sit === "paid" || /quitad|paga/.test(sit)) return true;
+  const cb = inst.currentBalance;
+  if (cb !== undefined && cb !== null && Number(cb) <= 0.009) return true;
+  const face = faceParcela(inst);
+  const pago = valorRecebidoParcela(inst);
+  if (baixaQuitaParcela(face, pago)) return true;
+  if (cb !== undefined && cb !== null && Number(cb) > 0.009) return false;
+  if (pago > 0.009 && face > 0.009 && pago + 0.05 < face && saldoCorrigidoParcela(inst) > 0.009) return false;
+  if (inst.isValidReceipt === true) return true;
+  const recs = Array.isArray(inst.receipts) ? inst.receipts : [];
+  return recs.some((r) => {
+    const op = String(r.operationTypeId || r.typeId || r.type || "");
+    const val = valorRecebidoRecibo(r);
+    const dt = r.paymentDate || r.receiptDate || r.date;
+    return dt && (String(op) === "2" || val > 0.009);
+  });
+}
+
+function installmentOverdueAmount(inst) {
+  const face = faceParcela(inst);
+  const pago = valorRecebidoParcela(inst);
+  const parcial = pago > 0.009 && face > 0.009 && !baixaQuitaParcela(face, pago);
+  let amount = 0;
+  if (inst.correctedValueWithAdditions !== undefined && inst.correctedValueWithAdditions !== null) {
+    amount = Number(inst.correctedValueWithAdditions) || 0;
+  } else if (inst.correctedValueWithoutAdditions !== undefined && inst.correctedValueWithoutAdditions !== null) {
+    amount = (Number(inst.correctedValueWithoutAdditions) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+  } else {
+    amount = (Number(inst.value) || 0) + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+  }
+  if (parcial && amount > face + 0.05) {
+    const cb = Number(inst.currentBalance);
+    if (Number.isFinite(cb) && cb > 0.009) {
+      return cb + (Number(inst.interest) || 0) + (Number(inst.fine) || 0);
+    }
+  }
+  return amount;
+}
+
+function mesclarTitulosInadimplentes(bills) {
+  const porId = new Map();
+  const semId = [];
+  (bills || []).forEach((bill) => {
+    if (!bill) return;
+    const id = String(bill.receivableBillId || bill.id || "");
+    if (!id) { semId.push(bill); return; }
+    const prev = porId.get(id);
+    if (!prev) { porId.set(id, bill); return; }
+    const insts = new Map();
+    const add = (inst) => {
+      if (!inst) return;
+      const key = String(inst.installmentId || inst.id || "") + "|" + String(inst.dueDate || "").slice(0, 10);
+      const cur = insts.get(key);
+      const v = Number(inst.correctedValueWithAdditions);
+      const cv = cur ? Number(cur.correctedValueWithAdditions) : -1;
+      if (!cur || (Number.isFinite(v) && v > cv)) insts.set(key, inst);
+    };
+    (prev.defaulterInstallments || []).forEach(add);
+    (bill.defaulterInstallments || []).forEach(add);
+    prev.defaulterInstallments = Array.from(insts.values());
+    if ((!prev.costCentersId || !prev.costCentersId.length) && bill.costCentersId) prev.costCentersId = bill.costCentersId;
+    if ((!prev.underJudgmentInstallments || !prev.underJudgmentInstallments.length) && bill.underJudgmentInstallments && bill.underJudgmentInstallments.length) {
+      prev.underJudgmentInstallments = bill.underJudgmentInstallments;
+    }
+  });
+  return Array.from(porId.values()).concat(semId);
+}
+
+/**
+ * Revisão 3: o saldo corrigido continua na fila mesmo quando o título teve
+ * recebimento recente e só resta uma parcela em aberto. A revisão 2 já trazia
+ * as parcelas de tipo que não gera cobrança.
+ */
+const DEFAULTERS_CACHE_REV = 6;
+
+function linhasBulkDefaulters(res) {
+  if (!res || typeof res !== "object") return null;
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.data)) return res.data;
+  if (Array.isArray(res.results)) return res.results;
+  if (res.data && Array.isArray(res.data.results)) return res.data.results;
+  return null;
+}
+
+function idTituloInadimplente(bill) {
+  return String((bill && (bill.receivableBillId || bill.id || bill.saleId)) || "");
+}
+
+function tituloTrazSubJudice(bill, ids) {
+  const id = idTituloInadimplente(bill);
+  if (id && ids && ids.has(id)) return true;
+  return !!(bill && Array.isArray(bill.underJudgmentInstallments) && bill.underJudgmentInstallments.length);
+}
+
+function documentoExtratoEhCt(row) {
+  const tipo = String((row && (row.documentIdentificationId || row.documentId || row.documentsId)) || "").trim().toUpperCase();
+  if (!tipo || /^\d+$/.test(tipo)) return true;
+  return tipo === "CT";
+}
+
+function idTituloExtrato(row) {
+  return String((row && (row.billReceivableId || row.receivableBillId)) || "").replace(/^B-/, "").split("-")[0];
+}
+
+function diasAtrasoParcela(due, today) {
+  const iso = String(due || "").slice(0, 10);
+  if (!iso || iso > today) return 0;
+  const a = new Date(iso + "T12:00:00");
+  const b = new Date(today + "T12:00:00");
+  return Math.max(0, Math.round((b.getTime() - a.getTime()) / 86400000));
+}
+
+function rotuloUnidadesExtrato(row) {
+  if (!row) return "N/D";
+  if (typeof row.units === "string" && row.units.trim()) return row.units;
+  if (Array.isArray(row.units)) {
+    const names = row.units.map((u) => u && (u.name || u.unitName || u.id)).filter(Boolean);
+    if (names.length) return names.join(", ");
+  }
+  return row.unitName || "N/D";
+}
+
+function linhasDoExtrato(res) {
+  if (!res) return [];
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res.data)) return res.data;
+  if (Array.isArray(res.results)) return res.results;
+  return [];
+}
+
+async function fetchExtratoVencidoCc(ccId, today) {
+  const path = (s, e) => `/bulk-data/v1/customer-extract-history?startDueDate=${s}&endDueDate=${e}&costCenterId=${encodeURIComponent(ccId)}`
+    + "&documentsId=CT&includeRemadeInstallments=false&includeCanceledInstallments=false&includeRevokedInstallments=false&includeRenegotiatedDischarge=false";
+  const get = async (s, e, depth) => {
+    try {
+      return linhasDoExtrato(await siengeFetch(path(s, e)));
+    } catch (err) {
+      const status = Number(err && err.status);
+      if (status === 429 && depth < 8) {
+        await new Promise((r) => setTimeout(r, 2000));
+        return get(s, e, depth + 1);
+      }
+      if (status === 404) return [];
+      const sy = Number(String(s).slice(0, 4));
+      const ey = Number(String(e).slice(0, 4));
+      if (status !== 507 || depth > 6 || ey - sy < 1) throw err;
+      const mid = Math.floor((sy + ey) / 2);
+      const left = await get(s, mid + "-12-31", depth + 1);
+      const right = await get((mid + 1) + "-01-01", e, depth + 1);
+      return left.concat(right);
+    }
+  };
+  return get("1996-01-01", today, 0);
+}
+
+/**
+ * A fila de inadimplentes do Sienge deixa de fora a parcela cujo tipo de condição não gera cobrança.
+ * O extrato CT traz o saldo em aberto. Entram no total vencido só as que ainda não estão no título.
+ */
+function incluirParcelasForaDaCobranca(normalized, rows, today, companyId) {
+  const porId = new Set();
+  const porVencimento = new Set();
+  const porTitulo = new Map();
+  (normalized || []).forEach((b) => {
+    const billId = String(b.id);
+    porTitulo.set(billId, b);
+    (b.defaulterInstallments || []).forEach((inst) => {
+      const id = String(inst.installmentId || inst.id || "");
+      const due = String(inst.dueDate || "").slice(0, 10);
+      if (id) porId.add(billId + "|" + id);
+      if (due) porVencimento.add(billId + "|" + due);
+    });
+  });
+
+  const extras = new Map();
+  (rows || []).forEach((row) => {
+    if (!row || !documentoExtratoEhCt(row)) return;
+    const billId = idTituloExtrato(row);
+    if (!billId) return;
+    (row.installments || []).forEach((p) => {
+      if (!p) return;
+      const due = String(p.dueDate || "").slice(0, 10);
+      if (!due || due >= today) return;
+      const saldo = Number(p.currentBalance);
+      const comAcr = Number(p.currentBalanceWithAddition);
+      const valor = Number.isFinite(comAcr) && comAcr > 0.009 ? comAcr : (Number.isFinite(saldo) ? saldo : 0);
+      if (!(valor > 0.009)) return;
+      const instId = String(p.id || p.installmentId || "");
+      if (instId && porId.has(billId + "|" + instId)) return;
+      if (due && porVencimento.has(billId + "|" + due)) return;
+      const chave = billId + "|" + (instId || due) + "|" + due;
+      let acc = extras.get(chave);
+      if (!acc) {
+        const cliente = row.customer || {};
+        acc = {
+          billId,
+          instId,
+          due,
+          saldo: 0,
+          valor: 0,
+          companyId: row.companyId || companyId,
+          customerId: cliente.id != null ? Number(cliente.id) : (row.clientId != null ? Number(row.clientId) : 0),
+          clientName: cliente.name || cliente.tradeName || row.clientName || "Cliente",
+          costCenterId: row.costCenterId || null,
+          units: rotuloUnidadesExtrato(row),
+          conditionType: p.conditionType || p.paymentConditionType || p.paymentCondition || ""
+        };
+        extras.set(chave, acc);
+      }
+      acc.saldo += Number.isFinite(saldo) ? saldo : valor;
+      acc.valor += valor;
+    });
+  });
+
+  let acrescentadas = 0;
+  extras.forEach((acc) => {
+    if (!(acc.valor > 0.009)) return;
+    const inst = {
+      id: acc.instId || undefined,
+      installmentId: acc.instId || undefined,
+      dueDate: acc.due,
+      currentBalance: acc.saldo,
+      correctedValueWithAdditions: acc.valor,
+      conditionType: acc.conditionType,
+      receipts: [],
+      daysOfDelay: diasAtrasoParcela(acc.due, today),
+      foraDaCobranca: true
+    };
+    let bill = porTitulo.get(acc.billId);
+    if (!bill) {
+      bill = {
+        id: acc.billId,
+        saleId: Number(acc.billId) || acc.billId,
+        realSaleId: null,
+        customerId: acc.customerId,
+        clientName: acc.clientName,
+        companyId: acc.companyId,
+        costCentersId: acc.costCenterId ? [acc.costCenterId] : [],
+        costCenterId: acc.costCenterId,
+        units: acc.units,
+        value: 0,
+        interest: 0,
+        fine: 0,
+        daysDelay: 0,
+        slipStatus: "Vencido",
+        subjudice: "N",
+        defaulterInstallments: [],
+        defaulterJudicialActivities: [],
+        totalInstallmentsCount: 0,
+        foraDaCobranca: true
+      };
+      porTitulo.set(acc.billId, bill);
+      normalized.push(bill);
+    }
+    bill.defaulterInstallments = bill.defaulterInstallments || [];
+    bill.defaulterInstallments.push(inst);
+    bill.totalInstallmentsCount = (Number(bill.totalInstallmentsCount) || 0) + 1;
+    const open = typeof window.summarizeOpenDefaulterBill === "function"
+      ? window.summarizeOpenDefaulterBill(bill)
+      : null;
+    if (open) {
+      bill.value = open.value;
+      bill.interest = open.interest;
+      bill.fine = open.fine;
+      bill.daysDelay = open.daysDelay;
+      bill.defaulterInstallments = open.installments || bill.defaulterInstallments;
+    } else {
+      bill.value = (Number(bill.value) || 0) + acc.valor;
+      if (inst.daysOfDelay > (bill.daysDelay || 0)) bill.daysDelay = inst.daysOfDelay;
+    }
+    if (acc.instId) porId.add(acc.billId + "|" + acc.instId);
+    porVencimento.add(acc.billId + "|" + acc.due);
+    acrescentadas += 1;
+  });
+  return acrescentadas;
+}
+
+function paidMapDaysForBill(bill, paidMap) {
+  if (!paidMap || typeof paidMap.get !== "function") return null;
+  const ids = [bill.id, bill.saleId, bill.receivableBillId, bill.billReceivableId]
+    .filter((v) => v !== undefined && v !== null && v !== "")
+    .map((v) => String(v));
+  for (const id of ids) {
+    if (!paidMap.has(id)) continue;
+    const v = paidMap.get(id);
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && /^\d{1,3}$/.test(v)) return Number(v);
+  }
+  return null;
+}
+
+function lastPayIsoFromDays(days, todayIso) {
+  const d = new Date(todayIso + "T12:00:00");
+  d.setDate(d.getDate() - Number(days));
+  return d.toISOString().slice(0, 10);
+}
+
+function paidMapDayFlagKey(dayStr) {
+  return "crm_paidmap_prefetch_" + String(dayStr || filaLocalTodayStr()).slice(0, 10);
+}
+
+function markPaidMapDayDone(dayStr) {
+  try { localStorage.setItem(paidMapDayFlagKey(dayStr), "done"); } catch (e) {}
+  if (typeof window !== "undefined") window.hasPrefetchedPayments = true;
+}
+
+function applyPaidCacheFields(paidMapStr, paidInstStr) {
+  if (typeof window === "undefined") return;
+  window.advFilters = window.advFilters || {};
+  if (paidMapStr) {
+    try {
+      const restored = new Map(JSON.parse(paidMapStr));
+      window.advFilters.paidMap = restored;
+      if (typeof window.syncRecentPaidMap === "function") window.syncRecentPaidMap(restored);
+    } catch (e) {}
+  }
+  if (paidInstStr) {
+    try {
+      const arr = JSON.parse(paidInstStr);
+      window.advFilters.paidInstallmentIds = new Set(Array.isArray(arr) ? arr : []);
+    } catch (e) {}
+  }
+  if (window.paidMapHasBillDays && window.paidMapHasBillDays(window.getRecentPaidMap ? window.getRecentPaidMap() : window.advFilters.paidMap)) {
+    markPaidMapDayDone();
+  }
+}
+
+async function hydratePaidMapsFromDailyCache(todayStr) {
+  const day = todayStr || filaLocalTodayStr();
+  try {
+    const localCache = await IdbDefaultersCache.get(`defaulters_${day}`);
+    if (localCache && (localCache.paidMap || localCache.paidInstallmentIds)) {
+      applyPaidCacheFields(localCache.paidMap, localCache.paidInstallmentIds);
+      if (window.paidMapHasBillDays && window.paidMapHasBillDays(window.getRecentPaidMap ? window.getRecentPaidMap() : null)) {
+        return true;
+      }
+    }
+  } catch (e) {}
+  if (typeof window !== "undefined" && window.DadosCobranca) {
+    try {
+      // Supabase: ficha do dia em sienge_defaulters_history; comoTexto devolve paidMap/paidInstallmentIds como texto JSON (igual ao Firestore).
+      const meta = await window.DadosCobranca.lerCacheDia(day, { comoTexto: true });
+      if (meta) {
+        applyPaidCacheFields(meta.paidMap, meta.paidInstallmentIds);
+        if (window.paidMapHasBillDays && window.paidMapHasBillDays(window.getRecentPaidMap ? window.getRecentPaidMap() : null)) {
+          return true;
+        }
+      }
+    } catch (e) {}
+  }
+  return false;
+}
+
+function serializePaidInstallmentIds() {
+  try {
+    if (typeof window !== "undefined" && window.advFilters && window.advFilters.paidInstallmentIds) {
+      return JSON.stringify(Array.from(window.advFilters.paidInstallmentIds));
+    }
+  } catch (e) {}
+  return null;
+}
+
+function baixaRegistrada(billIds, instKey) {
+  if (typeof window === "undefined" || !window.advFilters || !(window.advFilters.paidInstallmentAmounts instanceof Map)) return null;
+  const amounts = window.advFilters.paidInstallmentAmounts;
+  const ids = billIds || [];
+  for (let i = 0; i < ids.length; i++) {
+    const info = amounts.get(String(ids[i]) + ":" + String(instKey));
+    if (info && Number(info.amount) > 0.009) return info;
+  }
+  return null;
+}
+
+window.summarizeOpenDefaulterBill = function(bill) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const all = (bill && bill.defaulterInstallments) || [];
+  const paidInst = (typeof window !== "undefined" && window.advFilters && window.advFilters.paidInstallmentIds) || null;
+  const billIds = [bill && bill.id, bill && bill.saleId, bill && bill.receivableBillId]
+    .filter((v) => v !== undefined && v !== null && v !== "")
+    .map((v) => String(v));
+
+  let open = all.filter((inst) => {
+    if (installmentIsSettled(inst)) return false;
+    const due = installmentDueIso(inst);
+    if (due && due > todayIso) return false;
+    const instKey = String(inst.installmentId || inst.installmentNumber || "");
+    if (paidInst && instKey && billIds.some((id) => paidInst.has(id + ":" + instKey))) {
+      const info = baixaRegistrada(billIds, instKey);
+      const face = faceParcela(inst);
+      const pago = info ? Number(info.amount) || 0 : 0;
+      if (baixaQuitaParcela(face, pago)) return false;
+      if (!(face > 0.009) && pago > 0.009 && info.date === filaLocalTodayStr()) return false;
+      if (saldoCorrigidoParcela(inst) > 0.009 || installmentOverdueAmount(inst) > 0.009) return true;
+      return false;
+    }
+    return true;
+  });
+
+  let value = 0, interest = 0, fine = 0, daysDelay = 0;
+  open.forEach((inst) => {
+    value += installmentOverdueAmount(inst);
+    interest += Number(inst.interest) || 0;
+    fine += Number(inst.fine) || 0;
+    const delay = inst.daysOfDelay !== undefined ? inst.daysOfDelay : (inst.daysDelay || 0);
+    if (Number(delay) > daysDelay) daysDelay = Number(delay) || 0;
+  });
+
+  if (!all.length) {
+    value = Number(bill && (bill.value || bill.totalValue)) || 0;
+    daysDelay = Number(bill && bill.daysDelay) || 0;
+    open = [];
+  }
+
+  return {
+    skip: daysDelay <= 0 || value <= 0.009,
+    value,
+    interest,
+    fine,
+    daysDelay,
+    installments: open
+  };
+};
+
+function getBasicAuthHeader() {
+  const credentials = `${SIENGE_CONFIG.user}:${SIENGE_CONFIG.pass}`;
+  return "Basic " + btoa(credentials);
+}
+
+let s_apiMode = "real";
+
+function setApiMode(mode) {
+  // Always use "real" mode
+  s_apiMode = "real";
+  localStorage.setItem("crm_sienge_api_mode", "real");
+}
+
+function getApiMode() {
+  return s_apiMode;
+}
+
+// -----------------------------------------------
+// AUDITORIA DO SISTEMA (Segurança)
+// -----------------------------------------------
+const AuditService = {
+  COLLECTION: "auditoria_logs",
+  MAX_LOCAL: 800,
+
+  currentUser: function() {
+    const u = window.AppState && AppState.currentUser;
+    if (u && (u.name || u.email)) {
+      return { name: u.name || "", email: String(u.email || "").toLowerCase() };
+    }
+    try {
+      const s = JSON.parse(localStorage.getItem("crm_moura_user_session") || "null");
+      if (s) return { name: s.name || "", email: String(s.email || "").toLowerCase() };
+    } catch (e) {}
+    return { name: "Desconhecido", email: "" };
+  },
+
+  customerLabel: function(customerId) {
+    const id = customerId == null ? "" : String(customerId).trim();
+    if (!id) return "";
+    try {
+      const c = window.AppState && AppState.customers && (AppState.customers[id] || AppState.customers[customerId]);
+      const name = c && (c.name || c.customerName || c.clientName);
+      if (name) return id + " — " + name;
+    } catch (e) {}
+    return "Cliente " + id;
+  },
+
+  slim: function(value) {
+    try {
+      const s = JSON.stringify(value);
+      if (s && s.length > 3500) return { truncated: true, preview: s.slice(0, 1800) };
+      return value;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  getLogs: function() {
+    try {
+      const logs = localStorage.getItem("crm_audit_logs");
+      return logs ? JSON.parse(logs) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  _saveLocal: function(rec) {
+    const logs = this.getLogs();
+    if (logs.some(function(l) { return l && l.id === rec.id; })) return;
+    logs.unshift(rec);
+    if (logs.length > this.MAX_LOCAL) logs.length = this.MAX_LOCAL;
+    localStorage.setItem("crm_audit_logs", JSON.stringify(logs));
+  },
+
+  _persistRemote: function(rec) {
+    // Supabase: auditoria_logs só aceita inclusão (sem política de update), por isso insert e não upsert.
+    try {
+      const D = window.DadosNucleo;
+      if (!D) return;
+      const linha = D.tabela(this.COLLECTION).paraLinha(rec, String(rec.id));
+      D.pronto.then(function() {
+        return window.sb.from("auditoria_logs").insert(linha);
+      }).then(function(r) {
+        if (r && r.error) console.warn("[Auditoria] Supabase", r.error);
+      }).catch(function(e) {
+        console.warn("[Auditoria] Supabase", e);
+      });
+    } catch (e) {
+      console.warn("[Auditoria] Supabase", e);
+    }
+  },
+
+  resolveEnterpriseName: function(id) {
+    const sid = id == null ? "" : String(id).trim();
+    if (!sid) return "";
+    try {
+      const list = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+      const cc = list.find(function(c) {
+        return String(c.id) === sid || String(c.code) === sid;
+      });
+      if (cc && cc.name) return String(cc.name);
+    } catch (e) {}
+    return "";
+  },
+
+  logEvent: function(entry) {
+    try {
+      const user = this.currentUser();
+      const d = (entry && entry.details) || {};
+      const enterpriseId = String((entry && entry.enterpriseId) || d.enterpriseId || d.costCenterId || "").trim();
+      const unitId = String((entry && entry.unitId) || d.unitId || "").trim();
+      const titleId = String((entry && entry.titleId) || d.receivableBillId || d.titleId || "").trim();
+      const rec = {
+        id: (entry && entry.id) || (Date.now() + "-" + Math.random().toString(36).slice(2, 9)),
+        timestamp: (entry && entry.timestamp) || new Date().toISOString(),
+        user: (entry && entry.user) || user.name || "Desconhecido",
+        userEmail: String((entry && entry.userEmail) || user.email || "").toLowerCase(),
+        action: (entry && entry.action) || "HTTP",
+        module: (entry && entry.module) || "Sistema",
+        status: (entry && entry.status) || "ok",
+        summary: (entry && entry.summary) || "",
+        customerId: entry && entry.customerId != null ? String(entry.customerId) : "",
+        customerLabel: (entry && entry.customerLabel) || this.customerLabel(entry && entry.customerId),
+        enterpriseId: enterpriseId,
+        enterpriseName: (entry && entry.enterpriseName) || d.enterpriseName || d.costCenterName || this.resolveEnterpriseName(enterpriseId),
+        unitId: unitId,
+        unitName: (entry && entry.unitName) || d.unitName || "",
+        titleId: titleId,
+        details: this.slim((entry && entry.details) || {}),
+        endpoint: (entry && entry.endpoint) || "",
+        method: (entry && entry.method) || ""
+      };
+      this._saveLocal(rec);
+      this._persistRemote(rec);
+      return rec;
+    } catch (e) {
+      console.error("Erro ao salvar log de auditoria", e);
+      return null;
+    }
+  },
+
+  logAction: function(module, endpoint, method, payload) {
+    this.logEvent({
+      action: "HTTP",
+      module: module,
+      endpoint: endpoint,
+      method: method,
+      summary: (method || "") + " " + (endpoint || ""),
+      details: { payload: this.slim(payload) }
+    });
+  },
+
+  inferModuleFromUrl: function(url) {
+    url = String(url || "").toLowerCase();
+    if (url.includes("/attachments")) return "GED / Anexos";
+    if (url.includes("/sales-contracts") || url.includes("/sales-contracts-renegotiations")) return "Comercial";
+    if (url.includes("/payable-bills") || url.includes("/creditors")) return "Compras/Contas a Pagar";
+    if (url.includes("/receivable-bills") || url.includes("/overdue-receivable-bill")) return "Financeiro";
+    if (url.includes("/units") || url.includes("/enterprises")) return "Engenharia";
+    if (url.includes("/tags") || url.includes("/ocr")) return "GED / Anexos";
+    if (url.includes("/relacionamento")) return "Relacionamento";
+    return "Sistema";
+  },
+
+  loadRemote: async function(maxRows) {
+    const limitN = maxRows || 400;
+    if (!window.DadosNucleo) return [];
+    try {
+      return await window.DadosNucleo.tabela(this.COLLECTION).listar({ ordem: ["timestamp", "desc"], limite: limitN });
+    } catch (err) {
+      console.warn("[Auditoria] leitura Supabase", err);
+      return [];
+    }
+  }
+};
+
+window.AuditService = AuditService;
+window.logCrmAudit = function(entry) {
+  return AuditService.logEvent(entry);
+};
+
+// Cache Local via IndexedDB para evitar dependência total do Firebase e limites de Quota
+const IdbDefaultersCache = {
+    dbName: 'CrmDefaultersDB',
+    storeName: 'DefaultersCache',
+    openDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, 1);
+            request.onupgradeneeded = e => e.target.result.createObjectStore(this.storeName);
+            request.onsuccess = e => resolve(e.target.result);
+            request.onerror = e => reject(e.target.error);
+        });
+    },
+    async get(key) {
+        try {
+            const db = await this.openDB();
+            if (!db.objectStoreNames.contains(this.storeName)) return null;
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readonly');
+                const req = tx.objectStore(this.storeName).get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        } catch(e) { return null; }
+    },
+    async set(key, val) {
+        try {
+            const db = await this.openDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this.storeName, 'readwrite');
+                const req = tx.objectStore(this.storeName).put(val, key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => reject(req.error);
+            });
+        } catch(e) {}
+    }
+};
+
+window.IdbDefaultersCache = IdbDefaultersCache;
+window.FILA_PRONTA_REV = 2;
+
+const FILA_PRONTA_CAMPOS = [
+  "customerId", "customerName", "customerCpf", "saleId", "companyId", "costCenterId",
+  "unitName", "unitId", "subjudice", "percPaid", "assignedOperator", "appliedRule",
+  "overdueValue", "overdueCharges", "maxDaysDelay", "billCount", "billIds",
+  "isZeroPaid", "hasOverdueAgreement", "agreementDaysDelay", "oldestDueDateMs", "dueDay",
+  "hasUnpaidSinal", "sinalDaysDelay", "lotesCount", "age",
+  "isInternalBrokenAgreement", "isAcordoJudicialQuebrado", "distratado",
+  "_filaQueueGroup", "lastPayDays"
+];
+
+function fotoFilaPronta(c) {
+  if (!c) return null;
+  const row = {};
+  FILA_PRONTA_CAMPOS.forEach((k) => {
+    if (c[k] !== undefined) row[k] = c[k];
+  });
+  if (Array.isArray(c.billIds)) row.billIds = c.billIds.slice();
+  return row;
+}
+
+window.salvarFilaProntaDoDia = function(rawList) {
+  const today = filaLocalTodayStr();
+  const rows = (rawList || []).map(fotoFilaPronta).filter(Boolean);
+  if (!rows.length) return;
+  const atFull = new Date().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const payload = { date: today, rev: window.FILA_PRONTA_REV, count: rows.length, atFull: atFull, rows: rows };
+  window._filaProntaCache = { date: today, rows: rows };
+  IdbDefaultersCache.set("fila_pronta_" + today, payload).catch(() => {});
+  if (!window.DadosCobranca) return;
+  const CHUNK = 400;
+  const numChunks = Math.ceil(rows.length / CHUNK);
+  (async () => {
+    try {
+      // Supabase: mesmos ids do Firestore em sienge_defaulters_history; "data" vai como jsonb (sem JSON.stringify).
+      for (let i = 0; i < numChunks; i++) {
+        const slice = rows.slice(i * CHUNK, (i + 1) * CHUNK);
+        await window.DadosCobranca.gravarCacheDia(today + "_pronta_" + i, { data: slice });
+      }
+      await window.DadosCobranca.gravarCacheDia(today + "_pronta", {
+        date: today,
+        chunks: numChunks,
+        count: rows.length,
+        rev: window.FILA_PRONTA_REV,
+        atFull: atFull
+      });
+      console.log("%c[Fila] Fila pronta do dia salva (" + rows.length + " títulos).", "color:#105436;font-weight:bold;");
+    } catch (e) {
+      console.warn("[Fila] Não salvou a fila pronta no Supabase", e);
+    }
+  })();
+};
+
+/**
+ * Tira da fila (ou reduz o valor) o que foi pago depois que a fila do dia foi montada.
+ * Recalcula cada linha com as parcelas da base do dia e a lista de parcelas pagas.
+ * Só mexe quando o valor em aberto diminuiu; nunca aumenta nem cria linha.
+ */
+window.filaAplicarPagamentosRecentes = function(rows) {
+  const bills = (window.AppState && Array.isArray(window.AppState.defaultersBills)) ? window.AppState.defaultersBills : [];
+  if (!Array.isArray(rows) || !rows.length || !bills.length || typeof window.summarizeOpenDefaulterBill !== "function") return rows;
+  const porContrato = new Map();
+  bills.forEach((b) => {
+    if (!b) return;
+    const k = String(b.customerId) + "-" + String(b.saleId);
+    if (!porContrato.has(k)) porContrato.set(k, []);
+    porContrato.get(k).push(b);
+  });
+  let removidas = 0;
+  let reduzidas = 0;
+  const out = [];
+  rows.forEach((r) => {
+    const lista = r ? porContrato.get(String(r.customerId) + "-" + String(r.saleId)) : null;
+    if (!lista) { out.push(r); return; }
+    let valor = 0;
+    let atraso = 0;
+    let aberto = false;
+    lista.forEach((b) => {
+      const s = window.summarizeOpenDefaulterBill(b);
+      if (!s || s.skip) return;
+      aberto = true;
+      valor += Number(s.value) || 0;
+      if ((Number(s.daysDelay) || 0) > atraso) atraso = Number(s.daysDelay) || 0;
+    });
+    const atual = Number(r.overdueValue) || 0;
+    if (!aberto) { removidas += 1; return; }
+    if (valor < atual - 0.01) {
+      r.overdueValue = valor;
+      r.maxDaysDelay = atraso;
+      reduzidas += 1;
+    }
+    out.push(r);
+  });
+  if (removidas || reduzidas) {
+    console.log(`[Fila] Pagamentos recentes: ${removidas} contrato(s) saíram e ${reduzidas} tiveram o valor reduzido.`);
+  }
+  return out;
+};
+
+window.carregarFilaProntaDoDia = async function() {
+  const today = filaLocalTodayStr();
+  const mem = window._filaProntaCache;
+  if (mem && mem.date === today && Array.isArray(mem.rows) && mem.rows.length) return mem.rows;
+  const serve = (payload) => {
+    if (!payload || payload.date !== today || Number(payload.rev) !== window.FILA_PRONTA_REV) return null;
+    if (!Array.isArray(payload.rows) || !payload.rows.length) return null;
+    window._filaProntaCache = { date: today, rows: payload.rows };
+    if (payload.atFull) {
+      window._siengeLastFetchTime = window._siengeLastFetchTime || {
+        elapsed: "0.1",
+        count: payload.rows.length,
+        at: payload.atFull,
+        atFull: payload.atFull,
+        cached: true
+      };
+    }
+    return payload.rows;
+  };
+  try {
+    const local = await IdbDefaultersCache.get("fila_pronta_" + today);
+    const rows = serve(local);
+    if (rows) return rows;
+  } catch (e) {}
+  if (!window.DadosCobranca) return null;
+  try {
+    // Supabase: ficha "<dia>_pronta" + blocos "<dia>_pronta_N" lidos e concatenados pela camada (data já é jsonb).
+    const lido = await window.DadosCobranca.lerBlocosDia(today, "pronta");
+    if (!lido) return null;
+    const meta = lido.ficha || {};
+    if (Number(meta.rev) !== window.FILA_PRONTA_REV || meta.date !== today) return null;
+    const rows = lido.lista;
+    if (meta.count && rows.length < meta.count) return null;
+    const prontas = serve({ date: today, rev: meta.rev, rows: rows, atFull: meta.atFull });
+    if (prontas) {
+      IdbDefaultersCache.set("fila_pronta_" + today, {
+        date: today, rev: window.FILA_PRONTA_REV, count: prontas.length, atFull: meta.atFull || "", rows: prontas
+      }).catch(() => {});
+    }
+    return prontas;
+  } catch (e) {
+    console.warn("[Fila] Não leu a fila pronta do dia", e);
+    return null;
+  }
+};
+
+const ApiUsage = {
+  COLLECTION: "api_consumo",
+  LOCAL_KEY: "crm_api_consumo_v1",
+  stack: [],
+  pending: {},
+  flushTimer: null,
+
+  todayIso: function() {
+    const n = new Date();
+    return n.getFullYear() + "-" + String(n.getMonth() + 1).padStart(2, "0") + "-" + String(n.getDate()).padStart(2, "0");
+  },
+
+  safeKey: function(s) {
+    return String(s || "unknown").replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").slice(0, 80) || "unknown";
+  },
+
+  normalizePath: function(urlStr) {
+    let path = String(urlStr || "");
+    try {
+      if (/^https?:/i.test(path)) path = new URL(path, window.location.origin).pathname;
+    } catch (e) {}
+    path = path.split("?")[0];
+    path = path.replace(/^\/api\/sienge-proxy/i, "").replace(/^\/sienge-proxy/i, "");
+    path = path.replace(/^\/api\/sienge-builder-proxy/i, "");
+    path = path.replace(/\/mouraleite\/public\/api(\/v1)?/i, "");
+    path = path.replace(/\/\d+(?=\/|$)/g, "/{id}");
+    if (!path.startsWith("/")) path = "/" + path;
+    return path.replace(/\/+/g, "/") || "/";
+  },
+
+  classify: function(urlStr) {
+    const raw = String(urlStr || "").toLowerCase();
+    const path = this.normalizePath(urlStr);
+    const bulk = raw.includes("/bulk-data/") || path.indexOf("/bulk-data/") === 0;
+    return { kind: bulk ? "bulk" : "rest", path: path };
+  },
+
+  currentActor: function() {
+    const top = this.stack.length ? this.stack[this.stack.length - 1] : null;
+    if (top && top.source === "system") {
+      return { source: "system", reason: top.reason || "automatico", userKey: "_sistema", userLabel: "Sistema (automático)" };
+    }
+    const u = (window.AppState && AppState.currentUser) || null;
+    let name = (u && (u.name || u.email)) || "";
+    if (!name) {
+      try {
+        const s = JSON.parse(localStorage.getItem("crm_moura_user_session") || "null");
+        name = (s && (s.name || s.email)) || "";
+      } catch (e) {}
+    }
+    const label = name || "Usuário";
+    return { source: "user", reason: "tela", userKey: this.safeKey(label.toLowerCase()), userLabel: label };
+  },
+
+  pushSource: function(source, reason) {
+    this.stack.push({ source: source === "system" ? "system" : "user", reason: String(reason || "") });
+    return () => this.popSource();
+  },
+
+  popSource: function() {
+    this.stack.pop();
+  },
+
+  withSource: async function(source, reason, fn) {
+    this.pushSource(source, reason);
+    try {
+      return await fn();
+    } finally {
+      this.popSource();
+    }
+  },
+
+  emptyDay: function(date) {
+    return { date: date, rest: 0, bulk: 0, actors: { user: 0, system: 0 }, apis: {}, users: {}, updatedAt: 0 };
+  },
+
+  rememberStore: function() {
+    if (this._mem && typeof this._mem === "object") return this._mem;
+    try { this._mem = JSON.parse(localStorage.getItem(this.LOCAL_KEY) || "{}") || {}; } catch (e) { this._mem = {}; }
+    if (!this._mem || typeof this._mem !== "object" || Array.isArray(this._mem)) this._mem = {};
+    return this._mem;
+  },
+
+  scheduleStoreWrite: function() {
+    if (this._writeTimer || window._storageQuotaFull) return;
+    this._writeTimer = setTimeout(() => {
+      this._writeTimer = null;
+      if (window._storageQuotaFull || !this._mem) return;
+      try { localStorage.setItem(this.LOCAL_KEY, JSON.stringify(this._mem)); }
+      catch (e) {
+        window._storageQuotaFull = true;
+        try { localStorage.removeItem(this.LOCAL_KEY); } catch (e2) {}
+      }
+    }, 2500);
+  },
+
+  bumpLocal: function(date, kind, path, actor) {
+    const store = this.rememberStore();
+    const day = store[date] || this.emptyDay(date);
+    day[kind] = (Number(day[kind]) || 0) + 1;
+    day.actors = day.actors || { user: 0, system: 0 };
+    day.actors[actor.source] = (Number(day.actors[actor.source]) || 0) + 1;
+    const apiKey = path;
+    day.apis = day.apis || {};
+    day.apis[apiKey] = day.apis[apiKey] || { rest: 0, bulk: 0, user: 0, system: 0 };
+    day.apis[apiKey][kind] = (Number(day.apis[apiKey][kind]) || 0) + 1;
+    day.apis[apiKey][actor.source] = (Number(day.apis[apiKey][actor.source]) || 0) + 1;
+    const tela = this.telaAtual();
+    day.apis[apiKey].telas = day.apis[apiKey].telas || {};
+    day.apis[apiKey].telas[tela] = (Number(day.apis[apiKey].telas[tela]) || 0) + 1;
+    day.apis[apiKey].quem = day.apis[apiKey].quem || {};
+    day.apis[apiKey].quem[actor.userKey] = day.apis[apiKey].quem[actor.userKey] || { label: actor.userLabel, kind: actor.source, rest: 0, bulk: 0 };
+    day.apis[apiKey].quem[actor.userKey][kind] = (Number(day.apis[apiKey].quem[actor.userKey][kind]) || 0) + 1;
+    day.apis[apiKey].quem[actor.userKey].label = actor.userLabel;
+    day.apis[apiKey].quem[actor.userKey].kind = actor.source;
+    day.users = day.users || {};
+    day.users[actor.userKey] = day.users[actor.userKey] || { rest: 0, bulk: 0, label: actor.userLabel, kind: actor.source };
+    day.users[actor.userKey][kind] = (Number(day.users[actor.userKey][kind]) || 0) + 1;
+    day.users[actor.userKey].label = actor.userLabel;
+    day.users[actor.userKey].kind = actor.source;
+    day.updatedAt = Date.now();
+    store[date] = day;
+    const keys = Object.keys(store).sort();
+    while (keys.length > 14) delete store[keys.shift()];
+    this._mem = store;
+    this.scheduleStoreWrite();
+    return day;
+  },
+
+  /** Aba aberta no momento da chamada (chamada em segundo plano conta para a aba em que o usuário estava). */
+  telaAtual: function() {
+    return this.safeKey(window.activeAppTab || "inicio");
+  },
+
+  trackFetch: function(urlStr) {
+    const raw = String(urlStr || "");
+    if (!/sienge-proxy|sienge-builder-proxy|api\.sienge\.com\.br/i.test(raw)) return;
+    if (/\/api\/consumo|api_consumo/i.test(raw)) return;
+    const info = this.classify(raw);
+    const actor = this.currentActor();
+    const date = this.todayIso();
+    this.bumpLocal(date, info.kind, info.path, actor);
+    const pend = this.pending[date] || { rest: 0, bulk: 0, apis: {}, users: {}, actors: { user: 0, system: 0 } };
+    pend[info.kind] += 1;
+    pend.actors[actor.source] = (pend.actors[actor.source] || 0) + 1;
+    const pk = this.safeKey(info.path);
+    pend.apis[pk] = pend.apis[pk] || { path: info.path, rest: 0, bulk: 0, user: 0, system: 0 };
+    pend.apis[pk][info.kind] += 1;
+    pend.apis[pk][actor.source] += 1;
+    const tela = this.telaAtual();
+    pend.apis[pk].telas = pend.apis[pk].telas || {};
+    pend.apis[pk].telas[tela] = (pend.apis[pk].telas[tela] || 0) + 1;
+    pend.apis[pk].quem = pend.apis[pk].quem || {};
+    pend.apis[pk].quem[actor.userKey] = pend.apis[pk].quem[actor.userKey] || { label: actor.userLabel, kind: actor.source, rest: 0, bulk: 0 };
+    pend.apis[pk].quem[actor.userKey][info.kind] += 1;
+    pend.apis[pk].quem[actor.userKey].label = actor.userLabel;
+    pend.apis[pk].quem[actor.userKey].kind = actor.source;
+    pend.users[actor.userKey] = pend.users[actor.userKey] || { label: actor.userLabel, kind: actor.source, rest: 0, bulk: 0 };
+    pend.users[actor.userKey][info.kind] += 1;
+    this.pending[date] = pend;
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => { this.flush(); }, 4000);
+  },
+
+  flush: async function() {
+    const dates = Object.keys(this.pending || {});
+    if (!dates.length) return;
+    const batch = this.pending;
+    this.pending = {};
+    // Supabase: a RPC incrementar_api_consumo soma os números (e funde objetos) no banco, então
+    // o payload vai com números puros no lugar do increment() do Firestore. date/updatedAt são ignorados.
+    const D = window.DadosNucleo;
+    if (!D) return;
+    const increment = (n) => n;
+    for (const date of dates) {
+      const pend = batch[date];
+      if (!pend) continue;
+      const payload = {
+        date: date,
+        rest: increment(pend.rest || 0),
+        bulk: increment(pend.bulk || 0),
+        actors: {
+          user: increment(pend.actors.user || 0),
+          system: increment(pend.actors.system || 0)
+        },
+        updatedAt: Date.now(),
+        apis: {},
+        users: {}
+      };
+      Object.keys(pend.apis || {}).forEach((k) => {
+        const a = pend.apis[k];
+        payload.apis[k] = {
+          path: a.path,
+          rest: increment(a.rest || 0),
+          bulk: increment(a.bulk || 0),
+          user: increment(a.user || 0),
+          system: increment(a.system || 0)
+        };
+        if (a.telas && Object.keys(a.telas).length) {
+          payload.apis[k].telas = {};
+          Object.keys(a.telas).forEach((t) => { payload.apis[k].telas[t] = increment(a.telas[t] || 0); });
+        }
+        if (a.quem && Object.keys(a.quem).length) {
+          payload.apis[k].quem = {};
+          Object.keys(a.quem).forEach((u) => {
+            const q = a.quem[u] || {};
+            payload.apis[k].quem[u] = {
+              label: q.label || u,
+              kind: q.kind || "user",
+              rest: increment(q.rest || 0),
+              bulk: increment(q.bulk || 0)
+            };
+          });
+        }
+      });
+      Object.keys(pend.users || {}).forEach((k) => {
+        const u = pend.users[k];
+        payload.users[k] = {
+          label: u.label,
+          kind: u.kind,
+          rest: increment(u.rest || 0),
+          bulk: increment(u.bulk || 0)
+        };
+      });
+      if (!Object.keys(payload.apis).length) delete payload.apis;
+      if (!Object.keys(payload.users).length) delete payload.users;
+      try {
+        await D.incrementarApiConsumo(date, payload);
+      } catch (e) {
+        console.warn("[ApiUsage] flush", e);
+        this.pending[date] = pend;
+      }
+    }
+  },
+
+  loadLocalDays: function() {
+    try {
+      const store = this.rememberStore();
+      return Object.keys(store).sort().reverse().map((k) => store[k]);
+    } catch (e) {
+      return [];
+    }
+  },
+
+  nestDottedFields: function(data) {
+    const src = data && typeof data === "object" ? data : {};
+    const out = {};
+    Object.keys(src).forEach((k) => {
+      if (k.indexOf(".") < 0) {
+        out[k] = src[k];
+        return;
+      }
+      const parts = k.split(".");
+      let cur = out;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (!cur[p] || typeof cur[p] !== "object") cur[p] = {};
+        cur = cur[p];
+      }
+      cur[parts[parts.length - 1]] = src[k];
+    });
+    return out;
+  },
+
+  mergeDay: function(a, b) {
+    const left = this.nestDottedFields(a || {});
+    const right = this.nestDottedFields(b || {});
+    const out = Object.assign(this.emptyDay(right.date || left.date || ""), left, right);
+    if (!Object.keys(out.apis || {}).length && Object.keys(left.apis || {}).length) out.apis = left.apis;
+    if (!Object.keys(out.users || {}).length && Object.keys(left.users || {}).length) out.users = left.users;
+    const actorsEmpty = !((out.actors && (Number(out.actors.user) || Number(out.actors.system))));
+    if (actorsEmpty && left.actors) out.actors = left.actors;
+    return out;
+  },
+
+  loadDays: async function(n) {
+    const limitN = Math.max(1, Number(n) || 7);
+    const local = this.loadLocalDays();
+    const byDate = {};
+    local.forEach((d) => { if (d && d.date) byDate[d.date] = this.nestDottedFields(d); });
+    if (window.DadosNucleo) {
+      const today = this.todayIso();
+      const isoDe = (dt) => dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0") + "-" + String(dt.getDate()).padStart(2, "0");
+      // Supabase: uma consulta só para os N dias (antes era um getDoc por dia).
+      const inicio = new Date();
+      inicio.setDate(inicio.getDate() - (limitN - 1));
+      let remotos = null;
+      try {
+        remotos = {};
+        const linhas = await window.DadosNucleo.tabela(this.COLLECTION).listar({ filtros: [["date", "gte", isoDe(inicio)]] });
+        linhas.forEach((l) => { remotos[String(l.id)] = l; });
+      } catch (e) {
+        remotos = null;
+      }
+      for (let i = 0; i < limitN; i++) {
+        const dt = new Date();
+        dt.setDate(dt.getDate() - i);
+        const iso = isoDe(dt);
+        const remoto = remotos && remotos[iso];
+        if (remoto) {
+          const dados = Object.assign({}, remoto, { date: iso });
+          delete dados.id;
+          byDate[iso] = this.mergeDay(byDate[iso] || this.emptyDay(iso), dados);
+        } else if (!byDate[iso]) byDate[iso] = this.emptyDay(iso);
+        if (iso === today && !byDate[iso]) byDate[iso] = this.emptyDay(iso);
+      }
+    }
+    return Object.keys(byDate).sort().reverse().slice(0, limitN).map((k) => byDate[k]);
+  }
+};
+
+window.ApiUsage = ApiUsage;
+
+// Monkey Patch global fetch to intercept mutating requests
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  const url = typeof args[0] === 'string' ? args[0] : args[0].url;
+  const options = args[1] || {};
+  const method = (options.method || 'GET').toUpperCase();
+  
+  const urlStr = String(url || "");
+  try {
+    if (window.ApiUsage && typeof ApiUsage.trackFetch === "function") ApiUsage.trackFetch(urlStr);
+  } catch (e) {}
+  const skipSemantic = /overdue-receivable-bill|\/attachments|purchase-invoices|\/bills(?:\/|$|\?)/i.test(urlStr);
+  if (!skipSemantic && (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') && 
+      (urlStr.includes('sienge-proxy') || urlStr.includes('/api/') || urlStr.includes('sienge'))) {
+      
+      let payload = null;
+      if (options.body && typeof options.body === 'string') {
+          try { payload = JSON.parse(options.body); } catch(e) {}
+      } else if (options.body && options.body instanceof FormData) {
+          payload = "FormData (Arquivo/Multimídia)";
+      }
+      
+      const moduleName = AuditService.inferModuleFromUrl(urlStr);
+      AuditService.logAction(moduleName, urlStr, method, payload);
+  }
+  
+  return await originalFetch.apply(this, args);
+};
+
+// -----------------------------------------------
+// Fetch base com CORS handling
+// -----------------------------------------------
+/*
+ * Fila única do bulk-data do Sienge (caixa e banco, extratos, inadimplência...).
+ * O Sienge limita essas consultas: telas como o DFC disparavam várias empresas x vários períodos
+ * ao mesmo tempo e recebiam 429 em quase todas. Aqui passam no máximo 2 por vez, com um intervalo
+ * curto entre elas, e quando o Sienge responde 429 a fila inteira espera o tempo pedido.
+ */
+const _siengeBulkFila = { ativos: 0, max: 2, intervalo: 600, ultimo: 0, pausaAte: 0, espera: [] };
+
+function siengeBulkPausar(ms) {
+  const ate = Date.now() + Math.max(0, Number(ms) || 0);
+  if (ate > _siengeBulkFila.pausaAte) _siengeBulkFila.pausaAte = ate;
+}
+
+async function siengeBulkNaFila(fn) {
+  const f = _siengeBulkFila;
+  await new Promise((entrar) => {
+    const tentar = () => {
+      if (f.ativos < f.max) { f.ativos += 1; entrar(); } else f.espera.push(tentar);
+    };
+    tentar();
+  });
+  try {
+    for (;;) {
+      const agora = Date.now();
+      const falta = Math.max(f.pausaAte - agora, f.ultimo + f.intervalo - agora);
+      if (falta <= 0) break;
+      await new Promise((r) => setTimeout(r, falta));
+    }
+    f.ultimo = Date.now();
+    return await fn();
+  } finally {
+    f.ativos -= 1;
+    const prox = f.espera.shift();
+    if (prox) prox();
+  }
+}
+
+async function siengeFetch(endpoint) {
+  if (s_apiMode !== "simulado" && String(endpoint || "").startsWith("/bulk-data/")) {
+    return siengeBulkNaFila(() => siengeFetchDireto(endpoint));
+  }
+  return siengeFetchDireto(endpoint);
+}
+
+async function siengeFetchDireto(endpoint) {
+  if (s_apiMode === "simulado") {
+    throw new Error("Chamada de API em Modo Simulado. Use os métodos simulados.");
+  }
+
+  let baseUrl = SIENGE_CONFIG.baseUrl;
+  if (endpoint.startsWith("/bulk-data/")) {
+    if (baseUrl.endsWith("/v1")) {
+      baseUrl = baseUrl.substring(0, baseUrl.length - 3);
+    }
+  }
+  const url = `${baseUrl}${endpoint}`;
+  const response = await fetch(url, {
+    method: "GET",
+    cache: String(endpoint).indexOf("payment-information") >= 0 ? "no-store" : "default",
+    headers: {
+      "Authorization": getBasicAuthHeader(),
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    const err = new Error(`Erro na requisição Sienge ERP: ${response.status} - ${response.statusText}`);
+    err.status = response.status;
+    err.retryAfter = response.headers.get("Retry-After");
+    throw err;
+  }
+
+  const text = await response.text();
+  if (!text || !String(text).trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error("Resposta inválida da API Sienge.");
+  }
+}
+
+// -----------------------------------------------
+// Fetch com retry automático em caso de HTTP 429
+// -----------------------------------------------
+function isSiengeRateLimitError(err) {
+  if (!err) return false;
+  if (err.status === 429) return true;
+  const m = String(err.message || "");
+  return m.includes("429") || /rate limit/i.test(m);
+}
+
+function siengeIsoDate(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function siengeParseIsoDate(iso) {
+  return new Date(String(iso).slice(0, 10) + "T12:00:00");
+}
+
+function siengeDaySpan(startDate, endDate) {
+  const s = siengeParseIsoDate(startDate);
+  const e = siengeParseIsoDate(endDate);
+  return Math.round((e - s) / 86400000) + 1;
+}
+
+function siengeSplitDateRange(startDate, endDate) {
+  const start = String(startDate || "").slice(0, 10);
+  const end = String(endDate || "").slice(0, 10);
+  if (!start || !end || start > end) return [];
+  const days = siengeDaySpan(start, end);
+  if (days <= 21) return [{ start, end }];
+  const weekly = days <= 92;
+  const chunks = [];
+  let cur = siengeParseIsoDate(start);
+  const last = siengeParseIsoDate(end);
+  while (cur <= last) {
+    let chunkEnd;
+    if (weekly) {
+      chunkEnd = new Date(cur);
+      chunkEnd.setDate(chunkEnd.getDate() + 6);
+    } else {
+      chunkEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+    }
+    if (chunkEnd > last) chunkEnd = last;
+    chunks.push({ start: siengeIsoDate(cur), end: siengeIsoDate(chunkEnd) });
+    cur = new Date(chunkEnd);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return chunks;
+}
+
+async function siengeMapLimit(items, limit, fn) {
+  const list = Array.isArray(items) ? items : [];
+  const out = new Array(list.length);
+  let i = 0;
+  const workers = Math.max(1, Math.min(Number(limit) || 1, list.length));
+  async function worker() {
+    while (i < list.length) {
+      const idx = i++;
+      out[idx] = await fn(list[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, worker));
+  return out;
+}
+
+function siengeDedupeBankMovements(rows) {
+  const seen = new Set();
+  const out = [];
+  (rows || []).forEach((m) => {
+    if (!m) return;
+    const id = m.bankMovementId != null ? String(m.bankMovementId)
+      : (m.id != null ? String(m.id) : "");
+    const key = id
+      ? "id:" + id
+      : [
+          String(m.bankMovementDate || "").slice(0, 10),
+          m.companyId,
+          m.accountNumber || m.checkingAccountNumber || "",
+          m.bankMovementAmount,
+          m.documentNumber || m.documentIdentification || "",
+          m.historic || m.history || ""
+        ].join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(m);
+  });
+  return out;
+}
+
+function siengeRateLimitWaitMs(attempt, retryAfter) {
+  const fromHeader = parseInt(retryAfter, 10);
+  if (Number.isFinite(fromHeader) && fromHeader > 0) {
+    return Math.min(Math.max(fromHeader * 1000, 2000), 45000);
+  }
+  return Math.min(4000 * Math.pow(2, attempt), 30000);
+}
+
+async function siengeFetchWithRetry(endpoint, retries = 6) {
+  let lastError;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await siengeFetch(endpoint);
+    } catch (err) {
+      lastError = err;
+      const invalidJson = /Resposta inválida/i.test(String(err.message || ""));
+      const serverFail = Number(err.status) >= 500;
+      const misdirected = Number(err.status) === 421;
+      if ((isSiengeRateLimitError(err) || invalidJson || serverFail || misdirected) && attempt < retries - 1) {
+        const waitMs = siengeRateLimitWaitMs(attempt, err.retryAfter);
+        // 429 no bulk-data: segura a fila toda, para as outras consultas não insistirem junto.
+        if (isSiengeRateLimitError(err) && String(endpoint || "").startsWith("/bulk-data/")) siengeBulkPausar(waitMs);
+        console.warn(`[Sienge] ${invalidJson ? "JSON inválido" : (err.status || "erro")} — aguardando ${waitMs / 1000}s (tentativa ${attempt + 2}/${retries})...`);
+        await new Promise(r => setTimeout(r, waitMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+// -----------------------------------------------
+// POST base com CORS handling
+// -----------------------------------------------
+async function siengePost(endpoint, payload, retries = 8, onRetry) {
+  if (s_apiMode === "simulado") {
+    throw new Error("Chamada de API em Modo Simulado. Use os métodos simulados.");
+  }
+
+  let baseUrl = SIENGE_CONFIG.baseUrl;
+  if (endpoint.startsWith("/bulk-data/")) {
+    if (baseUrl.endsWith("/v1")) {
+      baseUrl = baseUrl.substring(0, baseUrl.length - 3);
+    }
+  }
+
+  const url = `${baseUrl}${endpoint}`;
+  let lastError;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": getBasicAuthHeader(),
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        let errBody = "";
+        try { errBody = await response.text(); } catch (e) {}
+        const err = new Error(`Erro na requisição Sienge ERP: ${response.status} - ${response.statusText} | ${errBody}`);
+        err.status = response.status;
+        err.retryAfter = response.headers.get("Retry-After");
+        throw err;
+      }
+
+      const text = await response.text();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        return { success: true, message: text };
+      }
+    } catch (err) {
+      lastError = err;
+      if (isSiengeRateLimitError(err) && attempt < retries - 1) {
+        const waitMs = siengeRateLimitWaitMs(attempt, err.retryAfter);
+        console.warn(`[Sienge] HTTP 429 POST — aguardando ${waitMs / 1000}s (tentativa ${attempt + 2}/${retries})...`);
+        if (typeof onRetry === "function") onRetry(attempt + 2, waitMs, retries);
+        await new Promise(r => setTimeout(r, waitMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function siengePatch(endpoint, payload, retries = 6) {
+  if (s_apiMode === "simulado") {
+    throw new Error("Chamada de API em Modo Simulado. Use os métodos simulados.");
+  }
+  let baseUrl = SIENGE_CONFIG.baseUrl;
+  if (endpoint.startsWith("/bulk-data/")) {
+    if (baseUrl.endsWith("/v1")) {
+      baseUrl = baseUrl.substring(0, baseUrl.length - 3);
+    }
+  }
+  const url = `${baseUrl}${endpoint}`;
+  let lastError;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          "Authorization": getBasicAuthHeader(),
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        let errBody = "";
+        try { errBody = await response.text(); } catch (e) {}
+        const err = new Error(`Erro na requisição Sienge ERP: ${response.status} - ${response.statusText} | ${errBody}`);
+        err.status = response.status;
+        err.retryAfter = response.headers.get("Retry-After");
+        throw err;
+      }
+      const text = await response.text();
+      if (!text || !String(text).trim()) return { success: true };
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        return { success: true, message: text };
+      }
+    } catch (err) {
+      lastError = err;
+      if (isSiengeRateLimitError(err) && attempt < retries - 1) {
+        const waitMs = siengeRateLimitWaitMs(attempt, err.retryAfter);
+        await new Promise((r) => setTimeout(r, waitMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+// -----------------------------------------------
+// Paginação automática sequencial (300ms entre páginas)
+// -----------------------------------------------
+async function siengeFetchAllPages(baseEndpoint, pageSize = 200) {
+  const allResults = [];
+  let offset = 0;
+  let totalCount = null;
+  const sep = baseEndpoint.includes("?") ? "&" : "?";
+
+  do {
+    const res = await siengeFetchWithRetry(`${baseEndpoint}${sep}limit=${pageSize}&offset=${offset}`);
+    const results = res.results || [];
+    if (totalCount === null) {
+      totalCount = res.resultSetMetadata?.count ?? results.length;
+    }
+    allResults.push(...results);
+    offset += pageSize;
+    if (offset < totalCount) {
+      await new Promise(r => setTimeout(r, 600)); // throttle entre páginas
+    }
+  } while (offset < totalCount);
+
+  return allResults;
+}
+
+// Helper local de simulação de antecipação
+function runLocalPrepaymentSimulation(saleId, installmentsToPay) {
+  const baseDiscountRate = 0.005;
+  let totalAmount = 0;
+  let totalDiscount = 0;
+  installmentsToPay.forEach((inst, index) => {
+    const discount = inst.value * (baseDiscountRate * (index + 1));
+    totalAmount += inst.value;
+    totalDiscount += discount;
+  });
+  return {
+    saleId,
+    originalValue: totalAmount,
+    discountApplied: totalDiscount,
+    finalValue: totalAmount - totalDiscount,
+    dueDateSimulated: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+  };
+}
+
+function formatSiengeAddressLine(addr) {
+  if (!addr || typeof addr !== "object") return "";
+  const typeHint = String(addr.streetTypeDescription || addr.streetType || "").trim();
+  const streetRaw = String(addr.street || addr.streetName || "").trim();
+  const skipType = /^(residencial|comercial|outros|correspondencia|correspondência)$/i.test(typeHint);
+  const street = (!skipType && typeHint && streetRaw && !streetRaw.toLowerCase().startsWith(typeHint.toLowerCase()))
+    ? (typeHint + " " + streetRaw)
+    : streetRaw;
+  const city = addr.cityName || addr.city || "";
+  const state = addr.stateName || addr.state || "";
+  const zipRaw = String(addr.postalCode || addr.zipCode || "").replace(/\D/g, "");
+  const zip = zipRaw.length === 8 ? zipRaw.replace(/(\d{5})(\d{3})/, "$1-$2") : zipRaw;
+  const parts = [
+    street && addr.number ? street + ", " + addr.number : street,
+    addr.complement,
+    addr.neighborhood,
+    [city, state].filter(Boolean).join("/"),
+    zip ? "CEP " + zip : ""
+  ].map(p => String(p || "").trim()).filter(p => p && p !== "-" && p !== "/");
+  return parts.join(", ");
+}
+
+function normalizeSiengeCustomer(c) {
+  if (!c || typeof c !== "object") return c;
+  c.cpfCnpj = c.cpfCnpj || c.cpf || c.cnpj || "";
+  c.rg = c.rg || c.numberIdentityCard || c.identityCard || c.identity || "";
+  c.issuingBody = c.issuingBody || c.rgIssuingBody || "";
+  c.nationality = c.nationality || c.nacionalidade || "";
+  c.profession = c.profession || c.occupation || "";
+  c.civilStatus = c.civilStatus || c.maritalStatus || "";
+  c.maritalStatus = c.maritalStatus || c.civilStatus || "";
+  const addr0 = Array.isArray(c.addresses) && c.addresses.length ? c.addresses[0] : null;
+  const line = formatSiengeAddressLine(addr0);
+  if (line && (!c.address || c.address === "N/D" || /^[\s,/-]+$/.test(c.address))) {
+    c.address = line;
+  }
+  if (addr0) {
+    c.city = c.city || addr0.cityName || addr0.city || "";
+    c.state = c.state || addr0.stateName || addr0.state || "";
+    c.zipCode = c.zipCode || addr0.postalCode || addr0.zipCode || "";
+  }
+  return c;
+}
+
+// -----------------------------------------------
+// Interface de Acesso aos Serviços
+// -----------------------------------------------
+const SiengeApiService = {
+
+  // 1. Empresas
+  async getCompanies(forceRefresh = false) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.COMPANIES;
+    }
+    const cacheKey = 'crm_companies_data';
+    const cacheAtKey = 'crm_companies_sync_at';
+    let cachedData = [];
+    let lastSync = 0;
+    try {
+      const cachedRaw = localStorage.getItem(cacheKey);
+      if (cachedRaw) cachedData = JSON.parse(cachedRaw);
+      lastSync = Number(localStorage.getItem(cacheAtKey) || 0);
+    } catch (e) {}
+
+    const now = new Date();
+    const targetSync = new Date();
+    targetSync.setHours(8, 0, 0, 0);
+    if (now < targetSync) targetSync.setDate(targetSync.getDate() - 1);
+    const useCache = !forceRefresh && cachedData.length > 0 && lastSync >= targetSync.getTime();
+    if (useCache) {
+      if (window.EmpresasApp && typeof EmpresasApp.afterCompaniesFetched === "function") {
+        EmpresasApp.afterCompaniesFetched(cachedData, false);
+      }
+      return cachedData;
+    }
+
+    try {
+      const list = await siengeFetchWithRetry("/companies?limit=200", 2);
+      const array = list && list.results ? list.results : list;
+      if (array && array.length > 0) {
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify(array));
+          localStorage.setItem(cacheAtKey, String(Date.now()));
+        } catch (e) {}
+        if (window.EmpresasApp && typeof EmpresasApp.afterCompaniesFetched === "function") {
+          EmpresasApp.afterCompaniesFetched(array, true);
+        }
+        return array;
+      }
+      if (window.EmpresasApp && typeof EmpresasApp.afterCompaniesFetched === "function" && cachedData.length) {
+        EmpresasApp.afterCompaniesFetched(cachedData, false);
+      }
+      return cachedData;
+    } catch (e) {
+      console.warn("[Sienge] Erro ao buscar empresas (provável limite de API), usando cache local:", e);
+      if (window.EmpresasApp && typeof EmpresasApp.afterCompaniesFetched === "function" && cachedData.length) {
+        EmpresasApp.afterCompaniesFetched(cachedData, false);
+      }
+      return cachedData;
+    }
+  },
+
+  // 1.1. Departamentos (GET /departments)
+  async getDepartments(forceRefresh = false) {
+    if (s_apiMode === "simulado") return [];
+    const fresh = forceRefresh !== true;
+    if (fresh && this._deptCache && (Date.now() - (this._deptCacheAt || 0)) < 10 * 60 * 1000) {
+      return this._deptCache;
+    }
+    const list = await siengeFetchAllPages("/departments");
+    const out = (Array.isArray(list) ? list : []).map((raw) => {
+      if (!raw || typeof raw !== "object") return null;
+      const id = raw.id != null ? raw.id : (raw.departmentId != null ? raw.departmentId : raw.code);
+      const name = raw.name || raw.description || raw.departmentName || "";
+      const companyId = raw.companyId != null ? raw.companyId : (raw.company != null ? raw.company : "");
+      if (id == null || !String(name).trim()) return null;
+      return {
+        id: String(id),
+        name: String(name).trim(),
+        companyId: companyId === "" || companyId == null ? "" : String(companyId)
+      };
+    }).filter(Boolean);
+    out.sort((a, b) => a.name.localeCompare(b.name, "pt-BR") || a.id.localeCompare(b.id, "pt-BR"));
+    this._deptCache = out;
+    this._deptCacheAt = Date.now();
+    return out;
+  },
+
+  // 1.5. Centros de Custo (Paginado)
+  async getCostCenters(forceRefresh = false) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.COST_CENTERS;
+    }
+    
+    const cacheKey = 'crm_cost_centers_data';
+    const cacheDateKey = 'crm_cost_centers_date';
+    const todayStr = new Date().toISOString().split('T')[0];
+    
+    let cachedData = null;
+    try {
+        const cachedRaw = localStorage.getItem(cacheKey);
+        if (cachedRaw) cachedData = JSON.parse(cachedRaw);
+    } catch(e) {}
+
+    const lastFetch = localStorage.getItem(cacheDateKey);
+    
+    if (!forceRefresh && cachedData && cachedData.length > 0) {
+        if (lastFetch !== todayStr) {
+            this._updateCostCentersBackground(cacheKey, cacheDateKey, todayStr);
+        }
+        return cachedData;
+    }
+
+    try {
+      const data = await siengeFetchAllPages("/cost-centers");
+      if (data && data.length > 0) {
+          try {
+              localStorage.setItem(cacheKey, JSON.stringify(data));
+              localStorage.setItem(cacheDateKey, todayStr);
+          } catch(e) {
+              console.warn("Could not save cost centers to localStorage");
+          }
+      }
+      return data;
+    } catch(e) {
+      console.warn("[Sienge] Erro ao buscar centros de custo, usando fallback (mock/cache):", e);
+      if (cachedData && cachedData.length > 0) return cachedData;
+      return (window.MOCK_DATA && window.MOCK_DATA.COST_CENTERS) ? window.MOCK_DATA.COST_CENTERS : [];
+    }
+  },
+
+  async _updateCostCentersBackground(cacheKey, cacheDateKey, todayStr) {
+      try {
+          console.log("[Sienge] Atualizando centros de custo em background...");
+          const data = await siengeFetchAllPages("/cost-centers");
+          if (data && data.length > 0) {
+              try {
+                  localStorage.setItem(cacheKey, JSON.stringify(data));
+                  localStorage.setItem(cacheDateKey, todayStr);
+                  console.log("[Sienge] Centros de custo atualizados com sucesso no cache.");
+              } catch(e) {}
+          }
+      } catch (e) {
+          console.error("[Sienge] Erro ao atualizar centros de custo em background:", e);
+      }
+  },
+
+  // 1.5b. Empreendimentos (Paginado)
+  async getEnterprises() {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.COST_CENTERS || []; // MOCK fallback
+    }
+    try {
+      return await siengeFetchAllPages("/enterprises");
+    } catch(e) {
+      console.error("[Sienge] Erro ao buscar empreendimentos:", e);
+      return [];
+    }
+  },
+
+  /* 1.5c. VGV do cadastro da obra (salesDetails.generalSalesValue).
+     Cache compartilhado no Firebase (config/obra_vgv) + navegador: cada obra é consultada no Sienge
+     no máximo uma vez a cada 7 dias para todos os usuários. Centro de custo que não está na lista de
+     empreendimentos não é consultado. Erro de limite ou do servidor pausa as consultas por 15 minutos. */
+  OBRA_VGV_CACHE_KEY: "crm_obra_vgv_cache",
+  OBRA_VGV_TTL: 7 * 86400000,
+  ENTERPRISES_IDS_KEY: "crm_enterprises_ids_v1",
+  VGV_PAUSA_MS: 15 * 60000,
+
+  obraVgvCache(id) {
+    const chave = String(id);
+    const mem = this._vgvMem && this._vgvMem[chave];
+    if (mem && (mem.erro ? Date.now() - mem.at < this.VGV_PAUSA_MS : Date.now() - Number(mem.at || 0) < this.OBRA_VGV_TTL)) return mem;
+    try {
+      const map = JSON.parse(localStorage.getItem(this.OBRA_VGV_CACHE_KEY) || "{}");
+      const hit = map[chave];
+      if (hit && Date.now() - Number(hit.at || 0) < this.OBRA_VGV_TTL) {
+        this._vgvMem = this._vgvMem || {};
+        this._vgvMem[chave] = hit;
+        return hit;
+      }
+    } catch (e) {}
+    return null;
+  },
+
+  async getEnterpriseVgv(enterpriseId, opts = {}) {
+    const id = String(enterpriseId || "").trim();
+    if (!id) return null;
+    if (!opts.force) {
+      const hit = this.obraVgvCache(id);
+      if (hit) return hit;
+    }
+    if (s_apiMode === "simulado") return null;
+    this._vgvMem = this._vgvMem || {};
+    this._vgvVoo = this._vgvVoo || {};
+    if (this._vgvVoo[id]) return this._vgvVoo[id];
+    const busca = this._buscarEnterpriseVgv(id, opts).finally(() => { delete this._vgvVoo[id]; });
+    this._vgvVoo[id] = busca;
+    return busca;
+  },
+
+  vgvPausado() {
+    return (this._vgvPausaAte || 0) > Date.now();
+  },
+
+  async _buscarEnterpriseVgv(id, opts = {}) {
+    await this._vgvCompartilhado();
+    if (!opts.force) {
+      const hit = this.obraVgvCache(id);
+      if (hit) return hit;
+    }
+    if (this.vgvPausado()) {
+      const err = new Error("Consulta de VGV pausada: o Sienge recusou chamadas há pouco.");
+      err.pausado = true;
+      throw err;
+    }
+    let out = { id, vgv: null, nome: "", at: Date.now() };
+    const empreendimentos = await this._empreendimentos();
+    if (!empreendimentos && this.vgvPausado()) {
+      const err = new Error("Consulta de VGV pausada: o Sienge recusou chamadas há pouco.");
+      err.pausado = true;
+      throw err;
+    }
+    const daLista = empreendimentos && empreendimentos.porId[id];
+    if (empreendimentos && !daLista) {
+      out.naoObra = true;
+      this._guardarVgv(id, out);
+      return out;
+    }
+    if (daLista && daLista.vgvNaLista && !opts.force) {
+      out = { id, vgv: daLista.vgv, nome: daLista.nome, lancamento: daLista.lancamento, at: Date.now() };
+      this._guardarVgv(id, out);
+      return out;
+    }
+    try {
+      const ent = await siengeFetchWithRetry(`/enterprises/${encodeURIComponent(id)}`, 1);
+      const sd = (ent && ent.salesDetails) || {};
+      const vgv = Number(sd.generalSalesValue);
+      out = {
+        id,
+        vgv: Number.isFinite(vgv) && vgv > 0 ? vgv : null,
+        nome: (ent && (ent.commercialName || ent.name)) || "",
+        lancamento: (ent && ent.constructionDetails && ent.constructionDetails.startDate) || "",
+        at: Date.now()
+      };
+    } catch (e) {
+      if (Number(e && e.status) !== 404) {
+        const st = Number(e && e.status);
+        if (!st || st === 429 || st >= 500) this._vgvPausaAte = Date.now() + this.VGV_PAUSA_MS;
+        this._vgvMem[id] = Object.assign({}, out, { erro: true });
+        throw e;
+      }
+      out.naoObra = true;
+    }
+    this._guardarVgv(id, out);
+    return out;
+  },
+
+  _guardarVgv(id, out) {
+    this._vgvMem = this._vgvMem || {};
+    this._vgvMem[id] = out;
+    try {
+      const map = JSON.parse(localStorage.getItem(this.OBRA_VGV_CACHE_KEY) || "{}");
+      map[id] = out;
+      const orig = window._originalSetItem;
+      if (typeof orig === "function") orig.call(localStorage, this.OBRA_VGV_CACHE_KEY, JSON.stringify(map));
+      else localStorage.setItem(this.OBRA_VGV_CACHE_KEY, JSON.stringify(map));
+    } catch (e) {}
+    this._vgvParaFirebase = this._vgvParaFirebase || {};
+    this._vgvParaFirebase[id] = out;
+    clearTimeout(this._vgvFbTimer);
+    this._vgvFbTimer = setTimeout(() => this._gravarVgvFirebase(), 5000);
+  },
+
+  /** Lê uma vez por sessão o cache de VGV que todos os usuários compartilham. */
+  _vgvCompartilhado() {
+    if (this._vgvFbLido) return this._vgvFbLido;
+    // Supabase: config/obra_vgv é montado a partir da tabela obra_vgv.
+    if (!window.DadosNucleo) return Promise.resolve();
+    this._vgvFbLido = (async () => {
+      try {
+        const snap = await window.DadosNucleo.lerConfig("obra_vgv");
+        const existe = snap && (typeof snap.exists === "function" ? snap.exists() : snap.exists);
+        const obras = (existe && snap.data() && snap.data().obras) || {};
+        this._vgvMem = this._vgvMem || {};
+        Object.keys(obras).forEach((id) => {
+          const o = obras[id];
+          const atual = this._vgvMem[id];
+          if (o && o.at && (!atual || atual.erro || Number(atual.at || 0) < Number(o.at))) this._vgvMem[id] = o;
+        });
+      } catch (e) {
+        console.warn("[Sienge] cache compartilhado de VGV:", e);
+      }
+    })();
+    return this._vgvFbLido;
+  },
+
+  async _gravarVgvFirebase() {
+    const pend = this._vgvParaFirebase;
+    this._vgvParaFirebase = {};
+    if (!pend || !Object.keys(pend).length || !window.DadosNucleo) return;
+    try {
+      await window.DadosNucleo.gravarConfig("obra_vgv", { obras: pend, atualizadoEm: Date.now() }, { merge: true });
+    } catch (e) {
+      console.warn("[Sienge] gravar cache de VGV:", e);
+    }
+  },
+
+  /** Lista de empreendimentos (paginada, 200 por chamada), guardada por 1 dia: diz quais centros de custo são obra. */
+  async _empreendimentos() {
+    if (this._entLista && Date.now() - this._entLista.at < 86400000) return this._entLista;
+    try {
+      const c = JSON.parse(localStorage.getItem(this.ENTERPRISES_IDS_KEY) || "null");
+      if (c && Date.now() - Number(c.at || 0) < 86400000 && c.porId && Object.keys(c.porId).length) return (this._entLista = c);
+    } catch (e) {}
+    if (this._entVoo) return this._entVoo;
+    this._entVoo = (async () => {
+      const lista = await siengeFetchAllPages("/enterprises");
+      if (!Array.isArray(lista) || !lista.length) return null;
+      const porId = {};
+      lista.forEach((e) => {
+        if (!e || e.id == null) return;
+        const sd = e.salesDetails || {};
+        const vgv = Number(sd.generalSalesValue);
+        porId[String(e.id)] = {
+          nome: e.commercialName || e.name || "",
+          vgv: Number.isFinite(vgv) && vgv > 0 ? vgv : null,
+          vgvNaLista: !!e.salesDetails,
+          lancamento: (e.constructionDetails && e.constructionDetails.startDate) || ""
+        };
+      });
+      const out = { at: Date.now(), porId };
+      this._entLista = out;
+      try {
+        const orig = window._originalSetItem;
+        if (typeof orig === "function") orig.call(localStorage, this.ENTERPRISES_IDS_KEY, JSON.stringify(out));
+        else localStorage.setItem(this.ENTERPRISES_IDS_KEY, JSON.stringify(out));
+      } catch (e) {}
+      return out;
+    })().catch((e) => {
+      const st = Number(e && e.status);
+      if (!st || st === 429 || st >= 500) this._vgvPausaAte = Date.now() + this.VGV_PAUSA_MS;
+      return null;
+    }).finally(() => { this._entVoo = null; });
+    return this._entVoo;
+  },
+
+  // Movimentos até 31/12/2025 ficam no Firebase. 2026 em diante sai sempre do Sienge.
+  _caixaBaseAte: "2025-12-31",
+  _caixaBaseDe: "2017-01-01",
+  _caixaMesPromessas: {},
+  _baseCaixaStatus: "",
+  _baseCaixaRodando: false,
+  _baseCaixaChave: "",
+  _caixaConsulta: 0,
+  _caixaMesMem: {},
+
+  _avisarBaseCaixa() {
+    const el = document.getElementById("fc-base-caixa");
+    const txt = this._baseCaixaStatus || "";
+    if (!el) return;
+    el.textContent = txt;
+    el.style.display = txt ? "" : "none";
+  },
+
+  _statusCaixa(txt) {
+    this._baseCaixaStatus = txt || "";
+    this._avisarBaseCaixa();
+  },
+
+  async _esperarConsultaCaixa() {
+    while (this._caixaConsulta > 0) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  },
+
+  _mesesCaixa(start, end) {
+    const out = [];
+    let ym = String(start || "").slice(0, 7);
+    const fim = String(end || "").slice(0, 7);
+    while (ym && fim && ym <= fim && out.length < 240) {
+      out.push(ym);
+      const [y, m] = ym.split("-").map(Number);
+      const d = new Date(y, m, 1);
+      ym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    }
+    return out;
+  },
+
+  _fimDoMes(ym) {
+    const [y, m] = String(ym).split("-").map(Number);
+    return ym + "-" + String(new Date(y, m, 0).getDate()).padStart(2, "0");
+  },
+
+  _dataMovCaixa(m) {
+    return String((m && (m.bankMovementDate || m.paymentDate || m.date)) || "").slice(0, 10);
+  },
+
+  _movNoCentro(m, costCentersId) {
+    if (!costCentersId) return true;
+    const wanted = String(Array.isArray(costCentersId) ? costCentersId.join(",") : costCentersId).split(",").map((s) => s.trim()).filter(Boolean);
+    if (!wanted.length) return true;
+    const cats = (m && m.financialCategories) || [];
+    return cats.some((fc) => wanted.includes(String(fc && fc.costCenterId))) || wanted.includes(String((m && m.costCenterId) || ""));
+  },
+
+  // caixa_movimentos no Supabase: cabeçalho + uma linha por movimento (as partes _pN do Firestore acabaram).
+  async _lerMesCaixa(companyId, ym) {
+    if (!window.DadosFinanceiro) return null;
+    try {
+      return await window.DadosFinanceiro.lerMesCaixa(companyId, ym);
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async _gravarMesCaixa(companyId, ym, rows) {
+    if (!window.DadosFinanceiro || ym > "2025-12") return;
+    // RPC gravar_caixa_movimentos_mes: troca o mês inteiro (sem fatiar em 700 KB como no Firestore).
+    await window.DadosFinanceiro.gravarMesCaixa(companyId, ym, Array.isArray(rows) ? rows : []);
+  },
+
+  async _lerOuBuscarMesCaixa(companyId, ym, opts) {
+    const key = String(companyId) + "_" + ym;
+    if (this._caixaMesMem[key]) return this._caixaMesMem[key];
+    if (this._caixaMesPromessas[key]) return this._caixaMesPromessas[key];
+    const promessa = (async () => {
+      const salvo = await this._lerMesCaixa(companyId, ym);
+      if (salvo) {
+        this._caixaMesMem[key] = salvo;
+        return salvo;
+      }
+      const start = ym + "-01";
+      const end = this._fimDoMes(ym);
+      const rows = await this._bankMovementsSienge(start, end, {
+        selectionType: "M",
+        companyId: companyId,
+        skipBase: true,
+        onChunk: opts && opts.onChunk
+      });
+      const noMes = (rows || []).filter((m) => this._dataMovCaixa(m).slice(0, 7) === ym);
+      try { await this._gravarMesCaixa(companyId, ym, noMes); } catch (e) {}
+      this._caixaMesMem[key] = noMes;
+      return noMes;
+    })().finally(() => { delete this._caixaMesPromessas[key]; });
+    this._caixaMesPromessas[key] = promessa;
+    return promessa;
+  },
+
+  async _bankMovementsBase(startDate, endDate, opts) {
+    const meses = this._mesesCaixa(startDate, endDate);
+    const companyId = opts.companyId;
+    const faltam = [];
+    const rows = [];
+    for (let i = 0; i < meses.length; i++) {
+      const key = String(companyId) + "_" + meses[i];
+      let salvo = this._caixaMesMem[key];
+      if (!salvo) {
+        salvo = await this._lerMesCaixa(companyId, meses[i]);
+        if (salvo) this._caixaMesMem[key] = salvo;
+      }
+      if (salvo) rows.push.apply(rows, salvo);
+      else faltam.push(meses[i]);
+    }
+    const de = String(startDate || "").slice(0, 7);
+    const ate = String(endDate || "").slice(0, 7);
+    if (!faltam.length) {
+      this._statusCaixa("Lendo " + de + " a " + ate + " no banco.");
+    } else {
+      for (let i = 0; i < faltam.length; i++) {
+        this._statusCaixa("Gravando " + (i + 1) + " de " + faltam.length + " mês(es) até 31/12/2025 da empresa " + companyId + ".");
+        const got = await this._lerOuBuscarMesCaixa(companyId, faltam[i], opts);
+        if (got && got.length) rows.push.apply(rows, got);
+      }
+      this._statusCaixa("Meses até 31/12/2025 da empresa " + companyId + " lidos no banco. 2026 segue na API.");
+    }
+    return rows.filter((m) => {
+      const d = this._dataMovCaixa(m);
+      return d && d >= startDate && d <= endDate && this._movNoCentro(m, opts.costCentersId);
+    });
+  },
+
+  async _baseCaixaPronta(companyId) {
+    if (!window.DadosFinanceiro) return false;
+    try {
+      const base = await window.DadosFinanceiro.lerBaseCaixa(companyId);
+      if (!base) return false;
+      return String(base.ate || "") >= "2025-12";
+    } catch (e) {
+      return false;
+    }
+  },
+
+  async _marcarBaseCaixa(companyId) {
+    if (!window.DadosFinanceiro) return;
+    await window.DadosFinanceiro.marcarBaseCaixa(companyId, "2025-12");
+  },
+
+  async _empresasDaBaseCaixa() {
+    let lista = [];
+    const mem = window.AppState && Array.isArray(AppState.companies) ? AppState.companies : [];
+    lista = mem.map((c) => String(c && c.id != null ? c.id : "")).filter(Boolean);
+    if (!lista.length && typeof this.getCompanies === "function") {
+      try {
+        const rows = await this.getCompanies(false);
+        lista = (rows || []).map((c) => String(c && (c.id != null ? c.id : c.companyId) || "")).filter(Boolean);
+      } catch (e) {}
+    }
+    const sel = (window.FluxoCaixaApp && FluxoCaixaApp.selectedCompanyIds || []).map(String).filter(Boolean);
+    const set = new Set(lista);
+    sel.forEach((id) => set.add(id));
+    const primeiro = sel.filter((id) => set.has(id));
+    const resto = Array.from(set).filter((id) => primeiro.indexOf(id) < 0).sort((a, b) => Number(a) - Number(b));
+    return primeiro.concat(resto);
+  },
+
+  _ordemMesesBase() {
+    const meses = this._mesesCaixa(this._caixaBaseDe, this._caixaBaseAte);
+    let prefer = [];
+    try {
+      const comp = window.FluxoCaixaApp && typeof FluxoCaixaApp.periodoComparado === "function"
+        ? FluxoCaixaApp.periodoComparado()
+        : null;
+      if (comp && comp.start && comp.end) prefer = this._mesesCaixa(comp.start, comp.end);
+    } catch (e) {}
+    prefer = prefer.filter((ym) => ym >= "2017-01" && ym <= "2025-12");
+    const resto = meses.filter((ym) => prefer.indexOf(ym) < 0).reverse();
+    return prefer.concat(resto);
+  },
+
+  async prepararBaseMovimentosCaixa() {
+    if (s_apiMode === "simulado" || !window.DadosFinanceiro) return;
+    if (this._baseCaixaRodando) return;
+    this._baseCaixaRodando = true;
+    let chave = "";
+    try {
+      const ids = await this._empresasDaBaseCaixa();
+      chave = ids.slice().sort((a, b) => Number(a) - Number(b)).join(",");
+      if (!chave) {
+        this._baseCaixaEspera = (this._baseCaixaEspera || 0) + 1;
+        if (this._baseCaixaEspera < 6) setTimeout(() => this.prepararBaseMovimentosCaixa(), 2000);
+        return;
+      }
+      if (this._baseCaixaChave === chave) return;
+      this._baseCaixaEspera = 0;
+      this._baseCaixaChave = chave;
+      const meses = this._ordemMesesBase();
+      for (let c = 0; c < ids.length; c++) {
+        if (await this._baseCaixaPronta(ids[c])) continue;
+        let falhou = false;
+        for (let i = 0; i < meses.length; i++) {
+          await this._esperarConsultaCaixa();
+          const memKey = String(ids[c]) + "_" + meses[i];
+          const jaSalvo = await this._lerMesCaixa(ids[c], meses[i]);
+          if (jaSalvo) continue;
+          this._statusCaixa("Gravando a base até 31/12/2025 · empresa " + ids[c] + " · " + meses[i] + ". Mês já salvo não volta para a API.");
+          await this._lerOuBuscarMesCaixa(ids[c], meses[i], { companyId: ids[c] });
+          delete this._caixaMesMem[memKey];
+          const conferido = await this._lerMesCaixa(ids[c], meses[i]);
+          if (!conferido) { falhou = true; break; }
+          if (window.FluxoCaixaApp && typeof FluxoCaixaApp.baseCaixaAtualizada === "function") {
+            FluxoCaixaApp.baseCaixaAtualizada(ids[c], meses[i]);
+          }
+        }
+        if (!falhou) {
+          try { await this._marcarBaseCaixa(ids[c]); } catch (e) { falhou = true; }
+        }
+        if (falhou) this._baseCaixaChave = "";
+      }
+    } catch (e) {
+      console.warn("[Caixa] base de movimentos", e);
+      this._baseCaixaChave = "";
+    } finally {
+      this._baseCaixaRodando = false;
+      if (!this._caixaConsulta) {
+        this._baseCaixaStatus = "";
+        this._avisarBaseCaixa();
+      }
+    }
+  },
+
+  // 1.6. Movimentos Bancários (Fiscal / Prestação de Contas)
+  // selectionType M = data do movimento/pagamento (caixa real).
+  // P (vencimento) não é válido neste endpoint (Sienge 422) e não reflete o caixa.
+  // Até 31/12/2025 a consulta lê o Firebase. De 01/01/2026 em diante, sempre o Sienge.
+  async getBankMovements(startDate, endDate, opts = {}) {
+    const start = String(startDate || "").slice(0, 10);
+    const end = String(endDate || "").slice(0, 10);
+    const usarBase = !opts.skipBase && s_apiMode !== "simulado" && opts.companyId && window.DadosFinanceiro;
+    if (!usarBase || !start || !end || start > end) return this._bankMovementsSienge(start, end, opts);
+    this._caixaConsulta += 1;
+    try {
+      const partes = [];
+      if (start < this._caixaBaseDe) {
+        const antigoFim = end < "2016-12-31" ? end : "2016-12-31";
+        partes.push(await this._bankMovementsSienge(start, antigoFim, Object.assign({}, opts, { skipBase: true })));
+      }
+      if (start <= this._caixaBaseAte && end >= this._caixaBaseDe) {
+        const hStart = start < this._caixaBaseDe ? this._caixaBaseDe : start;
+        const hEnd = end < this._caixaBaseAte ? end : this._caixaBaseAte;
+        partes.push(await this._bankMovementsBase(hStart, hEnd, opts));
+      }
+      if (end >= "2026-01-01") {
+        const vStart = start > "2026-01-01" ? start : "2026-01-01";
+        partes.push(await this._bankMovementsSienge(vStart, end, Object.assign({}, opts, { skipBase: true })));
+      }
+      return siengeDedupeBankMovements(partes.flat());
+    } finally {
+      this._caixaConsulta = Math.max(0, this._caixaConsulta - 1);
+      if (!this._caixaConsulta && !this._baseCaixaRodando) this._statusCaixa("");
+    }
+  },
+
+  async _bankMovementsSienge(startDate, endDate, opts = {}) {
+    const selectionType = opts.selectionType === "P" ? "M" : (opts.selectionType || "M");
+    if (s_apiMode === "simulado") {
+      const all = window.MOCK_DATA && window.MOCK_DATA.BANK_MOVEMENTS ? window.MOCK_DATA.BANK_MOVEMENTS : [];
+      return all.filter(m => {
+        const d = String(m.bankMovementDate || "").slice(0, 10);
+        if (d && (d < startDate || d > endDate)) return false;
+        if (opts.companyId && String(m.companyId) !== String(opts.companyId)) return false;
+        if (opts.costCentersId) {
+          const wanted = String(opts.costCentersId).split(",").map(s => s.trim()).filter(Boolean);
+          if (wanted.length) {
+            const cats = m.financialCategories || [];
+            const hit = cats.some(fc => wanted.includes(String(fc.costCenterId))) || wanted.includes(String(m.costCenterId || ""));
+            if (!hit) return false;
+          }
+        }
+        return true;
+      });
+    }
+    const chunks = opts.noChunk ? [{ start: startDate, end: endDate }] : siengeSplitDateRange(startDate, endDate);
+    const fetchOnce = async (s, e) => {
+      let url = `/bulk-data/v1/bank-movement?startDate=${s}&endDate=${e}&selectionType=${encodeURIComponent(selectionType)}`;
+      if (opts.companyId) url += `&companyId=${encodeURIComponent(opts.companyId)}`;
+      if (opts.costCentersId) {
+        const ids = Array.isArray(opts.costCentersId) ? opts.costCentersId.join(",") : String(opts.costCentersId);
+        url += `&costCentersId=${ids}`;
+      }
+      const res = await siengeFetchWithRetry(url);
+      if (res && Array.isArray(res.data)) return res.data;
+      if (Array.isArray(res)) return res;
+      return [];
+    };
+    if (!chunks.length) return [];
+    if (chunks.length === 1) return fetchOnce(chunks[0].start, chunks[0].end);
+    const concurrency = Math.max(1, Math.min(Number(opts.concurrency) || 3, 4));
+    const parts = await siengeMapLimit(chunks, concurrency, async (c, idx) => {
+      if (typeof opts.onChunk === "function") opts.onChunk(c, idx, chunks.length);
+      return fetchOnce(c.start, c.end);
+    });
+    return siengeDedupeBankMovements(parts.flat());
+  },
+
+  _progressListeners: [],
+  _lastProgressState: null,
+  // 2. FILA DE COBRANÇA — Retorna apenas bills brutos inadimplentes
+  //    SEM buscar installments, SEM buscar clientes
+  async getDefaulters(companyId = null, onProgress = null, forceRefresh = false) {
+    if (s_apiMode === "simulado") {
+      let bills = window.MOCK_DATA.DEFAULTERS_RECEIVABLE_BILLS;
+      if (companyId) bills = bills.filter(b => b.companyId === Number(companyId));
+      return bills;
+    }
+
+    if (onProgress) {
+        this._progressListeners.push(onProgress);
+        if (this._defaultersPromise && this._lastProgressState) {
+            onProgress(...this._lastProgressState);
+        }
+    }
+
+    if (!companyId) {
+      if (!this._progressListeners) this._progressListeners = [];
+      if (onProgress) {
+        this._progressListeners.push(onProgress);
+        if (this._lastProgressState) {
+          onProgress(...this._lastProgressState);
+        }
+      }
+
+      // Só o botão de atualizar descarta a busca em andamento.
+      // Sáb/dom/feriado usa a base de hoje se ela já existe; a busca completa
+      // fica para quando o cache do dia ainda não foi gravado.
+      const explicitForce = !!forceRefresh;
+      if (this._defaultersPromise && !explicitForce) {
+        return this._defaultersPromise;
+      }
+      if (explicitForce && this._defaultersPromise) {
+        this._defaultersFetchGen = (this._defaultersFetchGen || 0) + 1;
+        this._defaultersPromise = null;
+        this._progressListeners = [];
+        this._lastProgressState = null;
+      }
+      this._lastProgressState = null;
+      this._defaultersFetchGen = (this._defaultersFetchGen || 0) + 1;
+      const fetchGen = this._defaultersFetchGen;
+      if (window.ApiUsage) ApiUsage.pushSource(explicitForce ? "user" : "system", "fila_inadimplentes");
+      this._defaultersPromise = (async () => {
+        try {
+        const t0 = performance.now();
+        const todayStr = filaLocalTodayStr();
+        const expectedCompanyIds = getConfiguredInternalCompanyIds();
+        try { await hydratePaidMapsFromDailyCache(todayStr); } catch (e) {}
+
+        // 1) VERIFICAÇÃO DO CACHE DIÁRIO (INDEXEDDB E FIRESTORE)
+        if (!explicitForce) {
+           
+           // A) Tentar ler do IndexedDB (Cache Local, rápido e sem limite de quota)
+           try {
+               const localCache = await IdbDefaultersCache.get(`defaulters_${todayStr}`);
+               if (localCache && localCache.data) {
+                   if (!filaCacheDoDiaServe(localCache.cacheRev)) {
+                       console.warn('%c[Sienge] ⚠️ Cache da fila desatualizado — buscando o saldo em aberto de novo.', 'color:#f59e0b;font-weight:bold;');
+                   } else if (defaultersCacheLooksIncomplete(localCache.data, localCache, expectedCompanyIds)) {
+                       console.warn('%c[Sienge] ⚠️ Cache IndexedDB incompleto (faltam empresas internas) — ignorando.', 'color:#f59e0b;font-weight:bold;');
+                   } else {
+                   console.log(`%c[Sienge] ✅ Base carregada do IndexedDB local — ${localCache.data.length} títulos`, 'color:#10b981;font-size:13px;font-weight:bold;');
+                   applyPaidCacheFields(localCache.paidMap, localCache.paidInstallmentIds);
+                   if (localCache.paidMap) {
+                       console.log(`%c[Sienge] ✅ Último Pagamento restaurado do IndexedDB.`, 'color:#10b981;font-weight:bold;');
+                   }
+                   window._siengeLastFetchTime = {
+                     elapsed: "0.1",
+                     count: localCache.data.length,
+                     at: localCache.timestampStr || new Date().toLocaleTimeString('pt-BR'),
+                     atFull: localCache.atFull || localCache.timestampStr || new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                     cached: true
+                   };
+                   if (typeof window.updateFilaCacheStatusIndicator === "function") window.updateFilaCacheStatusIndicator();
+                   if (isFilaNonBusinessDay(todayStr)) markFilaFullRefreshDone(todayStr);
+                   if (Array.isArray(localCache.companyIds)) window._filaEmpresasRespondidas = localCache.companyIds.map(Number);
+                   return localCache.data;
+                   }
+               }
+           } catch (e) {
+               console.log('%c[Sienge] ℹ️ Erro ao ler cache do IndexedDB:', e);
+           }
+
+           // B) Se não tem no IndexedDB, tenta o Firebase (útil para o primeiro acesso do dia no PC)
+           if (window.DadosCobranca) {
+               try {
+                 console.log(`%c[Sienge] ⏱ Verificando cache diário no Supabase...`, 'color:#f59e0b;font-weight:bold;');
+                 // Supabase: ficha "<dia>" + blocos "<dia>_chunk_N" lidos e concatenados pela camada (data já é jsonb).
+                 const lido = await window.DadosCobranca.lerBlocosDia(todayStr);
+
+                 if (lido) {
+                   const meta = lido.ficha || {};
+                   // paidMap / paidInstallmentIds voltam como jsonb; aqui o resto do código espera o texto JSON do Firestore.
+                   ["paidMap", "paidInstallmentIds"].forEach((k) => {
+                     if (meta[k] != null && typeof meta[k] !== "string") meta[k] = JSON.stringify(meta[k]);
+                   });
+                   console.log(`%c[Sienge] ✅ Cache de hoje encontrado! Montando base...`, 'color:#10b981;font-weight:bold;');
+                   let result = lido.lista;
+
+                   if (!filaCacheDoDiaServe(meta.cacheRev)) {
+                     console.warn('%c[Sienge] ⚠️ Cache da fila desatualizado — buscando o saldo em aberto de novo.', 'color:#f59e0b;font-weight:bold;');
+                   } else if (defaultersCacheLooksIncomplete(result, meta, expectedCompanyIds)) {
+                     console.warn('%c[Sienge] ⚠️ Cache Firestore incompleto (faltam empresas internas) — buscando base completa.', 'color:#f59e0b;font-weight:bold;');
+                   } else {
+                   
+                   applyPaidCacheFields(meta.paidMap, meta.paidInstallmentIds);
+                   if (meta.paidMap) {
+                     console.log(`%c[Sienge] ✅ Último Pagamento restaurado do cache.`, 'color:#10b981;font-weight:bold;');
+                   }
+
+                   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+                   console.log(`%c[Sienge] ✅ Base carregada do Firestore em ${elapsed}s — ${result.length} títulos`, 'color:#10b981;font-size:13px;font-weight:bold;');
+                   window._siengeLastFetchTime = {
+                     elapsed,
+                     count: result.length,
+                     at: meta.timestampStr || new Date().toLocaleTimeString('pt-BR'),
+                     atFull: meta.atFull || meta.timestampStr || new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                     cached: true
+                   };
+                   if (typeof window.updateFilaCacheStatusIndicator === "function") window.updateFilaCacheStatusIndicator();
+                   
+                   // Salva no IndexedDB para as próximas vezes serem instantâneas!
+                   IdbDefaultersCache.set(`defaulters_${todayStr}`, {
+                       data: result,
+                       paidMap: meta.paidMap,
+                       paidInstallmentIds: meta.paidInstallmentIds || serializePaidInstallmentIds(),
+                       timestampStr: meta.timestampStr,
+                       atFull: meta.atFull || null,
+                       companyIds: meta.companyIds || expectedCompanyIds,
+                       cacheRev: meta.cacheRev || DEFAULTERS_CACHE_REV
+                   }).catch(() => {});
+
+                   if (isFilaNonBusinessDay(todayStr)) markFilaFullRefreshDone(todayStr);
+                   if (Array.isArray(meta.companyIds)) window._filaEmpresasRespondidas = meta.companyIds.map(Number);
+                   return result;
+                   }
+                 } else {
+                   console.log('%c[Sienge] ℹ️ Cache do Firestore desatualizado ou inexistente.', 'color:#f59e0b;');
+                 }
+               } catch (e) {
+                 console.log('%c[Sienge] ℹ️ Erro ao ler cache do Firestore (Possível limite de cota atingido):', e);
+               }
+           }
+        }
+
+        if (!explicitForce && isFilaNonBusinessDay(todayStr)) {
+          console.log('%c[Sienge] 📅 FDS/feriado sem a base de hoje — atualizando a fila.', 'color:#f59e0b;font-weight:bold;');
+        }
+        console.log('%c[Sienge] ⏱ Iniciando busca completa de inadimplentes na API...', 'color:#f59e0b;font-weight:bold;');
+        const broadcastProgress = (cId, cc, idx, total, cName, wData) => {
+             this._lastProgressState = [cId, cc, idx, total, cName, wData];
+             if (this._progressListeners) {
+               this._progressListeners.forEach(listener => listener(cId, cc, idx, total, cName, wData));
+             }
+          };
+          const result = await this._getDefaultersInternal(null, broadcastProgress);
+          if (fetchGen !== this._defaultersFetchGen) {
+            console.warn('%c[Sienge] ℹ️ Busca obsoleta descartada (nova atualização em andamento).', 'color:#f59e0b;');
+            return result;
+          }
+          const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+          console.log(
+            `%c[Sienge] ✅ Busca concluída em ${elapsed}s — ${result.length} títulos inadimplentes`,
+            'color:#10b981;font-size:13px;font-weight:bold;'
+          );
+          
+          const timestampStr = new Date().toLocaleTimeString('pt-BR');
+          const atFull = new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+          window._siengeLastFetchTime = { elapsed, count: result.length, at: timestampStr, atFull, cached: false };
+          if (typeof window.updateFilaCacheStatusIndicator === "function") window.updateFilaCacheStatusIndicator();
+
+          const fetchedCompanyIds = (result && result._fetchedCompanyIds)
+            ? result._fetchedCompanyIds
+            : expectedCompanyIds;
+          // Carga vazia nunca é a fila do dia (a carteira tem mais de mil títulos vencidos). Em 26/11/2026 um navegador
+          // recebeu 0 títulos às 17:14 e gravou a fila com chunks: 0 por cima da carga das 15:18; o batimento parou
+          // esperando a fila e quem abria a tela recebia a fila vazia. Vazia agora é tratada como incompleta.
+          const filaVazia = !Array.isArray(result) || result.length === 0;
+          const filaIncompleta = !!(result && result._filaIncompleta) || filaVazia;
+          window._filaEmpresasRespondidas = (fetchedCompanyIds || []).map(Number);
+          if (result && result._fetchedCompanyIds) delete result._fetchedCompanyIds;
+          if (result && result._empresasFalhas) delete result._empresasFalhas;
+          if (result) delete result._filaIncompleta;
+          if (filaIncompleta) {
+            console.warn("%c[Sienge] Fila incompleta. O cache do dia e o sprint não serão gravados com essa carga.", "color:#f59e0b;font-weight:bold;");
+          }
+          if (filaVazia && explicitForce) {
+            setTimeout(() => alert("A busca no Sienge voltou sem nenhum título, então a fila não foi atualizada. Confira se o seu login está ativo (saia e entre de novo no Integra) e tente outra vez."), 0);
+          }
+
+          if (isFilaNonBusinessDay(todayStr) && !defaultersCacheLooksIncomplete(result, { companyIds: fetchedCompanyIds }, expectedCompanyIds)) {
+            markFilaFullRefreshDone(todayStr);
+          }
+
+          try {
+            await this.ensureDailyPaidMaps(fetchedCompanyIds, broadcastProgress);
+          } catch (e) {
+            console.warn("[Sienge] paidMap diário", e);
+          }
+          
+          if (filaIncompleta) return result;
+
+          if (window.DadosCobranca) {
+              const CHUNK_SIZE = 100;
+              const numChunks = Math.ceil(result.length / CHUNK_SIZE);
+
+              (async () => {
+                if (fetchGen !== this._defaultersFetchGen) return;
+                try {
+                  console.log(`%c[Supabase] Salvando cache diário em ${numChunks} blocos...`, 'color:#3b82f6;');
+                  // Supabase: mesmos ids do Firestore; "data" vai como jsonb (sem JSON.stringify).
+                  const promises = [];
+                  for (let i = 0; i < numChunks; i++) {
+                    const chunkData = result.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+                    promises.push(window.DadosCobranca.gravarCacheDia(`${todayStr}_chunk_${i}`, { data: chunkData }));
+                  }
+                  await Promise.all(promises);
+                  
+                  let paidMapStr = null;
+                  if (window.advFilters && window.advFilters.paidMap) {
+                      try { paidMapStr = JSON.stringify(Array.from(window.advFilters.paidMap.entries())); } catch(e){}
+                  }
+                  const paidInstStr = serializePaidInstallmentIds();
+                  
+                  // paidMap / paidInstallmentIds em texto JSON: a camada faz JSON.parse para jsonb.
+                  await window.DadosCobranca.gravarCacheDia(todayStr, {
+                      date: todayStr, 
+                      chunks: numChunks, 
+                      timestampStr: timestampStr,
+                      atFull: atFull,
+                      paidMap: paidMapStr,
+                      paidInstallmentIds: paidInstStr,
+                      companyIds: fetchedCompanyIds,
+                      cacheRev: DEFAULTERS_CACHE_REV,
+                      batimentoPedidoEm: new Date().toISOString(),
+                      createdAt: new Date().toISOString()
+                  });
+                  fetch("/api/estoque-batimento?pedido=1", { method: "GET", keepalive: true }).catch(() => {});
+                  console.log(`%c[Supabase] Cache diário (${todayStr}) salvo com sucesso!`, 'color:#3b82f6;font-weight:bold;');
+                } catch (e) {
+                  console.error("[Supabase] Erro ao salvar o cache diário:", e);
+                }
+              })();
+              
+              // SALVA NO INDEXEDDB LOCALMENTE TAMBÉM
+              (async () => {
+                if (fetchGen !== this._defaultersFetchGen) return;
+                try {
+                   let paidMapStr = null;
+                   if (window.advFilters && window.advFilters.paidMap) {
+                       try { paidMapStr = JSON.stringify(Array.from(window.advFilters.paidMap.entries())); } catch(e){}
+                   }
+                   await IdbDefaultersCache.set(`defaulters_${todayStr}`, {
+                       data: result,
+                       paidMap: paidMapStr,
+                       paidInstallmentIds: serializePaidInstallmentIds(),
+                       timestampStr: timestampStr,
+                       atFull: atFull,
+                       companyIds: fetchedCompanyIds,
+                       cacheRev: DEFAULTERS_CACHE_REV
+                   });
+                   console.log(`%c[IndexedDB] Cache diário salvo localmente com sucesso!`, 'color:#3b82f6;font-weight:bold;');
+                } catch(e) {
+                   console.error("[IndexedDB] Erro ao salvar cache local:", e);
+                }
+              })();
+
+              
+              if (!filaIncompleta) this.saveDefaultersSnapshot(result).catch(console.error);
+              if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
+          } else if (!filaIncompleta) {
+             this.saveDefaultersSnapshot(result).catch(console.error);
+             if (this.syncSubjudiceHistory) this.syncSubjudiceHistory(result).catch(console.error);
+          }
+
+          return result;
+        } finally {
+          if (window.ApiUsage) ApiUsage.popSource();
+          if (fetchGen === this._defaultersFetchGen) {
+            this._defaultersPromise = null;
+            this._progressListeners = [];
+            this._lastProgressState = null;
+          }
+        }
+      })();
+      return this._defaultersPromise;
+    }
+    return await this._getDefaultersInternal(companyId, onProgress);
+  },
+
+  async hydratePaidMaps() {
+    return hydratePaidMapsFromDailyCache(filaLocalTodayStr());
+  },
+
+  ingestBulkIncomeRows(rows, paidMap, paidInst) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (typeof window !== "undefined") {
+      window.advFilters = window.advFilters || {};
+      if (!(window.advFilters.paidInstallmentAmounts instanceof Map)) window.advFilters.paidInstallmentAmounts = new Map();
+    }
+    const amounts = (typeof window !== "undefined" && window.advFilters && window.advFilters.paidInstallmentAmounts) || null;
+    const registrarBaixa = (billId, instId, receipt) => {
+      if (!billId || !instId || !receipt) return;
+      const key = String(billId) + ":" + String(instId);
+      const val = valorRecebidoRecibo(receipt);
+      const dt = String(receipt.paymentDate || receipt.receiptDate || receipt.date || "").slice(0, 10);
+      if (amounts && val > 0) {
+        const prev = amounts.get(key) || { amount: 0, date: "" };
+        prev.amount += val;
+        if (dt && dt > prev.date) prev.date = dt;
+        amounts.set(key, prev);
+      }
+      if (paidInst) paidInst.add(key);
+    };
+    (rows || []).forEach((item) => {
+      const bId = item.billReceivableId || item.receivableBillId || item.billId || item.documentId || item.invoiceId || item.id;
+      const instId = item.installmentId || item.installmentNumber
+        || (item.receipts && item.receipts[0] && (item.receipts[0].installmentId || item.receipts[0].installmentNumber));
+      const aninhados = [];
+      (item.receipts || []).forEach((receipt) => aninhados.push(receipt));
+      (item.receiptsCategories || []).forEach((cat) => {
+        (cat.receipts || []).forEach((receipt) => aninhados.push(receipt));
+      });
+      if (aninhados.length) {
+        aninhados.forEach((receipt) => {
+          const idInst = receipt.installmentId || receipt.installmentNumber || instId;
+          registrarBaixa(bId, idInst, receipt);
+        });
+      } else if (bId && instId) {
+        registrarBaixa(bId, instId, item);
+      }
+      if (!bId || !paidMap) return;
+      const validDates = [];
+      (item.receipts || []).forEach((receipt) => {
+        if (String(receipt.operationTypeId) === "2" && receipt.paymentDate) validDates.push(receipt.paymentDate);
+      });
+      (item.receiptsCategories || []).forEach((cat) => {
+        (cat.receipts || []).forEach((receipt) => {
+          if (String(receipt.operationTypeId) === "2" && receipt.paymentDate) validDates.push(receipt.paymentDate);
+        });
+      });
+      validDates.forEach((dateStr) => {
+        if (!dateStr) return;
+        const cleanDate = typeof dateStr === "string" ? dateStr.substring(0, 10) : dateStr;
+        const rDate = new Date(cleanDate + "T12:00:00");
+        rDate.setHours(0, 0, 0, 0);
+        const diffDays = Math.floor((today - rDate) / (1000 * 60 * 60 * 24));
+        const key = String(bId);
+        const currentVal = paidMap.get(key);
+        if (currentVal === undefined || diffDays < currentVal) paidMap.set(key, diffDays);
+      });
+    });
+  },
+
+  async ensureDailyPaidMaps(companyIds, onProgress) {
+    const todayStr = filaLocalTodayStr();
+    if (await hydratePaidMapsFromDailyCache(todayStr)) return true;
+    if (typeof window !== "undefined" && window.paidMapHasBillDays && window.paidMapHasBillDays(window.getRecentPaidMap ? window.getRecentPaidMap() : null)) {
+      markPaidMapDayDone(todayStr);
+      return true;
+    }
+    const companies = [...new Set((companyIds || []).map(String).filter(Boolean))];
+    if (!companies.length) return false;
+
+    if (typeof onProgress === "function") {
+      onProgress(null, null, 0, companies.length, "Pagamentos recentes (1ª atualização do dia)");
+    }
+
+    const paidMap = (typeof window !== "undefined" && window.getRecentPaidMap && window.getRecentPaidMap()) || new Map();
+    const paidInst = (typeof window !== "undefined" && window.advFilters && window.advFilters.paidInstallmentIds) || new Set();
+    if (typeof window !== "undefined") {
+      window.advFilters = window.advFilters || {};
+      window.advFilters.paidMap = paidMap;
+      window.advFilters.paidInstallmentIds = paidInst;
+    }
+
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const isoLocal = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    const dateChunks = [];
+    for (let i = 0; i < 30; i += 6) {
+      const chunkEnd = new Date(today);
+      chunkEnd.setDate(chunkEnd.getDate() - i);
+      const chunkStart = new Date(today);
+      chunkStart.setDate(chunkStart.getDate() - Math.min(i + 5, 29));
+      dateChunks.push({ start: isoLocal(chunkStart), end: isoLocal(chunkEnd) });
+    }
+
+    const run = async () => {
+      let step = 0;
+      const total = companies.length * dateChunks.length;
+      for (const companyId of companies) {
+        for (const chunk of dateChunks) {
+          step += 1;
+          if (typeof onProgress === "function") {
+            onProgress(companyId, null, step, total, "Pagamentos recentes (1ª atualização do dia)");
+          }
+          try {
+            const res = await this.getBulkIncome(chunk.start, chunk.end, companyId);
+            this.ingestBulkIncomeRows(res && res.data, paidMap, paidInst);
+          } catch (e) {
+            console.warn("[Sienge] income diário", e);
+          }
+        }
+      }
+    };
+
+    if (typeof window !== "undefined" && window.ApiUsage && typeof ApiUsage.withSource === "function") {
+      await ApiUsage.withSource("system", "pagamentos_30d_diario", run);
+    } else {
+      await run();
+    }
+
+    if (typeof window !== "undefined") {
+      if (typeof window.syncRecentPaidMap === "function") window.syncRecentPaidMap(paidMap);
+      markPaidMapDayDone(todayStr);
+    }
+    return paidMap.size > 0;
+  },
+
+  async updateCachePaidMap(paidMapStr, paidInstStr) {
+    const todayStr = filaLocalTodayStr();
+    const instStr = paidInstStr != null ? paidInstStr : serializePaidInstallmentIds();
+    try {
+      const localCache = await IdbDefaultersCache.get(`defaulters_${todayStr}`);
+      if (localCache) {
+        localCache.paidMap = paidMapStr || localCache.paidMap;
+        if (instStr) localCache.paidInstallmentIds = instStr;
+        await IdbDefaultersCache.set(`defaulters_${todayStr}`, localCache);
+      }
+    } catch (e) {}
+    if (s_apiMode === "simulado" || !window.DadosCobranca) return;
+    try {
+        // Supabase: updateDoc só se a ficha do dia existir -> lerCacheDia + gravarCacheDia com merge.
+        const meta = await window.DadosCobranca.lerCacheDia(todayStr);
+        if (meta) {
+            const patch = { paidMap: paidMapStr };
+            if (instStr) patch.paidInstallmentIds = instStr;
+            await window.DadosCobranca.gravarCacheDia(todayStr, patch, { merge: true });
+            console.log('%c[Supabase] PaidMap atualizado no cache diário.', 'color:#3b82f6;');
+        }
+    } catch(e) {
+        console.error("[Supabase] Erro ao atualizar PaidMap no cache:", e);
+    }
+  },
+
+
+  /**
+   * Busca os recebimentos dos últimos 3 dias e marca as parcelas pagas.
+   * A base da fila é baixada uma vez por dia (madrugada); baixas lançadas depois,
+   * mesmo com data de ontem, só entram por aqui. Roda no máximo a cada 30 min.
+   * Retorna quantas parcelas pagas novas entraram.
+   */
+  async refreshRecentPayments(opts = {}) {
+    if (s_apiMode === "simulado") return 0;
+    const KEY = "crm_pagtos_recentes_em";
+    if (!opts.force) {
+      try {
+        const last = Number(localStorage.getItem(KEY)) || 0;
+        if (Date.now() - last < 30 * 60 * 1000) return 0;
+      } catch (e) {}
+    }
+    if (this._refreshPaysInFlight) return this._refreshPaysInFlight;
+    const run = async () => {
+      window.advFilters = window.advFilters || {};
+      const paidMap = (window.getRecentPaidMap && window.getRecentPaidMap()) || window.advFilters.paidMap || new Map();
+      const paidInst = window.advFilters.paidInstallmentIds || new Set();
+      window.advFilters.paidMap = paidMap;
+      window.advFilters.paidInstallmentIds = paidInst;
+      const antes = paidInst.size;
+      const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      const fim = new Date();
+      fim.setHours(12, 0, 0, 0);
+      const ini = new Date(fim);
+      ini.setDate(ini.getDate() - 3);
+      let falhas = 0;
+      const companies = getConfiguredInternalCompanyIds();
+      for (const cId of companies) {
+        try {
+          const res = await this.getBulkIncome(iso(ini), iso(fim), cId);
+          this.ingestBulkIncomeRows(res && res.data, paidMap, paidInst);
+        } catch (e) {
+          falhas += 1;
+          console.warn("[Sienge] pagamentos recentes", cId, e);
+        }
+      }
+      if (typeof window.syncRecentPaidMap === "function") window.syncRecentPaidMap(paidMap);
+      if (falhas < companies.length) {
+        try { localStorage.setItem(KEY, String(Date.now())); } catch (e) {}
+      }
+      const novos = paidInst.size - antes;
+      if (novos > 0) {
+        console.log(`[Sienge] ${novos} parcela(s) paga(s) depois da carga do dia.`);
+        try {
+          await this.updateCachePaidMap(JSON.stringify(Array.from(paidMap.entries())), serializePaidInstallmentIds());
+        } catch (e) {}
+      }
+      return novos;
+    };
+    this._refreshPaysInFlight = (window.ApiUsage && typeof ApiUsage.withSource === "function")
+      ? ApiUsage.withSource("system", "pagamentos_recentes", run)
+      : run();
+    try { return await this._refreshPaysInFlight; }
+    finally { this._refreshPaysInFlight = null; }
+  },
+
+  async _getDefaultersInternal(companyId, onProgress) {
+    let targetCompanies = getConfiguredInternalCompanyIds();
+    let customData = null;
+    if (companyId) {
+      targetCompanies = [companyId];
+    } else {
+      try {
+        const localCustom = localStorage.getItem('crm_empresas_custom');
+        if (localCustom) {
+          customData = JSON.parse(localCustom);
+          const internalIds = collectInternalIdsFromCustomMap(customData);
+          if (internalIds.length > 0) {
+            targetCompanies = [...new Set(internalIds)];
+          }
+        }
+      } catch(e) {
+        console.error("Erro ao ler customData de empresas", e);
+      }
+    }
+
+    console.log(`[Sienge] Iniciando busca de inadimplentes para as empresas: ${targetCompanies.join(', ')}`);
+
+    let firstCompanyName = "Moura Leite Desenvolvimento e Urbanização";
+    if (targetCompanies.length > 0 && customData && customData[targetCompanies[0]]) {
+        firstCompanyName = customData[targetCompanies[0]].nome || customData[targetCompanies[0]].nome_usual || firstCompanyName;
+    }
+    if (onProgress) onProgress(null, null, 0, targetCompanies.length, firstCompanyName);
+
+    const today = filaLocalTodayStr();
+    const allNormalized = [];
+
+    // Carregar os centros de custo para aplicar o filtro por enterpriseId
+    let allCcs = [];
+    try {
+      allCcs = await this.getCostCenters();
+    } catch (e) {
+      console.warn("Erro ao carregar centros de custo para otimização da API:", e);
+    }
+
+    let companyTimes = {};
+    try { companyTimes = JSON.parse(localStorage.getItem('siengeCompanyTimes') || '{}'); } catch(e){}
+    
+    let totalWeight = 0;
+    targetCompanies.forEach(id => totalWeight += (companyTimes[id] || 7000));
+    let currentWeightAccum = 0;
+
+    const prevSubPorEmpresa = new Map();
+    try {
+      const prevCache = await IdbDefaultersCache.get(`defaulters_${today}`);
+      (prevCache && Array.isArray(prevCache.data) ? prevCache.data : []).forEach((b) => {
+        if (!b || b.subjudice !== "S") return;
+        const emp = String(b.companyId || "");
+        const id = idTituloInadimplente(b);
+        if (!id) return;
+        if (!prevSubPorEmpresa.has(emp)) prevSubPorEmpresa.set(emp, new Set());
+        prevSubPorEmpresa.get(emp).add(id);
+      });
+    } catch (e) {}
+
+    let _companyIndex = 0;
+    for (const cId of targetCompanies) {
+      const cStartTime = Date.now();
+      _companyIndex++;
+      
+      const thisWeight = companyTimes[cId] || 7000;
+      let pctBefore = totalWeight > 0 ? (currentWeightAccum / totalWeight) * 100 : 0;
+      let pctAfter = totalWeight > 0 ? ((currentWeightAccum + thisWeight) / totalWeight) * 100 : 0;
+      
+      let cName = customData && customData[cId] ? (customData[cId].nome_usual || customData[cId].nome || `Empresa ${cId}`) : `Empresa ${cId}`;
+      if (onProgress) onProgress(cId, null, _companyIndex, targetCompanies.length, cName, { pctBefore, pctAfter, expectedDuration: thisWeight });
+
+      // Para a empresa 1, a consulta precisa complementar também pelo Centro de Custo,
+      // porque algumas unidades e lotes são carregadas por empreendimento e não aparecem
+      // apenas pela empresa. Mantemos a regra de lotes ativos para as demais empresas.
+      const companyCcsRaw = allCcs
+        .filter(cc => Number(cc.companyId) === Number(cId))
+        .map(cc => String(cc.id || cc.costCenterId || '').trim())
+        .filter(Boolean);
+
+      const companyCcs = companyCcsRaw.filter(id => {
+        const isActivePrefix = id.startsWith('1') || id.startsWith('2') || id.startsWith('3');
+        return Number(cId) === 1 ? true : isActivePrefix;
+      });
+
+      console.log(`[Sienge] Empresa ${cId} — ${companyCcs.length} centros de custo elegíveis: ${companyCcs.join(', ')}`);
+
+      // Divisão em lotes menores (2 CCs) para evitar requests muito longos e timeout na Vercel (60s limit)
+      const BATCH_SIZE = 2;
+      const ccBatches = [];
+      if (companyCcs.length === 0) {
+        ccBatches.push([]); // Lote vazio caso não haja CCs filtrados
+      } else {
+        for (let i = 0; i < companyCcs.length; i += BATCH_SIZE) {
+          ccBatches.push(companyCcs.slice(i, i + BATCH_SIZE));
+        }
+      }
+
+      console.log(`[Sienge] Buscando títulos inadimplentes via Bulk Data da empresa ${cId} em ${ccBatches.length} lote(s)...`);
+      
+      let rawArray = [];
+      let rawUnderJudgment = [];
+      const idsSemConfirmacao = new Set();
+      let empresaFalhou = false;
+
+      for (let i = 0; i < ccBatches.length; i++) {
+        const batch = ccBatches[i];
+        const extraParams = batch.length > 0 ? `&enterpriseId=${batch.join(',')}` : '';
+
+        const buildQuery = (billTypeParams) =>
+          `?companyId=${cId}` +
+          `&dueDateLimit=${today}` +
+          `&documentsId=CT` +
+          `&correctionDate=${today}` +
+          billTypeParams +
+          `&normalActivities=false` +
+          `&inBillingActivities=false` +
+          `&defaultersActivities=true` +
+          `&underJudgmentActivities=true` +
+          `&includeResidueInstallment=true` +
+          `&includePartiallyPaidInstallments=true` +
+          `&showOnlyDefaulters=false` +
+          `&includeUnderJudgment=true` +
+          `&showSentToSPCSerasa=true` +
+          `&positionDate=${today}` +
+          extraParams;
+
+        const qAll   = buildQuery(`&normalReceivableBills=true&inBillingReceivableBills=true&defaultersReceivableBills=true&underJudgmentReceivableBills=true`);
+        const qJudge = buildQuery(`&normalReceivableBills=false&inBillingReceivableBills=false&defaultersReceivableBills=false&underJudgmentReceivableBills=true`);
+
+        if (ccBatches.length > 1) {
+          console.log(`[Sienge] Empresa ${cId} — Processando lote ${i + 1}/${ccBatches.length} (CCs: ${batch.join(', ')})`);
+        }
+
+        let resAll = null;
+        let resJudge = null;
+        for (let tentativa = 0; tentativa < 3 && !resAll; tentativa++) {
+          try {
+            resAll = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qAll}`);
+          } catch (err) {
+            console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId} (Lote ${i + 1}, tentativa ${tentativa + 1}):`, err);
+            if (tentativa < 2) await new Promise((r) => setTimeout(r, 1500 * (tentativa + 1)));
+          }
+        }
+        if (!resAll) empresaFalhou = true;
+        const allRows = linhasBulkDefaulters(resAll) || [];
+        if (resAll) {
+          try {
+            await new Promise(r => setTimeout(r, 1000));
+            resJudge = await siengeFetchWithRetry(`/bulk-data/v1/defaulters-receivable-bills${qJudge}`);
+          } catch (err) {
+            console.error(`[Sienge] Erro na lista de sub judice da empresa ${cId} (Lote ${i + 1}):`, err);
+          }
+        }
+        const judgeRows = linhasBulkDefaulters(resJudge);
+        rawArray.push(...allRows);
+        if (judgeRows) rawUnderJudgment.push(...judgeRows);
+        if (allRows.length && !judgeRows) {
+          allRows.forEach((b) => {
+            const id = idTituloInadimplente(b);
+            if (id) idsSemConfirmacao.add(id);
+          });
+          console.warn(`[Sienge] Empresa ${cId} lote ${i + 1}: sub judice não confirmado. ${allRows.length} título(s) não serão dados como saída.`);
+        }
+      }
+
+      try {
+        const underJudgmentIds = new Set(rawUnderJudgment.map(b => idTituloInadimplente(b)).filter(Boolean));
+        const prevIds = prevSubPorEmpresa.get(String(cId)) || new Set();
+        const idsNaCarteira = new Set(rawArray.map(b => String(b.receivableBillId || b.id || "")));
+        rawUnderJudgment.forEach(b => {
+          const id = String(b.receivableBillId || b.id || "");
+          if (!id || idsNaCarteira.has(id)) return;
+          idsNaCarteira.add(id);
+          rawArray.push(b);
+        });
+        rawArray = mesclarTitulosInadimplentes(rawArray);
+        let marcadosAgora = 0;
+        rawArray.forEach((b) => { if (tituloTrazSubJudice(b, underJudgmentIds)) marcadosAgora += 1; });
+        const quedaEmpresa = prevIds.size >= 8 && marcadosAgora * 2 < prevIds.size;
+        if (quedaEmpresa) {
+          console.warn(`[Sienge] Empresa ${cId}: sub judice caiu de ${prevIds.size} para ${marcadosAgora}. A marca anterior permanece.`);
+        }
+
+        const normalizedArray = rawArray.map(bill => {
+          const installments = []
+            .concat(bill.defaulterInstallments || [])
+            .concat(bill.underJudgmentInstallments || []);
+          const mapped = {
+            id:          bill.receivableBillId || String(bill.id),
+            saleId:      bill.receivableBillId ? Number(bill.receivableBillId) : (bill.saleId || 100),
+            realSaleId:  bill.saleId,
+            customerId:  bill.clientId ? Number(bill.clientId) : (bill.customerId || 0),
+            clientName:  bill.clientName || `Cliente #${bill.clientId}`,
+            companyId:   bill.companyId,
+            costCentersId: bill.costCentersId || [],
+            costCenterId:  bill.costCenterId || (bill.costCentersId?.length > 0 ? bill.costCentersId[0] : null),
+            units:       bill.units || 'N/D',
+            value: 0, interest: 0, fine: 0, daysDelay: 0,
+            slipStatus:  'Vencido',
+            subjudice: (tituloTrazSubJudice(bill, underJudgmentIds)
+              || (idsSemConfirmacao.has(idTituloInadimplente(bill)) && prevIds.has(idTituloInadimplente(bill)))
+              || (quedaEmpresa && prevIds.has(idTituloInadimplente(bill)))) ? 'S' : 'N',
+            defaulterInstallments:      installments,
+            defaulterJudicialActivities: bill.defaulterJudicialActivities || [],
+            totalInstallmentsCount: (bill.defaulterInstallments ? bill.defaulterInstallments.length : 0) +
+                                    (bill.normalInstallments ? bill.normalInstallments.length : 0) +
+                                    (bill.inBillingInstallments ? bill.inBillingInstallments.length : 0) +
+                                    (bill.underJudgmentInstallments ? bill.underJudgmentInstallments.length : 0)
+          };
+          const open = typeof window.summarizeOpenDefaulterBill === "function"
+            ? window.summarizeOpenDefaulterBill(mapped)
+            : null;
+          if (open) {
+            mapped.value = open.value;
+            mapped.interest = open.interest;
+            mapped.fine = open.fine;
+            mapped.daysDelay = open.daysDelay;
+            mapped.defaulterInstallments = open.installments || [];
+          } else {
+            installments.forEach(inst => {
+              mapped.value += installmentOverdueAmount(inst);
+              mapped.interest += inst.interest || 0;
+              mapped.fine += inst.fine || 0;
+              const delay = inst.daysOfDelay !== undefined ? inst.daysOfDelay : (inst.daysDelay || 0);
+              if (delay > mapped.daysDelay) mapped.daysDelay = delay;
+            });
+          }
+          return mapped;
+        });
+
+        let foraDaCobranca = 0;
+        for (let ci = 0; ci < companyCcs.length; ci++) {
+          const cc = companyCcs[ci];
+          if (onProgress) onProgress(cId, cc, _companyIndex, targetCompanies.length, cName + " · parcelas sem cobrança");
+          try {
+            const rows = await fetchExtratoVencidoCc(cc, today);
+            foraDaCobranca += incluirParcelasForaDaCobranca(normalizedArray, rows, today, cId);
+          } catch (e) {
+            console.warn("[Sienge] Extrato das parcelas sem cobrança", cc, e);
+          }
+        }
+        console.log(`[Sienge] Empresa ${cId}: ${foraDaCobranca} parcela(s) de tipo que não gera cobrança incluída(s) no vencido.`);
+        console.log(`[Sienge] Retornou ${normalizedArray.length} títulos inadimplentes da empresa ${cId}`);
+        if (empresaFalhou) {
+          console.warn(`[Sienge] Empresa ${cId} ficou incompleta: um lote não respondeu. Essa empresa não entra no cache do dia.`);
+          allNormalized._empresasFalhas = allNormalized._empresasFalhas || [];
+          allNormalized._empresasFalhas.push(Number(cId));
+        }
+        allNormalized.push(...normalizedArray.filter(b => b.subjudice === "S" || (b.daysDelay > 0 && (b.value || 0) > 0.009)));
+
+      } catch (err) {
+        console.error(`[Sienge] Erro na API Bulk Data da empresa ${cId}:`, err);
+      }
+      
+      const cElapsed = Date.now() - cStartTime;
+      companyTimes[cId] = cElapsed;
+      localStorage.setItem('siengeCompanyTimes', JSON.stringify(companyTimes));
+      currentWeightAccum += thisWeight;
+    }
+
+    const falhas = new Set((allNormalized._empresasFalhas || []).map(Number));
+    allNormalized._fetchedCompanyIds = targetCompanies.filter((id) => !falhas.has(Number(id)));
+    allNormalized._filaIncompleta = falhas.size > 0;
+    return allNormalized;
+  },
+
+  // 3. Parcelas de um título (chamado apenas ao abrir Detalhes)
+  async getBillInstallments(receivableBillId) {
+    if (s_apiMode === "simulado") return [];
+    const res = await siengeFetchWithRetry(`/accounts-receivable/receivable-bills/${receivableBillId}/installments`);
+    return res.results || res || [];
+  },
+
+  // 4. Dados do Cliente (chamado apenas ao abrir Detalhes)
+  async getCustomer(id) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.CUSTOMERS[id] || null;
+    }
+    const c = await siengeFetchWithRetry(`/customers/${id}`);
+    return normalizeSiengeCustomer({
+      ...c,
+      id: c.id,
+      name: c.name,
+      cpfCnpj: c.cnpj || c.cpf || "",
+      email: c.email || c.emails?.[0]?.email || "N/D",
+      phone: c.phones?.[0]?.number || c.phones?.[0]?.phoneNumber || "N/D",
+      phones: c.phones || [],
+      addresses: c.addresses || [],
+      civilStatus: c.civilStatus || "N/D",
+      profession: c.profession || "N/D",
+      sex: c.sex || "N/D",
+      birthDate: c.birthDate || "1980-01-01",
+      subtypes: c.subTypes || c.subtypes || []
+    });
+  },
+
+  // 5. Contratos de Venda (chamado apenas ao abrir Detalhes ou por customerId específico)
+  async getSales(customerId = null) {
+    if (s_apiMode === "simulado") {
+      let sales = window.MOCK_DATA.SALES;
+      if (customerId) sales = sales.filter(s => s.customerId === Number(customerId));
+      return sales;
+    }
+
+    // No modo Real, sem customerId, usa cache
+    if (!customerId) {
+      if (typeof window !== 'undefined' && window.AppState && window.AppState.sales && window.AppState.sales.length > 0) {
+        return window.AppState.sales;
+      }
+      return [];
+    }
+
+    try {
+      const res = await siengeFetchWithRetry(`/sales-contracts?customerId=${customerId}`);
+      const rawResults = res.results || [];
+
+      const mapped = rawResults.map(c => {
+        const mainCustomer = c.salesContractCustomers?.find(cust => cust.main === true) || c.salesContractCustomers?.[0] || {};
+        const mainUnit = c.salesContractUnits?.find(u => u.main === true) || c.salesContractUnits?.[0] || {};
+        const unitId = `U-${c.enterpriseId}-${mainUnit.name ? mainUnit.name.replace(/\s+/g, '') : 'ND'}`;
+
+        if (typeof window !== 'undefined' && window.AppState) {
+          window.AppState.units = window.AppState.units || {};
+          if (!window.AppState.units[unitId]) {
+            const unitName = mainUnit.name || "";
+            const nameParts = unitName.split("-");
+            window.AppState.units[unitId] = {
+              id: unitId,
+              costCenterId: String(c.enterpriseId),
+              block: nameParts.length > 1 ? nameParts[0] : "N/D",
+              lot: nameParts.length > 1 ? nameParts.slice(1).join("-") : (unitName || "N/D"),
+              area: null,
+              privateArea: null,
+              status: c.outstandingBalance === 0 ? "Quitado" : "Vendido"
+            };
+          }
+        }
+
+        const brokers = c.brokers || c.salesContractBrokers || [];
+        const mainBroker = (Array.isArray(brokers) && brokers.length)
+          ? (brokers.find(b => b.main === true || b.main === "S") || brokers[0])
+          : null;
+        const brokerName = (mainBroker && (mainBroker.name || mainBroker.brokerName || mainBroker.personName || mainBroker.fantasyName))
+          || c.salespersonName || c.salesmanName || c.brokerName || "";
+
+        const mappedSale = {
+          id: c.id,
+          contractNumber: c.contractNumber || c.number || c.documentNumber || "",
+          number: c.number || c.contractNumber || "",
+          customerId: mainCustomer.id || customerId,
+          queriedCustomerId: customerId,
+          companyId: c.companyId,
+          unitId: unitId,
+          siengeUnitId: mainUnit.id || "",
+          unitName: mainUnit.name || "",
+          saleDate: c.contractDate,
+          contractValue: c.totalSellingValue || c.value,
+          updatedContractValue: c.value,
+          interestPercentage: c.interestPercentage,
+          interestRate: (c.interestPercentage != null && c.interestPercentage !== "" ? Number(c.interestPercentage) / 100 : null),
+          paymentConditions: Array.isArray(c.paymentConditions) ? c.paymentConditions : [],
+          subjudice: c.subjudice ? "S" : "N",
+          percPaid: c.value > 0 ? (c.totalSellingValue - c.outstandingBalance) / c.value : 0,
+          lastPaymentDate: c.lastUpdateDate,
+          status: c.situation === "Distratado" ? "Distratado" : c.outstandingBalance === 0 ? "Quitado" : "Ativo",
+          receivableBillId: c.receivableBillId,
+          enterpriseId: c.enterpriseId,
+          customers: c.salesContractCustomers || [],
+          salesContractCustomers: c.salesContractCustomers || [],
+          brokers,
+          brokerName: String(brokerName || "").trim()
+        };
+        if (typeof window !== "undefined" && typeof window.rememberContractBuyers === "function") {
+          window.rememberContractBuyers(mappedSale);
+        }
+        return mappedSale;
+      });
+
+      return mapped;
+    } catch (error) {
+      console.error("Erro ao obter vendas/contratos:", error);
+      return [];
+    }
+  },
+
+  // 6. Títulos pagos de um cliente específico (chamado ao abrir Detalhes)
+  async getPaidBills(companyId = null, customerId = null) {
+    if (s_apiMode === "simulado") {
+      let bills = window.MOCK_DATA.PAID_RECEIVABLE_BILLS;
+      if (companyId) bills = bills.filter(b => b.companyId === Number(companyId));
+      return bills;
+    }
+    if (!customerId) return [];
+
+    try {
+      let queryParam = `?customerId=${customerId}`;
+      if (companyId) queryParam += `&companyId=${companyId}`;
+      const billsRes = await siengeFetchWithRetry(`/accounts-receivable/receivable-bills${queryParam}`);
+      const paidBills = (billsRes.results || []).filter(b => b.payOffDate !== null);
+
+      return paidBills.map(bill => ({
+        id: `B-${bill.receivableBillId}`,
+        saleId: bill.receivableBillId,
+        customerId: bill.customerId,
+        companyId: bill.companyId,
+        paymentDate: bill.payOffDate,
+        value: bill.receivableBillValue,
+        totalPaid: bill.receivableBillValue,
+        slipStatus: "Pago"
+      }));
+    } catch (error) {
+      console.error("Erro ao obter títulos pagos:", error);
+      return [];
+    }
+  },
+
+  // 7. Unidade física
+  async getUnit(unitId) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.UNITS[unitId] || { id: unitId, block: "N/D", lot: "N/D", area: 0, status: "N/D" };
+    }
+    try {
+      if (!isNaN(unitId)) {
+        const u = await siengeFetchWithRetry(`/units/${unitId}`);
+        const nameParts = (u.name || "").split("-");
+        const priv = u.privateArea || u.Privatearea || null;
+        return { id: u.id, costCenterId: String(u.enterpriseId), block: nameParts[0] || "N/D", lot: nameParts[1] || "N/D", area: priv || u.totalArea || 0, privateArea: priv, totalArea: u.totalArea || 0, status: u.contractId ? "Vendido" : "Disponível" };
+      }
+      const parts = String(unitId).split("-");
+      const nameToSearch = parts.slice(2).join("-");
+      const enterpriseId = parts[1];
+      const queryParam = enterpriseId ? `?enterpriseId=${enterpriseId}` : "";
+      const unitsRes = await siengeFetchWithRetry(`/units${queryParam}`);
+      const found = unitsRes.results.find(u => u.name === nameToSearch || u.name.replace(/\s+/g, '') === nameToSearch);
+      if (found) {
+        const nameParts = (found.name || "").split("-");
+        const priv = found.privateArea || found.Privatearea || null;
+        return { id: found.id, costCenterId: String(found.enterpriseId), block: nameParts[0] || "N/D", lot: nameParts[1] || "N/D", area: priv || found.totalArea || 0, privateArea: priv, totalArea: found.totalArea || 0, status: found.contractId ? "Vendido" : "Disponível" };
+      }
+    } catch (e) { /* silencioso */ }
+    return { id: unitId, block: "N/D", lot: "N/D", area: 0, status: "N/D" };
+  },
+
+  async getUnitRaw(unitId) {
+    if (s_apiMode === "simulado") return null;
+    try {
+      if (isNaN(unitId) && String(unitId).includes("-")) {
+        const u = await this.getUnit(unitId);
+        if (u && u.id && !isNaN(u.id)) {
+          return await siengeFetchWithRetry(`/units/${u.id}`);
+        }
+        return null;
+      }
+      return await siengeFetchWithRetry(`/units/${unitId}`);
+    } catch (e) {
+      console.error("Erro getUnitRaw:", e);
+      return null;
+    }
+  },
+
+  async findUnitByName(enterpriseId, name) {
+    if (s_apiMode === "simulado") return null;
+    try {
+      const res = await siengeFetchWithRetry(`/units?limit=10&offset=0&enterpriseId=${enterpriseId}&name=${encodeURIComponent(name)}&additionalData=NONE`);
+      if (res && res.results && res.results.length > 0) {
+        return res.results[0];
+      }
+      return null;
+    } catch (e) {
+      console.error("Erro findUnitByName:", e);
+      return null;
+    }
+  },
+
+  async getContractRaw(contractId) {
+    if (s_apiMode === "simulado") return null;
+    try {
+      return await siengeFetchWithRetry(`/sales-contracts/${contractId}`);
+    } catch (e) {
+      console.error("Erro getContractRaw:", e);
+      return null;
+    }
+  },
+
+  _siengeAttachmentRows: function(res) {
+    if (!res) return [];
+    if (Array.isArray(res)) return res;
+    if (Array.isArray(res.results)) return res.results;
+    if (Array.isArray(res.data)) return res.data;
+    if (Array.isArray(res.attachments)) return res.attachments;
+    return [];
+  },
+
+  async getSalesContractAttachments(contractId) {
+    if (s_apiMode === "simulado" || !contractId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/sales-contracts/${encodeURIComponent(contractId)}/attachments?limit=200&offset=0`);
+      return { results: this._siengeAttachmentRows(res) };
+    } catch (e) {
+      console.error("[Sienge] anexos do contrato", e);
+      return { results: [] };
+    }
+  },
+
+  async getUnitAttachments(unitId) {
+    if (s_apiMode === "simulado" || !unitId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/units/${encodeURIComponent(unitId)}/attachments?limit=200&offset=0`);
+      return { results: this._siengeAttachmentRows(res) };
+    } catch (e) {
+      console.error("[Sienge] anexos da unidade", e);
+      return { results: [] };
+    }
+  },
+
+  async findSalesContract(opts) {
+    const o = opts || {};
+    const customerId = o.customerId != null ? String(o.customerId).trim() : "";
+    const rawId = o.contractId != null ? String(o.contractId).trim() : "";
+    const contractNumber = String(o.contractNumber || "").replace(/\s+/g, "").trim();
+    const billId = String(o.receivableBillId || "").replace(/^B-/i, "").trim();
+    const enterpriseId = o.enterpriseId != null ? String(o.enterpriseId).trim() : "";
+    const unitName = String(o.unitName || "").replace(/\s+/g, "").toUpperCase();
+    const isCanceled = (c) => {
+      const sit = String((c && (c.situation || c.status || c.salesContractSituation)) || "").toUpperCase();
+      return sit === "CANCELED" || sit === "CANCELADO" || sit === "DISTRATADO";
+    };
+    const usable = (c) => c && c.id != null && !isCanceled(c);
+    // Contrato de outra pessoa nunca serve: com o cliente informado, ele precisa estar entre os compradores.
+    const compradores = (c) => (Array.isArray(c && c.salesContractCustomers) ? c.salesContractCustomers : null);
+    const doCliente = (c) => {
+      if (!customerId) return true;
+      const lista = compradores(c);
+      if (!lista) return true;
+      return lista.some((x) => x && String(x.id != null ? x.id : x.customerId) === customerId);
+    };
+    const looksLikeContractNumber = contractNumber && !/^\d{1,8}$/.test(contractNumber);
+    // Título a receber (ex.: 16825) não é o id do sales-contract
+    const salesContractId = rawId && rawId !== billId && /^\d+$/.test(rawId) ? rawId : "";
+
+    const pool = [];
+    const pushAll = (arr) => {
+      (arr || []).forEach((c) => {
+        if (!c || c.id == null) return;
+        if (!pool.some((x) => String(x.id) === String(c.id))) pool.push(c);
+      });
+    };
+
+    if (customerId) {
+      try {
+        const res = await siengeFetchWithRetry(`/sales-contracts?customerId=${encodeURIComponent(customerId)}&limit=200&offset=0`);
+        pushAll(res && res.results);
+      } catch (e) {}
+    }
+    if (looksLikeContractNumber) {
+      // Só "number" filtra. O Sienge ignora "contractNumber" e devolve 50 contratos quaisquer.
+      try {
+        const res = await siengeFetchWithRetry(`/sales-contracts?number=${encodeURIComponent(contractNumber)}&limit=50&offset=0`);
+        pushAll(res && res.results);
+      } catch (e) {}
+    }
+    if (salesContractId) {
+      try {
+        const one = await this.getContractRaw(salesContractId);
+        if (one && one.id) pushAll([one]);
+      } catch (e) {}
+    }
+
+    const num = contractNumber.toUpperCase();
+    const scored = pool.filter(doCliente).map((c) => {
+      let score = 0;
+      if (billId && String(c.receivableBillId || c.billReceivableId || "") === billId) score += 8;
+      const cn = String(c.contractNumber || c.number || "").toUpperCase().replace(/\s+/g, "");
+      if (num && cn && (cn === num || cn.includes(num) || num.includes(cn))) score += 12;
+      if (salesContractId && String(c.id) === salesContractId) score += 6;
+      if (enterpriseId && String(c.enterpriseId) === enterpriseId) score += 3;
+      if (unitName) {
+        const units = c.salesContractUnits || c.units || [];
+        const hit = (Array.isArray(units) ? units : []).some((u) => {
+          const n = String((u && (u.name || u.unitName)) || "").replace(/\s+/g, "").toUpperCase();
+          return n && (n === unitName || n.includes(unitName) || unitName.includes(n));
+        });
+        if (hit) score += 4;
+      }
+      if (usable(c)) score += 1;
+      return { c, score };
+    }).sort((a, b) => b.score - a.score);
+
+    const best = (scored[0] && scored[0].score > 0) ? scored[0].c : (pool.filter((c) => usable(c) && doCliente(c))[0] || null);
+    if (!best) return null;
+    if (compradores(best)) return best;
+    try {
+      const full = await this.getContractRaw(best.id);
+      if (full && full.id) return doCliente(full) ? full : null;
+      return customerId ? null : best;
+    } catch (e) {
+      return customerId ? null : best;
+    }
+  },
+
+  async cancelSalesContract(contractId, body) {
+    const id = String(contractId || "").trim();
+    if (!/^\d+$/.test(id)) throw new Error("Id do contrato de vendas inválido.");
+    const letras = {
+      I: "I", X: "X", J: "J", E: "E",
+      INTERNAL: "I", NOTARY_NOTIFICATION: "X", OFFICE_NOTIFICATION: "J", EDICT: "E"
+    };
+    const subType = letras[String((body && body.subType) || "").trim().toUpperCase()] || "";
+    const payload = {
+      date: String((body && body.date) || "").slice(0, 10),
+      reason: String((body && body.reason) || "").trim(),
+      subType: subType
+    };
+    if (!payload.date || !payload.reason || !payload.subType) {
+      throw new Error("Data, motivo e subtipo são obrigatórios. O subtipo vai como I, X, J ou E.");
+    }
+    return siengePost("/sales-contracts/" + encodeURIComponent(id) + "/cancellation", payload);
+  },
+
+  // 9. Centro de Custo
+  async getCostCenter(costCenterId) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.COST_CENTERS.find(cc => String(cc.id) === String(costCenterId)) || { id: costCenterId, name: `Centro de Custo ${costCenterId}` };
+    }
+    const chave = String(costCenterId || "").trim();
+    this._ccNomeMem = this._ccNomeMem || {};
+    if (this._ccNomeMem[chave]) return this._ccNomeMem[chave];
+    try {
+      const lista = JSON.parse(localStorage.getItem("crm_cost_centers_data") || "[]");
+      const hit = Array.isArray(lista) && lista.find((c) => c && String(c.id) === chave && c.name);
+      if (hit) return (this._ccNomeMem[chave] = { id: hit.id, name: hit.name });
+    } catch (e) {}
+    const obra = this.obraVgvCache(chave);
+    if (obra && obra.nome) return (this._ccNomeMem[chave] = { id: chave, name: obra.nome });
+    const daLista = this._entLista && this._entLista.porId && this._entLista.porId[chave];
+    if (daLista && daLista.nome) return (this._ccNomeMem[chave] = { id: chave, name: daLista.nome });
+    try {
+      // Tentar a rota de empreendimentos primeiro, já que o usuário pediu "Empreendimento"
+      const ent = await siengeFetchWithRetry(`/enterprises/${costCenterId}`);
+      if (ent && ent.name) return (this._ccNomeMem[chave] = { id: ent.id, name: ent.name });
+    } catch (e1) {
+      // Fallback para costcenters caso não seja um enterprise válido
+      try {
+        const cc = await siengeFetchWithRetry(`/cost-centers/${costCenterId}`);
+        return { id: cc.id, name: cc.name || `Centro de Custo ${costCenterId}` };
+      } catch (e2) {
+        return { id: costCenterId, name: `Centro de Custo ${costCenterId}` };
+      }
+    }
+    return { id: costCenterId, name: `Centro de Custo ${costCenterId}` };
+  },
+
+  // 10. Acordos anteriores (chamado ao abrir Detalhes)
+  async getRemadeInstallments(billReceivableId) {
+    if (s_apiMode === "simulado") return window.MOCK_DATA.REMADE_INSTALLMENTS[billReceivableId] || [];
+    try {
+      // Endpoint oficial passado pelo usuário
+      const res = await siengeFetchWithRetry(`/remade-installments?billReceivableId=${billReceivableId}`);
+      return res.results || res.data || res || [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async postRemadeInstallments(payload) {
+    if (s_apiMode === "simulado") return { ok: true, simulated: true };
+    return await siengePost("/remade-installments", payload || {});
+  },
+
+  // 9. Histórico de notificações
+  async getNotificationHistory(saleId) {
+    if (s_apiMode === "simulado") return window.MOCK_DATA.COLLECTIONS_NOTIFICATION_HISTORY[saleId] || [];
+    return [];
+  },
+
+  // 10. Antecipação / quitação (Sienge prepayment-slip-register)
+  async simulatePrepaymentSlip(payload) {
+    if (s_apiMode === "simulado") {
+      const insts = (payload && payload.installments) || [];
+      const pct = Number(payload && payload.percentPresentValue) || 0;
+      const base = insts.length * 1000;
+      const disc = base * (pct / 100);
+      return {
+        originalValue: base,
+        discountApplied: disc,
+        finalValue: base - disc,
+        presentValue: base - disc,
+        percentPresentValue: pct,
+        dueDateSimulated: (payload && payload.newDueDate) || new Date().toISOString().slice(0, 10)
+      };
+    }
+    return await siengePost("/prepayment-slip-register/simulate", payload || {}, 4);
+  },
+
+  async registerPrepaymentSlip(payload) {
+    if (s_apiMode === "simulado") {
+      return { ok: true, simulated: true, message: "Boleto de antecipação simulado gerado." };
+    }
+    return await siengePost("/prepayment-slip-register/", payload || {}, 4);
+  },
+
+  async simulatePrepayment(saleId, installmentsToPay) {
+    if (s_apiMode === "simulado") return runLocalPrepaymentSimulation(saleId, installmentsToPay);
+    try {
+      const insts = (installmentsToPay || []).map((b) => ({
+        billId: String(b.billId || b.id || b.receivableBillId || saleId),
+        installmentId: Number(b.installmentId != null ? b.installmentId : (b.installmentNumber != null ? b.installmentNumber : 0))
+      }));
+      return await this.simulatePrepaymentSlip({
+        companyId: String((installmentsToPay && installmentsToPay[0] && installmentsToPay[0].companyId) || (window.AppState && AppState.currentCompanyId) || "1"),
+        installments: insts,
+        accountNumber: "6538-2",
+        newDueDate: new Date().toISOString().slice(0, 10),
+        groupBy: "CUSTOMER",
+        matchDueDate: "ALL",
+        percentPresentValue: 0,
+        calculatePresentValue: true,
+        correctAnnualInstallment: true
+      });
+    } catch (e) {
+      return runLocalPrepaymentSimulation(saleId, installmentsToPay);
+    }
+  },
+
+    async loadAllCustomersInBackground() {
+    if (s_apiMode === "simulado") return;
+    if (window.AppState && window.AppState.allCustomersLoaded) return;
+    
+    try {
+      if (!window.AppState) window.AppState = {};
+      window.AppState.allCustomers = [];
+      let offset = 0;
+      const limit = 200;
+      let hasMore = true;
+      
+      while (hasMore) {
+        const res = await siengeFetchWithRetry(`/customers?offset=${offset}&limit=${limit}`);
+        if (res && res.results && res.results.length > 0) {
+          window.AppState.allCustomers.push(...res.results);
+          if (res.results.length < limit) {
+             hasMore = false;
+          } else {
+             offset += limit;
+             await new Promise(r => setTimeout(r, 500)); // Delay para evitar rate limit
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+      window.AppState.allCustomersLoaded = true;
+      console.log(`[Sienge] Carregados ${window.AppState.allCustomers.length} clientes em segundo plano.`);
+    } catch (e) {
+      console.error("[Sienge] Erro ao carregar clientes em segundo plano:", e);
+    }
+  },
+
+  // 11. Busca cliente por ID
+  async getCustomer(customerId) {
+    if (s_apiMode === "simulado") {
+      return window.MOCK_DATA.CUSTOMERS[customerId] || null;
+    }
+    try {
+      const res = await siengeFetchWithRetry(`/customers/${customerId}`);
+      return normalizeSiengeCustomer(res);
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter cliente por ID:", e);
+      return null;
+    }
+  },
+
+  // 11b. Pesquisa de clientes (por Nome ou CPF/CNPJ)
+  async searchCustomers(query) {
+    if (s_apiMode === "simulado") {
+      const q = String(query).toLowerCase();
+      return Object.values(window.MOCK_DATA.CUSTOMERS).filter(c => 
+        String(c.name).toLowerCase().includes(q) || String(c.cpfCnpj).includes(q)
+      );
+    }
+    
+    const q = String(query).toLowerCase().trim();
+    const cleanVal = q.replace(/[-.\/]/g, "");
+    
+    // Usa memria se disponvel
+    if (window.AppState && window.AppState.allCustomersLoaded && window.AppState.allCustomers) {
+       return window.AppState.allCustomers.filter(c => {
+         const name = String(c.name || "").toLowerCase();
+         const cpf = String(c.cpf || "").replace(/[-.\/]/g, "");
+         const cnpj = String(c.cnpj || "").replace(/[-.\/]/g, "");
+         return name.includes(q) || cpf.includes(cleanVal) || cnpj.includes(cleanVal);
+       });
+    }
+
+    try {
+      const isNumber = /^\d+$/.test(cleanVal);
+      const param = isNumber ? `cpfCnpj=${cleanVal}` : `name=${encodeURIComponent(query)}`;
+      const res = await siengeFetchWithRetry(`/customers?${param}&limit=50`);
+      return res.results || res || [];
+    } catch (e) {
+      console.error("[Sienge] Erro na pesquisa de clientes:", e);
+      return [];
+    }
+  },
+
+  // 12. Detalhes da Unidade Física com Filtros
+  async getUnitDetails(enterpriseId, name) {
+    if (s_apiMode === "simulado") {
+      const mockUnitKey = Object.keys(window.MOCK_DATA.UNITS).find(k => k.includes(enterpriseId) && k.includes(name));
+      const u = window.MOCK_DATA.UNITS[mockUnitKey] || { id: `U-${enterpriseId}-${name}`, block: "Q01", lot: "L01", area: 250 };
+      return {
+        results: [{
+          id: u.id,
+          realEstateRegistration: "12.345.678-9",
+          legalregistrationnumber: "REG-9553-AVARE",
+          Privatearea: u.area || 250,
+          privateArea: u.area || 250,
+          contractnumber: "CT-7758",
+          contractNumber: "CT-7758"
+        }]
+      };
+    }
+    try {
+      // O nome da unidade no Sienge às vezes tem espaço ("12- 13") e no título vem sem ("12-13").
+      // A busca do Sienge é exata: tenta as variações e fica só com a unidade de mesmo nome.
+      const semEspaco = (s) => String(s || "").replace(/\s+/g, "").toUpperCase();
+      const alvo = semEspaco(name);
+      const base = String(name || "").trim();
+      const variacoes = [base];
+      if (/-/.test(base)) {
+        const partes = base.split("-").map((p) => p.trim());
+        [partes.join("- "), partes.join(" - "), partes.join(" -"), partes.join("-")].forEach((v) => {
+          if (variacoes.indexOf(v) < 0) variacoes.push(v);
+        });
+      }
+      let ultimo = { results: [] };
+      for (const v of variacoes) {
+        const res = await siengeFetchWithRetry(`/units?limit=200&offset=0&enterpriseId=${enterpriseId}&name=${encodeURIComponent(v)}&additionalData=NONE`);
+        const lista = (res && res.results) || [];
+        const certas = lista.filter((u) => semEspaco(u && u.name) === alvo);
+        if (certas.length) return Object.assign({}, res, { results: certas });
+        if (lista.length && !ultimo.results.length) ultimo = res;
+      }
+      return ultimo;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter detalhes da unidade:", e);
+      return { results: [] };
+    }
+  },
+
+  // 13. Extrato Histórico do Cliente (Bulk Data)
+  async getCustomerExtractHistory(customerId) {
+    if (s_apiMode === "simulado") {
+      const sales = window.MOCK_DATA.SALES.filter(s => s.customerId === Number(customerId));
+      const unpaid = window.MOCK_DATA.DEFAULTERS_RECEIVABLE_BILLS.filter(b => b.customerId === Number(customerId));
+      const paid = window.MOCK_DATA.PAID_RECEIVABLE_BILLS.filter(b => b.customerId === Number(customerId));
+      
+      const data = [];
+      
+      // Mapear parcelas não pagas
+      unpaid.forEach(u => {
+        const sale = sales.find(s => s.id === u.saleId) || {};
+        data.push({
+          billReceivableId: u.saleId,
+          costCenterId: u.costCenterId || "20100",
+          costCenterDescription: "Residencial Bella Vista",
+          emissionDate: sale.saleDate || "2020-01-01",
+          lastRenegotiationDate: "2025-05-12",
+          correctionDate: "2026-04-20",
+          document: u.id.split("-").slice(0, 2).join(" "),
+          revokedBillReceivableDate: sale.status === "Distratado" ? "2026-01-10" : null,
+          unitName: sale.unitId ? sale.unitId.split("-").slice(2).join("-") : "Q01-L01",
+          installmentId: u.installmentNum || 1,
+          dueDate: u.dueDate,
+          indexerId: "IGPM",
+          currentBalance: u.value,
+          currentBalanceWithAddition: u.totalValue,
+          calculationDate: "2026-05-24",
+          generatedBillet: true,
+          days: u.daysDelay,
+          installmentSituation: 1,
+          receipts: []
+        });
+      });
+
+      // Mapear parcelas pagas
+      paid.forEach(p => {
+        const sale = sales.find(s => s.id === p.saleId) || {};
+        data.push({
+          billReceivableId: p.saleId,
+          costCenterId: p.costCenterId || "20100",
+          costCenterDescription: "Residencial Bella Vista",
+          emissionDate: sale.saleDate || "2020-01-01",
+          lastRenegotiationDate: null,
+          correctionDate: null,
+          document: p.id.split("-").slice(0, 2).join(" "),
+          revokedBillReceivableDate: sale.status === "Distratado" ? "2026-01-10" : null,
+          unitName: sale.unitId ? sale.unitId.split("-").slice(2).join("-") : "Q01-L01",
+          installmentId: p.installmentNum || 1,
+          dueDate: p.dueDate,
+          indexerId: "IGPM",
+          currentBalance: null,
+          currentBalanceWithAddition: null,
+          calculationDate: "2026-05-24",
+          generatedBillet: false,
+          days: 0,
+          installmentSituation: 2,
+          receipts: [{
+            date: p.paymentDate,
+            value: p.value,
+            extra: p.interestPaid,
+            Discount: p.discount,
+            netReceipt: p.totalPaid,
+            type: "Baixa normal"
+          }]
+        });
+      });
+
+      return { data };
+    }
+    try {
+      const endYear = new Date().getFullYear() + 24;
+      const endDueDate = `${endYear}-01-01`;
+      const res = await siengeFetchWithRetry(`/bulk-data/v1/customer-extract-history?startDueDate=1996-01-01&endDueDate=${endDueDate}&customerId=${customerId}&documentsId=CT&includeRemadeInstallments=false&includeCanceledInstallments=true&includeRevokedInstallments=true&includeRenegotiatedDischarge=false`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter extrato histórico do cliente:", e);
+      return { data: [] };
+    }
+  },
+
+  // 14. Extrato por BillReceivableId
+  async getCustomerExtractHistoryByCompany(companyId) {
+    if (s_apiMode === "simulado") return { data: [] };
+    if (!companyId) return { data: [] };
+    try {
+      const endYear = new Date().getFullYear() + 24;
+      const endDueDate = `${endYear}-01-01`;
+      return await siengeFetchWithRetry(`/bulk-data/v1/customer-extract-history?startDueDate=1996-01-01&endDueDate=${endDueDate}&companyId=${companyId}&documentsId=CT&includeRemadeInstallments=false&includeCanceledInstallments=true&includeRevokedInstallments=true&includeRenegotiatedDischarge=false`);
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter extrato histórico por empresa:", e);
+      throw e;
+    }
+  },
+
+  async getCustomerExtractHistoryByBill(billReceivableId) {
+    if (s_apiMode === "simulado") {
+      return { data: [] }; // Mock if needed
+    }
+    try {
+      const endYear = new Date().getFullYear() + 24;
+      const endDueDate = `${endYear}-01-01`;
+      const res = await siengeFetchWithRetry(`/bulk-data/v1/customer-extract-history?startDueDate=1996-01-01&endDueDate=${endDueDate}&billReceivableId=${billReceivableId}&documentsId=CT&includeRemadeInstallments=false&includeCanceledInstallments=true&includeRevokedInstallments=true&includeRenegotiatedDischarge=false`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter extrato histórico por bill:", e);
+      return { data: [] };
+    }
+  },
+
+  // 15. Saldo Devedor Detalhado do Cliente (Bulk Data) — VP por parcela
+  async getCustomerDebtBalance(billReceivableId, opts = {}) {
+    const billId = billReceivableId || opts.billReceivableId;
+    const companyId = opts.companyId;
+    const startDueDate = opts.startDueDate || "2000-01-01";
+    const endDueDate = opts.endDueDate || "2045-12-31";
+    if (s_apiMode === "simulado") {
+      const base = Number(billId) || 1000;
+      return {
+        data: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({
+          billReceivableId: Number(billId),
+          installmentId: n,
+          installmentNumber: n,
+          dueDate: `2026-${String(n).padStart(2, "0")}-10`,
+          originalValue: 12000 + n * 150,
+          currentBalance: 12000 + n * 150,
+          presentValue: 11800 + n * 140
+        }))
+      };
+    }
+    if (!billId) return { data: [] };
+    try {
+      let url = `/bulk-data/v1/customer-debt-balance?startDueDate=${encodeURIComponent(startDueDate)}&endDueDate=${encodeURIComponent(endDueDate)}&billReceivableId=${encodeURIComponent(billId)}&calculatePresentValue=true&includeAdministrativeRateAmount=false&includeInsuranceAmount=false&correctAnnualInstallment=false&includeReceiptsByAdvanceRebate=false&includeConditionalDiscountValid=false&calculateAdditionsUserInformation=false&calculateAdditionsValue=true`;
+      if (companyId != null && companyId !== "") url += `&companyId=${encodeURIComponent(companyId)}`;
+      const res = await siengeFetchWithRetry(url);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter saldo devedor do cliente:", e);
+      return { data: [] };
+    }
+  },
+
+  // 15. Saldo Devedor Atual Total por CPF
+  async getTotalCurrentDebitBalance(cpfCnpj, receivableBillsIds = "") {
+    if (s_apiMode === "simulado") {
+      return {
+        presentValue: 35000.00,
+        totalBalance: 42000.00,
+        discountApplied: 7000.00
+      };
+    }
+    try {
+      const cleanDoc = String(cpfCnpj || "").replace(/\D/g, "");
+      const docParam = cleanDoc.length === 14 ? `cnpj=${cleanDoc}` : `cpf=${cleanDoc}`;
+      let url = `/total-current-debit-balance?${docParam}`;
+      if (receivableBillsIds && receivableBillsIds !== "undefined" && receivableBillsIds !== "null") {
+          url += `&receivableBillsIds=${receivableBillsIds}`;
+      }
+      const res = await siengeFetchWithRetry(url);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter saldo devedor atual por CPF:", e);
+      return { presentValue: 0, totalBalance: 0, discountApplied: 0 };
+    }
+  },
+
+  // 16b. Gerar Informe de Rendimentos (IR) em PDF
+  async getCustomerIncomeTaxReportPdf(customerId, companyId, year) {
+    if (s_apiMode === "simulado") {
+      return { results: [{ value: "https://mouraleite.sienge.com.br/sienge/visualizar-relatorio?arquivo=MOCK_IR_1234&formato=pdf" }] };
+    }
+    if (!customerId || !companyId || !year) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/customer-income-tax/report/pdf?customerId=${customerId}&companyId=${companyId}&year=${year}&documentsIn=CT&receiptTypeNotIn=`);
+      // Sometimes Sienge returns a single object { value: "..." } wrapped in an array, or just an object.
+      // We will return the raw response, but adjust if it's an array without results wrapper.
+      if (Array.isArray(res)) {
+        return { results: res };
+      }
+      if (res.value) {
+        return { results: [res] };
+      }
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter Informe de Rendimentos PDF:", e);
+      return { results: [] };
+    }
+  },
+
+  // 16. Gerar Extrato em PDF
+  async getCustomerFinancialStatementsPdf(customerId, billReceivableId) {
+    if (s_apiMode === "simulado") {
+      return { results: [{ value: "https://mouraleite.sienge.com.br/sienge/visualizar-relatorio?arquivo=13074965419836066933&formato=pdf" }] };
+    }
+    if (!customerId || !billReceivableId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/customer-financial-statements/pdf?customerId=${customerId}&billReceivableId=${billReceivableId}&includeSubJudice=true&includeRemadeInstallments=N&includeRenegotiation=N`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter Extrato PDF:", e);
+      return { results: [] };
+    }
+  },
+
+  // 17. Contas a Receber (Contratos/Lotes) do Cliente
+  async getReceivableBills(customerId) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!customerId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/accounts-receivable/receivable-bills?customerId=${customerId}&limit=100&offset=0`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter contas a receber (receivable bills) do cliente:", e);
+      return { results: [] };
+    }
+  },
+
+
+  // 18. Extrato Financeiro do Cliente (customer-financial-statements)
+  async getCustomerFinancialStatements(customerId) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!customerId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/customer-financial-statements?customerId=${customerId}&includeSubJudice=true&includeRemadeInstallments=N&includeRenegotiation=N`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter customer-financial-statements:", e);
+    }
+  },
+
+  // 19. Extrato Financeiro em PDF (customer-financial-statements/pdf)
+  async getCustomerFinancialStatementsPdf(customerId, billReceivableId) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!customerId || !billReceivableId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/customer-financial-statements/pdf?customerId=${customerId}&billReceivableId=${billReceivableId}&includeSubJudice=true&includeRemadeInstallments=N&includeRenegotiation=N`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter customer-financial-statements/pdf:", e);
+      return { results: [] };
+    }
+  },
+
+  // 20b. Dados bancários do credor (mesmo endpoint do assistente de contas a pagar)
+  async getCreditorBankInformations(creditorId) {
+    const id = String(creditorId || "").trim();
+    if (!id) return [];
+    if (s_apiMode === "simulado") return [];
+    try {
+      const list = await siengeFetchAllPages(`/creditors/${encodeURIComponent(id)}/bank-informations`, 100);
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter dados bancários do credor:", e);
+      return [];
+    }
+  },
+  async getPaymentSlipNotification(billReceivableId, installmentId) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!billReceivableId || !installmentId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/payment-slip-notification?billReceivableId=${billReceivableId}&installmentId=${installmentId}`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter payment-slip-notification:", e);
+      return { results: [] };
+    }
+  },
+
+  // Cadastro de contas (Caixa e bancos / Contas correntes).
+  // accountType.id: B Bancária, I Investimento, M Mútuo, C CAIXA, Q Cheque, E Estoque.
+  async getCheckingAccounts(companyId, opts = {}) {
+    if (s_apiMode === "simulado") {
+      const all = (window.MOCK_DATA && window.MOCK_DATA.CHECKING_ACCOUNTS) || [{ accountNumber: "6538-2", accountName: "Conta Simulada", accountType: "CHECKING", companyId: 1 }];
+      if (!companyId) return { results: all };
+      return { results: all.filter(a => String(a.companyId) === String(companyId)) };
+    }
+    try {
+      const params = [];
+      if (companyId) params.push(`companyId=${companyId}`);
+      if (!opts.allStatuses) params.push("accountStatus=ENABLED");
+      const q = `/checking-accounts${params.length ? "?" + params.join("&") : ""}`;
+      const list = await siengeFetchAllPages(q, 100);
+      return { results: list };
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter contas correntes:", e);
+      return { results: [] };
+    }
+  },
+
+  extrairBalancete(res) {
+    if (!res) return { lista: [], total: 0 };
+    if (Array.isArray(res)) return { lista: res, total: res.length };
+    let lista = [];
+    if (Array.isArray(res.results)) lista = res.results;
+    else if (Array.isArray(res.accounts)) lista = res.accounts;
+    else if (Array.isArray(res.data)) lista = res.data;
+    else if (res.data && Array.isArray(res.data.results)) lista = res.data.results;
+    else if (res.data && Array.isArray(res.data.accounts)) lista = res.data.accounts;
+    const total = Number(res.resultSetMetadata && res.resultSetMetadata.count);
+    return { lista: lista, total: Number.isFinite(total) ? total : lista.length };
+  },
+
+  async lerBalanceteCompleto(url) {
+    const res = await siengeFetchWithRetry(url, 2);
+    const pack = this.extrairBalancete(res);
+    if (!pack.lista.length || !(pack.total > pack.lista.length)) return pack.lista;
+    const page = pack.lista.length;
+    const tudo = pack.lista.slice();
+    let offset = page;
+    const teto = Math.min(pack.total, page * 25);
+    while (offset < teto) {
+      const sep = url.indexOf("?") >= 0 ? "&" : "?";
+      try {
+        const mais = await siengeFetchWithRetry(`${url}${sep}limit=${page}&offset=${offset}`, 2);
+        const extra = this.extrairBalancete(mais).lista;
+        if (!extra.length) break;
+        tudo.push.apply(tudo, extra);
+        offset += extra.length;
+      } catch (e) {
+        const st = Number(e && e.status);
+        if (st === 400 || st === 422) break;
+        throw e;
+      }
+    }
+    return tudo;
+  },
+
+  async getTrialBalance(companyId, initialPeriod, finalPeriod) {
+    const ini = String(initialPeriod || "").slice(0, 10);
+    const fim = String(finalPeriod || "").slice(0, 10);
+    if (!companyId || !ini || !fim) return [];
+    const q = `companyId=${encodeURIComponent(companyId)}&initialPeriod=${ini}&finalPeriod=${fim}`;
+    const oficial = `/trial-balance?${q}&desconsiderClosingBalance=true&reportType=CORPORATE&onlyAccountsWithMovements=true&thirdParties=false`;
+    const lista = await this.lerBalanceteCompleto(oficial);
+    return lista || [];
+  },
+
+  /* DRE e balanço: o fechamento entra, para o resultado ir ao patrimônio quando o período estiver encerrado. */
+  async getTrialBalanceContabil(companyId, initialPeriod, finalPeriod) {
+    const ini = String(initialPeriod || "").slice(0, 10);
+    const fim = String(finalPeriod || "").slice(0, 10);
+    if (!companyId || !ini || !fim) return [];
+    const q = `companyId=${encodeURIComponent(companyId)}&initialPeriod=${ini}&finalPeriod=${fim}&desconsiderClosingBalance=false&onlyAccountsWithMovements=true&thirdParties=false`;
+    const lista = await this.lerBalanceteCompleto(`/trial-balance?${q}`);
+    return lista || [];
+  },
+
+  async getAccountancyAccounts(companyId, opcoes) {
+    if (s_apiMode === "simulado") return [];
+    if (!companyId) return [];
+    const tipo = opcoes && (opcoes.accountType === "ANALYTICAL" || opcoes.accountType === "SYNTHETIC")
+      ? `&accountType=${opcoes.accountType}` : "";
+    const all = [];
+    let offset = 0;
+    const page = 200;
+    while (all.length < 8000) {
+      const res = await siengeFetchWithRetry(`/accountancy/accounts?companyId=${encodeURIComponent(companyId)}&limit=${page}&offset=${offset}${tipo}`);
+      const results = (res && (res.results || res.data)) || [];
+      all.push(...results);
+      const total = res && res.resultSetMetadata && res.resultSetMetadata.count;
+      offset += page;
+      if (!results.length || results.length < page) break;
+      if (total != null && offset >= total) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return all;
+  },
+
+  async buscarContaContabil(companyId, codigo) {
+    if (s_apiMode === "simulado") return [];
+    const cod = String(codigo || "").trim();
+    if (!companyId || !cod) return [];
+    const res = await siengeFetchWithRetry(`/accountancy/accounts?companyId=${encodeURIComponent(companyId)}&uniqueNumber=${encodeURIComponent(cod)}&limit=20&offset=0`);
+    let lista = (res && (res.results || res.data)) || [];
+    if (!lista.length && /^\d+$/.test(cod)) {
+      const porId = await siengeFetchWithRetry(`/accountancy/accounts?companyId=${encodeURIComponent(companyId)}&id=${encodeURIComponent(cod)}&limit=20&offset=0`);
+      lista = (porId && (porId.results || porId.data)) || [];
+    }
+    return lista;
+  },
+
+  async getAccountancyEntries(companyId, startDate, endDate) {
+    if (s_apiMode === "simulado") return [];
+    const ini = String(startDate || "").slice(0, 10);
+    const fim = String(endDate || "").slice(0, 10);
+    if (!companyId || !ini || !fim) return [];
+    const all = [];
+    let offset = 0;
+    const page = 200;
+    while (all.length < 1000) {
+      const q = `companyId=${encodeURIComponent(companyId)}&startDate=${encodeURIComponent(ini)}&endDate=${encodeURIComponent(fim)}&limit=${page}&offset=${offset}`;
+      const res = await siengeFetchWithRetry(`/accountancy/entries?${q}`);
+      const results = (res && (res.results || res.data)) || [];
+      all.push(...results);
+      const total = res && res.resultSetMetadata && res.resultSetMetadata.count;
+      offset += page;
+      if (!results.length || results.length < page) break;
+      if (total != null && offset >= total) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return all;
+  },
+
+  async postAccountancyEntry(entry) {
+    if (s_apiMode === "simulado") {
+      throw new Error("O Sienge está em modo simulado. O lançamento de equivalência não foi enviado.");
+    }
+    return siengePost("/accountancy/entries", [entry]);
+  },
+
+  /* Grava o lote. Não aprova e não fecha: o Sienge deixa o lote em aberto. */
+  async postAccountancyBatch(body) {
+    if (s_apiMode === "simulado") {
+      throw new Error("O Sienge está em modo simulado. O lote de equivalência não foi gerado.");
+    }
+    return siengePost("/batch", body);
+  },
+
+  async getAccountBalances(balanceDate, opts = {}) {
+    const date = String(balanceDate || "").slice(0, 10);
+    const showLast = opts.showLast === false ? "N" : "S";
+    if (s_apiMode === "simulado") {
+      const all = (window.MOCK_DATA && window.MOCK_DATA.ACCOUNT_BALANCES) || [];
+      return all
+        .filter(b => !date || String(b.balanceDate || "").slice(0, 10) <= date)
+        .map(b => ({ ...b }));
+    }
+    if (!date) return [];
+    try {
+      const ep = `/accounts-balances?balanceDate=${encodeURIComponent(date)}&showLastBalanceIfNotExistBalance=${showLast}`;
+      const withCo = opts.companyId ? `${ep}&companyId=${encodeURIComponent(opts.companyId)}` : ep;
+      const list = await siengeFetchAllPages(withCo, 300);
+      if (list && list.length) return list;
+      const res = await siengeFetchWithRetry(`${withCo}&limit=300&offset=0`);
+      return (res && (res.results || res.data)) || [];
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter saldos de contas:", e);
+      if (opts && opts.rethrow) throw e;
+      return [];
+    }
+  },
+
+  /* Extrato da conta corrente: movimentos entre as duas datas. */
+  async getAccountStatements(startDate, endDate, opts = {}) {
+    const ini = String(startDate || "").slice(0, 10);
+    const fim = String(endDate || "").slice(0, 10);
+    if (!ini || !fim) return [];
+    if (s_apiMode === "simulado") return [];
+    const params = [`startDate=${encodeURIComponent(ini)}`, `endDate=${encodeURIComponent(fim)}`];
+    if (opts.accountNumber) params.push(`accountNumber=${encodeURIComponent(opts.accountNumber)}`);
+    if (opts.companyId) params.push(`companyId=${encodeURIComponent(opts.companyId)}`);
+    if (opts.companyGroupId) params.push(`companyGroupId=${encodeURIComponent(opts.companyGroupId)}`);
+    try {
+      const list = await siengeFetchAllPages(`/accounts-statements?${params.join("&")}`, 200);
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter extrato de conta:", e);
+      if (opts && opts.rethrow) throw e;
+      return [];
+    }
+  },
+
+  // 22. Listar Contas Correntes Disponíveis pelo Centro de Custo (aba Disponível)
+  parseCostCenterAvailableResponse(res) {
+    if (!res) return { idCompany: null, list: [] };
+    if (typeof res === "string") {
+      try { res = JSON.parse(res); } catch (e) { return { idCompany: null, list: [] }; }
+    }
+    const bags = [];
+    const pushBag = (arr) => { if (Array.isArray(arr)) bags.push(...arr); };
+    pushBag(res.availables);
+    pushBag(res.availableCheckingAccounts);
+    pushBag(res.checkingAccounts);
+    pushBag(res.accounts);
+    if (Array.isArray(res.results)) pushBag(res.results);
+    else if (res.results && typeof res.results === "object") {
+      pushBag(res.results.availables);
+      pushBag(res.results.checkingAccounts);
+    }
+    if (Array.isArray(res.data)) pushBag(res.data);
+    else if (res.data && typeof res.data === "object") pushBag(res.data.availables);
+
+    const seen = new Set();
+    const list = [];
+    bags.forEach(acc => {
+      if (acc == null) return;
+      if (typeof acc === "string" || typeof acc === "number") {
+        const accountNumber = String(acc).trim();
+        if (!accountNumber) return;
+        if (seen.has(accountNumber)) return;
+        seen.add(accountNumber);
+        list.push({ accountNumber, accountName: "Conta corrente", checkingAccountId: null, companyId: res.idCompany || res.companyId || null });
+        return;
+      }
+      if (typeof acc !== "object") return;
+      const nested = acc.checkingAccounts || acc.availables;
+      const rows = Array.isArray(nested) && nested.length ? nested : [acc];
+      rows.forEach(row => {
+        if (row == null) return;
+        if (typeof row === "string" || typeof row === "number") {
+          const accountNumber = String(row).trim();
+          if (!accountNumber || seen.has(accountNumber)) return;
+          seen.add(accountNumber);
+          list.push({ accountNumber, accountName: "Conta corrente", checkingAccountId: null, companyId: res.idCompany || res.companyId || null });
+          return;
+        }
+        if (typeof row !== "object") return;
+        const selected = row.selected;
+        if (selected === false || selected === "N" || selected === "n" || selected === 0 || selected === "false") return;
+        const accountNumber = String(row.accountNumber || row.number || row.account || row.account_number || "").trim();
+        const idCandidates = [row.checkingAccountId, row.idCheckingAccount, row.accountId, row.idAccount, row.bankAccountId];
+        let checkingAccountId = null;
+        for (let i = 0; i < idCandidates.length; i++) {
+          const rawId = idCandidates[i];
+          if (rawId == null || rawId === "") continue;
+          const s = String(rawId).trim();
+          if (/^\d+$/.test(s)) { checkingAccountId = Number(s); break; }
+        }
+        if (!accountNumber && !checkingAccountId) return;
+        const key = String(checkingAccountId || accountNumber);
+        if (seen.has(key)) return;
+        seen.add(key);
+        list.push({
+          ...row,
+          accountNumber,
+          accountName: row.accountName || row.name || row.description || "Conta corrente",
+          checkingAccountId,
+          companyId: row.companyId || row.idCompany || res.idCompany || res.companyId || null
+        });
+      });
+    });
+    return {
+      idCompany: res.idCompany || res.companyId || null,
+      list
+    };
+  },
+
+  async getCostCenterAvailableAccounts(costCenterId) {
+    const ids = [];
+    const addId = (v) => {
+      const m = String(v || "").match(/(\d{3,})/);
+      const id = m ? m[1] : (v != null && v !== "" && v !== "N/D" && v !== "undefined" ? String(v).trim() : "");
+      if (id && id !== "N/D" && !ids.includes(id)) ids.push(id);
+    };
+    addId(costCenterId);
+    if (typeof window !== "undefined" && window.AppState) {
+      addId(window.AppState.currentCostCenterId);
+      const sale = (window.AppState.sales || []).find(s =>
+        String(s.id) === String(window.AppState.selectedSaleId) ||
+        String(s.receivableBillId) === String(window.AppState.selectedSaleId)
+      );
+      if (sale) {
+        addId(sale.costCenterId);
+        addId(sale.enterpriseId);
+      }
+      const bills = [
+        ...(window.AppState.defaultersBills || []),
+        ...(window.AppState.subjudiceBills || []),
+        ...(window.AppState.zeroPaidBills || [])
+      ];
+      const bill = bills.find(b =>
+        String(b.receivableBillId || b.billId) === String(window.AppState.currentReceivableBillId) ||
+        String(b.receivableBillId) === String(window.AppState.selectedSaleId)
+      );
+      if (bill) addId(bill.costCenterId || (bill.costCentersId && bill.costCentersId[0]));
+    }
+    if (typeof document !== "undefined") {
+      const ctx = document.getElementById("ctx-empreend-val");
+      if (ctx && ctx.textContent) addId(ctx.textContent);
+      const lot = document.getElementById("det-block-lot-span");
+      if (lot && lot.textContent) addId(lot.textContent);
+    }
+
+    if (s_apiMode === "simulado") {
+      return { idCompany: 1, availables: [{ checkingAccountId: 1, accountNumber: "99363-5", accountName: "C/C (MLDU) - ITAU" }], results: [{ checkingAccountId: 1, accountNumber: "99363-5", accountName: "C/C (MLDU) - ITAU" }] };
+    }
+    if (!ids.length) return { results: [], availables: [] };
+
+    let lastRes = null;
+    for (const id of ids) {
+      try {
+        const res = await siengeFetchWithRetry(`/cost-centers/${id}/available`, 2);
+        lastRes = res;
+        const parsed = this.parseCostCenterAvailableResponse(res);
+        if (parsed.list.length) {
+          console.log("[Sienge] Contas do disponível do CC", id, parsed.list.map(a => a.accountNumber));
+          return { ...(res || {}), idCompany: parsed.idCompany, availables: parsed.list, results: parsed.list };
+        }
+      } catch (e) {
+        console.warn("[Sienge] Disponível do CC", id, e && e.message);
+      }
+    }
+    const empty = this.parseCostCenterAvailableResponse(lastRes);
+    return { ...(lastRes || {}), idCompany: empty.idCompany, availables: [], results: [] };
+  },
+
+  // 22. Criar Boleto (POST overdue-receivable-bill)
+  async createOverdueBill(payload, onRetry) {
+    if (s_apiMode === "simulado") {
+      return { success: true, message: "Modo Simulado: Boleto gerado com sucesso!" };
+    }
+    return await siengePost('/overdue-receivable-bill', payload, 8, typeof onRetry === "function" ? onRetry : undefined);
+  },
+
+  // 23. Anexos do Cliente
+  async getCustomerAttachments(customerId) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!customerId) return { results: [] };
+    try {
+      const res = await siengeFetchWithRetry(`/customers/${customerId}/attachments?limit=100&offset=0`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter anexos do cliente:", e);
+      return { results: [] };
+    }
+  },
+
+  // 24. Extrato de Débitos (para validar cônjuge)
+  async getCurrentDebitBalance(cpf) {
+    if (s_apiMode === "simulado") {
+      return { results: [] };
+    }
+    if (!cpf) return { results: [] };
+    try {
+      // Remove mscara do CPF se houver
+      const cleanCpf = cpf.replace(/\D/g, '');
+      const res = await siengeFetchWithRetry(`/current-debit-balance?cpf=${cleanCpf}&dueDateStart=1996-01-01&dueDateEnd=2050-01-01`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter saldo devedor por CPF:", e);
+      return { results: [] };
+    }
+  },
+
+  // 25. Indexadores
+  async getIndexers() {
+    if (s_apiMode === "simulado") {
+      return { results: [
+        { id: 1, name: "IGPM" },
+        { id: 2, name: "INCC" },
+        { id: 3, name: "IPCA" }
+      ]};
+    }
+    try {
+      const res = await siengeFetchWithRetry(`/indexers?limit=100&offset=0`);
+      return res;
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter indexadores:", e);
+      return { results: [] };
+    }
+  },
+
+  /** Tipos de condição de pagamento (boletos / planos do contrato). */
+  async getPaymentConditionTypes(filter) {
+    if (s_apiMode === "simulado") {
+      return [
+        { id: "SI", name: "SINAL", description: "Sinal / entrada" },
+        { id: "M", name: "MENSAL", description: "Parcela mensal" },
+        { id: "A", name: "ANUAL", description: "Parcela anual" },
+        { id: "PU", name: "PARCELA UNICA", description: "Parcela única" },
+        { id: "SA", name: "ACORDO", description: "Parcela de acordo" }
+      ];
+    }
+    try {
+      const q = filter ? `?filter=${encodeURIComponent(filter)}` : "";
+      return await siengeFetchAllPages(`/payment-condition-types${q}`, 100);
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter tipos de condição de pagamento:", e);
+      throw e;
+    }
+  },
+
+  // 26. Plano Financeiro - Categorias de Pagamento
+  async getPaymentCategories() {
+    if (s_apiMode === "simulado") {
+      return [
+        { id: '5',     description: 'RECEITA',                                   type: 'Totalizador',   parentId: null },
+        { id: '51.01', description: 'VENDA DE IMOVEIS',                          type: 'Resultado',     parentId: '5' },
+        { id: '51.02', description: 'RECEITA DE SERVICOS',                       type: 'Resultado',     parentId: '5' },
+        { id: '11.00', description: 'RECEITAS NAO OPERACIONAIS',                 type: 'Resultado',     parentId: '5' },
+        { id: '51.03', description: 'ADIANTAMENTOS DE VENDAS',                   type: 'Resultado',     parentId: '5' },
+        { id: '02',    description: 'IMPOSTOS',                                  type: 'Totalizador',   parentId: null },
+        { id: '12.07', description: 'IMPOSTOS SOBRE VENDAS',                     type: 'Resultado',     parentId: '02' },
+        { id: '10.00', description: 'IMPOSTOS FINANCEIROS',                      type: 'Resultado',     parentId: '02' },
+        { id: '03',    description: 'CUSTOS E DESPESAS',                         type: 'Total nivel 1', parentId: null },
+        { id: '5.3',   description: 'CUSTOS',                                    type: 'Totalizador',   parentId: '03' },
+        { id: '54.01', description: 'REPASSES TERRENOS',                         type: 'Resultado',     parentId: '5.3' },
+        { id: '12',    description: 'PROJETOS E APROVACOES',                     type: 'Resultado',     parentId: '5.3' },
+        { id: '04.08', description: 'OBRAS',                                     type: 'Resultado',     parentId: '5.3' },
+        { id: '04.04', description: 'CUSTO ADIM. DE EMPREENDIMENTOS',            type: 'Resultado',     parentId: '5.3' },
+        { id: '04.06', description: 'AQUISICAO DE NOVAS AREAS',                 type: 'Resultado',     parentId: '5.3' },
+        { id: '05',    description: 'DESPESAS',                                  type: 'Totalizador',   parentId: '03' },
+        { id: '55.02', description: 'DESPESAS CONVENIOS',                        type: 'Resultado',     parentId: '05' },
+        { id: '55.03', description: 'MARKETING',                                 type: 'Resultado',     parentId: '05' },
+        { id: '55.04', description: 'ADMINISTRATIVO',                            type: 'Resultado',     parentId: '05' },
+        { id: '55.05', description: 'PESSOAL',                                   type: 'Resultado',     parentId: '05' },
+        { id: '55.06', description: 'DESPESAS NAO OPERACIONAIS',                 type: 'Resultado',     parentId: '05' },
+        { id: '55.01', description: 'DONATIVOS E CONTRIBUICOES',                 type: 'Resultado',     parentId: '05' },
+        { id: '55.08', description: 'ADMINISTRACAO E FORNECEDORES',              type: 'Resultado',     parentId: '05' },
+        { id: '55.09', description: 'RETENCOES',                                 type: 'Resultado',     parentId: '05' },
+        { id: '14.11', description: 'OUTROS INVESTIMENTOS',                      type: 'Resultado',     parentId: '05' },
+        { id: '14',    description: 'DESPESAS COM MANUTENCAO DE EMPREEND.',     type: 'Resultado',     parentId: '05' },
+        { id: '06',    description: 'GGO - GERACAO DE CAIXA OPERACIONAL',        type: 'Total nivel 1', parentId: null },
+        { id: '27',    description: 'CAPEX',                                     type: 'Total nivel 1', parentId: null },
+        { id: '08',    description: 'FCO - FLUXO DE CAIXA LIVRE',               type: 'Total nivel 1', parentId: null },
+        { id: '09',    description: 'RESULTADO FINANCEIRO',                      type: 'Totalizador',   parentId: null },
+        { id: '29.01', description: 'RECEITAS FINANCEIRAS',                      type: 'Resultado',     parentId: '09' },
+        { id: '19.02', description: 'DESPESAS FINANCEIRAS',                      type: 'Resultado',     parentId: '09' },
+        { id: '19.03', description: 'FUNDO DE INVESTIMENTO',                     type: 'Resultado',     parentId: '09' },
+        { id: '29.02', description: 'CAPTACOES',                                 type: 'Resultado',     parentId: '09' },
+        { id: '10',    description: 'AMORTIZACOES',                              type: 'Resultado',     parentId: '09' },
+        { id: '010',   description: 'GGO - LUCRO DO RESULTADO FINANCEIRO',       type: 'Total nivel 1', parentId: null },
+        { id: '11',    description: 'DIVIDENDOS E APORTES',                      type: 'Totalizador',   parentId: null },
+        { id: '11.01', description: '(-) DIVIDENDOS',                            type: 'Resultado',     parentId: '11' },
+        { id: '11.02', description: '(+) DIVIDENDOS',                            type: 'Resultado',     parentId: '11' },
+        { id: '11.03', description: 'APORTES',                                   type: 'Resultado',     parentId: '11' },
+        { id: '16',    description: 'VARIACAO DE CAIXA',                         type: 'Total nivel 1', parentId: null },
+      ];
+    }
+    try {
+      const res = await siengeFetchWithRetry('/payment-categories');
+      return res.results || (Array.isArray(res) ? res : []);
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter plano financeiro:", e);
+      return [];
+    }
+  },
+
+  // 27. Bulk Data - Income
+  async getBulkIncome(startDate, endDate, companyId) {
+    if (s_apiMode === "simulado") {
+      console.warn("Modo simulado: getBulkIncome retornando array vazio.");
+      return { data: [] };
+    }
+    try {
+      // The API endpoint: /bulk-data/v1/income?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD&selectionType=P&companyId=X
+      let endpoint = `/bulk-data/v1/income?startDate=${startDate}&endDate=${endDate}&selectionType=P`;
+      if (companyId) {
+         endpoint += `&companyId=${companyId}`;
+      }
+      
+      const res = await siengeFetchWithRetry(endpoint);
+      
+      if (res && res.data) {
+        return { data: res.data };
+      }
+      
+      return { data: [] };
+    } catch (e) {
+      console.error("[Sienge] Erro ao obter bulk income:", e);
+      return { data: [] };
+    }
+  },
+
+  // 28. Salvar Snapshot Diário de Inadimplência
+  async saveDefaultersSnapshot(bills) {
+    if (!bills || bills.length === 0) return;
+    try {
+      console.log("[Sienge] Preparando snapshot diário de inadimplência...");
+      
+      const today = new Date();
+      // Data local (BRT): toISOString() muda o dia após 21h e gravava snapshot no dia errado
+      const dateStr = (typeof window.localDateStr === "function")
+        ? window.localDateStr(today)
+        : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      
+      // Regras de negócio
+      // O 2º dia útil pode ser calculado com feriados fixos. Para simplificar no MVP, 
+      // usaremos uma lógica de encontrar o 2º dia útil baseado nos dias da semana.
+      let workDaysCount = 0;
+      let secondWorkDay = null;
+      for (let day = 1; day <= 31; day++) {
+        const d = new Date(today.getFullYear(), today.getMonth(), day);
+        if (d.getMonth() !== today.getMonth()) break;
+        if (d.getDay() !== 0 && d.getDay() !== 6) { // Ignora fds (dá pra melhorar com feriados)
+          workDaysCount++;
+          if (workDaysCount === 2) {
+            secondWorkDay = d;
+            break;
+          }
+        }
+      }
+      
+      const is_month_close = secondWorkDay && today.getDate() === secondWorkDay.getDate();
+      const is_week_start = today.getDay() === 1; // Segunda
+      const is_week_end = today.getDay() === 5;   // Sexta
+      
+      // Agrega os dados
+      let totalValue = 0;
+      let subjudiceCount = 0;
+      let subjudiceValue = 0;
+      
+      const companyMap = {};
+      const operatorMap = {};
+      
+      bills.forEach(b => {
+        const billVal = Number(b.value != null ? b.value : b.overdueValue) || 0;
+        totalValue += billVal;
+        if (b.subjudice === 'S') {
+          subjudiceCount++;
+          subjudiceValue += billVal;
+        }
+        
+        // Empresa
+        if (!companyMap[b.companyId]) {
+          companyMap[b.companyId] = {
+            company_id: b.companyId,
+            count: 0, value: 0,
+            cost_centers: {},
+            aging: {
+              d0_30: { count: 0, value: 0 },
+              d31_60: { count: 0, value: 0 },
+              d61_90: { count: 0, value: 0 },
+              d91_120: { count: 0, value: 0 },
+              d120p: { count: 0, value: 0 }
+            }
+          };
+        }
+        
+        const comp = companyMap[b.companyId];
+        comp.count++;
+        comp.value += billVal;
+        
+        // CC
+        const cc = String(b.costCenterId || 'N/D');
+        if (!comp.cost_centers[cc]) {
+          comp.cost_centers[cc] = { id: cc, count: 0, value: 0 };
+        }
+        comp.cost_centers[cc].count++;
+        comp.cost_centers[cc].value += billVal;
+        
+        // Aging
+        const delay = Number(b.daysDelay != null ? b.daysDelay : b.maxDaysDelay) || 0;
+        let agingKey = '';
+        if (delay <= 30) agingKey = 'd0_30';
+        else if (delay <= 60) agingKey = 'd31_60';
+        else if (delay <= 90) agingKey = 'd61_90';
+        else if (delay <= 120) agingKey = 'd91_120';
+        else agingKey = 'd120p';
+        
+        comp.aging[agingKey].count++;
+        comp.aging[agingKey].value += billVal;
+
+        const opName = String(b.assignedOperator || 'NÃO ATRIBUÍDO').toUpperCase().trim();
+        // 1 título por linha da carteira (não usar billCount = parcelas)
+        const nTit = 1;
+        if (!operatorMap[opName]) {
+          operatorMap[opName] = { name: opName, total_count: 0, total_value: 0, above31_count: 0, above31_value: 0 };
+        }
+        operatorMap[opName].total_count += nTit;
+        operatorMap[opName].total_value += billVal;
+        if (delay >= 31) {
+          operatorMap[opName].above31_count += nTit;
+          operatorMap[opName].above31_value += billVal;
+        }
+      });
+      const uniqueCustomers = new Set(bills.map(b => b.customerId));
+
+      const sjClients = {};
+      const sjCenters = {};
+      bills.forEach(b => {
+        if (b.subjudice !== 'S') return;
+        const cid = String(b.customerId || '');
+        if (!cid) return;
+        const billVal = Number(b.value != null ? b.value : b.overdueValue) || 0;
+        if (!sjClients[cid]) {
+          sjClients[cid] = {
+            id: cid,
+            name: b.clientName || b.customerName || '',
+            value: 0,
+            titles: 0,
+            cc: String(b.costCenterId || (b.costCentersId && (Array.isArray(b.costCentersId) ? b.costCentersId[0] : b.costCentersId)) || 'N/D')
+          };
+        }
+        sjClients[cid].value += billVal;
+        sjClients[cid].titles += 1;
+        const cc = sjClients[cid].cc;
+        if (!sjCenters[cc]) sjCenters[cc] = { id: cc, value: 0, titles: 0, clients: 0 };
+        sjCenters[cc].value += billVal;
+        sjCenters[cc].titles += 1;
+      });
+      Object.values(sjClients).forEach(c => {
+        if (sjCenters[c.cc]) sjCenters[c.cc].clients += 1;
+      });
+      
+      const payload = {
+        date: dateStr,
+        is_month_close,
+        is_week_start,
+        is_week_end,
+        total_count: bills.length,
+        total_customers: uniqueCustomers.size,
+        total_value: totalValue,
+        avg_ticket: bills.length ? totalValue / bills.length : 0,
+        subjudice_count: subjudiceCount,
+        subjudice_customers: Object.keys(sjClients).length,
+        subjudice_value: subjudiceValue,
+        subjudice_detail: {
+          clients: Object.values(sjClients),
+          cost_centers: Object.values(sjCenters)
+        },
+        new_count: 0, // calculado no dashboard ao comparar com histórico
+        recovered_count: 0, // calculado no dashboard ao comparar com histórico
+        data_json: {
+          companies: Object.values(companyMap).map(c => ({
+            ...c,
+            cost_centers: Object.values(c.cost_centers)
+          })),
+          operators: Object.values(operatorMap)
+        },
+        saved_at: new Date().toISOString(),
+        source_count: bills.length
+      };
+
+      if (window.DadosCobranca) {
+        try {
+          const tabSnaps = window.DadosCobranca.tabela('inadimplencia_snapshots');
+          // Não sobrescrever um snapshot cheio com carga parcial (causa o “buraco” no gráfico)
+          try {
+            const prev = await tabSnaps.obter(dateStr);
+            if (prev) {
+              const prevVal = Number(prev.total_value) || 0;
+              const prevCnt = Number(prev.total_count) || 0;
+              const thinnerValue = prevVal > 0 && totalValue < prevVal * 0.85;
+              const thinnerCount = prevCnt > 0 && bills.length < prevCnt * 0.85;
+              if (thinnerValue || thinnerCount) {
+                console.warn(
+                  `[Firebase] Snapshot ${dateStr} NÃO sobrescrito: existente ${prevCnt} tít / R$ ${prevVal.toFixed(0)} vs novo ${bills.length} tít / R$ ${totalValue.toFixed(0)} (parece parcial).`
+                );
+                return;
+              }
+              // A busca bruta entra antes da fila filtrada e infla o "último dia útil".
+              // Se o sprint do dia já gravou a carteira da fila, ela permanece.
+              if (prev.sprint_clients != null && prev.sprint_titles != null && prev.sprint_value != null) {
+                payload.total_value = Number(prev.sprint_value) || prev.total_value;
+                payload.total_customers = Number(prev.sprint_clients) || prev.total_customers;
+                payload.total_count = Number(prev.sprint_titles) || prev.total_count;
+                payload.sprint_value = prev.sprint_value;
+                payload.sprint_clients = prev.sprint_clients;
+                payload.sprint_titles = prev.sprint_titles;
+                payload.sprint_avg_delay = prev.sprint_avg_delay;
+                payload.sprint_saved_at = prev.sprint_saved_at;
+              }
+            }
+          } catch (readPrevErr) {
+            console.warn("[Firebase] Não foi possível comparar snapshot anterior:", readPrevErr);
+          }
+          await tabSnaps.gravar(dateStr, payload, { merge: true });
+          console.log(`[Supabase] Snapshot de dashboard (${dateStr}) salvo com sucesso.`);
+        } catch (fbErr) {
+          console.error("[Supabase] Erro ao salvar snapshot:", fbErr);
+        }
+      } else {
+          console.error("[Supabase] Camada de dados não inicializada, impossível salvar snapshot.");
+      }
+
+    } catch (e) {
+      console.error("[Sienge] Exceção ao salvar snapshot:", e);
+    }
+  },
+
+  // 29. Sincronizar Histórico de Sub Judice no Firebase
+  async syncSubjudiceHistory(bills) {
+    if (!window.DadosCobranca) return;
+    try {
+      console.log("[Supabase] Sincronizando histórico Sub Judice...");
+      const tabClientes = window.DadosCobranca.tabela("sienge_customers");
+
+      const marcados = await tabClientes.listar({
+        filtros: [["is_subjudice", "eq", true]],
+        colunas: "id, is_subjudice, subjudice_entry_date, subjudice_exit_date"
+      });
+      const currentFirebaseSubjudice = new Map();
+      marcados.forEach(d => currentFirebaseSubjudice.set(String(d.id), d));
+
+      const siengeSubjudice = new Set();
+      const nomes = {};
+      bills.forEach(b => {
+         if (b.subjudice === 'S') {
+           const id = String(b.customerId || b.clientId);
+           siengeSubjudice.add(id);
+           if (!nomes[id]) nomes[id] = b.customerName || b.clientName || "";
+         }
+      });
+
+      const todayStr = new Date().toISOString();
+      const batchPromises = [];
+
+      for (const cId of siengeSubjudice) {
+         if (!currentFirebaseSubjudice.has(cId)) {
+             const marca = {
+                 is_subjudice: true,
+                 subjudice_entry_date: todayStr,
+                 subjudice_exit_date: null
+             };
+             // Supabase: name é obrigatório na tabela; se o cliente ainda não está no espelho (o setDoc merge
+             // criava o doc só com a marca), cria a linha com o nome que veio no título.
+             batchPromises.push(tabClientes.gravar(cId, marca, { merge: true }).catch(() =>
+               tabClientes.gravar(cId, Object.assign({ name: nomes[cId] || ("Cliente " + cId) }, marca), { merge: true })));
+         }
+      }
+      
+      const quedaFirebase = currentFirebaseSubjudice.size >= 15 && siengeSubjudice.size * 2 < currentFirebaseSubjudice.size;
+      if (quedaFirebase) {
+         console.warn(`[Firebase] Sub judice caiu de ${currentFirebaseSubjudice.size} para ${siengeSubjudice.size}. Saídas não registradas.`);
+      }
+      for (const [cId, data] of currentFirebaseSubjudice.entries()) {
+         if (quedaFirebase) break;
+         if (!siengeSubjudice.has(cId)) {
+             batchPromises.push(tabClientes.gravar(cId, {
+                 is_subjudice: false,
+                 subjudice_exit_date: todayStr
+             }, { merge: true }));
+         }
+      }
+      
+      await Promise.allSettled(batchPromises);
+      if (batchPromises.length > 0) {
+         console.log(`[Firebase] Sincronizado histórico Sub Judice. ${batchPromises.length} alterações.`);
+      }
+    } catch (e) {
+      console.error("[Firebase] Erro no syncSubjudiceHistory:", e);
+    }
+  }
+};
+
+window.SiengeApiService = SiengeApiService;
+window.setSiengeApiMode = setApiMode;
+window.getSiengeApiMode = getApiMode;
+window.SIENGE_CONFIG = SIENGE_CONFIG;
+window.siengeFetchWithRetry = siengeFetchWithRetry;
+window.siengePatch = siengePatch;

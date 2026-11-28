@@ -73,7 +73,7 @@ function htmlDo(body, assinaturas) {
 }
 
 function anexoAssinatura(item) {
-  const arquivo = path.join(__dirname, "..", "..", "assinaturas-rydoo", item.arquivo);
+  const arquivo = path.join(__dirname, "..", "..", "assets", "assinaturas-rydoo", item.arquivo);
   const bytes = fs.readFileSync(arquivo);
   return {
     name: item.arquivo,

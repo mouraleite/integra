@@ -1,0 +1,2130 @@
+/**
+ * Comercial · Tabelas vigentes
+ * Cadastro de tabela de preços/condições por competência, cidade e empreendimento.
+ */
+const TabelasVigentesApp = {
+  FB_COL: "tabelas_vigentes",
+  STORAGE_KEY: "crm_moura_tabelas_vigentes",
+  SHEET_FIELDS: ["plano", "intermediarias", "entradaMin", "parcelamentoEntrada", "taxaJuros", "reajuste", "desconto"],
+  DEFAULT_PLANOS: [
+    { plano: "Boleto único", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "REAL", descontoOn: false, descontoPct: "" },
+    { plano: "12", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "24", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "36", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "48", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "60", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "120", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" },
+    { plano: "180", intermediarias: false, entradaMin: "", parcelamentoEntrada: "", taxaJuros: "", reajuste: "", descontoOn: false, descontoPct: "" }
+  ],
+
+  state: {
+    inited: false,
+    loading: false,
+    tables: [],
+    shown: [],
+    consulted: false,
+    catalog: [],
+    cities: [],
+    enterprises: [],
+    cityIds: [],
+    empIds: [],
+    competencia: "",
+    openCity: false,
+    openEmp: false,
+    qCity: "",
+    qEmp: "",
+    editor: null,
+    aba: "tabelas",
+    m2: null,
+    m2Ordem: "cidade",
+    m2Dir: "asc"
+  },
+
+  M2_KEY: "crm_moura_valor_padrao_m2",
+  M2_BASE: [
+    ["Araçariguama", "Reserva do Araçari", "14201", 957.14, 996.77],
+    ["Avaré", "Reserva Central Parque", "13700", 543.83, 566.35],
+    ["Avaré", "Reserva Central Parque", "13800", 703.51, 732.64],
+    ["Botucatu", "Livia", "13300", 470, 489.46],
+    ["Botucatu", "Livia I", "13400", 470, 489.46],
+    ["Botucatu", "Livia II", "13500", 470, 489.46],
+    ["Botucatu", "Livia II (somente QD \"P\")", "13500", 470, 489.46],
+    ["Botucatu", "Reserva Central Parque", "13600", 950, 989.33],
+    ["Botucatu", "Parque Cidade", "14100", 497, 517.58],
+    ["Botucatu", "Gleba C", "14500", 576.43, 600.30],
+    ["Cerqueira César", "Chácara (Lote 250m²)", "10100", 300, 312.42],
+    ["Cerqueira César", "Chácara (Lote 250m²)", "10101", 300, 312.42],
+    ["Cerqueira César", "Jardim Primavera", "10200", 300, 312.42],
+    ["Cerqueira César", "Jardim Primavera III", "10300", 300, 312.42],
+    ["Cerqueira César", "Jardim Tropical", "12200", 300, 312.42],
+    ["Cerqueira César", "Novo Horizonte", "13200", 320, 333.25],
+    ["Fartura", "Jardim da Serra II", "11900", 350, 364.49],
+    ["Fartura", "Jardim da Serra III", "12000", 350, 364.49],
+    ["Piraju", "Jardim Tropical", "11300", 352, 366.58],
+    ["Piraju", "Alto da Bela Vista", "13100", 352, 366.58],
+    ["Taguaí", "Jardim dos Ipês", "12400", 300, 450],
+    ["Taguaí", "Jardim dos Ipês II", "12800", 300, 450]
+  ],
+
+  esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  },
+
+  uid() {
+    return "tv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+  },
+
+  // Tabelas vigentes no Supabase (tabela tabelas_vigentes, via window.DadosEngenharia).
+  fbReady() {
+    return !!window.DadosEngenharia;
+  },
+
+  tabelaNuvem() {
+    return window.DadosEngenharia.tabela(this.FB_COL);
+  },
+
+  fold(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+  },
+
+  readIdSet(key) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) || "[]");
+      return new Set((Array.isArray(raw) ? raw : []).map(String).filter(Boolean));
+    } catch (e) {
+      return new Set();
+    }
+  },
+
+  unitsByEnterprise() {
+    const ids = new Set();
+    const est = window.EstoqueComercialApp && EstoqueComercialApp.state && EstoqueComercialApp.state.units;
+    (est || []).forEach((u) => {
+      if (u && u.enterpriseId) ids.add(String(u.enterpriseId));
+    });
+    if (ids.size) return ids;
+    try {
+      const raw = JSON.parse(localStorage.getItem("crm_estoque_posicao_v1") || "null");
+      const units = raw && (raw.units || (raw.data && raw.data.units));
+      (units || []).forEach((u) => {
+        if (u && u.enterpriseId) ids.add(String(u.enterpriseId));
+      });
+    } catch (e) {}
+    this.readIdSet("crm_cc_ids_com_unidade").forEach((id) => ids.add(String(id)));
+    return ids;
+  },
+
+  cityOfCc(cc) {
+    const id = cc && (cc.id || cc.code);
+    const name = (cc && cc.name) || "";
+    const raw = (cc && (cc.city || cc.cidade))
+      || (typeof window.extractCityDisplayName === "function" ? window.extractCityDisplayName(id, name) : "")
+      || "";
+    return this.fold(raw).replace(/\s*-\s*SP$/, "") || "SEM CIDADE";
+  },
+
+  isEmpCc(cc) {
+    const id = String((cc && cc.id) || "").trim();
+    if (window.EstoqueComercialApp && typeof EstoqueComercialApp.isEmpreendimentoCcId === "function") {
+      if (!EstoqueComercialApp.isEmpreendimentoCcId(id)) return false;
+      if (typeof EstoqueComercialApp.isDeptOnlyCc === "function" && EstoqueComercialApp.isDeptOnlyCc(cc)) return false;
+      return true;
+    }
+    return id.charAt(0) === "1" || id.charAt(0) === "2";
+  },
+
+  ccHasUnits(cc) {
+    const id = String((cc && cc.id) || "").trim();
+    if (!id) return false;
+    const empty = this.readIdSet("crm_cc_ids_sem_unidade");
+    if (empty.has(id)) return false;
+    const withUnits = this.unitsByEnterprise();
+    if (withUnits.size) return withUnits.has(id);
+    return true;
+  },
+
+  async loadCatalog() {
+    let list = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    if ((!list || !list.length) && window.SiengeApiService && typeof SiengeApiService.getCostCenters === "function") {
+      try { list = await SiengeApiService.getCostCenters(false); } catch (e) { list = []; }
+    }
+    if (window.EstoqueComercialApp && typeof EstoqueComercialApp.filterEmpreendimentosLikeRelacionamento === "function") {
+      try { list = EstoqueComercialApp.filterEmpreendimentosLikeRelacionamento(list || []); } catch (e) {}
+    }
+    const catalog = (list || []).filter((cc) => this.isEmpCc(cc) && this.ccHasUnits(cc)).map((cc) => {
+      const city = this.cityOfCc(cc);
+      return {
+        id: String(cc.id),
+        name: String(cc.name || "").toUpperCase(),
+        city,
+        cityId: city
+      };
+    });
+    catalog.sort((a, b) => Number(a.id) - Number(b.id) || a.name.localeCompare(b.name, "pt-BR"));
+    this.state.catalog = catalog;
+    const citySet = new Map();
+    catalog.forEach((e) => {
+      if (!citySet.has(e.cityId)) citySet.set(e.cityId, e.city);
+    });
+    this.state.cities = [...citySet.keys()].sort((a, b) => a.localeCompare(b, "pt-BR")).map((id) => ({ id, name: id, label: id }));
+    this.state.enterprises = catalog.map((e) => ({ id: e.id, name: e.name, cityId: e.cityId, label: e.id + " - " + e.name }));
+  },
+
+  visibleCities() {
+    return this.state.cities || [];
+  },
+
+  visibleEmps() {
+    const citySel = new Set((this.state.cityIds || []).map(String));
+    if (!citySel.size) return this.state.enterprises;
+    return this.state.enterprises.filter((e) => citySel.has(e.cityId));
+  },
+
+  pruneFilters() {
+    const emps = new Set(this.visibleEmps().map((e) => String(e.id)));
+    this.state.empIds = (this.state.empIds || []).filter((id) => emps.has(String(id)));
+  },
+
+  bindFilters() {
+    if (!window.MlEmpresaFilter) return;
+    const self = this;
+    const bind = (id, key, openKey, qKey, itemsFn, nouns) => {
+      MlEmpresaFilter.bind(id, {
+        toggleOpen() {
+          self.state[openKey] = !self.state[openKey];
+          if (openKey === "openCity") self.state.openEmp = false;
+          if (openKey === "openEmp") self.state.openCity = false;
+          self.paintFilters();
+        },
+        setQuery(q) {
+          self.state[qKey] = q || "";
+          const box = document.getElementById(id + "-list");
+          if (box) {
+            box.innerHTML = MlEmpresaFilter.listHtml({
+              id,
+              items: itemsFn(),
+              selectedIds: self.state[key],
+              query: self.state[qKey],
+              nouns
+            });
+          }
+        },
+        toggleId(itemId, on) {
+          const sid = String(itemId);
+          const cur = self.state[key].slice();
+          self.state[key] = on ? (cur.includes(sid) ? cur : cur.concat(sid)) : cur.filter((x) => x !== sid);
+          self.pruneFilters();
+          self.state[openKey] = true;
+          self.paintFilters();
+        },
+        selectAll() {
+          self.state[key] = itemsFn().map((x) => String(x.id));
+          self.pruneFilters();
+          self.state[openKey] = true;
+          self.paintFilters();
+        },
+        selectNone() {
+          self.state[key] = [];
+          self.pruneFilters();
+          self.state[openKey] = true;
+          self.paintFilters();
+        }
+      });
+    };
+    bind("tvig-filter-city", "cityIds", "openCity", "qCity", () => this.visibleCities(), { singular: "cidade", plural: "cidades" });
+    bind("tvig-filter-emp", "empIds", "openEmp", "qEmp", () => this.visibleEmps(), { singular: "empreendimento", plural: "empreendimentos" });
+  },
+
+  paintFilters() {
+    const citySlot = document.getElementById("tvig-city-slot");
+    const empSlot = document.getElementById("tvig-emp-slot");
+    if (!citySlot || !empSlot || !window.MlEmpresaFilter) return;
+    this.bindFilters();
+    citySlot.innerHTML = MlEmpresaFilter.html({
+      id: "tvig-filter-city",
+      label: "Cidades",
+      items: this.visibleCities(),
+      selectedIds: this.state.cityIds,
+      open: !!this.state.openCity,
+      query: this.state.qCity,
+      emptyMeansAll: true,
+      nouns: { singular: "cidade", plural: "cidades" }
+    });
+    empSlot.innerHTML = MlEmpresaFilter.html({
+      id: "tvig-filter-emp",
+      label: "Empreendimentos",
+      items: this.visibleEmps(),
+      selectedIds: this.state.empIds,
+      open: !!this.state.openEmp,
+      query: this.state.qEmp,
+      emptyMeansAll: true,
+      nouns: { singular: "empreendimento", plural: "empreendimentos" }
+    });
+    const cityBtn = citySlot.querySelector(".ml-emp-filter-btn span");
+    if (cityBtn && this.state.cityIds.length === 1) {
+      const cid = String(this.state.cityIds[0]);
+      const city = (this.state.cities || []).find((c) => String(c.id) === cid);
+      cityBtn.textContent = (city && (city.label || city.name)) || cid;
+    }
+    if (window.lucide) lucide.createIcons();
+  },
+
+  currentCompetencia() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  },
+
+  competenciaLabel(ym) {
+    const s = String(ym || "");
+    if (/^\d{4}-\d{2}$/.test(s)) return s.slice(5, 7) + "/" + s.slice(0, 4);
+    return s || "—";
+  },
+
+  stripDash(s) {
+    const t = String(s == null ? "" : s).trim();
+    return (t === "—" || t === "-" || t === "–") ? "" : t;
+  },
+
+  stripSuffix(s) {
+    return this.stripDash(s).replace(/%/g, "").replace(/x$/i, "").trim();
+  },
+
+  sanitizeDec(raw, maxDec) {
+    let s = this.stripSuffix(raw).replace(/[^\d,.]/g, "").replace(".", ",");
+    const i = s.indexOf(",");
+    if (i >= 0) {
+      s = s.slice(0, i + 1) + s.slice(i + 1).replace(/,/g, "");
+      const parts = s.split(",");
+      if (parts[1] && parts[1].length > maxDec) s = parts[0] + "," + parts[1].slice(0, maxDec);
+    }
+    return s;
+  },
+
+  padDec(raw, dec) {
+    const s = this.sanitizeDec(raw, dec);
+    if (!s) return "";
+    const parts = s.split(",");
+    const intPart = parts[0] === "" ? "0" : parts[0];
+    const frac = String(parts[1] || "").padEnd(dec, "0").slice(0, dec);
+    return intPart + "," + frac;
+  },
+
+  sanitizeInt(raw) {
+    return this.stripSuffix(raw).replace(/\D/g, "");
+  },
+
+  isBoletoRow(idx, r) {
+    return idx === 0 || this.isBoletoPlano(r && r.plano);
+  },
+
+  boletoFieldLocked(idx, field, r) {
+    if (!this.isBoletoRow(idx, r)) return false;
+    return field !== "desconto" && field !== "descontoOn" && field !== "descontoPct";
+  },
+
+  isEditorContextReady(draft) {
+    const d = draft || (this.state.editor && this.state.editor.draft);
+    return !!(d && String(d.competencia || "").trim() && d.cityId && d.enterpriseId);
+  },
+
+  isEditorReadOnly() {
+    const ed = this.state.editor;
+    return !!(ed && (ed.mode === "view" || ed.readOnly));
+  },
+
+  sheetFieldLocked(idx, field, r) {
+    if (this.isEditorReadOnly()) return true;
+    if (!this.isEditorContextReady()) return true;
+    return this.boletoFieldLocked(idx, field, r);
+  },
+
+  refreshEditorSheetLock() {
+    const ready = this.isEditorContextReady();
+    const wrap = document.querySelector(".tvig-editor-table-wrap");
+    const hint = document.getElementById("tvig-editor-lock-hint");
+    const addBtn = document.getElementById("tvig-add-plano");
+    if (hint) hint.hidden = ready;
+    if (addBtn) addBtn.disabled = !ready;
+    if (wrap) wrap.classList.toggle("is-context-locked", !ready);
+    this.paintKeyHint();
+    const d = this.state.editor && this.state.editor.draft;
+    if (!wrap || !d) return;
+    (d.rows || []).forEach((r, i) => {
+      wrap.querySelectorAll('td[data-row="' + i + '"] input, td[data-row="' + i + '"] select').forEach((el) => {
+        const td = el.closest("td");
+        const field = td && td.getAttribute("data-field");
+        if (field === "desconto" && el.classList.contains("tvig-sheet-input")) {
+          el.disabled = !ready || !r.descontoOn;
+          return;
+        }
+        el.disabled = this.sheetFieldLocked(i, field === "desconto" ? "descontoOn" : field, r);
+      });
+      const del = wrap.querySelectorAll("tbody tr")[i];
+      const btn = del && del.querySelector(".tvig-ico");
+      if (btn) btn.disabled = !ready;
+    });
+    if (!ready) {
+      document.querySelectorAll(".tvig-fill-handle").forEach((el) => el.remove());
+    }
+  },
+
+  normalizeBoletoRow(r) {
+    if (!r) return r;
+    r.plano = "Boleto único";
+    r.intermediarias = false;
+    r.entradaMin = "";
+    r.parcelamentoEntrada = "";
+    r.taxaJuros = "";
+    r.reajuste = "REAL";
+    return r;
+  },
+
+  isBoletoPlano(raw) {
+    const fold = this.fold(raw).replace(/\s+/g, " ");
+    return fold === "BOLETO UNICO" || fold === "BOLETOUNICO";
+  },
+
+  sanitizePlano(raw, lockedBoleto) {
+    return this.normalizePlano(raw, lockedBoleto);
+  },
+
+  normalizePlano(raw, lockedBoleto) {
+    if (lockedBoleto || this.isBoletoPlano(raw)) return "Boleto único";
+    const text = String(raw == null ? "" : raw).replace(/\s+/g, " ").trim();
+    const range = text.match(/^(\d+)\s*a\s*(\d+)$/i);
+    if (range) return String(parseInt(range[1], 10)) + " a " + String(parseInt(range[2], 10));
+    if (/[A-Za-zÀ-ÿ]/.test(text)) return text;
+    const n = text.replace(/\D/g, "");
+    return n ? String(parseInt(n, 10)) : "";
+  },
+
+  planoSortKey(r) {
+    if (!r || this.isBoletoPlano(r.plano)) return -1;
+    const text = String(r.plano || "");
+    const range = text.match(/(\d+)\s*a\s*(\d+)/i);
+    if (range) return parseInt(range[2], 10) + 0.5;
+    if (/parcela/i.test(text)) return 36.5;
+    const n = parseInt(text.replace(/\D/g, ""), 10);
+    return Number.isFinite(n) ? n : 999999;
+  },
+
+  sortDraftRows(keepId) {
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows) return -1;
+    const boleto = d.rows.find((r) => this.isBoletoPlano(r.plano)) || d.rows[0];
+    if (boleto) {
+      this.normalizeBoletoRow(boleto);
+      const rest = d.rows.filter((r) => r !== boleto).sort((a, b) => this.planoSortKey(a) - this.planoSortKey(b));
+      d.rows = [boleto].concat(rest);
+    }
+    if (keepId) return d.rows.findIndex((r) => String(r.id) === String(keepId));
+    return -1;
+  },
+
+  normalizeReajuste(raw) {
+    const t = String(raw == null ? "" : raw).trim();
+    if (!t) return "";
+    const fold = this.fold(t).replace(/\s+/g, "");
+    if (fold === "0" || fold === "REAL" || t === "-" || t === "—" || t === "–") return "REAL";
+    return t;
+  },
+
+  indexadorOptions(current) {
+    let names = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem("crm_indexadores_ativos") || "[]");
+      if (Array.isArray(saved)) names = saved.map((x) => String(x || "").trim()).filter(Boolean);
+    } catch (e) {}
+    if (!names.length && window.IndexadoresState && Array.isArray(IndexadoresState.siengeIndexers)) {
+      names = IndexadoresState.siengeIndexers.map((i) => String((i && i.name) || "").trim()).filter(Boolean);
+    }
+    names = names.map((n) => this.normalizeReajuste(n)).filter((n) => n && n !== "REAL");
+    names = names.filter((n, i) => names.indexOf(n) === i);
+    const cur = this.normalizeReajuste(current);
+    if (cur && cur !== "REAL" && names.indexOf(cur) < 0) names = [cur].concat(names);
+    return ["REAL"].concat(names);
+  },
+
+  migrateRow(r) {
+    const src = r || {};
+    const planoRaw = String(src.plano || "");
+    const interFromText = /intermed/i.test(planoRaw);
+    let plano = planoRaw.replace(/\s*c\/\s*intermedi[aá]rias?/i, "").trim();
+    plano = this.normalizePlano(plano) || (this.fold(planoRaw).includes("BOLETO") ? "Boleto único" : plano);
+    const cond = String(src.condicaoEspecial || "");
+    const m = cond.match(/(\d+(?:[.,]\d+)?)\s*%/);
+    const descontoOn = src.descontoOn != null ? !!src.descontoOn : !!m;
+    return {
+      id: src.id || this.uid(),
+      plano,
+      intermediarias: src.intermediarias != null ? !!src.intermediarias : interFromText,
+      entradaMin: this.stripSuffix(src.entradaMin),
+      parcelamentoEntrada: this.sanitizeInt(src.parcelamentoEntrada),
+      taxaJuros: this.padDec(src.taxaJuros, 4),
+      reajuste: this.normalizeReajuste(src.reajuste),
+      descontoOn,
+      descontoPct: src.descontoPct != null && String(src.descontoPct) !== ""
+        ? this.stripSuffix(src.descontoPct)
+        : (m ? String(m[1]).replace(".", ",") : ""),
+      condicaoEspecial: src.condicaoEspecial || ""
+    };
+  },
+
+  defaultRows() {
+    return this.DEFAULT_PLANOS.map((r) => this.migrateRow(Object.assign({ id: this.uid() }, r)));
+  },
+
+  emptyTable() {
+    const ym = new Date().toISOString().slice(0, 7);
+    return {
+      id: this.uid(),
+      competencia: ym,
+      cityId: "",
+      city: "",
+      enterpriseId: "",
+      enterpriseName: "",
+      rows: this.defaultRows(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  },
+
+  prefillFromFilters(draft) {
+    const emps = (this.state.empIds || []).map(String);
+    const cities = (this.state.cityIds || []).map(String);
+    if (emps.length === 1) {
+      const emp = this.state.enterprises.find((e) => String(e.id) === emps[0]);
+      if (emp) {
+        draft.enterpriseId = emp.id;
+        draft.enterpriseName = emp.name;
+        draft.cityId = emp.cityId || draft.cityId;
+        draft.city = draft.cityId;
+      }
+    }
+    if (cities.length === 1) {
+      draft.cityId = cities[0];
+      draft.city = cities[0];
+    }
+    if (this.state.competencia) draft.competencia = this.state.competencia;
+    if ((!draft.cityId || this.fold(draft.city) === "TODOS") && draft.enterpriseId) {
+      const emp = this.state.enterprises.find((e) => String(e.id) === String(draft.enterpriseId));
+      if (emp && emp.cityId) {
+        draft.cityId = emp.cityId;
+        draft.city = emp.cityId;
+      }
+    }
+    return draft;
+  },
+
+  loadLocal() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(this.STORAGE_KEY) || "[]");
+      this.state.tables = Array.isArray(raw) ? raw : [];
+    } catch (e) {
+      this.state.tables = [];
+    }
+  },
+
+  saveLocal() {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.state.tables)); } catch (e) {}
+  },
+
+  async loadCloud() {
+    if (!this.fbReady()) return;
+    try {
+      const list = (await this.tabelaNuvem().listar()).filter((d) => d && d.id && String(d.id).charAt(0) !== "_");
+      if (list.length) {
+        this.state.tables = list;
+        this.saveLocal();
+      }
+    } catch (e) {
+      console.warn("[TabelasVigentes] leitura", e);
+    }
+  },
+
+  async persistOne(row) {
+    this.saveLocal();
+    if (!this.fbReady()) return;
+    try {
+      await this.tabelaNuvem().gravar(String(row.id), row); // substitui (setDoc sem merge)
+    } catch (e) {
+      console.warn("[TabelasVigentes] save", e);
+    }
+  },
+
+  async deleteOne(id) {
+    this.state.tables = this.state.tables.filter((t) => String(t.id) !== String(id));
+    this.saveLocal();
+    if (!this.fbReady()) return;
+    try {
+      await this.tabelaNuvem().excluir(String(id));
+    } catch (e) {
+      console.warn("[TabelasVigentes] delete", e);
+    }
+  },
+
+  isDuplicate(d) {
+    const city = String((d && (d.cityId || d.city)) || "");
+    const emp = String((d && d.enterpriseId) || "");
+    const comp = String((d && d.competencia) || "");
+    if (!city || !emp || !comp) return false;
+    return (this.state.tables || []).some((t) =>
+      String(t.id) !== String(d.id)
+      && String(t.competencia || "") === comp
+      && String(t.cityId || t.city || "") === city
+      && String(t.enterpriseId || "") === emp
+    );
+  },
+
+  editorContextLabel(d) {
+    const emp = (this.state.enterprises || []).find((e) => String(e.id) === String(d.enterpriseId));
+    const empLabel = emp
+      ? (emp.label || ((emp.id ? emp.id + " - " : "") + (emp.name || "")))
+      : ((d.enterpriseId ? d.enterpriseId + " - " : "") + (d.enterpriseName || ""));
+    const parts = [
+      this.competenciaLabel(d.competencia),
+      d.cityId || d.city || "",
+      empLabel
+    ].map((x) => String(x || "").trim()).filter(Boolean);
+    return parts.join(" · ");
+  },
+
+  editorKeyError() {
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!d) return null;
+    if (ed.mode === "copy" && ed.sourceCompetencia && String(d.competencia || "") === String(ed.sourceCompetencia)) {
+      return {
+        title: "Competência igual à origem",
+        text: "A cópia precisa de outro mês. A tabela de origem é " + this.competenciaLabel(ed.sourceCompetencia) + "."
+      };
+    }
+    if (this.isDuplicate(d)) {
+      return {
+        title: "Tabela já cadastrada",
+        text: "Já existe uma tabela vigente para " + this.editorContextLabel(d) + ". Troque a competência, a cidade ou o empreendimento para continuar."
+      };
+    }
+    return null;
+  },
+
+  paintKeyHint() {
+    const el = document.getElementById("tvig-key-error");
+    const msg = this.editorKeyError();
+    if (el) {
+      if (!msg) {
+        el.hidden = true;
+        el.innerHTML = "";
+      } else {
+        el.hidden = false;
+        el.innerHTML = '<span class="tvig-key-ico" aria-hidden="true"><i data-lucide="info"></i></span>'
+          + '<div><strong>' + this.esc(msg.title) + '</strong><p>' + this.esc(msg.text) + '</p></div>';
+        if (window.lucide) lucide.createIcons({ attrs: { width: 18, height: 18 } });
+      }
+    }
+    const saveBtn = document.querySelector("#tvig-editor-overlay .tvig-editor-foot .btn-primary");
+    if (saveBtn) saveBtn.disabled = !!msg;
+  },
+
+  setCompetencia(ym) {
+    this.state.competencia = /^\d{4}-\d{2}$/.test(String(ym || "")) ? String(ym) : this.currentCompetencia();
+    const el = document.getElementById("tvig-filter-comp");
+    if (el && el.value !== this.state.competencia) el.value = this.state.competencia;
+  },
+
+  consultar() {
+    const cities = new Set((this.state.cityIds || []).map(String));
+    const emps = new Set((this.state.empIds || []).map(String));
+    const monthEl = document.getElementById("tvig-filter-comp");
+    if (monthEl) this.setCompetencia(monthEl.value);
+    const comp = String(this.state.competencia || "").trim();
+    this.state.shown = (this.state.tables || []).filter((t) => {
+      if (comp && String(t.competencia || "") !== comp) return false;
+      if (cities.size && !cities.has(String(t.cityId || t.city))) return false;
+      if (emps.size && !emps.has(String(t.enterpriseId))) return false;
+      return true;
+    }).slice().sort((a, b) => String(b.competencia || "").localeCompare(String(a.competencia || ""))
+      || String(a.city || "").localeCompare(String(b.city || ""), "pt-BR")
+      || String(a.enterpriseName || "").localeCompare(String(b.enterpriseName || ""), "pt-BR"));
+    this.state.consulted = true;
+    this.renderList();
+  },
+
+  limpar() {
+    this.state.cityIds = [];
+    this.state.empIds = [];
+    this.state.competencia = this.currentCompetencia();
+    this.state.openCity = false;
+    this.state.openEmp = false;
+    this.state.qCity = "";
+    this.state.qEmp = "";
+    this.state.shown = [];
+    this.state.consulted = false;
+    const monthEl = document.getElementById("tvig-filter-comp");
+    if (monthEl) monthEl.value = this.state.competencia;
+    this.paintFilters();
+    this.renderList();
+  },
+
+  siengeAuthorName() {
+    const u = (window.AppState && AppState.currentUser) || {};
+    const sienge = String(u.sienge_user || "").trim();
+    if (sienge) return sienge;
+    return String(u.name || "").trim();
+  },
+
+  criadoPorLabel(t) {
+    return String((t && t.createdBy) || "").trim() || "—";
+  },
+
+  renderList() {
+    const box = document.getElementById("tvig-results");
+    if (!box) return;
+    if (!this.state.consulted) {
+      box.innerHTML = `<div class="tvig-empty">Use <strong>Consultar</strong> para ver as tabelas cadastradas.</div>`;
+      return;
+    }
+    const rows = this.state.shown || [];
+    if (!rows.length) {
+      box.innerHTML = `<div class="tvig-empty">Não há tabelas cadastradas${this.state.cityIds.length || this.state.empIds.length || this.state.competencia ? " para o filtro selecionado" : ""}.</div>`;
+      return;
+    }
+    box.innerHTML = `
+      <div class="cc-scroll">
+        <table class="cc-table tvig-cc-table">
+          <colgroup>
+            <col style="width:108px"><col style="width:16%"><col><col style="width:180px"><col class="tvig-c-acao">
+          </colgroup>
+          <thead>
+            <tr>
+              <th>Competência</th>
+              <th>Cidade</th>
+              <th>Empreendimento</th>
+              <th>Criado por</th>
+              <th class="is-right">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((t) => {
+              const autor = this.criadoPorLabel(t);
+              const cidade = t.city || t.cityId || "—";
+              const emp = (t.enterpriseId ? t.enterpriseId + " - " : "") + (t.enterpriseName || "—");
+              return `
+              <tr>
+                <td>${this.esc(this.competenciaLabel(t.competencia))}</td>
+                <td class="cc-nome" title="${this.esc(cidade)}">${this.esc(cidade)}</td>
+                <td class="cc-nome" title="${this.esc(emp)}">${this.esc(emp)}</td>
+                <td title="${this.esc(autor)}">${this.esc(autor)}</td>
+                <td class="is-right tvig-acoes">
+                  <button type="button" class="tvig-ico" title="Visualizar" onclick="TabelasVigentesApp.openViewer('${this.esc(t.id)}')">
+                    <i data-lucide="eye" style="width:15px;height:15px;"></i>
+                  </button>
+                  <button type="button" class="tvig-ico" title="Editar" onclick="TabelasVigentesApp.openEditor('${this.esc(t.id)}')">
+                    <i data-lucide="pencil" style="width:15px;height:15px;"></i>
+                  </button>
+                  <button type="button" class="tvig-ico" title="Copiar" onclick="TabelasVigentesApp.copyTable('${this.esc(t.id)}')">
+                    <i data-lucide="copy" style="width:15px;height:15px;"></i>
+                  </button>
+                  <button type="button" class="tvig-ico is-danger" title="Excluir" onclick="TabelasVigentesApp.removeTable('${this.esc(t.id)}')">
+                    <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+                  </button>
+                </td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>`;
+    if (window.lucide) lucide.createIcons();
+  },
+
+  setAba(id) {
+    this.state.aba = id === "m2" ? "m2" : "tabelas";
+    this.renderPage();
+  },
+
+  renderPage() {
+    const root = document.getElementById("tabelas-vigentes-root");
+    if (!root) return;
+    const aba = this.state.aba === "m2" ? "m2" : "tabelas";
+    const tab = (id, icon, label) => `
+      <button type="button" role="tab" aria-selected="${aba === id}"
+        class="ml-tab ${aba === id ? "is-active" : ""}"
+        onclick="TabelasVigentesApp.setAba('${id}')"><i data-lucide="${icon}"></i> ${label}</button>`;
+    root.innerHTML = `
+      <div class="ml-tabs tvig-tabs" role="tablist">
+        ${tab("tabelas", "table", "Tabelas vigentes")}
+        ${tab("m2", "ruler", "Valor padrão m²")}
+      </div>
+      <div id="tvig-aba-corpo"></div>
+      <div id="tvig-editor-overlay" class="modal-overlay tvig-editor-overlay" style="display:none;"></div>`;
+    if (aba === "m2") this.renderM2();
+    else this.renderTabelas();
+    if (window.lucide) lucide.createIcons();
+  },
+
+  renderTabelas() {
+    const box = document.getElementById("tvig-aba-corpo");
+    if (!box) return;
+    if (!this.state.competencia) this.state.competencia = this.currentCompetencia();
+    box.innerHTML = `
+      <div class="tvig-page">
+        <div class="search-filter-panel tvig-params">
+          <h3 class="tvig-section-title">Parâmetros da consulta</h3>
+          <div class="tvig-filters">
+            <div id="tvig-city-slot" class="tvig-filter-slot"></div>
+            <div id="tvig-emp-slot" class="tvig-filter-slot"></div>
+            <div class="tvig-filter-slot tvig-comp-slot">
+              <label class="tvig-comp-label" for="tvig-filter-comp">Mês de referência</label>
+              <input type="month" id="tvig-filter-comp" class="tvig-comp-input" value="${this.esc(this.state.competencia || this.currentCompetencia())}"
+                onchange="TabelasVigentesApp.setCompetencia(this.value)">
+            </div>
+            <div class="tvig-filter-actions">
+              <button type="button" class="btn btn-primary" onclick="TabelasVigentesApp.consultar()">
+                <i data-lucide="search" style="width:16px;"></i> Consultar
+              </button>
+              <button type="button" class="btn btn-cancel" onclick="TabelasVigentesApp.limpar()">Limpar</button>
+              <button type="button" class="btn btn-primary" onclick="TabelasVigentesApp.openEditor()">
+                <i data-lucide="plus" style="width:16px;"></i> Adicionar nova tabela
+              </button>
+            </div>
+          </div>
+        </div>
+        <h3 class="tvig-section-title">Resultados da consulta</h3>
+        <div id="tvig-results"></div>
+      </div>`;
+    this.paintFilters();
+    this.renderList();
+  },
+
+  m2Seed() {
+    return {
+      indice: "IPCA-12",
+      correcoes: { "2026": 4.14 },
+      linhas: this.M2_BASE.map((r, i) => ({
+        id: "m2-" + r[2] + "-" + i,
+        cidade: r[0],
+        empreendimento: r[1],
+        cc: r[2],
+        valores: { "2025": r[3], "2026": r[4] }
+      }))
+    };
+  },
+
+  loadM2() {
+    if (this.state.m2) return;
+    let raw = null;
+    try { raw = localStorage.getItem(this.M2_KEY); } catch (e) {}
+    if (raw == null) {
+      this.state.m2 = this.m2Seed();
+      this.saveM2();
+      return;
+    }
+    try {
+      const o = JSON.parse(raw);
+      if (o && Array.isArray(o.linhas) && o.linhas.length) this.state.m2 = o;
+      else this.state.m2 = this.m2Seed();
+    } catch (e) {
+      this.state.m2 = this.m2Seed();
+    }
+    if (!this.state.m2.correcoes) this.state.m2.correcoes = { "2026": 4.14 };
+    if (this.state.m2.correcoes["2026"] == null) this.state.m2.correcoes["2026"] = 4.14;
+  },
+
+  saveM2() {
+    try { localStorage.setItem(this.M2_KEY, JSON.stringify(this.state.m2)); } catch (e) {}
+  },
+
+  anoAtual() {
+    return new Date().getFullYear();
+  },
+
+  anosM2() {
+    const anos = [2025, 2026];
+    const atual = this.anoAtual();
+    for (let y = 2027; y <= atual; y++) anos.push(y);
+    return anos;
+  },
+
+  reais(n) {
+    const v = Number(n);
+    if (!isFinite(v)) return null;
+    return Math.round((v + Number.EPSILON) * 100) / 100;
+  },
+
+  dinheiro(n) {
+    const v = this.reais(n);
+    if (v == null) return "—";
+    return v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  pctTexto(n) {
+    const v = Number(n);
+    if (!isFinite(v)) return "";
+    return String(v).replace(".", ",");
+  },
+
+  lerPct(texto) {
+    const n = parseFloat(String(texto || "").trim().replace(/\s/g, "").replace("%", "").replace(",", "."));
+    return isFinite(n) ? n : null;
+  },
+
+  ordenarM2(campo) {
+    if (this.state.m2Ordem === campo) this.state.m2Dir = this.state.m2Dir === "asc" ? "desc" : "asc";
+    else {
+      this.state.m2Ordem = campo;
+      this.state.m2Dir = "asc";
+    }
+    this.renderPage();
+  },
+
+  linhasM2() {
+    const campo = this.state.m2Ordem || "cidade";
+    const dir = this.state.m2Dir === "desc" ? -1 : 1;
+    const linhas = (this.state.m2 && this.state.m2.linhas) || [];
+    return linhas.slice().sort((a, b) => {
+      if (campo === "cc") return (Number(a.cc) - Number(b.cc)) * dir;
+      if (/^\d{4}$/.test(campo)) {
+        const av = Number(a.valores && a.valores[campo]);
+        const bv = Number(b.valores && b.valores[campo]);
+        return ((isFinite(av) ? av : -1) - (isFinite(bv) ? bv : -1)) * dir;
+      }
+      const c = String(a[campo] || "").localeCompare(String(b[campo] || ""), "pt-BR");
+      if (c) return c * dir;
+      return (Number(a.cc) - Number(b.cc)) * dir;
+    });
+  },
+
+  renderM2() {
+    const box = document.getElementById("tvig-aba-corpo");
+    if (!box) return;
+    this.loadM2();
+    const anos = this.anosM2();
+    const atual = this.anoAtual();
+    const pedePct = atual >= 2027;
+    const pctAno = this.state.m2.correcoes && this.state.m2.correcoes[String(atual)];
+    const th = (campo, label, centro) => `<th class="${centro ? "is-right" : ""}" onclick="TabelasVigentesApp.ordenarM2('${campo}')" style="cursor:pointer;user-select:none;">${this.esc(label)} <i data-lucide="chevrons-up-down" style="width:11px;vertical-align:middle;"></i></th>`;
+    const linhas = this.linhasM2();
+    const corpo = linhas.map((r) => `
+      <tr>
+        <td class="cc-nome" title="${this.esc(r.cidade)}">${this.esc(r.cidade)}</td>
+        <td class="cc-nome" title="${this.esc(r.empreendimento)}">${this.esc(r.empreendimento)}</td>
+        <td><strong>${this.esc(r.cc)}</strong></td>
+        ${anos.map((ano) => `<td class="is-right">${this.dinheiro(r.valores && r.valores[String(ano)])}</td>`).join("")}
+        ${pedePct ? `<td class="is-right aobra-acoes">
+          <button type="button" class="tvig-ico" title="Ajustar ${atual}" onclick="TabelasVigentesApp.abrirM2Linha('${this.esc(r.id)}')">
+            <i data-lucide="pencil" style="width:15px;height:15px;"></i>
+          </button>
+        </td>` : ""}
+      </tr>`).join("");
+    box.innerHTML = `
+      <div class="cc-page">
+        <div class="cc-toolbar">
+          <p class="aobra-help">Índice de correção 2026: IPCA-12 · 4,14%. Os valores de 2025 e 2026 já estão na tabela.${pedePct ? " Informe o percentual de " + atual + " para calcular a partir de " + (atual - 1) + "." : " O campo do percentual abre em 2027, quando o ano virar."}</p>
+          ${pedePct ? `<div class="cc-toolbar-actions">
+            <label class="tvig-m2-pct">Percentual de correção ${atual}
+              <input type="text" id="tvig-m2-pct" inputmode="decimal" placeholder="0,00" value="${this.esc(this.pctTexto(pctAno))}">
+            </label>
+            <button type="button" class="btn btn-primary cc-atualizar" onclick="TabelasVigentesApp.aplicarCorrecaoM2()">Aplicar</button>
+          </div>` : ""}
+        </div>
+        <div class="cc-scroll">
+          <table class="cc-table tvig-m2-table">
+            <colgroup>
+              <col style="width:16%"><col><col style="width:88px">
+              ${anos.map(() => '<col style="width:120px">').join("")}
+              ${pedePct ? '<col style="width:52px">' : ""}
+            </colgroup>
+            <thead>
+              <tr>
+                ${th("cidade", "Cidade")}
+                ${th("empreendimento", "Empreendimento")}
+                ${th("cc", "Centro de custo")}
+                ${anos.map((ano) => th(String(ano), "Valor por m² " + ano, true)).join("")}
+                ${pedePct ? '<th class="is-right">Ações</th>' : ""}
+              </tr>
+            </thead>
+            <tbody>${corpo || `<tr><td colspan="${3 + anos.length}" style="text-align:center;padding:28px;">Nenhum valor cadastrado.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>
+      <div id="tvig-m2-overlay" class="modal-overlay" onclick="if (event.target === this) TabelasVigentesApp.fecharM2()"></div>`;
+  },
+
+  aplicarCorrecaoM2() {
+    const ano = this.anoAtual();
+    if (ano < 2027) return;
+    this.loadM2();
+    const el = document.getElementById("tvig-m2-pct");
+    const pct = this.lerPct(el && el.value);
+    if (pct == null) {
+      alert("Informe o percentual de correção.");
+      return;
+    }
+    const anterior = String(ano - 1);
+    const fator = 1 + pct / 100;
+    (this.state.m2.linhas || []).forEach((linha) => {
+      const base = this.reais(linha.valores && linha.valores[anterior]);
+      if (base == null) return;
+      if (!linha.valores) linha.valores = {};
+      linha.valores[String(ano)] = this.reais(base * fator);
+    });
+    if (!this.state.m2.correcoes) this.state.m2.correcoes = {};
+    this.state.m2.correcoes[String(ano)] = pct;
+    this.saveM2();
+    this.renderPage();
+  },
+
+  abrirM2Linha(id) {
+    const ano = this.anoAtual();
+    if (ano < 2027) return;
+    this.loadM2();
+    const linha = (this.state.m2.linhas || []).find((r) => String(r.id) === String(id));
+    const ov = document.getElementById("tvig-m2-overlay");
+    if (!linha || !ov) return;
+    const valor = linha.valores && linha.valores[String(ano)];
+    ov.innerHTML = `
+      <div class="modal-box aobra-modal" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Valor ${ano} · ${this.esc(linha.cc)}</h3>
+          <button type="button" class="btn btn-fechar" onclick="TabelasVigentesApp.fecharM2()">Fechar</button>
+        </div>
+        <p class="aobra-help" style="margin-bottom:12px;">${this.esc(linha.cidade)} · ${this.esc(linha.empreendimento)}. Use este campo quando o valor não seguir o percentual.</p>
+        <label class="tvig-m2-pct">Valor por m² ${ano}
+          <input type="text" id="tvig-m2-valor" inputmode="decimal" value="${valor == null ? "" : this.esc(this.pctTexto(valor))}">
+        </label>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+          <button type="button" class="btn btn-primary" onclick="TabelasVigentesApp.salvarM2Linha('${this.esc(linha.id)}')">Salvar</button>
+        </div>
+      </div>`;
+    ov.classList.add("active");
+    const campo = document.getElementById("tvig-m2-valor");
+    if (campo) campo.focus();
+  },
+
+  fecharM2() {
+    const ov = document.getElementById("tvig-m2-overlay");
+    if (!ov) return;
+    ov.classList.remove("active");
+    ov.innerHTML = "";
+  },
+
+  salvarM2Linha(id) {
+    const ano = String(this.anoAtual());
+    this.loadM2();
+    const linha = (this.state.m2.linhas || []).find((r) => String(r.id) === String(id));
+    if (!linha) return;
+    const valor = this.lerPct(document.getElementById("tvig-m2-valor") && document.getElementById("tvig-m2-valor").value);
+    if (valor == null || valor < 0) {
+      alert("Informe o valor por m².");
+      return;
+    }
+    if (!linha.valores) linha.valores = {};
+    linha.valores[ano] = this.reais(valor);
+    this.saveM2();
+    this.fecharM2();
+    this.renderPage();
+  },
+
+  findTable(id) {
+    return (this.state.tables || []).find((t) => String(t.id) === String(id)) || null;
+  },
+
+  openEditor(id, asCopy) {
+    this.openEditorMode(id, asCopy ? "copy" : (id ? "edit" : "new"));
+  },
+
+  openViewer(id) {
+    this.openEditorMode(id, "view");
+  },
+
+  openEditorMode(id, mode) {
+    const src = id ? this.findTable(id) : null;
+    if (mode === "view" && !src) return;
+    let draft;
+    if (src) {
+      draft = JSON.parse(JSON.stringify(src));
+      if (mode === "copy") {
+        draft.id = this.uid();
+        draft.createdAt = new Date().toISOString();
+        draft.createdBy = "";
+        draft.competencia = "";
+      }
+    } else {
+      draft = this.emptyTable();
+      this.prefillFromFilters(draft);
+    }
+    draft.rows = ((draft.rows && draft.rows.length) ? draft.rows : this.defaultRows()).map((r) => this.migrateRow(r));
+    const titles = {
+      view: "Visualizar tabela vigente",
+      copy: "Copiar tabela vigente",
+      edit: "Editar tabela vigente",
+      new: "Nova tabela vigente"
+    };
+    this.state.editor = {
+      draft,
+      mode: mode || "new",
+      sourceCompetencia: mode === "copy" && src ? String(src.competencia || "") : "",
+      sourceId: mode === "copy" && src ? String(src.id) : "",
+      readOnly: mode === "view",
+      title: titles[mode] || titles.new,
+      openCity: false,
+      openEmp: false,
+      qCity: "",
+      qEmp: "",
+      sel: null,
+      undo: [],
+      redo: [],
+      _editSnap: null
+    };
+    this.paintEditor();
+  },
+
+  copyTable(id) {
+    this.openEditor(id, true);
+  },
+
+  async removeTable(id) {
+    const t = this.findTable(id);
+    const label = t
+      ? (this.competenciaLabel(t.competencia) + " · " + (t.enterpriseName || t.enterpriseId || ""))
+      : "esta tabela";
+    const ok = typeof window.mouraConfirm === "function"
+      ? await window.mouraConfirm("Excluir a tabela " + label + "? Esta ação não pode ser desfeita.")
+      : window.confirm("Excluir a tabela " + label + "?");
+    if (!ok) return;
+    await this.deleteOne(id);
+    if (this.state.consulted) this.consultar();
+    else this.renderList();
+  },
+
+  closeEditor() {
+    this.state.editor = null;
+    const ov = document.getElementById("tvig-editor-overlay");
+    if (ov) {
+      ov.classList.remove("active");
+      ov.style.display = "none";
+      ov.innerHTML = "";
+    }
+  },
+
+  editorCityOptions() {
+    return this.state.cities;
+  },
+
+  editorEmpOptions() {
+    const d = this.state.editor && this.state.editor.draft;
+    const cityId = d && d.cityId;
+    if (!cityId) return this.state.enterprises;
+    return this.state.enterprises.filter((e) => e.cityId === cityId);
+  },
+
+  bindEditorFilters() {
+    if (!window.MlEmpresaFilter || !this.state.editor) return;
+    const self = this;
+    const ed = this.state.editor;
+    const bind = (id, kind) => {
+      MlEmpresaFilter.bind(id, {
+        toggleOpen() {
+          if (kind === "city") {
+            ed.openCity = !ed.openCity;
+            ed.openEmp = false;
+          } else {
+            ed.openEmp = !ed.openEmp;
+            ed.openCity = false;
+          }
+          self.paintEditorFilters();
+        },
+        setQuery(q) {
+          if (kind === "city") ed.qCity = q || "";
+          else ed.qEmp = q || "";
+          const box = document.getElementById(id + "-list");
+          if (box) {
+            box.innerHTML = MlEmpresaFilter.listHtml({
+              id,
+              items: kind === "city" ? self.editorCityOptions() : self.editorEmpOptions(),
+              selectedIds: kind === "city"
+                ? (ed.draft.cityId ? [ed.draft.cityId] : [])
+                : (ed.draft.enterpriseId ? [ed.draft.enterpriseId] : []),
+              query: kind === "city" ? ed.qCity : ed.qEmp,
+              nouns: kind === "city"
+                ? { singular: "cidade", plural: "cidades" }
+                : { singular: "empreendimento", plural: "empreendimentos" }
+            });
+          }
+        },
+        toggleId(itemId, on) {
+          if (kind === "city") {
+            ed.draft.cityId = on ? String(itemId) : "";
+            ed.draft.city = ed.draft.cityId;
+            const emps = self.editorEmpOptions();
+            if (!emps.some((e) => String(e.id) === String(ed.draft.enterpriseId))) {
+              ed.draft.enterpriseId = "";
+              ed.draft.enterpriseName = "";
+            }
+            ed.openCity = true;
+          } else if (on) {
+            const emp = self.state.enterprises.find((e) => String(e.id) === String(itemId));
+            ed.draft.enterpriseId = String(itemId);
+            ed.draft.enterpriseName = emp ? emp.name : "";
+            if (emp && emp.cityId) {
+              ed.draft.cityId = emp.cityId;
+              ed.draft.city = emp.cityId;
+            }
+            ed.openEmp = true;
+          } else {
+            ed.draft.enterpriseId = "";
+            ed.draft.enterpriseName = "";
+            ed.openEmp = true;
+          }
+          self.paintEditorFilters();
+          self.refreshEditorSheetLock();
+        },
+        selectAll() {
+          const items = kind === "city" ? self.editorCityOptions() : self.editorEmpOptions();
+          if (items.length === 1) this.toggleId(items[0].id, true);
+        },
+        selectNone() {
+          this.toggleId(kind === "city" ? ed.draft.cityId : ed.draft.enterpriseId, false);
+        }
+      });
+    };
+    bind("tvig-ed-city", "city");
+    bind("tvig-ed-emp", "emp");
+  },
+
+  paintEditorFilters() {
+    const citySlot = document.getElementById("tvig-ed-city-slot");
+    const empSlot = document.getElementById("tvig-ed-emp-slot");
+    const ed = this.state.editor;
+    if (!citySlot || !empSlot || !ed) return;
+    if (this.isEditorReadOnly()) {
+      const emp = this.state.enterprises.find((e) => String(e.id) === String(ed.draft.enterpriseId));
+      const empLabel = emp
+        ? (emp.label || (emp.id + " - " + emp.name))
+        : ((ed.draft.enterpriseId ? ed.draft.enterpriseId + " - " : "") + (ed.draft.enterpriseName || ""));
+      citySlot.innerHTML = `<div class="form-group"><label>Cidade</label><input type="text" class="form-control" disabled value="${this.esc(ed.draft.cityId || ed.draft.city || "")}"></div>`;
+      empSlot.innerHTML = `<div class="form-group"><label>Empreendimento</label><input type="text" class="form-control" disabled value="${this.esc(empLabel)}"></div>`;
+      return;
+    }
+    if (!window.MlEmpresaFilter) return;
+    this.bindEditorFilters();
+    citySlot.innerHTML = MlEmpresaFilter.html({
+      id: "tvig-ed-city",
+      label: "Cidade",
+      items: this.editorCityOptions(),
+      selectedIds: ed.draft.cityId ? [ed.draft.cityId] : [],
+      open: !!ed.openCity,
+      query: ed.qCity || "",
+      emptyMeansAll: false,
+      nouns: { singular: "cidade", plural: "cidades" }
+    });
+    empSlot.innerHTML = MlEmpresaFilter.html({
+      id: "tvig-ed-emp",
+      label: "Empreendimento",
+      items: this.editorEmpOptions(),
+      selectedIds: ed.draft.enterpriseId ? [ed.draft.enterpriseId] : [],
+      open: !!ed.openEmp,
+      query: ed.qEmp || "",
+      emptyMeansAll: false,
+      nouns: { singular: "empreendimento", plural: "empreendimentos" }
+    });
+    const cityBtn = citySlot.querySelector(".ml-emp-filter-btn span");
+    if (cityBtn && ed.draft.cityId) cityBtn.textContent = ed.draft.cityId;
+    const empBtn = empSlot.querySelector(".ml-emp-filter-btn span");
+    if (empBtn && ed.draft.enterpriseId) {
+      const emp = this.state.enterprises.find((e) => String(e.id) === String(ed.draft.enterpriseId));
+      empBtn.textContent = emp ? (emp.label || (emp.id + " - " + emp.name)) : ed.draft.enterpriseId;
+    }
+    if (window.lucide) lucide.createIcons();
+  },
+
+  onEditorField(field, val) {
+    if (this.isEditorReadOnly()) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d) return;
+    d[field] = val;
+    if (field === "competencia") this.refreshEditorSheetLock();
+    else this.paintKeyHint();
+  },
+
+  onSheetInput(idx, field, el) {
+    if (this.isEditorReadOnly()) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[idx]) return;
+    if (this.sheetFieldLocked(idx, field, d.rows[idx])) {
+      if (field === "plano") el.value = "Boleto único";
+      else if (field === "reajuste") el.value = "REAL";
+      else el.value = "";
+      return;
+    }
+    this.beginCellEdit();
+    let v = el.value;
+    if (field === "plano") v = this.sanitizePlano(v, idx === 0);
+    else if (field === "entradaMin" || field === "descontoPct") v = this.sanitizeDec(v, 2);
+    else if (field === "taxaJuros") v = this.sanitizeDec(v, 4);
+    else if (field === "parcelamentoEntrada") v = this.sanitizeInt(v);
+    if (el.value !== v) el.value = v;
+    d.rows[idx][field] = v;
+  },
+
+  onPlanoBlur(idx, el) {
+    if (this._paintingEditor) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[idx]) return;
+    if (idx === 0) {
+      el.value = "Boleto único";
+      d.rows[idx].plano = "Boleto único";
+      return;
+    }
+    this.commitCellEdit();
+    const n = this.normalizePlano(el.value, false);
+    d.rows[idx].plano = n;
+    if (el.value !== n) el.value = n;
+    this.sortDraftRows(d.rows[idx].id);
+  },
+
+  onTaxaJurosBlur(idx, el) {
+    if (this._paintingEditor) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[idx]) return;
+    if (this.sheetFieldLocked(idx, "taxaJuros", d.rows[idx])) return;
+    this.commitCellEdit();
+    const n = this.padDec(el.value, 4);
+    d.rows[idx].taxaJuros = n;
+    if (el.value !== n) el.value = n;
+  },
+
+  onReajuste(idx, val) {
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[idx]) return;
+    if (this.sheetFieldLocked(idx, "reajuste", d.rows[idx])) {
+      d.rows[idx].reajuste = "REAL";
+      return;
+    }
+    if (String(d.rows[idx].reajuste || "") === String(val || "")) return;
+    this.pushUndo();
+    d.rows[idx].reajuste = this.normalizeReajuste(val);
+  },
+
+  onEditorFlag(idx, field, on) {
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[idx]) return;
+    if (this.sheetFieldLocked(idx, field, d.rows[idx])) return;
+    if (!!d.rows[idx][field] === !!on) return;
+    this.pushUndo();
+    d.rows[idx][field] = !!on;
+    if (field === "descontoOn") {
+      const wrap = document.querySelector('td[data-row="' + idx + '"][data-field="desconto"] .tvig-affix');
+      const input = document.querySelector('td[data-row="' + idx + '"][data-field="desconto"] input.tvig-sheet-input');
+      if (wrap) wrap.classList.toggle("is-off", !on);
+      if (input) input.disabled = !on;
+    }
+  },
+
+  rowNeedsPlano(r, i) {
+    if (i === 0 || this.isBoletoPlano(r && r.plano)) return false;
+    return !this.normalizePlano(r && r.plano, false);
+  },
+
+  addEditorRow() {
+    if (this.isEditorReadOnly()) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d) return;
+    if (!this.isEditorContextReady(d)) {
+      alert("Selecione competência, cidade e empreendimento antes de editar os planos.");
+      return;
+    }
+    const pending = (d.rows || []).findIndex((r, i) => this.rowNeedsPlano(r, i));
+    if (pending >= 0) {
+      alert("Preencha o número de parcelas da linha nova antes de adicionar outra.");
+      this.focusSheetCell(pending, "plano");
+      return;
+    }
+    this.pushUndo();
+    d.rows.push(this.migrateRow({ id: this.uid(), plano: "" }));
+    const last = d.rows.length - 1;
+    if (this.state.editor) {
+      this.state.editor.sel = { row: last, field: "plano", id: d.rows[last].id };
+      this.state.editor._keepFocus = true;
+    }
+    this.paintEditor();
+  },
+
+  removeEditorRow(idx) {
+    if (this.isEditorReadOnly()) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d) return;
+    if (!this.isEditorContextReady(d)) return;
+    if (idx === 0 || this.isBoletoPlano(d.rows[idx] && d.rows[idx].plano)) return;
+    this.pushUndo();
+    d.rows.splice(idx, 1);
+    this.sortDraftRows();
+    if (this.state.editor) this.state.editor._keepFocus = true;
+    this.paintEditor();
+  },
+
+  sheetCell(idx, field, value, opts) {
+    const o = opts || {};
+    const affix = o.affix ? `<span class="tvig-affix-mark">${this.esc(o.affix)}</span>` : "";
+    const extra = o.affix ? " tvig-affix" : "";
+    const off = o.off ? " is-off" : "";
+    const locked = !!(o.locked);
+    return `<td class="tvig-sheet-td" data-row="${idx}" data-field="${field}">
+      <div class="tvig-sheet-cell${extra}${off}${locked ? " is-locked" : ""}">
+        <input class="tvig-sheet-input${o.center ? " tvig-cell-center" : ""}" value="${this.esc(value || "")}"
+          ${o.off || locked ? "disabled" : ""} ${locked ? "readonly" : ""}
+          oninput="TabelasVigentesApp.onSheetInput(${idx},'${field}',this)"
+          ${field === "plano" && !locked ? `onblur="TabelasVigentesApp.onPlanoBlur(${idx},this)"` : ""}
+          ${field === "taxaJuros" && !locked ? `onblur="TabelasVigentesApp.onTaxaJurosBlur(${idx},this)"` : ""}>
+        ${affix}
+      </div>
+    </td>`;
+  },
+
+  sheetSelect(idx, field, value, options, extra) {
+    const opts = options || [];
+    const locked = !!(extra && extra.locked);
+    const center = extra && extra.center === false ? false : true;
+    return `<td class="tvig-sheet-td" data-row="${idx}" data-field="${field}">
+      <div class="tvig-sheet-cell${locked ? " is-locked" : ""}">
+        <select class="tvig-sheet-input tvig-sheet-select${center ? " tvig-cell-center" : ""}" ${locked ? "disabled" : ""}
+          onchange="TabelasVigentesApp.onReajuste(${idx}, this.value)">
+          <option value="">—</option>
+          ${opts.map((name) => `<option value="${this.esc(name)}" ${String(name) === String(value) ? "selected" : ""}>${this.esc(name)}</option>`).join("")}
+        </select>
+      </div>
+    </td>`;
+  },
+
+  paintEditor() {
+    const ov = document.getElementById("tvig-editor-overlay");
+    const ed = this.state.editor;
+    if (!ov || !ed) return;
+    this._paintingEditor = true;
+    const d = ed.draft;
+    const ro = this.isEditorReadOnly();
+    this.sortDraftRows();
+    ov.style.display = "flex";
+    ov.classList.add("active");
+    ov.innerHTML = `
+      <div class="modal-box tvig-editor-box${ro ? " is-readonly" : ""}" onclick="event.stopPropagation()">
+        <div class="modal-header tvig-editor-head">
+          <h3>${this.esc(ed.title)}</h3>
+          ${ro ? "" : `<button type="button" class="btn btn-fechar" onclick="TabelasVigentesApp.closeEditor()">Fechar</button>`}
+        </div>
+        <div class="tvig-editor-body">
+          <div class="tvig-editor-grid">
+            <div class="form-group">
+              <label class="tvig-comp-label" for="tvig-ed-comp">Competência</label>
+              <input type="month" id="tvig-ed-comp" class="tvig-comp-input" value="${this.esc(d.competencia || "")}"
+                ${ro ? "disabled" : ""} onchange="TabelasVigentesApp.onEditorField('competencia', this.value)">
+              ${ed.mode === "copy" && ed.sourceCompetencia ? `<p class="tvig-copy-hint">Origem: ${this.esc(this.competenciaLabel(ed.sourceCompetencia))}. Escolha outro mês.</p>` : ""}
+            </div>
+            <div id="tvig-ed-city-slot" class="tvig-ed-filter-slot"></div>
+            <div id="tvig-ed-emp-slot" class="tvig-ed-filter-slot"></div>
+          </div>
+          <div id="tvig-key-error" class="tvig-key-error" hidden></div>
+          <h4 class="tvig-plan-title">Planos de pagamento</h4>
+          <p id="tvig-editor-lock-hint" class="tvig-lock-hint" ${ro || this.isEditorContextReady(d) ? "hidden" : ""}>
+            Selecione competência, cidade e empreendimento para habilitar os campos da tabela.
+          </p>
+          <div class="tvig-editor-table-wrap${ro || this.isEditorContextReady(d) ? "" : " is-context-locked"}">
+            <table class="tvig-plan-table">
+              <colgroup>
+                <col class="tvig-col-plano">
+                <col class="tvig-col-flag">
+                <col class="tvig-col-entrada">
+                <col class="tvig-col-parc">
+                <col class="tvig-col-taxa">
+                <col class="tvig-col-reaj">
+                <col class="tvig-col-cond">
+                ${ro ? "" : '<col class="tvig-col-acao">'}
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Plano de pagamento</th>
+                  <th>Intermediárias</th>
+                  <th>Entrada mínima</th>
+                  <th>Parcelamento da entrada</th>
+                  <th>Taxa de juros</th>
+                  <th style="text-align:center;">Indexador REAL</th>
+                  <th>Condição especial (desconto)</th>
+                  ${ro ? "" : "<th></th>"}
+                </tr>
+              </thead>
+              <tbody>
+                ${(d.rows || []).map((r, i) => `
+                  <tr>
+                    ${this.sheetCell(i, "plano", i === 0 ? "Boleto único" : r.plano, { locked: this.sheetFieldLocked(i, "plano", r) })}
+                    <td class="tvig-sheet-td tvig-td-flag" data-row="${i}" data-field="intermediarias">
+                      <label class="moura-switch${this.sheetFieldLocked(i, "intermediarias", r) ? " is-locked" : ""}" title="Parcelas intermediárias">
+                        <input type="checkbox" ${r.intermediarias ? "checked" : ""} ${this.sheetFieldLocked(i, "intermediarias", r) ? "disabled" : ""}
+                          onchange="TabelasVigentesApp.onEditorFlag(${i},'intermediarias',this.checked)">
+                        <span class="moura-switch-track" aria-hidden="true"></span>
+                      </label>
+                    </td>
+                    ${this.sheetCell(i, "entradaMin", r.entradaMin, { affix: "%", center: true, locked: this.sheetFieldLocked(i, "entradaMin", r) })}
+                    ${this.sheetCell(i, "parcelamentoEntrada", r.parcelamentoEntrada, { affix: "x", center: true, locked: this.sheetFieldLocked(i, "parcelamentoEntrada", r) })}
+                    ${this.sheetCell(i, "taxaJuros", this.padDec(r.taxaJuros, 4), { affix: "%", center: true, locked: this.sheetFieldLocked(i, "taxaJuros", r) })}
+                    ${this.sheetSelect(i, "reajuste", this.normalizeReajuste(this.isBoletoRow(i, r) ? "REAL" : r.reajuste), this.indexadorOptions(this.isBoletoRow(i, r) ? "REAL" : r.reajuste), { locked: this.sheetFieldLocked(i, "reajuste", r), center: true })}
+                    <td class="tvig-sheet-td" data-row="${i}" data-field="desconto">
+                      <div class="tvig-desc-cell">
+                        <label class="moura-switch${this.sheetFieldLocked(i, "descontoOn", r) ? " is-locked" : ""}" title="Desconto especial">
+                          <input type="checkbox" ${r.descontoOn ? "checked" : ""} ${this.sheetFieldLocked(i, "descontoOn", r) ? "disabled" : ""}
+                            onchange="TabelasVigentesApp.onEditorFlag(${i},'descontoOn',this.checked)">
+                          <span class="moura-switch-track" aria-hidden="true"></span>
+                        </label>
+                        <div class="tvig-sheet-cell tvig-affix${r.descontoOn ? "" : " is-off"}">
+                          <input class="tvig-sheet-input tvig-cell-center" value="${this.esc(r.descontoPct || "")}"
+                            ${!this.sheetFieldLocked(i, "descontoPct", r) && r.descontoOn ? "" : "disabled"}
+                            oninput="TabelasVigentesApp.onSheetInput(${i},'descontoPct',this)">
+                          <span class="tvig-affix-mark">%</span>
+                        </div>
+                      </div>
+                    </td>
+                    ${ro ? "" : `<td class="tvig-td-del">
+                      ${i === 0 ? "" : `<button type="button" class="tvig-ico is-danger" title="Remover linha" ${this.isEditorContextReady(d) ? "" : "disabled"} onclick="TabelasVigentesApp.removeEditorRow(${i})"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></button>`}
+                    </td>`}
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${ro ? "" : `<button type="button" class="btn btn-outline" id="tvig-add-plano" ${this.isEditorContextReady(d) ? "" : "disabled"} onclick="TabelasVigentesApp.addEditorRow()">
+            <i data-lucide="plus" style="width:14px;"></i> Adicionar plano
+          </button>`}
+        </div>
+        <div class="tvig-editor-foot">
+          ${ro
+            ? `<button type="button" class="btn btn-fechar" onclick="TabelasVigentesApp.closeEditor()">Fechar</button>`
+            : `<button type="button" class="btn btn-cancel" onclick="TabelasVigentesApp.closeEditor()">Cancelar</button>
+          <button type="button" class="btn btn-primary" onclick="TabelasVigentesApp.saveEditor()">
+            <i data-lucide="save" style="width:16px;"></i> Salvar tabela
+          </button>`}
+        </div>
+      </div>`;
+    this.paintEditorFilters();
+    this.ensureSheetEvents();
+    this.paintKeyHint();
+    if (window.lucide) lucide.createIcons();
+    const keep = ed._keepFocus ? ed.sel : null;
+    ed._keepFocus = false;
+    this._paintingEditor = false;
+    if (keep && keep.field) {
+      let row = keep.row;
+      if (keep.id) {
+        const found = (d.rows || []).findIndex((r) => String(r.id) === String(keep.id));
+        if (found >= 0) row = found;
+      }
+      setTimeout(() => this.focusSheetCell(row, keep.field), 0);
+    }
+  },
+
+  cloneRows(rows) {
+    return JSON.parse(JSON.stringify(rows || []));
+  },
+
+  rowsEqual(a, b) {
+    return JSON.stringify(a || []) === JSON.stringify(b || []);
+  },
+
+  beginCellEdit() {
+    if (this.isEditorReadOnly()) return;
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d || ed._editSnap) return;
+    ed._editSnap = this.cloneRows(d.rows);
+  },
+
+  commitCellEdit() {
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d || !ed._editSnap) return;
+    if (!this.rowsEqual(ed._editSnap, d.rows)) {
+      ed.undo = ed.undo || [];
+      ed.undo.push(ed._editSnap);
+      if (ed.undo.length > 80) ed.undo.shift();
+      ed.redo = [];
+    }
+    ed._editSnap = null;
+  },
+
+  pushUndo() {
+    this.commitCellEdit();
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d) return;
+    const snap = this.cloneRows(d.rows);
+    const last = (ed.undo || [])[(ed.undo || []).length - 1];
+    if (last && this.rowsEqual(last, snap)) return;
+    ed.undo = ed.undo || [];
+    ed.undo.push(snap);
+    if (ed.undo.length > 80) ed.undo.shift();
+    ed.redo = [];
+  },
+
+  undoEditor() {
+    if (this.isEditorReadOnly()) return;
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d) return;
+    if (ed._editSnap && !this.rowsEqual(ed._editSnap, d.rows)) {
+      ed.redo = ed.redo || [];
+      ed.redo.push(this.cloneRows(d.rows));
+      d.rows = ed._editSnap;
+      ed._editSnap = null;
+      ed._keepFocus = true;
+      this.paintEditor();
+      return;
+    }
+    ed._editSnap = null;
+    if (!(ed.undo || []).length) return;
+    ed.redo = ed.redo || [];
+    ed.redo.push(this.cloneRows(d.rows));
+    d.rows = ed.undo.pop();
+    ed._keepFocus = true;
+    this.paintEditor();
+  },
+
+  redoEditor() {
+    if (this.isEditorReadOnly()) return;
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d || !(ed.redo || []).length) return;
+    ed._editSnap = null;
+    ed.undo = ed.undo || [];
+    ed.undo.push(this.cloneRows(d.rows));
+    d.rows = ed.redo.pop();
+    ed._keepFocus = true;
+    this.paintEditor();
+  },
+
+  matchIndexador(raw) {
+    const t = String(raw == null ? "" : raw).trim();
+    const mapped = this.normalizeReajuste(t);
+    if (!t) return "";
+    if (mapped === "REAL") return "REAL";
+    const names = this.indexadorOptions(mapped);
+    const fold = this.fold(mapped);
+    const exact = names.find((n) => this.fold(n) === fold);
+    if (exact) return exact;
+    const part = names.find((n) => this.fold(n).indexOf(fold) >= 0);
+    return part || "";
+  },
+
+  parseFlagValue(raw) {
+    const t = this.fold(raw).replace(/\s+/g, "");
+    if (!t || t === "0" || t === "N" || t === "NAO" || t === "FALSE" || t === "OFF" || t === "NAO") return false;
+    return true;
+  },
+
+  readCellPayload(td) {
+    const d = this.state.editor && this.state.editor.draft;
+    if (!td || !d) return null;
+    const row = Number(td.dataset.row);
+    const field = td.dataset.field;
+    const r = d.rows[row];
+    if (!r || !field) return null;
+    if (field === "intermediarias") {
+      return { field, kind: "flag", on: !!r.intermediarias, text: r.intermediarias ? "Sim" : "Não" };
+    }
+    if (field === "desconto") {
+      return {
+        field,
+        kind: "desconto",
+        descontoOn: !!r.descontoOn,
+        descontoPct: r.descontoPct || "",
+        text: r.descontoOn ? String(r.descontoPct || "") : ""
+      };
+    }
+    if (field === "reajuste") return { field, kind: "reajuste", text: r.reajuste || "" };
+    return { field, kind: "text", text: String(r[field] == null ? "" : r[field]) };
+  },
+
+  copySheetCell(td) {
+    const payload = this.readCellPayload(td);
+    if (!payload) return "";
+    this._sheetClip = payload;
+    return payload.text == null ? "" : String(payload.text);
+  },
+
+  writeClipText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text || "").catch(function () {});
+    }
+  },
+
+  applyPastedValue(row, field, raw) {
+    const d = this.state.editor && this.state.editor.draft;
+    const r = d && d.rows[row];
+    if (!r) return;
+    if (this.sheetFieldLocked(row, field, r)) return;
+    if (field === "plano") r.plano = this.normalizePlano(raw, false);
+    else if (field === "entradaMin") r.entradaMin = this.sanitizeDec(raw, 2);
+    else if (field === "parcelamentoEntrada") r.parcelamentoEntrada = this.sanitizeInt(raw);
+    else if (field === "taxaJuros") r.taxaJuros = this.padDec(raw, 4);
+    else if (field === "reajuste") r.reajuste = this.matchIndexador(raw);
+    else if (field === "intermediarias") r.intermediarias = this.parseFlagValue(raw);
+    else if (field === "desconto") {
+      const t = String(raw == null ? "" : raw).trim();
+      if (!t) {
+        r.descontoOn = false;
+        r.descontoPct = "";
+        return;
+      }
+      const fold = this.fold(t).replace(/\s+/g, "");
+      if (fold === "SIM" || fold === "NAO" || fold === "S" || fold === "N" || fold === "1" || fold === "0") {
+        r.descontoOn = this.parseFlagValue(t);
+        if (!r.descontoOn) r.descontoPct = "";
+        return;
+      }
+      r.descontoOn = true;
+      r.descontoPct = this.sanitizeDec(t, 2);
+    }
+  },
+
+  applyStructuredCell(row, field, clip) {
+    const d = this.state.editor && this.state.editor.draft;
+    const r = d && d.rows[row];
+    if (!r || !clip) return;
+    if (this.sheetFieldLocked(row, field, r)) return;
+    if (clip.kind === "flag" && field === "intermediarias") {
+      r.intermediarias = !!clip.on;
+      return;
+    }
+    if (clip.kind === "desconto" && field === "desconto") {
+      r.descontoOn = !!clip.descontoOn;
+      r.descontoPct = clip.descontoPct || "";
+      return;
+    }
+    this.applyPastedValue(row, field, clip.text);
+  },
+
+  parseSheetClipboard(text) {
+    const raw = String(text == null ? "" : text).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const lines = raw.split("\n");
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    return lines.map((line) => line.split("\t"));
+  },
+
+  pasteIntoSheet(startTd, text) {
+    const ed = this.state.editor;
+    const d = ed && ed.draft;
+    if (!ed || !d || !startTd || this.isEditorReadOnly()) return;
+    if (!this.isEditorContextReady(d)) return;
+    const fields = this.SHEET_FIELDS;
+    const startRow = Number(startTd.dataset.row);
+    const startFi = fields.indexOf(startTd.dataset.field);
+    if (startFi < 0 || !d.rows[startRow]) return;
+    const grid = this.parseSheetClipboard(text);
+    if (!grid.length) return;
+    const clip = this._sheetClip;
+    const single = grid.length === 1 && grid[0].length === 1;
+    const useStruct = !!(clip && single && String(grid[0][0]) === String(clip.text || ""));
+    this.pushUndo();
+    const before = this.cloneRows(d.rows);
+    for (let i = 0; i < grid.length; i++) {
+      const row = startRow + i;
+      if (!d.rows[row]) break;
+      for (let j = 0; j < grid[i].length; j++) {
+        const fi = startFi + j;
+        if (fi >= fields.length) break;
+        const field = fields[fi];
+        if (useStruct && i === 0 && j === 0) this.applyStructuredCell(row, field, clip);
+        else this.applyPastedValue(row, field, grid[i][j]);
+      }
+    }
+    if (this.rowsEqual(before, d.rows)) {
+      if (ed.undo && ed.undo.length) ed.undo.pop();
+      return;
+    }
+    this.sortDraftRows();
+    if (ed.sel) ed.sel = { row: startRow, field: fields[startFi] };
+    ed._keepFocus = true;
+    this.paintEditor();
+  },
+
+  async pasteSheetFromClipboard(td) {
+    let text = "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
+    } catch (e) {
+      text = "";
+    }
+    if (!text && this._sheetClip) text = this._sheetClip.text || "";
+    this.pasteIntoSheet(td, text);
+  },
+
+  clearSheetCell(row, field) {
+    const d = this.state.editor && this.state.editor.draft;
+    const r = d && d.rows[row];
+    if (!r) return;
+    if (this.sheetFieldLocked(row, field, r)) return;
+    if (field === "plano") r.plano = "";
+    else if (field === "intermediarias") r.intermediarias = false;
+    else if (field === "desconto") {
+      r.descontoOn = false;
+      r.descontoPct = "";
+    } else if (field === "reajuste") r.reajuste = "";
+    else r[field] = "";
+  },
+
+  cutSheetCell(td) {
+    if (this.isEditorReadOnly()) return this.copySheetCell(td);
+    const text = this.copySheetCell(td);
+    const row = Number(td.dataset.row);
+    const field = td.dataset.field;
+    if (row === 0 && field === "plano") return text;
+    this.pushUndo();
+    this.clearSheetCell(row, field);
+    if (this.state.editor) this.state.editor._keepFocus = true;
+    this.paintEditor();
+    return text;
+  },
+
+  activeSheetTd(fromEl) {
+    if (fromEl && fromEl.closest) {
+      const td = fromEl.closest(".tvig-sheet-td");
+      if (td && td.closest(".tvig-plan-table")) return td;
+    }
+    const sel = this.state.editor && this.state.editor.sel;
+    if (!sel) return null;
+    return document.querySelector('.tvig-sheet-td[data-row="' + sel.row + '"][data-field="' + sel.field + '"]');
+  },
+
+  focusSheetCell(row, field) {
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d) return;
+    const max = (d.rows || []).length - 1;
+    if (max < 0) return;
+    if (row > max) row = max;
+    if (row < 0) return;
+    const td = document.querySelector('.tvig-sheet-td[data-row="' + row + '"][data-field="' + field + '"]');
+    if (!td) return;
+    this.selectSheetTd(td);
+    const wrap = td.closest(".tvig-editor-table-wrap");
+    const keepTop = wrap ? wrap.scrollTop : 0;
+    const focusable = td.querySelector("input.tvig-sheet-input:not([disabled]):not([readonly]), select.tvig-sheet-select, input[type=checkbox]");
+    if (focusable) {
+      try { focusable.focus({ preventScroll: true }); } catch (e) { focusable.focus(); }
+      if (focusable.select && focusable.tagName === "INPUT" && focusable.type !== "checkbox") {
+        try { focusable.select(); } catch (e) {}
+      }
+    }
+    if (wrap && wrap.scrollHeight <= wrap.clientHeight + 12) wrap.scrollTop = 0;
+    else if (wrap) wrap.scrollTop = keepTop;
+  },
+
+  moveSheetFocus(fromTd, dir, shift) {
+    this.commitCellEdit();
+    const fields = this.SHEET_FIELDS;
+    let row = Number(fromTd.dataset.row);
+    let fi = fields.indexOf(fromTd.dataset.field);
+    if (fi < 0) fi = 0;
+    const maxRow = ((this.state.editor && this.state.editor.draft && this.state.editor.draft.rows) || []).length - 1;
+    if (dir === "tab") {
+      if (shift) {
+        fi -= 1;
+        if (fi < 0) { fi = fields.length - 1; row -= 1; }
+      } else {
+        fi += 1;
+        if (fi >= fields.length) { fi = 0; row += 1; }
+      }
+    } else if (dir === "up") row -= 1;
+    else if (dir === "down" || dir === "enter") row += 1;
+    else if (dir === "left") {
+      fi -= 1;
+      if (fi < 0) { fi = fields.length - 1; row -= 1; }
+    } else if (dir === "right") {
+      fi += 1;
+      if (fi >= fields.length) { fi = 0; row += 1; }
+    }
+    if (row < 0 || row > maxRow) return;
+    this.focusSheetCell(row, fields[fi]);
+  },
+
+  selectSheetTd(td) {
+    document.querySelectorAll(".tvig-sheet-td.is-selected").forEach((el) => el.classList.remove("is-selected"));
+    document.querySelectorAll(".tvig-fill-handle").forEach((el) => el.remove());
+    if (!td || !td.dataset.field) return;
+    td.classList.add("is-selected");
+    const wrap = td.closest(".tvig-editor-table-wrap");
+    const keepTop = wrap ? wrap.scrollTop : 0;
+    const row = Number(td.dataset.row);
+    const field = td.dataset.field;
+    const draftRow = this.state.editor && this.state.editor.draft && this.state.editor.draft.rows[row];
+    if (!this.sheetFieldLocked(row, field, draftRow)) {
+      const h = document.createElement("span");
+      h.className = "tvig-fill-handle";
+      h.title = "Arraste para copiar";
+      td.appendChild(h);
+    }
+    if (wrap && wrap.scrollHeight <= wrap.clientHeight + 12) wrap.scrollTop = 0;
+    else if (wrap) wrap.scrollTop = keepTop;
+    if (this.state.editor) {
+      const row = Number(td.dataset.row);
+      const d = this.state.editor.draft;
+      this.state.editor.sel = {
+        row,
+        field: td.dataset.field,
+        id: d && d.rows[row] ? d.rows[row].id : null
+      };
+    }
+  },
+
+  applyFill(field, from, to) {
+    if (this.isEditorReadOnly()) return;
+    const d = this.state.editor && this.state.editor.draft;
+    if (!d || !d.rows[from]) return;
+    this.pushUndo();
+    const a = Math.min(from, to);
+    const b = Math.max(from, to);
+    const src = d.rows[from];
+    const before = this.cloneRows(d.rows);
+    for (let i = a; i <= b; i++) {
+      if (!d.rows[i]) continue;
+      if (this.sheetFieldLocked(i, field, d.rows[i])) continue;
+      if (field === "intermediarias") {
+        d.rows[i].intermediarias = !!src.intermediarias;
+      } else if (field === "desconto") {
+        d.rows[i].descontoOn = !!src.descontoOn;
+        d.rows[i].descontoPct = src.descontoPct;
+      } else {
+        d.rows[i][field] = src[field];
+      }
+    }
+    if (this.rowsEqual(before, d.rows)) {
+      const ed = this.state.editor;
+      if (ed && ed.undo && ed.undo.length) ed.undo.pop();
+      return;
+    }
+    if (this.state.editor) this.state.editor._keepFocus = true;
+    this.paintEditor();
+  },
+
+  ensureSheetEvents() {
+    const ov = document.getElementById("tvig-editor-overlay");
+    if (!ov || ov.dataset.sheetBound === "1") return;
+    ov.dataset.sheetBound = "1";
+    const self = this;
+    ov.addEventListener("mousedown", (e) => {
+      const handle = e.target.closest(".tvig-fill-handle");
+      const td = e.target.closest(".tvig-sheet-td");
+      if (handle && td) {
+        e.preventDefault();
+        self._fill = { field: td.dataset.field, from: Number(td.dataset.row), to: Number(td.dataset.row) };
+        return;
+      }
+      if (td && td.closest(".tvig-plan-table")) {
+        self.commitCellEdit();
+        self.selectSheetTd(td);
+      }
+    });
+    ov.addEventListener("copy", (e) => {
+      const td = self.activeSheetTd(e.target);
+      if (!td) return;
+      const text = self.copySheetCell(td);
+      e.preventDefault();
+      if (e.clipboardData) e.clipboardData.setData("text/plain", text);
+    });
+    ov.addEventListener("cut", (e) => {
+      const td = self.activeSheetTd(e.target);
+      if (!td) return;
+      const text = self.cutSheetCell(td);
+      e.preventDefault();
+      if (e.clipboardData) e.clipboardData.setData("text/plain", text);
+      self.writeClipText(text);
+    });
+    ov.addEventListener("paste", (e) => {
+      const td = self.activeSheetTd(e.target);
+      if (!td) return;
+      e.preventDefault();
+      const text = (e.clipboardData && e.clipboardData.getData("text")) || "";
+      self.pasteIntoSheet(td, text);
+    });
+    ov.addEventListener("keydown", (e) => {
+      const td = e.target.closest && e.target.closest(".tvig-sheet-td");
+      const inSheet = !!(td && td.closest(".tvig-plan-table"));
+      const inChrome = !!(e.target.closest && (e.target.closest(".tvig-editor-grid") || e.target.closest(".ml-emp-filter")));
+      const key = e.key;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && !e.altKey) {
+        const k = key.length === 1 ? key.toLowerCase() : key;
+        if ((k === "z" && !e.shiftKey) && (inSheet || !inChrome)) {
+          e.preventDefault();
+          self.undoEditor();
+          return;
+        }
+        if ((k === "y" || (k === "z" && e.shiftKey)) && (inSheet || !inChrome)) {
+          e.preventDefault();
+          self.redoEditor();
+          return;
+        }
+        if (inSheet && k === "c") {
+          if (e.target.type === "checkbox" || e.target.tagName === "SELECT") {
+            e.preventDefault();
+            self.writeClipText(self.copySheetCell(td));
+          }
+          return;
+        }
+        if (inSheet && k === "x") {
+          e.preventDefault();
+          self.writeClipText(self.cutSheetCell(td));
+          return;
+        }
+        if (inSheet && k === "v") {
+          if (e.target.type === "checkbox" || e.target.tagName === "SELECT") {
+            e.preventDefault();
+            self.pasteSheetFromClipboard(td);
+          }
+          return;
+        }
+      }
+      if (!inSheet) return;
+      const isInput = e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT");
+      const caret = isInput && e.target.tagName === "INPUT" && e.target.type !== "checkbox" ? e.target.selectionStart : null;
+      const end = isInput && e.target.tagName === "INPUT" && e.target.type !== "checkbox" ? e.target.selectionEnd : null;
+      const len = isInput && e.target.value != null ? String(e.target.value).length : 0;
+      const allSel = caret != null && end != null && caret === 0 && end === len;
+      if (key === "Tab") {
+        e.preventDefault();
+        self.moveSheetFocus(td, "tab", e.shiftKey);
+        return;
+      }
+      if (key === "Enter") {
+        e.preventDefault();
+        self.moveSheetFocus(td, "enter");
+        return;
+      }
+      if (key === "ArrowDown") {
+        e.preventDefault();
+        self.moveSheetFocus(td, "down");
+        return;
+      }
+      if (key === "ArrowUp") {
+        e.preventDefault();
+        self.moveSheetFocus(td, "up");
+        return;
+      }
+      if (key === "ArrowRight" && (allSel || e.target.tagName === "SELECT" || e.target.type === "checkbox" || caret == null || caret === len)) {
+        e.preventDefault();
+        self.moveSheetFocus(td, "right");
+        return;
+      }
+      if (key === "ArrowLeft" && (allSel || e.target.tagName === "SELECT" || e.target.type === "checkbox" || caret == null || caret === 0)) {
+        e.preventDefault();
+        self.moveSheetFocus(td, "left");
+      }
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!self._fill) return;
+      const td = e.target.closest && e.target.closest(".tvig-sheet-td");
+      if (!td || td.dataset.field !== self._fill.field) return;
+      self._fill.to = Number(td.dataset.row);
+      const a = Math.min(self._fill.from, self._fill.to);
+      const b = Math.max(self._fill.from, self._fill.to);
+      document.querySelectorAll(".tvig-sheet-td.is-fill").forEach((el) => el.classList.remove("is-fill"));
+      document.querySelectorAll('.tvig-sheet-td[data-field="' + self._fill.field + '"]').forEach((el) => {
+        const r = Number(el.dataset.row);
+        if (r >= a && r <= b) el.classList.add("is-fill");
+      });
+    });
+    window.addEventListener("mouseup", () => {
+      if (!self._fill) return;
+      const job = self._fill;
+      self._fill = null;
+      document.querySelectorAll(".tvig-sheet-td.is-fill").forEach((el) => el.classList.remove("is-fill"));
+      if (job.from !== job.to) self.applyFill(job.field, job.from, job.to);
+    });
+  },
+
+  formatPctSave(raw, maxDec) {
+    const s = maxDec === 4 ? this.padDec(raw, maxDec) : this.sanitizeDec(raw, maxDec);
+    if (!s) return "";
+    return s + "%";
+  },
+
+  formatXSave(raw) {
+    const s = this.sanitizeInt(raw);
+    return s ? (s + "x") : "";
+  },
+
+  async saveEditor() {
+    const ed = this.state.editor;
+    if (!ed || !ed.draft || this.isEditorReadOnly()) return;
+    const d = ed.draft;
+    if (!d.competencia) {
+      alert("Informe a competência.");
+      return;
+    }
+    if (!d.cityId) {
+      alert("Selecione a cidade.");
+      return;
+    }
+    if (!d.enterpriseId) {
+      alert("Selecione o empreendimento.");
+      return;
+    }
+    const keyErr = this.editorKeyError();
+    if (keyErr) {
+      this.paintKeyHint();
+      return;
+    }
+    const pending = (d.rows || []).findIndex((r, i) => this.rowNeedsPlano(r, i));
+    if (pending >= 0) {
+      alert("Preencha o número de parcelas de todas as linhas adicionadas.");
+      this.focusSheetCell(pending, "plano");
+      return;
+    }
+    d.city = d.cityId;
+    const emp = this.state.enterprises.find((e) => String(e.id) === String(d.enterpriseId));
+    if (emp) d.enterpriseName = emp.name;
+    this.sortDraftRows();
+    d.rows = (d.rows || []).map((r, i) => {
+      const row = this.migrateRow(r);
+      row.plano = this.normalizePlano(row.plano, i === 0);
+      row.entradaMin = this.formatPctSave(row.entradaMin, 2);
+      row.parcelamentoEntrada = this.formatXSave(row.parcelamentoEntrada);
+      row.taxaJuros = this.formatPctSave(this.padDec(row.taxaJuros, 4), 4);
+      row.descontoPct = row.descontoOn ? this.formatPctSave(row.descontoPct, 2) : "";
+      row.condicaoEspecial = row.descontoOn && row.descontoPct ? ("Até " + row.descontoPct + " de desconto") : "";
+      return row;
+    }).filter((r) => String(r.plano || "").trim());
+    if (!d.rows.length) {
+      alert("Inclua ao menos um plano de pagamento.");
+      return;
+    }
+    d.updatedAt = new Date().toISOString();
+    const idx = this.state.tables.findIndex((t) => String(t.id) === String(d.id));
+    if (idx < 0) d.createdBy = this.siengeAuthorName();
+    if (idx >= 0) this.state.tables[idx] = d;
+    else this.state.tables.push(d);
+    await this.persistOne(d);
+    this.closeEditor();
+    this.state.consulted = true;
+    this.consultar();
+  },
+
+  async init() {
+    const root = document.getElementById("tabelas-vigentes-root");
+    if (!root) return;
+    if (!this.state.inited) {
+      if (!this.state.competencia) this.state.competencia = this.currentCompetencia();
+      this.loadLocal();
+      this.loadM2();
+      this.renderPage();
+      this.state.loading = true;
+      await this.loadCatalog();
+      await this.loadCloud();
+      this.state.loading = false;
+      this.state.inited = true;
+    }
+    this.renderPage();
+  }
+};
+
+window.TabelasVigentesApp = TabelasVigentesApp;
+
+document.addEventListener("tabChanged", function (e) {
+  if (e.detail === "tabelas-vigentes") TabelasVigentesApp.init();
+});

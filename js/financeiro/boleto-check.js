@@ -1,0 +1,697 @@
+/* Validação da forma de pagamento programada nos títulos a pagar do Sienge.
+   Boleto bancário: código de barras (44) e linha digitável (47) com dígitos verificadores, valor e vencimento.
+   Boleto de concessionária/arrecadação: código (44) e linha (48) iniciados por 8, com DV módulo 10 ou 11.
+   Também aponta instrução de desconto (data limite de desconto, desconto no título ou na observação). */
+window.BoletoCheck = {
+  digits(v) {
+    return String(v == null ? "" : v).replace(/\D/g, "");
+  },
+
+  esc(v) {
+    return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  },
+
+  money(v) {
+    return (Number(v) || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  },
+
+  dataBr(iso) {
+    const p = String(iso || "").slice(0, 10).split("-");
+    return p.length === 3 && p[0] ? `${p[2]}/${p[1]}/${p[0]}` : "—";
+  },
+
+  hoje() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  },
+
+  mod10(num) {
+    let soma = 0;
+    let peso = 2;
+    for (let i = num.length - 1; i >= 0; i--) {
+      let p = Number(num[i]) * peso;
+      if (p > 9) p = Math.floor(p / 10) + (p % 10);
+      soma += p;
+      peso = peso === 2 ? 1 : 2;
+    }
+    return (10 - (soma % 10)) % 10;
+  },
+
+  somaMod11(num) {
+    let soma = 0;
+    let peso = 2;
+    for (let i = num.length - 1; i >= 0; i--) {
+      soma += Number(num[i]) * peso;
+      peso = peso === 9 ? 2 : peso + 1;
+    }
+    return soma;
+  },
+
+  dvBancario(cod43) {
+    const dv = 11 - (this.somaMod11(cod43) % 11);
+    return dv === 0 || dv === 10 || dv === 11 ? 1 : dv;
+  },
+
+  dvArrecadacao(num, modulo) {
+    if (modulo === 10) return this.mod10(num);
+    const r = this.somaMod11(num) % 11;
+    if (r === 0 || r === 1) return 0;
+    if (r === 10) return 1;
+    return 11 - r;
+  },
+
+  /** Sábado, domingo ou feriado: o banco aceita o pagamento no próximo dia útil. */
+  proximoDiaUtil(iso) {
+    const s = String(iso || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    if (typeof window.installmentChargeDueIso === "function") return window.installmentChargeDueIso(s);
+    const d = new Date(s + "T12:00:00");
+    const dow = d.getDay();
+    if (dow === 6) d.setDate(d.getDate() + 2);
+    else if (dow === 0) d.setDate(d.getDate() + 1);
+    const p = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  },
+
+  /** Fator de vencimento → data mais próxima da referência (o fator recomeça em 1000 a cada 9000 dias desde 22/02/2025). */
+  dataDoFator(fator, ref) {
+    const f = Number(fator);
+    if (!f) return "";
+    const base = Date.UTC(1997, 9, 7);
+    const alvo = ref ? Date.parse(String(ref).slice(0, 10) + "T00:00:00Z") : Date.now();
+    const candidatos = [f];
+    for (let ciclo = 0; ciclo < 3; ciclo++) candidatos.push(10000 + ciclo * 9000 + (f - 1000));
+    let melhor = null;
+    candidatos.forEach((dias) => {
+      const t = base + dias * 86400000;
+      if (!melhor || Math.abs(t - alvo) < Math.abs(melhor - alvo)) melhor = t;
+    });
+    return new Date(melhor).toISOString().slice(0, 10);
+  },
+
+  linhaBancariaParaCodigo(l) {
+    return l.slice(0, 4) + l[32] + l.slice(33, 47) + l.slice(4, 9) + l.slice(10, 20) + l.slice(21, 31);
+  },
+
+  formatarLinha(l) {
+    if (l.length === 47) return `${l.slice(0, 5)}.${l.slice(5, 10)} ${l.slice(10, 15)}.${l.slice(15, 21)} ${l.slice(21, 26)}.${l.slice(26, 32)} ${l[32]} ${l.slice(33)}`;
+    if (l.length === 48) return [0, 12, 24, 36].map((i) => `${l.slice(i, i + 11)}-${l[i + 11]}`).join(" ");
+    return l;
+  },
+
+  /** Trechos de 44, 47 ou 48 dígitos (código ou linha), sem colar data e texto no mesmo número. */
+  codigosNoTexto(v) {
+    const out = [];
+    String(v == null ? "" : v).split(/[^\d.\s-]+/).forEach((p) => {
+      const n = p.replace(/\D/g, "");
+      if (n.length === 44 || n.length === 47 || n.length === 48) out.push(n);
+    });
+    return out;
+  },
+
+  codigosNoObjeto(d, depth) {
+    const out = [];
+    if (d == null || (depth || 0) > 4) return out;
+    if (typeof d === "string" || typeof d === "number") return this.codigosNoTexto(d);
+    if (typeof d !== "object") return out;
+    Object.keys(d).forEach((k) => {
+      if (k === "links" || k === "resultSetMetadata") return;
+      this.codigosNoObjeto(d[k], (depth || 0) + 1).forEach((n) => out.push(n));
+    });
+    return out;
+  },
+
+  /** O GET às vezes embrulha o boleto em results[0] em vez de devolver o objeto direto. */
+  corpoForma(data) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+    const listas = [data.results, data.data].filter(Array.isArray);
+    for (let i = 0; i < listas.length; i++) {
+      const objs = listas[i].filter((x) => x && typeof x === "object");
+      if (!objs.length) continue;
+      return objs.find((x) => this.codigosNoObjeto(x).length) || objs.find((x) => this.temDadosForma(x)) || objs[0];
+    }
+    if (data.data && typeof data.data === "object" && !Array.isArray(data.data)) {
+      const topo = Object.assign({}, data);
+      delete topo.data;
+      delete topo.results;
+      delete topo.resultSetMetadata;
+      if (!this.temDadosForma(topo) && !this.codigosNoObjeto(topo).length) return data.data;
+    }
+    return data;
+  },
+
+  /** Lê os campos do Sienge (payment-information e, se vier, a parcela) e devolve código e linha. */
+  ler(payment) {
+    const d = (payment && payment.data) || {};
+    const extra = (payment && payment.extra) || {};
+    const kind = payment && payment.kind;
+    const arrecadacao = kind === "boleto-concessionaria" || kind === "boleto-tax";
+    const pick = (lens, ...ks) => {
+      for (const fonte of [d, extra]) {
+        for (const k of ks) {
+          const v = this.digits(fonte[k]);
+          if (lens.indexOf(v.length) >= 0) return v;
+        }
+      }
+      return "";
+    };
+    const r = arrecadacao
+      ? {
+        tipo: "arrecadacao",
+        codigo: pick([44], "boletoConcessionariaBarCodeNumber", "taxBarCodeNumber", "barCode", "barCodeNumber", "barcode"),
+        linha: pick([48, 47], "boletoConcessionariaManualBarCodeNumber", "taxManualBarCodeNumber", "digitableNumber", "digitableLine", "barcode")
+      }
+      : {
+        tipo: "bancario",
+        codigo: pick([44], "boletoBancarioBarCodeNumber", "barCode", "barCodeNumber", "barcode"),
+        linha: pick([47, 48], "boletoBancarioManualBarCodeNumber", "digitableNumber", "digitableLine", "barcode")
+      };
+    if (r.codigo && r.linha) return r;
+    const achados = this.codigosNoObjeto(d).concat(this.codigosNoObjeto(extra));
+    let linha47 = "";
+    let linha48 = "";
+    let codigo = "";
+    achados.forEach((n) => {
+      if (n.length === 47 && !linha47) linha47 = n;
+      else if (n.length === 48 && !linha48) linha48 = n;
+      else if (n.length === 44 && !codigo) codigo = n;
+    });
+    if (!r.codigo) r.codigo = codigo;
+    if (!r.linha) r.linha = arrecadacao ? (linha48 || linha47) : (linha47 || linha48);
+    return r;
+  },
+
+  ehBoleto(payment) {
+    return !!payment && /^boleto-/.test(String(payment.kind || ""));
+  },
+
+  /** O Sienge devolve estes campos em toda forma consultada, mesmo quando a parcela usa outra forma (as observações saem iguais em todas). */
+  CAMPOS_FORMA_COMUNS: ["paymentTypeId", "notes", "links", "resultSetMetadata", "results", "beneficiaryAccountType", "isUsingCreditorData", "discountDueDate",
+    "tedFinalityCode", "docFinalityCode", "boletoConcessionariaPaymentType", "taxPayerType"],
+
+  temDadosForma(data) {
+    if (!data || typeof data !== "object") return false;
+    if (String(data.isUsingCreditorData || "").trim().toUpperCase() === "S") return true;
+    return Object.keys(data).some((k) => {
+      if (this.CAMPOS_FORMA_COMUNS.includes(k)) return false;
+      const v = data[k];
+      if (v == null) return false;
+      if (typeof v === "object") return Object.keys(v).length > 0;
+      return String(v).trim() !== "";
+    });
+  },
+
+  /** Endpoints de payment-information na ordem provável para a forma da parcela; especifico = a forma do Sienge aponta um endpoint. */
+  ehCartao(tipo) {
+    const t = String(tipo || "");
+    if (/cr[eé]dito em conta/i.test(t)) return false;
+    return /cart[aã]o/i.test(t);
+  },
+
+  tiposForma(tipo) {
+    const t = String(tipo || "");
+    if (this.ehCartao(t)) return { kinds: [], especifico: true, cartao: true };
+    if (/pix/i.test(t)) return { kinds: ["pix"], especifico: true };
+    if (/transf|ted\b|doc\b|cr[eé]dito em conta|dep[oó]sito/i.test(t)) return { kinds: ["bank-transfer"], especifico: true };
+    if (/concession|consumo|arrecad|tribut|guia|darf|gps|fgts|imposto/i.test(t)) return { kinds: ["boleto-concessionaria", "boleto-tax", "boleto-bancario"], especifico: true };
+    if (/boleto|bloqueto|cobran/i.test(t)) return { kinds: ["boleto-bancario", "boleto-concessionaria"], especifico: true };
+    return { kinds: ["boleto-bancario", "bank-transfer", "pix", "boleto-concessionaria"], especifico: false };
+  },
+
+  /**
+   * Forma de pagamento programada na parcela: { kind, data } ou null quando não há forma.
+   * tipo = nome da forma na parcela (paymentType); sem ele, lê as parcelas do título.
+   * Lança erro quando o Sienge não respondeu, para a tela não confundir falha de consulta com título sem forma.
+   */
+  escalares(obj) {
+    const out = {};
+    if (!obj || typeof obj !== "object") return out;
+    Object.keys(obj).forEach((k) => {
+      const v = obj[k];
+      if (v == null || typeof v === "object") return;
+      out[k] = v;
+    });
+    return out;
+  },
+
+  async lerForma(billId, parcela, tipo, extra) {
+    const get = (path) => window.siengeFetchWithRetry(path, 4);
+    const enc = encodeURIComponent;
+    const num = parcela || 1;
+    const nao404 = (e) => !(Number(e && e.status) === 404 || /\b404\b/.test(String((e && e.message) || "")));
+    let nome = tipo;
+    let parcelaObj = null;
+    const guardarParcela = (res) => {
+      const lista = (res && (res.results || res.data)) || (Array.isArray(res) ? res : []);
+      parcelaObj = lista.find((x) => String(x.installmentNumber != null ? x.installmentNumber : x.installmentId) === String(num)) || null;
+      return parcelaObj;
+    };
+    if (nome == null) {
+      try {
+        const p = guardarParcela(await get(`/bills/${enc(billId)}/installments`));
+        nome = p ? String(p.paymentType || "") : "";
+      } catch (e) {
+        nome = "";
+      }
+    }
+    const { kinds, especifico, cartao } = this.tiposForma(nome);
+    let falhou = false;
+    let principal = null;
+    const montar = (kind, data) => {
+      const payment = { kind, data: this.corpoForma(data) || {}, extra: this.escalares(extra) };
+      if (parcelaObj) payment.extra = Object.assign(payment.extra, this.escalares(parcelaObj));
+      return payment;
+    };
+    if (cartao) return montar("cartao", {});
+    for (let i = 0; i < kinds.length; i++) {
+      let data;
+      try {
+        data = await get(`/bills/${enc(billId)}/installments/${enc(num)}/payment-information/${kinds[i]}`);
+      } catch (e) {
+        if (nao404(e)) falhou = true;
+        continue;
+      }
+      const corpo = this.corpoForma(data);
+      const candidato = montar(kinds[i], corpo);
+      const lido = this.ler(candidato);
+      if (this.temDadosForma(corpo) || this.codigosNoObjeto(corpo).length || lido.codigo || lido.linha) return candidato;
+      if (i === 0 && corpo && typeof corpo === "object") principal = candidato;
+    }
+    let payment = especifico && principal ? principal : null;
+    const daParcela = parcelaObj || (extra && typeof extra === "object" ? extra : null);
+    if (!payment && daParcela && this.codigosNoObjeto(daParcela).length) {
+      const kind = (kinds[0] && /^boleto-/.test(kinds[0])) ? kinds[0] : "boleto-bancario";
+      payment = montar(kind, {});
+    }
+    const lido = payment ? this.ler(payment) : null;
+    if (payment && !lido.codigo && !lido.linha && !parcelaObj && !extra) {
+      try {
+        guardarParcela(await get(`/bills/${enc(billId)}/installments`));
+        if (parcelaObj) payment.extra = Object.assign(payment.extra || {}, this.escalares(parcelaObj));
+      } catch (e) {
+        if (nao404(e)) falhou = true;
+      }
+    }
+    if (payment) return payment;
+    if (falhou) throw new Error("O Sienge não respondeu à consulta da forma de pagamento.");
+    return null;
+  },
+
+  /** Resultado da conferência quando a forma de pagamento não pôde ser consultada. */
+  checkFalhaConsulta(msg) {
+    const texto = (msg || "O Sienge não respondeu à consulta da forma de pagamento.") + " Atualize para consultar de novo.";
+    return { nivel: "aviso", falhaConsulta: true, forma: "Não consultada", resumo: "Forma de pagamento não consultada no Sienge", erros: [], avisos: [texto], infos: [], desconto: false, linhaFmt: "", valorBoleto: null, vencBoleto: "" };
+  },
+
+  /**
+   * ctx: { valor, vencimento, descontoTitulo }
+   * Retorna { nivel: "ok"|"erro"|"aviso"|"info"|"sem", forma, resumo, erros[], avisos[], infos[], desconto, linhaFmt, valorBoleto, vencBoleto }.
+   */
+  validar(payment, ctx) {
+    ctx = ctx || {};
+    const out = { nivel: "ok", forma: "", resumo: "", erros: [], avisos: [], infos: [], desconto: false, linhaFmt: "", valorBoleto: null, vencBoleto: "" };
+    if (!payment || !payment.kind) {
+      out.nivel = "sem";
+      out.forma = "Sem forma";
+      out.resumo = "Forma de pagamento não informada no título";
+      out.avisos.push("O título não tem forma de pagamento programada no Sienge.");
+      return out;
+    }
+    const d = payment.data || {};
+    if (payment.kind === "cartao") {
+      out.nivel = "info";
+      out.forma = "Cartão de crédito";
+      out.resumo = "Cartão de crédito. Este título não entra no lote de pagamento do banco.";
+      return out;
+    }
+    if (payment.kind === "pix") return this.validarPix(payment, ctx.credor, out, ctx);
+    if (!this.ehBoleto(payment)) {
+      out.nivel = "info";
+      out.forma = payment.kind === "pix" ? "PIX" : (payment.kind === "bank-transfer" ? "Transferência" : String(payment.kind));
+      out.resumo = out.forma;
+      return out;
+    }
+    const r = this.ler(payment);
+    const guiaUnificada = /guia\s*unificada/i.test(String(ctx.tipo || ""));
+    out.forma = guiaUnificada && (r.tipo === "arrecadacao" || payment.kind === "boleto-tax")
+      ? "Guia unificada"
+      : (r.tipo === "arrecadacao" ? "Boleto de concessionária" : "Boleto");
+    let codigo = r.codigo;
+    if (!codigo && !r.linha) {
+      out.erros.push("Boleto sem código de barras e sem linha digitável.");
+    } else if (r.tipo === "bancario") {
+      if (r.linha) {
+        if (r.linha.length !== 47) out.erros.push(`Linha digitável com ${r.linha.length} dígitos (o boleto bancário tem 47).`);
+        else {
+          const campos = [[0, 9], [10, 20], [21, 31]];
+          campos.forEach(([ini, fim], i) => {
+            if (this.mod10(r.linha.slice(ini, fim)) !== Number(r.linha[fim])) out.erros.push(`Dígito verificador do campo ${i + 1} da linha digitável não confere.`);
+          });
+          const daLinha = this.linhaBancariaParaCodigo(r.linha);
+          if (codigo && codigo.length === 44 && codigo !== daLinha) out.erros.push("Linha digitável e código de barras não são do mesmo boleto.");
+          if (!codigo) codigo = daLinha;
+          out.linhaFmt = this.formatarLinha(r.linha);
+        }
+      }
+      if (codigo) {
+        if (codigo.length !== 44) out.erros.push(`Código de barras com ${codigo.length} dígitos (o correto são 44).`);
+        else {
+          if (this.dvBancario(codigo.slice(0, 4) + codigo.slice(5)) !== Number(codigo[4])) out.erros.push("Dígito verificador geral do código de barras não confere.");
+          if (codigo[3] !== "9") out.avisos.push("Moeda do boleto diferente de real.");
+          const fator = codigo.slice(5, 9);
+          out.valorBoleto = Number(codigo.slice(9, 19)) / 100;
+          out.vencBoleto = this.dataDoFator(fator, ctx.vencimento);
+          if (!out.linhaFmt) {
+            const c = codigo;
+            const l = c.slice(0, 4) + c.slice(19, 24);
+            const l2 = c.slice(24, 34);
+            const l3 = c.slice(34, 44);
+            out.linhaFmt = this.formatarLinha(l + this.mod10(l) + l2 + this.mod10(l2) + l3 + this.mod10(l3) + c[4] + c.slice(5, 19));
+          }
+        }
+      }
+    } else {
+      if (r.linha) {
+        if (r.linha.length !== 48) out.erros.push(`Linha digitável com ${r.linha.length} dígitos (o boleto de concessionária tem 48).`);
+        else {
+          const mod = ["6", "7"].includes(r.linha[2]) ? 10 : 11;
+          for (let i = 0; i < 4; i++) {
+            const bloco = r.linha.slice(i * 12, i * 12 + 11);
+            if (this.dvArrecadacao(bloco, mod) !== Number(r.linha[i * 12 + 11])) out.erros.push(`Dígito verificador do bloco ${i + 1} da linha digitável não confere.`);
+          }
+          const daLinha = [0, 12, 24, 36].map((i) => r.linha.slice(i, i + 11)).join("");
+          if (codigo && codigo.length === 44 && codigo !== daLinha) out.erros.push("Linha digitável e código de barras não são do mesmo boleto.");
+          if (!codigo) codigo = daLinha;
+          out.linhaFmt = this.formatarLinha(r.linha);
+        }
+      }
+      if (codigo) {
+        if (codigo.length !== 44 || codigo[0] !== "8") out.erros.push("Código de barras de concessionária inválido (deve ter 44 dígitos e começar com 8).");
+        else {
+          const ref = codigo[2];
+          const mod = ["6", "7"].includes(ref) ? 10 : 11;
+          if (this.dvArrecadacao(codigo.slice(0, 3) + codigo.slice(4), mod) !== Number(codigo[3])) out.erros.push("Dígito verificador geral do código de barras não confere.");
+          if (ref === "6" || ref === "8") out.valorBoleto = Number(codigo.slice(4, 15)) / 100;
+          else out.infos.push("O código traz valor de referência, não o valor a pagar.");
+        }
+      }
+    }
+    out.codigo = codigo || "";
+    const valor = Number(ctx.valor);
+    const retido = Number(ctx.retido) || 0;
+    const liquido = Math.round((valor - (retido > 0.009 ? retido : 0)) * 100) / 100;
+    const aPagar = retido > 0.009 ? liquido : valor;
+    if (out.valorBoleto != null && Number.isFinite(valor) && valor > 0) {
+      if (out.valorBoleto === 0) out.avisos.push("Boleto sem valor no código de barras: o valor será digitado na hora do pagamento.");
+      else if (Math.abs(out.valorBoleto - aPagar) <= 0.01) {
+        if (retido > 0.009) {
+          out.retidoAplicado = retido;
+          out.infos.push(`Boleto pelo valor líquido: ${this.money(valor)} − ${this.money(retido)} de impostos retidos = ${this.money(out.valorBoleto)}.`);
+        }
+      } else if (retido > 0.009 && Math.abs(out.valorBoleto - valor) <= 0.01) {
+        out.erros.push(`Boleto no valor bruto ${this.money(valor)}. Com imposto retido de ${this.money(retido)}, o valor a pagar é ${this.money(liquido)}.`);
+      } else {
+        const dif = out.valorBoleto - aPagar;
+        out.erros.push(`Valor do boleto ${this.money(out.valorBoleto)} diferente do valor a pagar ${this.money(aPagar)} (${dif > 0 ? "+" : "−"}${this.money(Math.abs(dif))})`
+          + (retido > 0.009 ? `. Bruto ${this.money(valor)} − impostos retidos ${this.money(retido)}.`
+            : (dif < 0 ? ". Se a nota tem imposto retido, o imposto não foi lançado no título do Sienge." : ".")));
+      }
+    }
+    if (out.vencBoleto && ctx.vencimento && out.vencBoleto !== String(ctx.vencimento).slice(0, 10)) {
+      const vb = out.vencBoleto;
+      const vtIso = String(ctx.vencimento).slice(0, 10);
+      const vt = this.dataBr(vtIso);
+      const mesmoDiaUtil = this.proximoDiaUtil(vb) === this.proximoDiaUtil(vtIso);
+      if (mesmoDiaUtil) {
+        out.infos.push(`Vencimento em ${vt} cai em fim de semana ou feriado. O boleto pode ser pago em ${this.dataBr(this.proximoDiaUtil(vtIso))}.`);
+      } else if (vb < vtIso) {
+        out.antecipado = true;
+        out.avisos.push(`Pagamento antecipado: o boleto vence em ${this.dataBr(vb)} e a parcela vence em ${vt}. Libere para pagar antes do vencimento.`);
+      } else {
+        out.vencimentoPosterior = true;
+        out.avisos.push(`O boleto vence em ${this.dataBr(vb)} e a parcela vence em ${vt}. Libere para pagar com este boleto.`);
+      }
+    }
+    const limite = String(d.discountDueDate || "").slice(0, 10);
+    const vencTitulo = String(ctx.vencimento || "").slice(0, 10);
+    const valorDesconto = Object.keys(d).filter((k) => /discount/i.test(k) && !/date/i.test(k))
+      .map((k) => Number(d[k])).find((n) => Number.isFinite(n) && n > 0.009);
+    // O Sienge costuma preencher a data limite do desconto com o próprio vencimento, sem desconto nenhum.
+    // Com o prazo vencido e sem valor de desconto, paga-se o valor cheio: a data costuma ser o vencimento antigo que ficou no Sienge.
+    if (limite && (valorDesconto || !vencTitulo || limite < vencTitulo)) {
+      if (limite < this.hoje() && !valorDesconto) {
+        out.infos.push(`Data limite de desconto ${this.dataBr(limite)} no Sienge, sem valor de desconto: paga-se o valor cheio.`);
+      } else {
+        out.desconto = true;
+        if (limite < this.hoje()) out.avisos.push(`Instrução de desconto de ${this.money(valorDesconto)} até ${this.dataBr(limite)}: o prazo do desconto já passou.`);
+        else out.infos.push(`Instrução de desconto${valorDesconto ? ` de ${this.money(valorDesconto)}` : ""}: pagar até ${this.dataBr(limite)} para ter o desconto.`);
+      }
+    }
+    if (Number(ctx.descontoTitulo) > 0) {
+      out.desconto = true;
+      out.infos.push(`Título com desconto de ${this.money(ctx.descontoTitulo)} no Sienge.`);
+    }
+    if (/descont|abatim/i.test(String(d.notes || ""))) {
+      out.desconto = true;
+      out.infos.push("A observação do pagamento menciona desconto.");
+    }
+    if (out.erros.length) out.nivel = "erro";
+    else if (out.avisos.length) out.nivel = "aviso";
+    out.resumo = out.erros[0] || out.avisos[0] || (out.desconto ? `${out.forma} conferido · com desconto` : `${out.forma} conferido`);
+    return out;
+  },
+
+  /* ---------- PIX: a chave tem de ser do credor do título ---------- */
+  TIPOS_PIX: { C: "CPF/CNPJ", E: "E-mail", T: "Telefone", A: "Aleatória", Q: "QR Code" },
+
+  /** Lê o "PIX copia e cola" (BR Code, padrão EMV): campos de 2 dígitos de id + 2 de tamanho + valor. */
+  lerBrCode(txt) {
+    const s = String(txt || "").trim();
+    const campos = (str) => {
+      const out = {};
+      let i = 0;
+      while (i + 4 <= str.length) {
+        const id = str.slice(i, i + 2);
+        const n = Number(str.slice(i + 2, i + 4));
+        if (!/^\d{2}$/.test(id) || !Number.isFinite(n) || i + 4 + n > str.length) return null;
+        out[id] = str.slice(i + 4, i + 4 + n);
+        i += 4 + n;
+      }
+      return i === str.length ? out : null;
+    };
+    const raiz = campos(s);
+    if (!raiz || raiz["00"] !== "01" || !raiz["63"]) return null;
+    // Conta PIX: id 26 (ou 26 a 51) com o GUI br.gov.bcb.pix
+    let conta = null;
+    for (let k = 26; k <= 51; k++) {
+      const v = raiz[String(k)];
+      const sub = v ? campos(v) : null;
+      if (sub && String(sub["00"] || "").toLowerCase() === "br.gov.bcb.pix") { conta = sub; break; }
+    }
+    // CRC16-CCITT (polinômio 0x1021, início 0xFFFF) de tudo até o "6304", inclusive.
+    const base = s.slice(0, s.length - 4);
+    let crc = 0xFFFF;
+    for (let i = 0; i < base.length; i++) {
+      crc ^= base.charCodeAt(i) << 8;
+      for (let b = 0; b < 8; b++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+    }
+    const crcOk = crc.toString(16).toUpperCase().padStart(4, "0") === String(raiz["63"]).toUpperCase();
+    return {
+      pix: !!conta,
+      crcOk,
+      chave: conta ? String(conta["01"] || "") : "",
+      url: conta ? String(conta["25"] || "") : "",
+      valor: raiz["54"] != null && raiz["54"] !== "" ? Number(raiz["54"]) : null,
+      recebedor: String(raiz["59"] || "").trim(),
+      cidade: String(raiz["60"] || "").trim()
+    };
+  },
+
+  /** PIX QR Code: o código é do recebedor da cobrança (guia, boleto PIX), não necessariamente do credor. */
+  validarPixQr(chave, ctx, out) {
+    out.forma = "PIX QR Code";
+    const qr = this.lerBrCode(chave);
+    out.pix.qr = qr;
+    if (!qr) {
+      out.erros.push("O QR Code PIX gravado no Sienge não está no formato do PIX copia e cola.");
+    } else if (!qr.pix) {
+      out.erros.push("O código gravado não é de PIX (falta o identificador br.gov.bcb.pix).");
+    } else if (!qr.crcOk) {
+      out.erros.push("O dígito verificador do PIX copia e cola não confere: o código foi copiado incompleto ou alterado.");
+    } else {
+      if (qr.recebedor) out.pix.titular = `QR Code de ${qr.recebedor}${qr.cidade ? " (" + qr.cidade + ")" : ""}.`;
+      const valor = Number(ctx && ctx.valor);
+      const retido = Number(ctx && ctx.retido) || 0;
+      const aPagar = retido > 0.009 ? Math.round((valor - retido) * 100) / 100 : valor;
+      if (qr.valor != null && qr.valor > 0 && Number.isFinite(aPagar) && aPagar > 0) {
+        if (Math.abs(qr.valor - aPagar) > 0.01) {
+          const dif = qr.valor - aPagar;
+          out.erros.push(`Valor do QR Code ${this.money(qr.valor)} diferente do valor a pagar ${this.money(aPagar)} (${dif > 0 ? "+" : "−"}${this.money(Math.abs(dif))}).`);
+        }
+      } else if (qr.url) {
+        out.infos.push("QR Code dinâmico: o valor vem da cobrança do recebedor na hora do pagamento.");
+      }
+    }
+    if (out.erros.length) out.nivel = "erro";
+    else if (out.avisos.length) out.nivel = "aviso";
+    else out.nivel = "ok";
+    out.resumo = out.erros[0] || out.avisos[0] || (out.pix.titular ? "PIX QR Code conferido · " + out.pix.titular : "PIX QR Code conferido");
+    return out;
+  },
+
+  cpfValido(c) {
+    if (!/^\d{11}$/.test(c) || /^(\d)\1{10}$/.test(c)) return false;
+    const dv = (n) => {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i);
+      const r = (s * 10) % 11;
+      return r === 10 ? 0 : r;
+    };
+    return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+  },
+
+  cnpjValido(c) {
+    if (!/^\d{14}$/.test(c) || /^(\d)\1{13}$/.test(c)) return false;
+    const dv = (n) => {
+      const pesos = n === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+      const r = pesos.reduce((s, p, i) => s + Number(c[i]) * p, 0) % 11;
+      return r < 2 ? 0 : 11 - r;
+    };
+    return dv(12) === Number(c[12]) && dv(13) === Number(c[13]);
+  },
+
+  docFmt(d) {
+    d = this.digits(d);
+    if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+    if (d.length === 14) return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+    return d || "—";
+  },
+
+  /** Telefone com DDD, sem o 55 do país: chave "+55 (14) 99999-8888" e cadastro "14 99999-8888" ficam iguais. */
+  telNorm(v) {
+    let t = this.digits(v);
+    if (t.length >= 12 && t.startsWith("55")) t = t.slice(2);
+    return t;
+  },
+
+  chaveNorm(tipo, chave) {
+    const k = String(chave == null ? "" : chave).trim();
+    if (tipo === "C") return this.digits(k);
+    if (tipo === "T") return this.telNorm(k);
+    return k.toLowerCase().replace(/\s+/g, "");
+  },
+
+  /**
+   * credor: { doc, nome, telefones[], emails[], chaves[{ tipo, chave, original, doc, padrao }], erro }.
+   * Sem consulta ao DICT do Banco Central: o titular de chave telefone, e-mail ou aleatória é conferido
+   * pelas chaves PIX cadastradas no credor do Sienge (que têm o CPF/CNPJ do credor).
+   */
+  validarPix(payment, credor, out, ctx) {
+    const d = payment.data || {};
+    out.forma = "PIX";
+    let tipo = String(d.keyPixType || "").trim().toUpperCase();
+    let chave = String(d.keyPix || "").trim();
+    const usaCredor = String(d.isUsingCreditorData || "").trim().toUpperCase() === "S";
+    const lido = credor && !credor.erro;
+    const credDoc = lido ? this.digits(credor.doc) : "";
+    if (!chave && usaCredor && lido && credor.chaves.length) {
+      const p = credor.chaves.find((c) => c.padrao) || credor.chaves[0];
+      tipo = p.tipo;
+      chave = p.original;
+      out.infos.push("O título usa a chave PIX padrão do cadastro do credor.");
+    }
+    const tipoNome = this.TIPOS_PIX[tipo] || (tipo ? `Tipo ${tipo}` : "—");
+    out.pix = { tipo, tipoNome, chave, beneficiario: String(d.beneficiaryName || "").trim(), benefDoc: this.digits(d.beneficiaryCNPJNumber || d.beneficiaryCPFNumber), credDoc, credNome: lido ? credor.nome : "", titular: "" };
+    if (tipo === "Q" && chave) return this.validarPixQr(chave, ctx, out);
+
+    if (credor && credor.erro) out.avisos.push(`Não consegui ler o cadastro do credor no Sienge para conferir o titular da chave (${credor.erro}).`);
+    else if (lido && !credDoc) out.avisos.push("O credor não tem CPF/CNPJ no cadastro do Sienge: não há como conferir o titular da chave.");
+
+    if (!chave) {
+      out.erros.push(usaCredor ? "O título usa os dados do credor, mas o credor não tem chave PIX cadastrada no Sienge." : "PIX sem chave informada no título.");
+    } else if (!this.TIPOS_PIX[tipo]) {
+      out.erros.push(`Tipo de chave PIX não reconhecido (${tipo || "vazio"}).`);
+    } else {
+      const k = this.chaveNorm(tipo, chave);
+      if (out.pix.benefDoc) {
+        if (!this.cpfValido(out.pix.benefDoc) && !this.cnpjValido(out.pix.benefDoc)) out.erros.push(`CPF/CNPJ do beneficiário do PIX inválido (${this.docFmt(out.pix.benefDoc)}).`);
+        else if (credDoc && out.pix.benefDoc !== credDoc) out.erros.push(`Beneficiário do PIX (${this.docFmt(out.pix.benefDoc)}) não é o credor do título (${this.docFmt(credDoc)}).`);
+      }
+      if (tipo === "C") {
+        if (!this.cpfValido(k) && !this.cnpjValido(k)) out.erros.push(`Chave PIX CPF/CNPJ inválida (${chave}).`);
+        else if (credDoc && k !== credDoc) out.erros.push(`A chave PIX é do CPF/CNPJ ${this.docFmt(k)}, mas o credor do título é ${this.docFmt(credDoc)}.`);
+        else if (credDoc) out.pix.titular = `A chave é o próprio CPF/CNPJ do credor (${this.docFmt(credDoc)}).`;
+      } else {
+        const formatoOk = tipo === "T" ? /^\d{10,11}$/.test(k)
+          : (tipo === "E" ? /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(k) : /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(k));
+        if (!formatoOk) out.erros.push(`Chave PIX ${tipoNome.toLowerCase()} em formato inválido (${chave}).`);
+        else if (lido) {
+          const reg = credor.chaves.find((c) => c.tipo === tipo && c.chave === k);
+          if (reg && reg.doc && credDoc && reg.doc !== credDoc) {
+            out.erros.push(`A chave ${tipoNome.toLowerCase()} está cadastrada no Sienge para o CPF/CNPJ ${this.docFmt(reg.doc)}, não para o credor (${this.docFmt(credDoc)}).`);
+          } else if (reg && credDoc) {
+            out.pix.titular = `Chave ${tipoNome.toLowerCase()} cadastrada nas chaves PIX do credor ${this.docFmt(credDoc)} no Sienge.`;
+          } else if (credDoc) {
+            const contato = tipo === "T" ? credor.telefones.includes(k) : (tipo === "E" ? credor.emails.includes(k) : false);
+            const avisoChave = `Chave ${tipoNome.toLowerCase()} não confirmada como do titular ${this.docFmt(credDoc)}: `
+              + (contato ? `o ${tipo === "T" ? "telefone" : "e-mail"} está no cadastro do credor, mas a chave ` : "a chave ")
+              + "não está nas chaves PIX cadastradas no credor. Confirme o titular no banco e cadastre a chave no credor, ou troque para a chave CPF/CNPJ.";
+            out.avisos.push(avisoChave);
+            out.avisosLivres = (out.avisosLivres || []).concat(avisoChave);
+          }
+        }
+      }
+    }
+    if (out.erros.length) out.nivel = "erro";
+    else if (out.avisos.length) out.nivel = "aviso";
+    else out.nivel = "ok";
+    out.resumo = out.erros[0] || out.avisos[0] || (out.pix.titular ? "PIX conferido · " + out.pix.titular : "PIX conferido");
+    return out;
+  },
+
+  pixHtml(v) {
+    const p = v.pix || {};
+    const lista = (itens, cor, ic) => itens.map((t) => `<p style="margin:4px 0 0;color:${cor};">${ic} ${this.esc(t)}</p>`).join("");
+    const qr = p.qr;
+    return `<p><strong>Forma:</strong> ${this.esc(v.forma || "PIX")}</p>
+      ${qr ? `<p><strong>Recebedor do QR Code:</strong> ${this.esc(qr.recebedor || "—")}${qr.cidade ? ` · ${this.esc(qr.cidade)}` : ""}</p>
+      <p><strong>Valor no QR Code:</strong> ${qr.valor != null && qr.valor > 0 ? this.esc(this.money(qr.valor)) : "definido pela cobrança na hora do pagamento"}</p>
+      <p style="word-break:break-all;"><strong>PIX copia e cola:</strong> ${this.esc(p.chave || "—")}</p>` : `<p><strong>Chave (${this.esc(p.tipoNome || "—")}):</strong> ${this.esc(p.chave || "—")}</p>`}
+      ${p.beneficiario || p.benefDoc ? `<p><strong>Beneficiário:</strong> ${this.esc(p.beneficiario || "—")}${p.benefDoc ? ` · ${this.esc(this.docFmt(p.benefDoc))}` : ""}</p>` : ""}
+      ${p.credDoc ? `<p><strong>Credor do título:</strong> ${this.esc(p.credNome || "—")} · ${this.esc(this.docFmt(p.credDoc))}</p>` : ""}
+      ${v.nivel === "ok" && p.titular ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ ${this.esc(p.titular)}</p>` : ""}
+      ${lista(v.erros, "#b91c1c", "✗")}
+      ${lista(v.avisos, "#c2410c", "!")}
+      ${lista(v.infos, "#0f766e", "ℹ")}`;
+  },
+
+  /** Selo curto para tabelas. */
+  seloHtml(v) {
+    if (!v) return `<span class="bchk bchk-wait">Conferindo…</span>`;
+    const cls = { ok: "bchk-ok", erro: "bchk-erro", aviso: "bchk-aviso", info: "bchk-info", sem: "bchk-aviso" }[v.nivel] || "bchk-info";
+    const txt = v.falhaConsulta ? "Forma não consultada" : v.nivel === "ok" ? `${v.forma} ✓` : (v.nivel === "erro" ? `${v.forma}: erro` : (v.nivel === "sem" ? "Sem forma" : (v.nivel === "aviso" ? `${v.forma}: atenção` : v.forma)));
+    const dica = [].concat(v.erros, v.avisos, v.infos).join("\n") || v.resumo;
+    return `<span class="bchk ${cls}" title="${this.esc(dica)}">${this.esc(txt)}</span>${v.desconto ? ` <span class="bchk bchk-desc" title="${this.esc(v.infos.concat(v.avisos).filter((x) => /descont/i.test(x)).join("\n"))}">Desconto</span>` : ""}`;
+  },
+
+  /** Bloco completo para o resumo do título. */
+  html(payment, ctx) {
+    const v = (ctx && ctx.check) || this.validar(payment, ctx);
+    if (payment && payment.kind === "pix") return this.pixHtml(v);
+    const d = (payment && payment.data) || {};
+    const lista = (itens, cor, ic) => itens.map((t) => `<p style="margin:4px 0 0;color:${cor};">${ic} ${this.esc(t)}</p>`).join("");
+    const cab = v.nivel === "ok"
+      ? (v.guiaSomada
+        ? `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ ${v.forma === "Boleto unificado" ? "Boleto unificado conferido: o boleto soma os títulos do mesmo credor." : "Guia unificada conferida: o código soma os títulos desta guia."}</p>`
+        : `<p style="margin:6px 0 0;color:#105436;font-weight:700;">✓ Código de barras conferido: dígitos, valor${v.retidoAplicado ? " líquido" : ""}${v.vencBoleto ? " e vencimento" : ""} batem com o título.</p>`)
+      : "";
+    return `<p><strong>Forma:</strong> ${this.esc(v.forma)}</p>
+      ${v.linhaFmt ? `<p><strong>Linha digitável:</strong> <span style="font-family:monospace;font-size:0.82rem;">${this.esc(v.linhaFmt)}</span></p>` : ""}
+      ${v.valorBoleto != null ? `<p><strong>Valor no boleto:</strong> ${this.money(v.valorBoleto)}${v.vencBoleto ? ` · <strong>Vencimento no boleto:</strong> ${this.dataBr(v.vencBoleto)}` : ""}</p>` : ""}
+      ${d.notes ? `<p><strong>Observação:</strong> ${this.esc(d.notes)}</p>` : ""}
+      ${cab}
+      ${lista(v.erros, "#b91c1c", "✗")}
+      ${lista(v.avisos, "#c2410c", "!")}
+      ${lista(v.infos, "#0f766e", "ℹ")}`;
+  }
+};

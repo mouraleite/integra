@@ -1,0 +1,3897 @@
+function caixaAddDays(iso, n) {
+  const d = new Date(String(iso).slice(0, 10) + "T12:00:00");
+  d.setDate(d.getDate() + Number(n || 0));
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function caixaEhUtil(iso) {
+  return typeof window.isBusinessDayIso === "function"
+    ? window.isBusinessDayIso(iso)
+    : [0, 6].indexOf(new Date(iso + "T12:00:00").getDay()) < 0;
+}
+
+function caixaDiaUtil(iso, passo) {
+  let d = String(iso || "").slice(0, 10);
+  for (let i = 0; i < 15; i++) {
+    if (caixaEhUtil(d)) return d;
+    d = caixaAddDays(d, passo || 1);
+  }
+  return d;
+}
+
+function caixaMoney(v) {
+  return (Number(v) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function caixaParseMoney(v) {
+  const s = String(v == null ? "" : v).replace(/[^\d,.-]/g, "").trim();
+  if (!s) return 0;
+  const n = s.indexOf(",") >= 0 ? Number(s.replace(/\./g, "").replace(",", ".")) : Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function caixaEsc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function caixaBalance(b) {
+  if (!b) return null;
+  const list = [b.amount, b.balance, b.balanceAmount, b.currentBalance, b.lastBalance, b.lastBalanceAmount, b.availableAmount, b.availableBalance, b.value];
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] == null || list[i] === "") continue;
+    const n = Number(String(list[i]).replace(/\./g, "").replace(",", "."));
+    const raw = Number(list[i]);
+    if (Number.isFinite(raw)) return raw;
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+async function caixaFormaPagamento(billId, parcela) {
+  if (typeof window.siengeFetchWithRetry !== "function" || !window.BoletoCheck) return null;
+  try {
+    return await BoletoCheck.lerForma(billId, parcela || 1);
+  } catch (e) {
+    return { erro: (e && e.message) || "O Sienge não respondeu à consulta da forma de pagamento." };
+  }
+}
+
+function caixaFormaHtml(payment, item) {
+  if (payment && payment.erro) {
+    return `<p style="color:#b45309;"><strong>Não foi possível consultar a forma de pagamento.</strong> ${caixaEsc(payment.erro)} Feche e abra o título de novo.</p>`;
+  }
+  if (payment && payment.data) {
+    const d = payment.data;
+    if (payment.kind === "pix") {
+      if (window.BoletoCheck) return BoletoCheck.html(payment, { check: item && item.pagCheck }) + (d.notes ? `<p style="margin-top:6px;">${caixaEsc(d.notes)}</p>` : "");
+      return `<p><strong>Forma:</strong> PIX</p><p>${caixaEsc(d.notes || "Chave do credor")}</p>`;
+    }
+    if (payment.kind === "boleto-bancario" || payment.kind === "boleto-concessionaria") {
+      if (window.BoletoCheck) {
+        const it = item || {};
+        return BoletoCheck.html(payment, {
+          valor: it.valorConferir != null ? it.valorConferir : (it.aPagar != null ? it.aPagar : it.valor),
+          vencimento: it.vencimento,
+          descontoTitulo: it.descontoTitulo,
+          retido: it.retido
+        });
+      }
+      return `<p><strong>Forma:</strong> ${payment.kind === "boleto-concessionaria" ? "Boleto de concessionária" : "Boleto"}</p><p>${caixaEsc(d.notes || d.boletoBancarioManualBarCodeNumber || d.boletoConcessionariaManualBarCodeNumber || "")}</p>`;
+    }
+    const banco = [d.beneficiaryBankCode, d.beneficiaryBankName].filter(Boolean).join(" — ");
+    const ag = [d.beneficiaryBankBranchNumber, d.beneficiaryBankBranchDigit].filter(Boolean).join("-");
+    const conta = [d.beneficiaryAccountNumber, d.beneficiaryAccountDigit].filter(Boolean).join("-");
+    const tipo = d.beneficiaryAccountType === "P" ? "Poupança" : "Conta corrente";
+    return `<p><strong>Forma:</strong> Transferência</p>
+      <p><strong>Banco:</strong> ${caixaEsc(banco || "—")}</p>
+      <p><strong>Agência:</strong> ${caixaEsc(ag || "—")}</p>
+      <p><strong>${caixaEsc(tipo)}:</strong> ${caixaEsc(conta || "—")}</p>
+      <p><strong>Favorecido:</strong> ${caixaEsc(d.beneficiaryName || "—")}</p>
+      ${d.notes ? `<pre style="white-space:pre-wrap;font-family:inherit;margin:8px 0 0;">${caixaEsc(d.notes)}</pre>` : ""}`;
+  }
+  if (item && (item.tipoBaixa || item.conta || item.operacao)) {
+    return `<p><strong>Programação na consulta:</strong> ${caixaEsc([item.tipoBaixa, item.operacao, item.conta].filter(Boolean).join(" · "))}</p>`;
+  }
+  return `<p>O pagamento ainda não está programado neste título.</p>`;
+}
+
+function caixaFmtDate(iso) {
+  if (!iso) return "—";
+  const p = String(iso).slice(0, 10).split("-");
+  return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : String(iso);
+}
+
+function caixaSlim(u, date) {
+  const present = u.presentDebitBalance != null ? Number(u.presentDebitBalance) : Number(u.outstandingBalance || 0);
+  return {
+    d: date,
+    uid: String(u.id || ""),
+    un: u.name || "",
+    cc: String(u.enterpriseId || ""),
+    cn: u.enterpriseName || "",
+    cid: u.customerId != null ? String(u.customerId) : "",
+    cpf: String(u.customerDoc || "").replace(/\D/g, ""),
+    nome: u.customerName || "",
+    rec: Number(u.receivedAmount) || 0,
+    ven: Number(u.kpiVencidas) || 0,
+    av: Number(u.kpiAVencer) || 0,
+    vp: Number.isFinite(present) ? present : 0,
+    pmp: Number(u.pmp3m) || 0,
+    st: u.relFin || (u.quitado ? "quitado" : ""),
+    parc: Array.isArray(u.openParcelas) ? u.openParcelas.slice(0, 18) : []
+  };
+}
+
+const CaixaPosicaoStore = {
+  FB: "caixa_posicao",
+  CHUNK: 120,
+
+  // caixa_posicao está no Supabase (window.DadosFinanceiro): uma linha por unidade por dia (os chunks <dia>_<n> e o
+  // _meta sumiram). Os nomes fb*/FB ficaram por compatibilidade.
+  fbReady() {
+    return !!window.DadosFinanceiro;
+  },
+
+  async loadEstoqueUnits() {
+    if (window.EstoqueComercialApp) {
+      if (!EstoqueComercialApp.state.units.length) await EstoqueComercialApp.init();
+      if (EstoqueComercialApp.state.units.length) return EstoqueComercialApp.state.units;
+    }
+    // Estoque no Supabase (estoque_comercial: uma linha por unidade).
+    if (!window.DadosEngenharia) return [];
+    return window.DadosEngenharia.listarUnidadesEstoque();
+  },
+
+  async saveFromUnits(units, date) {
+    if (!this.fbReady()) throw new Error("Supabase indisponível.");
+    const rows = (units || [])
+      .filter((u) => {
+        const code = String(u.commercialStock || "").toUpperCase();
+        return code === "V" || code === "O" || u.contractId || u.contractNumber;
+      })
+      .map((u) => caixaSlim(u, date));
+    // RPC gravar_caixa_posicao: apaga o dia e insere as linhas numa transação (antes: setDoc dos chunks + _meta).
+    await window.DadosFinanceiro.gravarCaixaPosicao(date, rows);
+    return rows;
+  },
+
+  async loadDate(date) {
+    if (!this.fbReady() || !date) return [];
+    return window.DadosFinanceiro.lerCaixaPosicao(date);
+  },
+
+  async listDates() {
+    if (!this.fbReady()) return [];
+    // Da mais recente para a mais antiga (como o sort().reverse() de antes).
+    return window.DadosFinanceiro.listarDatasCaixaPosicao();
+  }
+};
+
+const FluxoCaixaDiarioApp = {
+  month: "",
+  loading: false,
+  error: "",
+  days: [],
+  openDay: "",
+  totals: { saldo: 0, entrar: 0, pagar: 0 },
+  companyIds: [],
+  companies: [],
+  openEmp: false,
+  qEmp: "",
+  openCc: false,
+  qCc: "",
+  accounts: [],
+  openingDate: "",
+  recItems: [],
+  outras: [],
+  movs: [],
+  payItems: [],
+  progress: "",
+  detail: null,
+  detOpen: {},
+  contasAbertas: { corrente: false, investimento: false },
+  mostrarNaoUteis: false,
+  aba: "movimento",
+  radarYm: "",
+  radar: null,
+  histEntradas: null,
+  histCarregando: false,
+  _histChave: "",
+  compAberto: false,
+  semConcAberto: false,
+  semConcDia: "",
+  flags: {},
+  tipos: {},
+  ccExcl: {},
+  _flagsLoaded: false,
+  _types: {},
+  _banks: {},
+  _nomes: {},
+  _custom: null,
+  _gen: 0,
+  avisoCaixa: null,
+  _avisoDisparado: false,
+  _avisoToken: 0,
+
+  init() {
+    if (!this.month) {
+      const n = new Date();
+      this.month = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+    }
+    this.companyIds = [];
+    this.avisoCaixa = null;
+    this._avisoDisparado = false;
+    this._avisoToken = (this._avisoToken || 0) + 1;
+    this.render();
+    this.load();
+    if (this.aba === "receber") this.carregarVr();
+  },
+
+  hoje() {
+    const n = new Date();
+    return n.getFullYear() + "-" + String(n.getMonth() + 1).padStart(2, "0") + "-" + String(n.getDate()).padStart(2, "0");
+  },
+
+  /** Mês corrente e os três seguintes. A tela não escolhe competência. */
+  monthBounds() {
+    const n = new Date();
+    const startD = new Date(n.getFullYear(), n.getMonth(), 1);
+    const endD = new Date(n.getFullYear(), n.getMonth() + 4, 0);
+    const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return { start: iso(startD), end: iso(endD) };
+  },
+
+  mesRadar() {
+    return this.radarYm || this.hoje().slice(0, 7);
+  },
+
+  setAba(id) {
+    this.aba = id === "receber" ? "receber" : "movimento";
+    this.render();
+    if (this.aba === "receber" && !(this.vr && (this.vr.carregando || this.vr.atualizando))) this.carregarVr();
+  },
+
+  setRadarYm(ym) {
+    if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return;
+    this.radarYm = ym;
+    this.radar = null;
+    this.render();
+    this.carregarRadar();
+  },
+
+  radarDocId() {
+    const co = (this.companyIds && this.companyIds[0]) || "0";
+    return String(co) + "-" + this.mesRadar();
+  },
+
+  nomeMes(ym) {
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const p = String(ym || "").split("-");
+    return (meses[Number(p[1]) - 1] || ym) + " de " + (p[0] || "");
+  },
+
+  mesesDaTela() {
+    const b = this.monthBounds();
+    const out = [];
+    let ym = b.start.slice(0, 7);
+    const fim = b.end.slice(0, 7);
+    while (ym <= fim && out.length < 6) {
+      out.push(ym);
+      const [y, m] = ym.split("-").map(Number);
+      const d = new Date(y, m, 1);
+      ym = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    }
+    return out;
+  },
+
+  diasUteisDoMes(ym) {
+    const [y, m] = String(ym).split("-").map(Number);
+    const ultimo = new Date(y, m, 0).getDate();
+    const dias = [];
+    for (let d = 1; d <= ultimo; d++) {
+      const iso = ym + "-" + String(d).padStart(2, "0");
+      if (caixaEhUtil(iso)) dias.push(iso);
+    }
+    return dias;
+  },
+
+  grupoRecebimento(vencimento, pmp) {
+    const lag = Math.round(Number(pmp) || 0);
+    if (lag >= 29) return "G3";
+    const due = String(vencimento || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return "G1";
+    const cash = caixaDiaUtil(caixaAddDays(due, lag), lag < 0 ? -1 : 1);
+    if (cash.slice(0, 7) === due.slice(0, 7)) return "G1";
+    if (lag <= 28) return "G2";
+    return "G3";
+  },
+
+  mesDoRecebimento(vencimento, pmp) {
+    const lag = Math.round(Number(pmp) || 0);
+    const due = String(vencimento || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) return "";
+    return caixaDiaUtil(caixaAddDays(due, lag), lag < 0 ? -1 : 1).slice(0, 7);
+  },
+
+  planoReceberVivo(ym) {
+    const itens = [];
+    const incerto = [];
+    (this.recItems || []).forEach((it) => {
+      const grupo = this.grupoRecebimento(it.vencimento, it.pmp);
+      const mes = this.mesDoRecebimento(it.vencimento, it.pmp);
+      const row = {
+        key: [it.titulo, it.parcela, it.vencimento].join("|"),
+        grupo,
+        valor: Number(it.valor) || 0,
+        cliente: it.cliente || "",
+        titulo: it.titulo || "",
+        vencimento: it.vencimento || "",
+        previsto: it.date || ""
+      };
+      if (grupo === "G3" && String(it.vencimento || "").slice(0, 7) === ym) incerto.push(row);
+      else if (grupo !== "G3" && mes === ym) itens.push(row);
+    });
+    return { itens, incerto };
+  },
+
+  planoPagarVivo(ym) {
+    const itens = [];
+    (this.payItems || []).forEach((p) => {
+      if (String(p.date || p.vencimento || "").slice(0, 7) !== ym) return;
+      itens.push({
+        key: p.key || [p.titulo, p.parcela, p.vencimento].join("|"),
+        departamento: p.departamento || p.ccNome || "Sem departamento",
+        valor: Number(p.valor) || 0,
+        credor: p.credor || "",
+        titulo: p.titulo || "",
+        natureza: p.natureza || "",
+        vencimento: p.vencimento || ""
+      });
+    });
+    return itens;
+  },
+
+  realizadoMes(ym) {
+    let entrar = 0;
+    let sair = 0;
+    const saidas = [];
+    (this.days || []).forEach((d) => {
+      if (!d || !d.real || String(d.date || "").slice(0, 7) !== ym) return;
+      entrar += Number(d.entrar) || 0;
+      (d.pagarItens || []).forEach((p) => {
+        const v = Math.abs(Number(p.valor) || 0);
+        sair += v;
+        saidas.push(p);
+      });
+    });
+    return { entrar, sair, saidas };
+  },
+
+  async carregarRadar() {
+    const id = this.radarDocId();
+    const pedido = id;
+    let local = null;
+    try { local = JSON.parse(localStorage.getItem("cxd_radar_" + id) || "null"); } catch (e) { local = null; }
+    if (this.radarDocId() !== pedido) return;
+    this.radar = local && local.ym === this.mesRadar() ? local : null;
+    // caixa_radar no Supabase (window.DadosFinanceiro).
+    const D = window.DadosFinanceiro;
+    if (!D) return;
+    try {
+      const lido = await D.tabela("caixa_radar").obter(id);
+      if (this.radarDocId() !== pedido) return;
+      if (lido) {
+        const nuvem = Object.assign({}, lido);
+        delete nuvem.id;
+        if (nuvem && (!this.radar || String(nuvem.em || "") >= String(this.radar.em || ""))) this.radar = nuvem;
+      }
+    } catch (e) {}
+    if (this.aba !== "movimento") this.render();
+  },
+
+  async gravarRadar() {
+    const ym = this.mesRadar();
+    const receber = this.planoReceberVivo(ym);
+    const pagar = this.planoPagarVivo(ym);
+    if (!receber.itens.length && !pagar.length) {
+      alert("Ainda não há previsão de recebimento nem de pagamento para " + this.nomeMes(ym) + ".");
+      return;
+    }
+    const pergunta = "Gravar o radar de " + this.nomeMes(ym) + "? Ele fica como a foto do que já estava previsto. O que surgir depois aparece como aconteceu no mês.";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
+    const doc = {
+      ym,
+      companyId: (this.companyIds && this.companyIds[0]) || "",
+      em: new Date().toISOString(),
+      receber: receber.itens,
+      incerto: receber.incerto,
+      pagar
+    };
+    this.radar = doc;
+    try { localStorage.setItem("cxd_radar_" + this.radarDocId(), JSON.stringify(doc)); } catch (e) {}
+    if (window.DadosFinanceiro) {
+      try {
+        await window.DadosFinanceiro.tabela("caixa_radar").gravar(this.radarDocId(), doc); // setDoc sem merge
+      } catch (e) {
+        alert("O radar ficou gravado neste navegador. A nuvem não guardou esta cópia.");
+      }
+    }
+    this.render();
+  },
+
+  mesesComparacao() {
+    const hojeYm = this.hoje().slice(0, 7);
+    const [y, m] = hojeYm.split("-").map(Number);
+    const out = [];
+    for (let i = 3; i >= 0; i--) {
+      const d = new Date(y, m - 1 - i, 1);
+      out.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"));
+    }
+    return out;
+  },
+
+  siglaMes(ym) {
+    const s = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+    return s[Number(String(ym || "").split("-")[1]) - 1] || ym;
+  },
+
+  movContaEntra(m) {
+    if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return false;
+    if (!m.conta) return true;
+    const key = this.accountKey({ companyId: m.companyId, number: m.conta });
+    const norm = this.normNum(m.conta);
+    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm));
+    if (acc) return this.accountIncluded(acc);
+    return !(this._bloq && this._bloq.has(norm)) && this.flags[key] !== false;
+  },
+
+  async carregarHistorico() {
+    const meses = this.mesesComparacao();
+    const inicio = meses[0] + "-01";
+    const ontem = caixaAddDays(this.hoje(), -1);
+    if (ontem < inicio || !window.SiengeApiService || typeof SiengeApiService.getBankMovements !== "function") return;
+    const chave = ((this.companyIds && this.companyIds[0]) || "0") + "|" + inicio + "|" + ontem;
+    if (this._histChave === chave && (this.histEntradas || this.histCarregando)) return;
+    this._histChave = chave;
+    this.histEntradas = null;
+    this.histCarregando = true;
+    const gen = this._gen;
+    if (this.aba === "receber") this.render();
+    try {
+      const targets = this.companyIds.length ? this.companyIds.slice() : [""];
+      const list = [];
+      for (const co of targets) {
+        const part = await SiengeApiService.getBankMovements(inicio, ontem, co ? { companyId: co } : {});
+        if (this._gen !== gen || this._histChave !== chave) return;
+        if (Array.isArray(part)) list.push.apply(list, part);
+      }
+      const porMes = {};
+      meses.forEach((ym) => { porMes[ym] = {}; });
+      list.forEach((raw, i) => {
+        const m = this.normMov(raw, i);
+        if (!m.date || m.valor <= 0) return;
+        if (!m.origem || m.origem.tipo !== "cr") return;
+        const ym = m.date.slice(0, 7);
+        if (!porMes[ym] || !this.movContaEntra(m)) return;
+        porMes[ym][m.date] = (porMes[ym][m.date] || 0) + m.valor;
+      });
+      if (this._gen !== gen || this._histChave !== chave) return;
+      this.histEntradas = porMes;
+    } catch (e) {
+      if (this._histChave === chave) this._histChave = "";
+    }
+    this.histCarregando = false;
+    if (this.aba === "receber") this.render();
+  },
+
+  comparacaoHtml(planoSelecionado) {
+    const meses = this.mesesComparacao();
+    const atual = meses[meses.length - 1];
+    const plano = this.mesRadar() === atual
+      ? planoSelecionado
+      : this.planoReceberVivo(atual).itens.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+    const diasAtual = this.diasUteisDoMes(atual);
+    const hoje = this.hoje();
+    const n = diasAtual.filter((d) => d <= hoje).length;
+    if (!n) return "";
+    if (!this.histEntradas) {
+      return `<p class="cxd-radar-nota">${this.histCarregando ? "Lendo o recebimento dos três meses anteriores…" : "A comparação com os meses anteriores entra quando o extrato desses meses estiver carregado."}</p>`;
+    }
+    const serie = (ym) => {
+      const dias = this.diasUteisDoMes(ym);
+      let s = 0;
+      const out = [];
+      dias.forEach((d) => {
+        s += Number((this.histEntradas[ym] || {})[d]) || 0;
+        out.push(s);
+      });
+      return out;
+    };
+    const colunas = meses.map((ym) => ({ ym, acum: serie(ym) }));
+    const fatia = diasAtual.length ? plano / diasAtual.length : 0;
+    const cab = colunas.map((c) => `<th class="cxd-num">${caixaEsc(this.siglaMes(c.ym))}</th>`).join("");
+    const linhas = [];
+    for (let i = 0; i < n; i++) {
+      const celulas = colunas.map((c) => `<td class="cxd-num">${caixaMoney(c.acum[i] || 0)}</td>`).join("");
+      linhas.push(`<tr><td>${i + 1}º</td>${celulas}<td class="cxd-num">${caixaMoney(fatia * (i + 1))}</td></tr>`);
+    }
+    const notaPlano = this.mesRadar() === atual ? "A última coluna é o ritmo do plano deste mês, espalhado por igual." : "A última coluna é o ritmo do plano de " + this.nomeMes(atual) + ".";
+    return `<p class="cxd-radar-nota">No mesmo número de dias úteis, quanto entrou de contas a receber nas contas ligadas. ${caixaEsc(notaPlano)}</p>
+      <div class="cxd-wrap">
+        <table class="cxd-analitico">
+          <thead><tr><th>Dia útil</th>${cab}<th class="cxd-num">Plano</th></tr></thead>
+          <tbody>${linhas.join("")}</tbody>
+        </table>
+      </div>`;
+  },
+
+  abasHtml() {
+    const tabs = [
+      { id: "movimento", label: "Fluxo de caixa diário", icon: "calendar-days" },
+      { id: "receber", label: "Valor a Receber", icon: "banknote" }
+    ];
+    const atual = this.aba === "receber" ? "receber" : "movimento";
+    return `<div class="ml-tabs cxd-abas" role="tablist">${tabs.map((t) => `
+      <button type="button" role="tab" aria-selected="${atual === t.id ? "true" : "false"}"
+        class="ml-tab${atual === t.id ? " is-active" : ""}"
+        onclick="FluxoCaixaDiarioApp.setAba('${t.id}')"><i data-lucide="${t.icon}"></i> ${t.label}</button>`).join("")}</div>`;
+  },
+
+  /* ---------- Valor a Receber ----------
+     O batimento das 7h (api/_lib/morning-warmup.js, rota valor-receber) grava caixa_valor_receber/emp_<empresa>.
+     A tela só lê esse resultado; o botão Atualizar refaz a busca no Sienge e grava por cima.
+     O filtro vrItensDoIncome é o mesmo do servidor: mantenha os dois iguais. */
+  VR_COL: "caixa_valor_receber",
+  VR_MESES_VENCIDAS: 12,
+  vr: null,
+
+  vrEmpresasAlvo() {
+    if (this.companyIds.length) return this.companyIds.map(String);
+    return this.empresasGeridas().map((c) => String(c.id));
+  },
+
+  vrJanela() {
+    const n = new Date();
+    const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    return {
+      ini: iso(new Date(n.getFullYear(), n.getMonth() - this.VR_MESES_VENCIDAS, 1)),
+      fim: iso(new Date(n.getFullYear(), n.getMonth() + 4, 0))
+    };
+  },
+
+  vrItensDoIncome(rows, ini, fim) {
+    const out = [];
+    const visto = {};
+    (rows || []).forEach((r) => {
+      if (!r) return;
+      const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
+      if (doc === "CT" || doc === "TC") return;
+      const numero = String(r.documentNumber || "");
+      const numUp = numero.toUpperCase();
+      if (numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0) return;
+      const recs = Array.isArray(r.receipts) ? r.receipts : [];
+      if (recs.some((x) => x && x.operationTypeName)) return;
+      const due = String(r.dueDate || "").slice(0, 10);
+      if (!due || due < ini || due > fim) return;
+      const valor = Number(r.correctedBalanceAmount != null ? r.correctedBalanceAmount : (r.balanceAmount != null ? r.balanceAmount : r.originalAmount)) || 0;
+      if (!(valor > 0.009)) return;
+      const titulo = r.billId != null ? String(r.billId) : "";
+      const parcela = r.installmentId != null ? String(r.installmentId) : "";
+      const chave = titulo + "|" + parcela + "|" + due;
+      if (visto[chave]) return;
+      visto[chave] = true;
+      const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
+      const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
+      out.push({
+        empresa: r.companyName || "",
+        companyId: r.companyId != null ? String(r.companyId) : "",
+        doc,
+        descricao: numero,
+        titulo,
+        parcela,
+        vencimento: due,
+        valor: Math.round(valor * 100) / 100,
+        cliente: r.clientName || "",
+        cc: cat.costCenterId != null ? String(cat.costCenterId) : "",
+        ccNome: cat.costCenterName || ""
+      });
+    });
+    return out;
+  },
+
+  /** Lê o que o batimento (ou a última atualização manual) gravou. */
+  async carregarVr() {
+    // caixa_valor_receber (+ _itens) no Supabase: o snapshot de imitação traz os docs emp_<empresa> com itens em
+    // texto JSON, como antes (o _estado do cron não vem).
+    const D = window.DadosFinanceiro;
+    const token = {};
+    this._vrToken = token;
+    this.vr = Object.assign({}, this.vr || {}, { carregando: true, erro: "" });
+    if (this.aba === "receber") this.render();
+    if (!D) {
+      this.vr = { carregando: false, erro: "O Supabase não está disponível.", docs: {} };
+      if (this.aba === "receber") this.render();
+      return;
+    }
+    try {
+      const snap = await D.listarValorReceber();
+      if (this._vrToken !== token) return;
+      const docs = {};
+      snap.forEach((d) => {
+        if (!/^emp_/.test(d.id)) return;
+        const data = d.data() || {};
+        let itens = [];
+        try { itens = JSON.parse(data.itens || "[]"); } catch (e) { itens = []; }
+        docs[String(data.companyId || d.id.slice(4))] = {
+          itens, atualizadoEm: data.atualizadoEm || "", origem: data.origem || "", por: data.por || "", falhas: Number(data.falhas) || 0, ini: data.ini || "", fim: data.fim || ""
+        };
+      });
+      this.vr = Object.assign({}, this.vr, { carregando: false, erro: "", docs });
+    } catch (e) {
+      if (this._vrToken !== token) return;
+      console.warn("[Caixa diário] valor a receber", e);
+      this.vr = Object.assign({}, this.vr, { carregando: false, erro: "Não consegui ler o Valor a Receber gravado: " + ((e && e.message) || e) });
+    }
+    if (this.aba === "receber") this.render();
+  },
+
+  /** Botão Atualizar: busca no Sienge as empresas da tela e grava o resultado para todos. */
+  async atualizarVr() {
+    if (this.vr && this.vr.atualizando) return;
+    const D = window.DadosFinanceiro;
+    if (typeof window.siengeFetchWithRetry !== "function") { alert("A conexão com o Sienge não está disponível."); return; }
+    const empresas = this.vrEmpresasAlvo();
+    if (!empresas.length) { alert("Nenhuma empresa gerida pelo grupo para atualizar."); return; }
+    const jan = this.vrJanela();
+    const fatias = [];
+    let d = new Date(jan.ini + "T12:00:00");
+    const last = new Date(jan.fim + "T12:00:00");
+    const iso = (x) => x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0");
+    while (d <= last) {
+      fatias.push({ s: iso(new Date(d.getFullYear(), d.getMonth(), 1)), e: iso(new Date(d.getFullYear(), d.getMonth() + 1, 0)) });
+      d = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+    }
+    const get = async (s, e, cid, depth) => {
+      const path = "/bulk-data/v1/income?startDate=" + encodeURIComponent(s) + "&endDate=" + encodeURIComponent(e)
+        + "&selectionType=D&correctionIndexerId=0&correctionDate=2022-01-01&companyId=" + encodeURIComponent(cid);
+      try {
+        const payload = await window.siengeFetchWithRetry(path, 2);
+        return (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (Number(err && err.status) === 404) return [];
+        if (Number(err && err.status) !== 507 || depth > 6 || s >= e) throw err;
+        const dias = Math.round((new Date(e + "T12:00:00") - new Date(s + "T12:00:00")) / 86400000);
+        const m = caixaAddDays(s, Math.floor(dias / 2));
+        const left = await get(s, m, cid, depth + 1);
+        const right = await get(caixaAddDays(m, 1), e, cid, depth + 1);
+        return left.concat(right);
+      }
+    };
+    const user = (window.AppState && AppState.currentUser) || {};
+    this.vr = Object.assign({}, this.vr || {}, { atualizando: true, erro: "", passo: "" });
+    this.render();
+    const erros = [];
+    for (let i = 0; i < empresas.length; i++) {
+      const cid = empresas[i];
+      let itens = [];
+      let falhas = 0;
+      for (let j = 0; j < fatias.length; j++) {
+        this.vr.passo = `Empresa ${cid} (${i + 1} de ${empresas.length}) · mês ${j + 1} de ${fatias.length}`;
+        const el = document.getElementById("cxd-vr-passo");
+        if (el) el.textContent = this.vr.passo;
+        try {
+          itens = itens.concat(this.vrItensDoIncome(await get(fatias[j].s, fatias[j].e, cid, 0), jan.ini, jan.fim));
+        } catch (e) {
+          falhas += 1;
+          console.warn("[Caixa diário] valor a receber", cid, fatias[j].s, e);
+        }
+      }
+      if (falhas === fatias.length) { erros.push(cid); continue; }
+      const vistos = {};
+      itens = itens.filter((it) => {
+        const k = it.titulo + "|" + it.parcela + "|" + it.vencimento;
+        if (vistos[k]) return false;
+        vistos[k] = true;
+        return true;
+      }).sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+      const registro = { companyId: String(cid), ini: jan.ini, fim: jan.fim, atualizadoEm: new Date().toISOString(), origem: "manual", por: user.name || user.email || "", falhas, itens: JSON.stringify(itens) };
+      const docs = Object.assign({}, (this.vr && this.vr.docs) || {});
+      docs[String(cid)] = Object.assign({}, registro, { itens });
+      this.vr.docs = docs;
+      if (D) {
+        // RPC gravar_caixa_valor_receber: troca o cabeçalho emp_<empresa> e os itens numa transação.
+        try { await D.gravarValorReceber(registro); } catch (e) { console.warn("[Caixa diário] gravar valor a receber", e); }
+      }
+    }
+    this.vr.atualizando = false;
+    this.vr.passo = "";
+    if (erros.length) this.vr.erro = "Não consegui ler no Sienge a(s) empresa(s) " + erros.join(", ") + ". Ficou valendo a leitura anterior.";
+    this.render();
+  },
+
+  /** Fim da semana corrente (domingo). */
+  vrFimSemana(hoje) {
+    const d = new Date(hoje + "T12:00:00");
+    return caixaAddDays(hoje, (7 - d.getDay()) % 7);
+  },
+
+  vrRotuloAtualizacao(docs, empresas) {
+    const lidos = empresas.map((c) => docs[c]).filter(Boolean);
+    if (!lidos.length) return "";
+    const fmt = (iso) => {
+      const d = new Date(iso);
+      if (isNaN(d)) return "";
+      return d.toLocaleDateString("pt-BR") + " às " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    };
+    const maisAntigo = lidos.slice().sort((a, b) => String(a.atualizadoEm).localeCompare(String(b.atualizadoEm)))[0];
+    const quem = maisAntigo.origem === "manual" ? ("atualização manual" + (maisAntigo.por ? " de " + maisAntigo.por : "")) : "batimento das 7h";
+    let txt = `Informação atualizada em ${fmt(maisAntigo.atualizadoEm)} (${quem}).`;
+    const faltam = empresas.filter((c) => !docs[c]);
+    if (faltam.length) txt += ` Sem leitura ainda para a(s) empresa(s) ${faltam.join(", ")}.`;
+    if (lidos.some((x) => x.falhas)) txt += " Parte dos meses não respondeu no Sienge nessa leitura.";
+    return txt;
+  },
+
+  valorAReceberHtml() {
+    const v = this.vr || {};
+    const docs = v.docs || {};
+    const empresas = this.vrEmpresasAlvo();
+    const excl = this.excludedCcs();
+    const hoje = this.hoje();
+    const fimSemana = this.vrFimSemana(hoje);
+    const lista = [];
+    empresas.forEach((c) => {
+      const d = docs[c];
+      if (!d) return;
+      (d.itens || []).forEach((it) => {
+        if (it.cc && excl.has(String(it.cc))) return;
+        lista.push(it);
+      });
+    });
+    lista.sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento)) || String(a.titulo).localeCompare(String(b.titulo)));
+    const grupos = [
+      { id: "vencidas", rotulo: "Vencidas", itens: lista.filter((it) => it.vencimento < hoje) },
+      { id: "semana", rotulo: `Entradas na semana (${caixaFmtDate(hoje)} a ${caixaFmtDate(fimSemana)})`, itens: lista.filter((it) => it.vencimento >= hoje && it.vencimento <= fimSemana) },
+      { id: "depois", rotulo: "Demais entradas", itens: lista.filter((it) => it.vencimento > fimSemana) }
+    ];
+    const atualizacao = this.vrRotuloAtualizacao(docs, empresas);
+    const barra = `<div class="cxd-vr-barra">
+        <div class="cxd-vr-info">${v.atualizando
+          ? `<span class="loading-spinner" style="width:14px;height:14px;"></span> <span id="cxd-vr-passo">${caixaEsc(v.passo || "Buscando no Sienge…")}</span>`
+          : (v.carregando && !Object.keys(docs).length ? "Lendo o Valor a Receber…" : caixaEsc(atualizacao || "Ainda não há leitura gravada. Clique em Atualizar."))}</div>
+        <button type="button" class="btn btn-primary cc-atualizar" ${v.atualizando ? "disabled" : ""} onclick="FluxoCaixaDiarioApp.atualizarVr()"><i data-lucide="refresh-cw" style="width:14px;height:14px;"></i> Atualizar</button>
+      </div>
+      ${v.erro ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(v.erro)}</div>` : ""}`;
+    const cards = grupos.map((g) => {
+      const tot = g.itens.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+      return `<div class="cxd-vr-card is-${g.id}"><span>${caixaEsc(g.id === "semana" ? "Entradas na semana" : g.rotulo)}</span><strong>${caixaMoney(tot)}</strong><small>${g.itens.length} título(s)</small></div>`;
+    }).join("");
+    const nomeEmp = (it) => it.empresa || this.companyName(it.companyId) || "—";
+    const ccTxt = (it) => it.cc ? (it.cc + (it.ccNome || this.ccNomeDe(it.cc) ? " - " + (it.ccNome || this.ccNomeDe(it.cc)) : "")) : "—";
+    const corpo = grupos.map((g) => {
+      const tot = g.itens.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+      const head = `<tr class="cxd-vr-grupo is-${g.id}"><td colspan="7">${caixaEsc(g.rotulo)} · ${g.itens.length} título(s)</td><td class="is-right">${caixaMoney(tot)}</td><td></td></tr>`;
+      if (!g.itens.length) return head + `<tr><td colspan="9" style="text-align:center;color:#64748b;">Nada neste grupo.</td></tr>`;
+      return head + g.itens.map((it) => {
+        const atraso = it.vencimento < hoje ? Math.round((new Date(hoje + "T12:00:00") - new Date(it.vencimento + "T12:00:00")) / 86400000) : 0;
+        return `<tr>
+          <td title="${caixaEsc(nomeEmp(it))}">${caixaEsc(it.companyId || "—")}</td>
+          <td title="${caixaEsc(ccTxt(it))}">${caixaEsc(ccTxt(it))}</td>
+          <td>${caixaEsc(it.doc || "—")}</td>
+          <td title="${caixaEsc(it.descricao || "")}">${caixaEsc(it.descricao || "—")}</td>
+          <td>${caixaEsc(it.titulo || "—")}${it.parcela ? `<span style="color:#64748b;"> / ${caixaEsc(it.parcela)}</span>` : ""}</td>
+          <td>${caixaFmtDate(it.vencimento)}</td>
+          <td class="is-center">${atraso ? atraso : "—"}</td>
+          <td class="is-right">${caixaMoney(it.valor)}</td>
+          <td title="${caixaEsc(it.cliente || "")}">${caixaEsc(it.cliente || "—")}</td>
+        </tr>`;
+      }).join("");
+    }).join("");
+    const total = lista.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+    return `${barra}
+      <div class="cxd-vr-cards">${cards}</div>
+      <div class="cc-scroll">
+        <table class="cc-table cxd-vr-table">
+          <colgroup><col style="width:48px"><col style="width:20%"><col style="width:70px"><col style="width:16%"><col style="width:90px"><col style="width:86px"><col style="width:64px"><col style="width:110px"><col></colgroup>
+          <thead><tr>
+            <th>Emp.</th><th>Centro de custo</th><th>Documento</th><th>Descrição</th><th>Título</th><th>Vencimento</th><th class="is-center">Dias atraso</th><th class="is-right">Valor a receber</th><th>Cliente</th>
+          </tr></thead>
+          <tbody>
+            ${corpo}
+            <tr class="cxd-vr-total"><td colspan="7">Total</td><td class="is-right">${caixaMoney(total)}</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>`;
+  },
+
+  mesesRadarHtml() {
+    return `<div class="cxd-radar-meses">${this.mesesDaTela().map((ym) => {
+      const on = ym === this.mesRadar();
+      return `<button type="button" class="cxd-radar-mes${on ? " is-on" : ""}" onclick="FluxoCaixaDiarioApp.setRadarYm('${ym}')">${caixaEsc(this.nomeMes(ym))}</button>`;
+    }).join("")}</div>`;
+  },
+
+  receberHtml() {
+    const ym = this.mesRadar();
+    const vivo = this.planoReceberVivo(ym);
+    const radar = this.radar && this.radar.ym === ym ? this.radar : null;
+    const base = radar && Array.isArray(radar.receber) ? radar.receber : vivo.itens;
+    const incerto = radar && Array.isArray(radar.incerto) ? radar.incerto : vivo.incerto;
+    const soma = (lista, grupo) => (lista || []).reduce((s, it) => s + (grupo && it.grupo !== grupo ? 0 : (Number(it.valor) || 0)), 0);
+    const plano = soma(base);
+    const g1 = soma(base, "G1");
+    const g2 = soma(base, "G2");
+    const g3 = soma(incerto, "G3") || soma(incerto);
+    const dias = this.diasUteisDoMes(ym);
+    const hoje = this.hoje();
+    const passados = dias.filter((d) => d <= hoje);
+    const fatia = dias.length ? plano / dias.length : 0;
+    const previstoAteHoje = fatia * (ym < hoje.slice(0, 7) ? dias.length : passados.length);
+    const real = this.realizadoMes(ym).entrar;
+    const gap = real - previstoAteHoje;
+    const ritmo = ym > hoje.slice(0, 7)
+      ? "Este mês ainda não começou. Grave o radar neste fechamento para congelar o que já está previsto."
+      : "Com " + passados.length + " de " + dias.length + " dias úteis, a média do plano era " + caixaMoney(previstoAteHoje) + ". Entrou no caixa " + caixaMoney(real) + ". " + (gap >= 0 ? "Está " + caixaMoney(gap) + " à frente do ritmo." : "Falta " + caixaMoney(-gap) + " para o ritmo do plano.");
+    const card = (rotulo, valor, cor) => `<div class="cxd-radar-card"><span>${rotulo}</span><strong style="color:${cor}">${caixaMoney(valor)}</strong></div>`;
+    const linhas = dias.map((d, i) => {
+      const previstoAcum = fatia * (i + 1);
+      let realizado = 0;
+      (this.days || []).forEach((day) => {
+        if (day && day.date === d && day.real) realizado = Number(day.entrar) || 0;
+      });
+      if (d > hoje) return "";
+      return `<tr><td>${caixaFmtDate(d)}</td><td class="cxd-num">${caixaMoney(fatia)}</td><td class="cxd-num">${caixaMoney(previstoAcum)}</td><td class="cxd-num">${caixaMoney(realizado)}</td></tr>`;
+    }).join("");
+    const aviso = radar
+      ? "Radar gravado em " + caixaFmtDate(String(radar.em || "").slice(0, 10)) + ". A comparação usa essa foto, não o que foi aberto depois."
+      : "Esta ainda é a visão de agora. Grave o radar no último dia útil antes do mês para congelar o que já estava previsto.";
+    return `<div class="cxd-radar">
+      ${this.mesesRadarHtml()}
+      <p class="cxd-radar-nota">G1 paga dentro do mês do vencimento. G2 paga até 28 dias depois, mesmo no mês seguinte. G3 paga depois de 29 dias e fica fora do plano firme. O valor do mês é espalhado por igual nos dias úteis, como a média diária do antigo PRV.</p>
+      <p class="cxd-radar-nota">${caixaEsc(aviso)}</p>
+      <div class="cxd-radar-cards">
+        ${card("G1 no plano", g1, "#105436")}
+        ${card("G2 no plano", g2, "#c2410c")}
+        ${card("G3 fora do plano", g3, "#64748b")}
+        ${card("Plano do mês", plano, "#0f172a")}
+        ${card("Previsto até hoje", previstoAteHoje, "#0f172a")}
+        ${card("Recebido no mês", real, gap < -0.5 ? "#b91c1c" : "#105436")}
+      </div>
+      <p class="cxd-radar-nota">${caixaEsc(ritmo)}</p>
+      ${this.comparacaoHtml(plano)}
+      <div style="display:flex;justify-content:flex-end;margin:0 0 10px;">
+        <button type="button" class="btn btn-primary" onclick="FluxoCaixaDiarioApp.gravarRadar()">${radar ? "Atualizar radar" : "Gravar radar"}</button>
+      </div>
+      <div class="cxd-wrap">
+        <table class="cxd-analitico">
+          <thead><tr><th>Dia útil</th><th class="cxd-num">Média do dia</th><th class="cxd-num">Plano acumulado</th><th class="cxd-num">Recebido no dia</th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="4">Nenhum dia útil passado neste mês.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+  },
+
+  pagarHtml() {
+    const ym = this.mesRadar();
+    const vivo = this.planoPagarVivo(ym);
+    const radar = this.radar && this.radar.ym === ym ? this.radar : null;
+    const base = radar && Array.isArray(radar.pagar) ? radar.pagar : vivo;
+    const porDept = {};
+    const garantir = (nome) => porDept[nome] || (porDept[nome] = { radar: 0, pagoRadar: 0, soMes: 0 });
+    base.forEach((p) => {
+      const nome = p.departamento || "Sem departamento";
+      garantir(nome).radar += Number(p.valor) || 0;
+    });
+    const real = this.realizadoMes(ym);
+    const deptDoTitulo = {};
+    base.forEach((p) => {
+      if (p.titulo) deptDoTitulo[String(p.titulo)] = p.departamento || "Sem departamento";
+    });
+    real.saidas.forEach((p) => {
+      const titulo = String(p.titulo || "");
+      const valor = Math.abs(Number(p.valor) || 0);
+      if (titulo && deptDoTitulo[titulo]) garantir(deptDoTitulo[titulo]).pagoRadar += valor;
+      else garantir(p.departamento || p.plano || p.ccNome || "Sem departamento").soMes += valor;
+    });
+    const linhas = Object.keys(porDept).sort((a, b) => a.localeCompare(b, "pt")).map((nome) => {
+      const r = porDept[nome];
+      return `<tr><td>${caixaEsc(nome)}</td><td class="cxd-num">${caixaMoney(r.radar)}</td><td class="cxd-num">${caixaMoney(r.pagoRadar)}</td><td class="cxd-num">${caixaMoney(r.soMes)}</td></tr>`;
+    }).join("");
+    const tot = Object.values(porDept).reduce((s, r) => ({
+      radar: s.radar + r.radar,
+      pagoRadar: s.pagoRadar + r.pagoRadar,
+      soMes: s.soMes + r.soMes
+    }), { radar: 0, pagoRadar: 0, soMes: 0 });
+    const aviso = radar
+      ? "Radar gravado em " + caixaFmtDate(String(radar.em || "").slice(0, 10)) + ". Pagamento com título que não estava nessa foto entra como só aconteceu no mês."
+      : "Sem radar gravado, a coluna do plano é o que está previsto agora. Grave no último dia útil antes do mês para separar o que já estava no controle.";
+    return `<div class="cxd-radar">
+      ${this.mesesRadarHtml()}
+      <p class="cxd-radar-nota">Por departamento: o que já estava previsto para pagar, o que desse plano já foi baixado e o que só apareceu durante o mês.</p>
+      <p class="cxd-radar-nota">${caixaEsc(aviso)}</p>
+      <div class="cxd-radar-cards">
+        <div class="cxd-radar-card"><span>No radar</span><strong>${caixaMoney(tot.radar)}</strong></div>
+        <div class="cxd-radar-card"><span>Pago do radar</span><strong style="color:#105436">${caixaMoney(tot.pagoRadar)}</strong></div>
+        <div class="cxd-radar-card"><span>Só aconteceu no mês</span><strong style="color:#b91c1c">${caixaMoney(tot.soMes)}</strong></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin:0 0 10px;">
+        <button type="button" class="btn btn-primary" onclick="FluxoCaixaDiarioApp.gravarRadar()">${radar ? "Atualizar radar" : "Gravar radar"}</button>
+      </div>
+      <div class="cxd-wrap">
+        <table class="cxd-analitico">
+          <thead><tr><th>Departamento</th><th class="cxd-num">No radar</th><th class="cxd-num">Pago do radar</th><th class="cxd-num">Só no mês</th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="4">Nenhuma previsão de pagamento neste mês.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+  },
+
+  rotuloPeriodo() {
+    const meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+    const b = this.monthBounds();
+    const nome = (iso) => {
+      const p = String(iso || "").split("-");
+      return (meses[Number(p[1]) - 1] || "") + " de " + p[0];
+    };
+    return nome(b.start) + " a " + nome(b.end);
+  },
+
+  companyWanted(id) {
+    if (!this.companyIds.length) return true;
+    return this.companyIds.indexOf(String(id || "")) >= 0;
+  },
+
+  companyKey() {
+    return String(this.companyIds[0] || "");
+  },
+
+  async ensureCompanies() {
+    if (this.companies.length) return;
+    const local = (window.AppState && AppState.companies) || [];
+    if (local.length) {
+      this.companies = local.map((c) => ({ id: String(c.id), name: c.name || c.tradeName || "" }));
+      return;
+    }
+    if (window.SiengeApiService && typeof SiengeApiService.getCompanies === "function") {
+      try {
+        const list = await SiengeApiService.getCompanies(false);
+        const rows = Array.isArray(list) ? list : ((list && list.results) || []);
+        this.companies = rows.map((c) => ({ id: String(c.id), name: c.name || c.tradeName || "" }));
+      } catch (e) {
+        this.companies = [];
+      }
+    }
+  },
+
+  async ensureCcCompany() {
+    if (this._ccCompany) return;
+    const map = {};
+    const all = [];
+    let list = (window.AppState && (AppState.cachedCostCenters || AppState.costCenters)) || [];
+    if (!list.length && window.SiengeApiService && typeof SiengeApiService.getCostCenters === "function") {
+      try { list = await SiengeApiService.getCostCenters(); } catch (e) { list = []; }
+    }
+    (list || []).forEach((c) => {
+      const id = String(c.id || "");
+      const co = c.companyId || c.idCompany || (c.company && c.company.id);
+      if (id && co != null && co !== "") map[id] = String(co);
+      if (id) all.push({ id, name: String(c.name || c.description || "").trim(), companyId: co != null ? String(co) : "" });
+    });
+    this._ccCompany = map;
+    this._ccAll = all;
+  },
+
+  /** Empresa 1, ou a primeira gerida cujo nome é Moura Leite. */
+  empresaPadrao(ids) {
+    const lista = ids || this.empresasGeridas().map((c) => String(c.id));
+    if (lista.indexOf("1") >= 0) return "1";
+    const porNome = this.empresasGeridas()
+      .filter((c) => lista.indexOf(String(c.id)) >= 0 && /moura\s+leite/i.test(c.name || ""))
+      .sort((a, b) => Number(a.id) - Number(b.id));
+    if (porNome.length) return String(porNome[0].id);
+    const sorted = lista.slice().sort((a, b) => Number(a) - Number(b) || String(a).localeCompare(String(b)));
+    return sorted[0] || "";
+  },
+
+  ensureCompany() {
+    const ids = this.empresasGeridas().map((c) => String(c.id));
+    if (this.companyIds.length === 1 && ids.indexOf(this.companyIds[0]) >= 0) return;
+    const pick = this.empresaPadrao(ids);
+    this.companyIds = pick ? [pick] : [];
+    if (pick) {
+      try { localStorage.setItem("cxd_company", pick); } catch (e) {}
+    }
+  },
+
+  normNum(v) {
+    return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+  },
+
+  /**
+   * Contas ligadas/desligadas, tipo e empreendimentos fora do caixa ficam no Supabase
+   * (caixa_diario_config_contas / _cc_excluidos, montados no formato do doc saldo_inicial).
+   * Relê a cada consulta (outro operador pode ter mudado) e espera o Supabase subir (as funções da camada esperam
+   * o cliente); sem isso, abrir a tela logo após o login mostrava todas as contas ligadas.
+   */
+  async loadFlags() {
+    const D = window.DadosFinanceiro;
+    if (!D) return;
+    try {
+      const data = (await D.lerConfigCaixa()) || {};
+      // Contas ligadas: o que está gravado é o padrão de todos; o liga/desliga sem gravar vale só nesta tela.
+      this.flags = Object.assign({}, data.contas || {}, this._flagsTeste || {});
+      this._padraoContas = data.contas || {};
+      this._padraoInfo = { por: data.contasGravadoPor || data.updatedBy || "", em: data.contasGravadoEm || data.updatedAt || "" };
+      this.tipos = Object.assign({}, data.tipos || {}, this._tiposPendentes || {});
+      this.ccExcl = Object.assign({}, data.empreendimentosExcluidos || {}, this._ccPendentes || {});
+      this._flagsLoaded = true;
+    } catch (e) {
+      console.warn("[Caixa diário] configuração do caixa", e);
+    }
+  },
+
+  async saveConfig(patch, erroMsg) {
+    const D = window.DadosFinanceiro;
+    if (!D) {
+      alert("O Supabase não está disponível. A alteração vale só nesta consulta.");
+      return false;
+    }
+    const user = (window.AppState && AppState.currentUser) || {};
+    try {
+      // Merge por chave (antes setDoc com merge): só as linhas do patch; atualizado_em vem do servidor.
+      await D.gravarConfigCaixa(Object.assign({}, patch, {
+        updatedBy: user.name || user.email || ""
+      }));
+      return true;
+    } catch (e) {
+      console.error("[Caixa diário] gravar configuração", e);
+      alert(erroMsg || "Não consegui gravar a alteração na nuvem.");
+      return false;
+    }
+  },
+
+  /** Enquanto a gravação não confirma, a mudança vale sobre o que vier da nuvem. */
+  async _salvarPendente(bucket, key, value, patch, erroMsg) {
+    this[bucket] = this[bucket] || {};
+    this[bucket][key] = value;
+    const ok = await this.saveConfig(patch, erroMsg);
+    if (ok && this[bucket][key] === value) delete this[bucket][key];
+  },
+
+  readCustom() {
+    let custom = {};
+    try {
+      const raw = localStorage.getItem("crm_centros_custo_custom") || "{}";
+      custom = (typeof window.parseCentrosCustoCustomMap === "function")
+        ? window.parseCentrosCustoCustomMap(raw)
+        : (JSON.parse(raw) || {});
+    } catch (e) {
+      custom = {};
+    }
+    if (window.CentrosCustoState && CentrosCustoState.customFields && Object.keys(CentrosCustoState.customFields).length) {
+      custom = Object.assign({}, custom, CentrosCustoState.customFields);
+    }
+    return custom || {};
+  },
+
+  excludedCcs() {
+    return new Set((this.ccExcl[this.companyKey()] || []).map(String));
+  },
+
+  ccItems() {
+    return (this._ccAll || [])
+      .filter((c) => this.companyWanted(c.companyId))
+      .map((c) => ({ id: c.id, name: c.name.toUpperCase(), label: c.id + " - " + c.name.toUpperCase() }));
+  },
+
+  ccIncluidos() {
+    const excl = this.excludedCcs();
+    return this.ccItems().map((c) => c.id).filter((id) => !excl.has(id));
+  },
+
+  /**
+   * Avaré na empresa 1: 13700/13800/13900/14000 são da Moura Leite e
+   * 13701/13801/13901/14001 são do parceiro. Plano com rateio sai pela conta do parceiro.
+   * Obra exclusiva sai pela 99391-6 e permanece no caixa.
+   */
+  paresAvare() {
+    return [["13700", "13701"], ["13800", "13801"], ["13900", "13901"], ["14000", "14001"]];
+  },
+
+  ccBaseAvare(id) {
+    const cc = String(id || "");
+    return this.paresAvare().some((p) => p[0] === cc);
+  },
+
+  /** Centro do parceiro em Avaré. 13701/13801 fase 1, 13901/14001 fase 2. */
+  ccParceiroAvare(id) {
+    const cc = String(id || "");
+    if (cc === "13701" || cc === "13801") return 1;
+    if (cc === "13901" || cc === "14001") return 2;
+    return 0;
+  },
+
+  contaExclusiva(num) {
+    const d = String(num || "").replace(/\D/g, "");
+    return d === "993916" || d === "0993916";
+  },
+
+  /** Credores parceiros de Avaré: Agua do Burrinho e Lalim Participações. */
+  ehParceiroAvare(credor) {
+    const n = String(credor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    return /BURRINHO/.test(n) || /LALIM/.test(n);
+  },
+
+  /**
+   * Conta bancária de saída para os parceiros de Avaré (Agua do Burrinho e Lalim):
+   * - Centros de custo 13700 e 13800 (Fase 1): conta 99466-6
+   * - Centros de custo 13900 e 14000 (Fase 2): conta 98746-2
+   */
+  contaSaidaParceiroAvare(item) {
+    if (!item) return null;
+    const credor = item.credor || item.party || item.favorecido || "";
+    if (!this.ehParceiroAvare(credor)) return null;
+
+    const ccs = [];
+    if (item.ccId) ccs.push(String(item.ccId));
+    if (item.cc) ccs.push(String(item.cc));
+    if (Array.isArray(item.shares)) {
+      item.shares.forEach((s) => { if (s && s.cc) ccs.push(String(s.cc)); });
+    }
+    const txt = [item.ccNome, item.historico, item.documento, item.plano, item.departamento].filter(Boolean).join(" ");
+
+    // Centro de custo 13700 e 13800 -> conta 99466-6
+    if (ccs.some((c) => c === "13700" || c === "13800" || c === "13701" || c === "13801") ||
+        /\b13700\b|\b13800\b/i.test(txt)) {
+      return "99466-6";
+    }
+
+    // Centro de custo 13900 e 14000 (Fase 2) -> conta 98746-2
+    if (ccs.some((c) => c === "13900" || c === "14000" || c === "13901" || c === "14001") ||
+        /\b13900\b|\b14000\b/i.test(txt)) {
+      return "98746-2";
+    }
+
+    if (/FASE\s*(?:I\b|1\b)/i.test(txt)) return "99466-6";
+    if (/FASE\s*(?:II\b|2\b)/i.test(txt)) return "98746-2";
+
+    return null;
+  },
+
+  ehRepasse(item) {
+    const nomes = [];
+    if (item && item.plano) nomes.push(item.plano);
+    if (item && item.planos) nomes.push.apply(nomes, item.planos);
+    const n = nomes.join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    return /\bREPASSE/.test(n) && !/ADIANTAMENTO/.test(n);
+  },
+
+  /**
+   * Parte do título que fica fora do caixa.
+   * Repasse nesses quatro empreendimentos sai inteiro do contas a pagar da empresa 1,
+   * mesmo lançado só no centro da Moura Leite. Despesa exclusiva (obra na 99391-6),
+   * só nesse centro, continua. Rateio (os dois centros, ou pago na conta do parceiro) sai.
+   */
+  shareFora(shares, excl, item) {
+    let lista = (Array.isArray(shares) ? shares : []).filter((x) => x && x.cc);
+    if (!lista.length && item && item.ccId) lista = [{ cc: String(item.ccId), share: 1 }];
+    const ccs = new Set(lista.map((x) => String(x.cc)));
+    if (item && item.ccId) ccs.add(String(item.ccId));
+    const empresa1 = !item || item.companyId == null || item.companyId === "" || String(item.companyId) === "1";
+    if (empresa1 && this.ehRepasse(item) && [...ccs].some((cc) => this.ccBaseAvare(cc))) {
+      if (this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
+      return 1;
+    }
+    const rateio = this.paresAvare().some(([a, b]) => ccs.has(a) && ccs.has(b));
+    return lista.reduce((s, x) => {
+      const cc = String(x.cc || "");
+      if (!excl.has(cc)) return s;
+      if (empresa1 && this.ehParceiroAvare(item && (item.credor || item.party))) return 0;
+      // Pago pela conta final 1-6, mas o centro é da parceria de Avaré.
+      // O dinheiro saiu da conta que está no caixa. A transferência da conta da parceria
+      // para a 1-6 entra no mesmo caixa e zera essa dívida. Não tirar só o pagamento.
+      if (empresa1 && this.contaExclusiva(item && item.conta) && this.ccParceiroAvare(cc)) return s;
+      if (empresa1 && this.ccBaseAvare(cc) && !rateio && !this.ehRepasse(item)) {
+        const conta = item && item.conta;
+        if (conta && !this.contaExclusiva(conta)) return s + (Number(x.share) || 0);
+        return s;
+      }
+      return s + (Number(x.share) || 0);
+    }, 0);
+  },
+
+  /** Conta de parceria dos empreendimentos fora do caixa. A 99391-6 não entra: paga a obra exclusiva. */
+  contasBloqueadas() {
+    const custom = this._custom || {};
+    const set = new Set();
+    this.excludedCcs().forEach((id) => {
+      if (this.ccBaseAvare(id)) return;
+      const cp = custom[id] && custom[id].conta_parceria;
+      if (!cp || !cp.numero) return;
+      const n = this.normNum(cp.numero);
+      if (this.contaExclusiva(n)) return;
+      set.add(n);
+    });
+    return set;
+  },
+
+  async setCcExcl(ids) {
+    const co = this.companyKey();
+    this.ccExcl[co] = ids.map(String);
+    this.rebuild();
+    this.render();
+    await this._salvarPendente("_ccPendentes", co, this.ccExcl[co], { empreendimentosExcluidos: { [co]: this.ccExcl[co] } }, "Não consegui gravar os empreendimentos na nuvem.");
+  },
+
+  accountKey(a) {
+    return String(a.companyId || "") + "|" + String(a.number || a.name || "").trim().toUpperCase();
+  },
+
+  accountBlocked(a) {
+    return (this._bloq || this.contasBloqueadas()).has(this.normNum(a.number));
+  },
+
+  accountIncluded(a) {
+    if (a && a.tipo === "mutuo") return false;
+    return !this.accountBlocked(a) && this.flags[this.accountKey(a)] !== false;
+  },
+
+  saldoBase(a) {
+    return Number(this.openingDate ? a.opening : a.amount) || 0;
+  },
+
+  recalcSaldo() {
+    this.totals.saldo = (this.accounts || [])
+      .filter((a) => this.accountIncluded(a))
+      .reduce((s, a) => s + this.saldoBase(a), 0);
+  },
+
+  /** Liga/desliga sem gravar: vale só nesta tela até clicar em "Gravar disponível". */
+  setFlag(key, on) {
+    this._flagsTeste = this._flagsTeste || {};
+    const gravado = (this._padraoContas || {})[key] !== false;
+    if (!!on === gravado) delete this._flagsTeste[key];
+    else this._flagsTeste[key] = !!on;
+    this.flags[key] = !!on;
+    this.rebuild();
+    this.render();
+  },
+
+  qtdeDisponivelAlterado() {
+    return Object.keys(this._flagsTeste || {}).length;
+  },
+
+  /** Grava as contas ligadas como o padrão do disponível para todos. */
+  async gravarDisponivel() {
+    const mud = Object.assign({}, this._flagsTeste || {});
+    const n = Object.keys(mud).length;
+    if (!n) { alert("Nenhuma conta foi ligada ou desligada desde o último padrão gravado."); return; }
+    const pergunta = "Gravar " + n + " alteração(ões) como padrão do disponível?\n\nTodos que abrirem o Fluxo de caixa diário passam a ver estas contas ligadas.";
+    const segue = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!segue) return;
+    const user = (window.AppState && AppState.currentUser) || {};
+    const ok = await this.saveConfig({
+      contas: mud,
+      contasGravadoPor: user.name || user.email || "",
+      contasGravadoEm: new Date().toISOString()
+    }, "Não consegui gravar as contas do disponível no Firebase.");
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.rebuild();
+    this.render();
+  },
+
+  /** Desfaz o liga/desliga não gravado e volta às contas do padrão gravado. */
+  async restaurarDisponivel() {
+    const n = this.qtdeDisponivelAlterado();
+    if (!n) { alert("As contas já estão no padrão gravado."); return; }
+    const pergunta = "Desfazer " + n + " alteração(ões) e voltar às contas do padrão gravado?";
+    const ok = typeof window.mouraConfirm === "function" ? await window.mouraConfirm(pergunta) : confirm(pergunta);
+    if (!ok) return;
+    this._flagsTeste = {};
+    await this.loadFlags();
+    this.flags = Object.assign({}, this._padraoContas || {});
+    this.rebuild();
+    this.render();
+  },
+
+  disponivelBarHtml() {
+    const n = this.qtdeDisponivelAlterado();
+    const info = this._padraoInfo || {};
+    const quando = info.em ? caixaFmtDate(String(info.em).slice(0, 10)) : "";
+    const padrao = info.por || quando ? `Padrão gravado${info.por ? " por " + caixaEsc(info.por) : ""}${quando ? " em " + caixaEsc(quando) : ""}` : "";
+    return `<div class="cxd-disp-bar">
+      <p class="cxd-title">CONTAS COM SALDO <span>· ligue as contas que entram no caixa</span></p>
+      ${n ? `<span class="cxd-disp-aviso" title="O liga/desliga vale só nesta tela até gravar">${n} alteração(ões) não gravada(s)</span>` : (padrao ? `<span class="cxd-disp-info">${padrao}</span>` : "")}
+      <button type="button" class="btn btn-secondary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.restaurarDisponivel()" title="Volta às contas do padrão gravado">
+        <i data-lucide="rotate-ccw" style="width:14px;height:14px;"></i> Restaurar padrão
+      </button>
+      <button type="button" class="btn btn-primary cxd-disp-btn" ${n ? "" : "disabled"} onclick="FluxoCaixaDiarioApp.gravarDisponivel()" title="Grava as contas ligadas como padrão para todos">
+        <i data-lucide="save" style="width:14px;height:14px;"></i> Gravar disponível
+      </button>
+    </div>`;
+  },
+
+  async setTipo(key, tipo) {
+    this.tipos[key] = tipo;
+    this.accounts.forEach((a) => { if (this.accountKey(a) === key) a.tipo = tipo; });
+    this.render();
+    await this._salvarPendente("_tiposPendentes", key, tipo, { tipos: { [key]: tipo } }, "Não consegui gravar o tipo da conta na nuvem.");
+  },
+
+  async loadAccountTypes(companyId) {
+    const id = String(companyId || "");
+    if (!id) return {};
+    if (this._types[id]) return this._types[id];
+    const map = {};
+    const banks = {};
+    const nomes = {};
+    if (window.SiengeApiService && typeof SiengeApiService.getCheckingAccounts === "function") {
+      try {
+        const res = await SiengeApiService.getCheckingAccounts(id, { allStatuses: true });
+        ((res && res.results) || []).forEach((raw) => {
+          const type = raw && raw.accountType;
+          const typeId = String((type && typeof type === "object" ? type.id : raw.accountTypeId) || "").trim().toUpperCase();
+          const desc = String((type && typeof type === "object" ? (type.description || type.name) : type) || raw.accountKind || "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+          const nomeTipo = [raw.accountName, raw.name, raw.description, raw.accountDescription]
+            .map((s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase())
+            .join(" ");
+          const mutuo = typeId === "M" || /MUTUO/.test(desc) || /MUTUO/.test(nomeTipo);
+          const invest = !mutuo && (typeId === "I" || typeId === "A" || raw.investment === true || raw.isInvestment === true || /INVEST|APLIC|POUP/.test(desc));
+          const tipo = mutuo ? "mutuo" : (invest ? "investimento" : "corrente");
+          [raw.accountNumber, raw.number, raw.accountName, raw.name].forEach((k) => {
+            const key = this.normNum(k);
+            if (key && !map[key]) map[key] = tipo;
+          });
+          const num = this.normNum(raw.accountNumber || raw.number);
+          const nome = [raw.accountName, raw.name, raw.description, raw.accountDescription]
+            .map((s) => String(s || "").trim())
+            .find((s) => s && this.normNum(s) !== num);
+          if (num && nome) nomes[num] = nome;
+          if (num && window.RelacionamentoApp && typeof RelacionamentoApp._bancoDaConta === "function") {
+            const info = RelacionamentoApp._bancoDaConta(raw);
+            if (info && info.bancoLabel) banks[num] = info;
+          }
+        });
+      } catch (e) {
+        console.warn("[Caixa diário] tipos de conta", id, e);
+      }
+    }
+    this._types[id] = map;
+    this._banks[id] = banks;
+    this._nomes[id] = nomes;
+    return map;
+  },
+
+  accountTipo(types, number, name) {
+    const sienge = types[this.normNum(number)] || types[this.normNum(name)] || "";
+    if (sienge === "mutuo" || sienge === "investimento") return sienge;
+    const txt = String(number + " " + name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    if (/MUTUO/.test(txt)) return "mutuo";
+    if (/CDB|APLIC|INVEST|FUNDO|^FI[-\s]|\bFI\b|RENDA FIXA|\bRF\b|\bLCI\b|\bLCA\b|\bRDB\b|COMPROMISS|POUP/.test(txt)) return "investimento";
+    return sienge || "corrente";
+  },
+
+  /** Conta do movimento: mútuo, investimento ou conta corrente. Sem conta identificada, o previsto cai na corrente. */
+  ladoConta(companyId, number) {
+    if (!number) return "corrente";
+    const key = this.accountKey({ companyId: companyId || "", number });
+    const acc = (this.accounts || []).find((a) => this.accountKey(a) === key);
+    if (acc && (acc.tipo === "mutuo" || acc.tipo === "investimento")) return acc.tipo;
+    const types = (this._types && this._types[String(companyId || "")]) || {};
+    const tipo = this.accountTipo(types, number, (acc && acc.name) || "");
+    if (tipo === "mutuo" || tipo === "investimento") return tipo;
+    return "corrente";
+  },
+
+  saldoPorTipo() {
+    let corrente = 0;
+    let investimento = 0;
+    (this.accounts || []).forEach((a) => {
+      if (!this.accountIncluded(a)) return;
+      const v = this.saldoBase(a);
+      if (a.tipo === "investimento") investimento += v;
+      else corrente += v;
+    });
+    return { corrente, investimento, total: corrente + investimento };
+  },
+
+  bankInfo(companyId, number) {
+    const cad = window.RelacionamentoApp && typeof RelacionamentoApp._contaCadastrada === "function"
+      ? RelacionamentoApp._contaCadastrada(number, companyId) : null;
+    if (cad && cad.bancoLabel) return { bancoLabel: cad.bancoLabel, agencia: cad.agencia || "" };
+    return (this._banks[String(companyId || "")] || {})[this.normNum(number)] || { bancoLabel: "", agencia: "" };
+  },
+
+  companyName(id) {
+    const hit = this.companies.find((c) => String(c.id) === String(id));
+    return hit ? hit.name : (id ? ("Empresa " + id) : "");
+  },
+
+  /** Cadastro de Empresas: só entra quem está com Gerida pelo Grupo ligada. */
+  empresaGerida(id) {
+    const sid = String(id == null ? "" : id).trim();
+    if (!sid) return false;
+    const num = String(Number(sid));
+    const fontes = [];
+    if (window.EmpresasState && EmpresasState.customFields) fontes.push(EmpresasState.customFields);
+    try { fontes.push(JSON.parse(localStorage.getItem("crm_empresas_custom") || "{}") || {}); } catch (e) {}
+    if (window.AppState && AppState.companiesCustom) fontes.push(AppState.companiesCustom);
+    for (let i = 0; i < fontes.length; i++) {
+      const map = fontes[i] || {};
+      const cfg = map[sid] || map[num] || map[Number(sid)];
+      if (!cfg || typeof cfg !== "object") continue;
+      const v = cfg.gerida_pelo_grupo != null ? cfg.gerida_pelo_grupo : cfg.gerida_grupo;
+      if (v == null) continue;
+      return v === 1 || v === true || v === "1" || Number(v) === 1;
+    }
+    return false;
+  },
+
+  empresasGeridas() {
+    return (this.companies || []).filter((c) => this.empresaGerida(c.id));
+  },
+
+  empItems() {
+    return this.empresasGeridas().map((c) => ({
+      id: String(c.id),
+      name: String(c.name || "").toUpperCase(),
+      label: c.id + " - " + String(c.name || "").toUpperCase()
+    }));
+  },
+
+  paintProgress() {
+    const el = document.getElementById("cxd-progress");
+    if (!el) return;
+    el.textContent = this.progress || "";
+    el.hidden = !this.progress;
+  },
+
+  async load() {
+    const gen = (this._gen || 0) + 1;
+    this._gen = gen;
+    this.loading = true;
+    this.error = "";
+    this.days = [];
+    this.accounts = [];
+    this.recItems = [];
+    this.outras = [];
+    this.movs = [];
+    this.payItems = [];
+    this.openingDate = "";
+    this.progress = "Lendo as previsões de recebimento…";
+    this.render();
+    try {
+      await this.ensureCompanies();
+      this.ensureCompany();
+      await this.ensureCcCompany();
+      await this.loadFlags();
+      this._custom = this.readCustom();
+      if (this._gen !== gen) return;
+      const b = this.monthBounds();
+      const hoje = this.hoje();
+      if (b.end >= hoje) {
+        const units = await CaixaPosicaoStore.loadEstoqueUnits();
+        if (this._gen !== gen) return;
+        this.recItems = this.previsoesRecebimento(units, b, hoje);
+      }
+      this.loading = false;
+      this.rebuild();
+      this.render();
+      await this.loadBalances(gen, b, hoje);
+      if (this._gen !== gen) return;
+      if (b.start < hoje) await this.loadActuals(gen, b, hoje);
+      if (this._gen !== gen) return;
+      if (b.end >= hoje) await this.loadPayables(gen, b, hoje);
+      if (this._gen !== gen) return;
+      if (b.end >= hoje) await this.loadOutrasEntradas(gen, b, hoje);
+      if (this._gen !== gen) return;
+      this.progress = "";
+      this.render();
+      this.avisarCaixa();
+      this.carregarRadar();
+      if (this.aba === "receber") this.carregarHistorico();
+    } catch (e) {
+      if (this._gen !== gen) return;
+      this.error = e.message || String(e);
+      this.loading = false;
+      this.progress = "";
+      this.render();
+    }
+  },
+
+  previsoesRecebimento(units, b, hoje) {
+    const out = [];
+    // Um título com mais de uma unidade (lote + casa) vem repetido em cada unidade do estoque.
+    const vistos = {};
+    (units || []).forEach((u) => {
+      if (u.quitado || u.relFin === "quitado") return;
+      const companyId = this._ccCompany[String(u.enterpriseId || "")] || "";
+      if (!this.companyWanted(companyId)) return;
+      const pmp = Number(u.pmp3m) || 0;
+      const horizonte = b.end > caixaAddDays(hoje, 35) ? b.end : caixaAddDays(hoje, 35);
+      const titulo = u.receivableBillId != null ? String(u.receivableBillId) : "";
+      const local = {};
+      (Array.isArray(u.openParcelas) ? u.openParcelas : []).forEach((p) => {
+        if (!p || !p.due) return;
+        if (titulo) {
+          const k = [titulo, p.num || "", p.due, (Number(p.val) || 0).toFixed(2)].join("|");
+          local[k] = (local[k] || 0) + 1;
+          const ja = vistos[k];
+          if (ja && local[k] <= ja.n) {
+            const un = String(u.name || "").trim();
+            const item = ja.itens[local[k] - 1];
+            if (item && un && !item.unidades.includes(un)) {
+              item.unidades.push(un);
+              item.unidade = item.unidades.join(" + ");
+            }
+            return;
+          }
+        }
+        // Ainda cabe no caixa enquanto o próximo dia útil do vencimento não passou.
+        const vencEfetivo = caixaDiaUtil(p.due, 1);
+        if (vencEfetivo < hoje) return;
+        const bruto = caixaAddDays(p.due, pmp);
+        const prev = caixaDiaUtil(bruto, 1);
+        const fora = prev < b.start || prev > horizonte || prev < hoje;
+        const un = String(u.name || "").trim();
+        const item = fora ? null : {
+          date: prev,
+          vencEfetivo,
+          deslocadoDe: prev !== bruto ? bruto : "",
+          valor: Number(p.val) || 0,
+          unidade: un,
+          unidades: un ? [un] : [],
+          cc: String(u.enterpriseId || ""),
+          ccNome: u.enterpriseName || "",
+          titulo,
+          parcela: p.num ? [p.tipo, p.num].filter(Boolean).join(" ") : "",
+          cliente: u.customerName || "",
+          cpf: u.customerDoc || "",
+          vencimento: p.due,
+          pmp,
+          customerId: u.customerId != null ? String(u.customerId) : "",
+          billId: titulo
+        };
+        if (titulo) {
+          const k = [titulo, p.num || "", p.due, (Number(p.val) || 0).toFixed(2)].join("|");
+          const ja = vistos[k] || (vistos[k] = { n: 0, itens: [] });
+          ja.n = local[k];
+          ja.itens[local[k] - 1] = item;
+        }
+        if (item) out.push(item);
+      });
+    });
+    return out;
+  },
+
+  async loadBalances(gen, b, hoje) {
+    this.progress = "Lendo o saldo das contas…";
+    this.paintProgress();
+    const abertura = caixaAddDays(b.start, -1);
+    const usaAbertura = b.start <= hoje;
+    const ler = async (date) => {
+      if (!window.SiengeApiService || typeof SiengeApiService.getAccountBalances !== "function") return [];
+      const out = [];
+      if (this.companyIds.length) {
+        const parts = await Promise.all(this.companyIds.map((id) => SiengeApiService.getAccountBalances(date, { companyId: id })));
+        parts.forEach((list) => { if (Array.isArray(list)) out.push.apply(out, list); });
+      } else {
+        const list = await SiengeApiService.getAccountBalances(date);
+        if (Array.isArray(list)) out.push.apply(out, list);
+      }
+      return out;
+    };
+    const [rowsHoje, rowsIni] = await Promise.all([ler(hoje), usaAbertura ? ler(abertura) : Promise.resolve([])]);
+    if (this._gen !== gen) return;
+    const typesByCo = {};
+    for (const id of this.companyIds) typesByCo[id] = await this.loadAccountTypes(id);
+    if (this._gen !== gen) return;
+    const byKey = {};
+    const put = (row, campo, limite) => {
+      const companyId = String(row.companyId || row.company || "");
+      if (!this.companyWanted(companyId)) return;
+      const number = String(row.accountNumber || row.number || "").trim();
+      const amount = caixaBalance(row);
+      if (amount == null) return;
+      const dt = String(row.balanceDate || "").slice(0, 10);
+      if (dt && dt > limite) return;
+      const name = row.accountName || row.name || number || "Conta";
+      const key = this.accountKey({ companyId, number: number || name });
+      const acc = byKey[key] || (byKey[key] = { companyId, company: this.companyName(companyId), number, name, amount: 0, opening: 0, _dt: {} });
+      if (acc._dt[campo] && dt && dt < acc._dt[campo]) return;
+      acc._dt[campo] = dt || acc._dt[campo] || "";
+      acc[campo] = amount;
+    };
+    rowsHoje.forEach((r) => put(r, "amount", hoje));
+    rowsIni.forEach((r) => put(r, "opening", abertura));
+    const accounts = Object.values(byKey);
+    for (const acc of accounts) {
+      if (!typesByCo[acc.companyId]) typesByCo[acc.companyId] = await this.loadAccountTypes(acc.companyId);
+      const key = this.accountKey(acc);
+      const detectado = this.accountTipo(typesByCo[acc.companyId] || {}, acc.number, acc.name);
+      acc.tipo = detectado === "mutuo" ? "mutuo" : (this.tipos[key] || detectado);
+      const bank = this.bankInfo(acc.companyId, acc.number);
+      acc.banco = bank.bancoLabel || "";
+      acc.agencia = bank.agencia || "";
+      const nomeCad = (this._nomes[String(acc.companyId)] || {})[this.normNum(acc.number)];
+      acc.descricao = nomeCad || (acc.name && this.normNum(acc.name) !== this.normNum(acc.number) ? acc.name : "");
+      delete acc._dt;
+    }
+    if (this._gen !== gen) return;
+    accounts.sort((a, b2) => String(a.companyId).localeCompare(String(b2.companyId), "pt") || String(a.name).localeCompare(String(b2.name), "pt", { numeric: true }));
+    this.accounts = accounts;
+    this.openingDate = usaAbertura ? abertura : "";
+    this.rebuild();
+    this.render();
+  },
+
+  /** Parte de cada centro de custo no rateio (soma 1). */
+  sharesDe(cats) {
+    const pesos = {};
+    let n = 0;
+    (Array.isArray(cats) ? cats : []).forEach((fc) => {
+      const cc = fc && fc.costCenterId != null && typeof fc.costCenterId !== "object" ? String(fc.costCenterId).trim() : "";
+      const r = Number(fc && fc.financialCategoryRate);
+      if (!(cc in pesos)) n++;
+      pesos[cc] = (pesos[cc] || 0) + (Number.isFinite(r) && r > 0 ? r : 0);
+    });
+    const soma = Object.values(pesos).reduce((s, p) => s + p, 0);
+    return Object.keys(pesos).map((cc) => ({ cc, share: soma > 0 ? pesos[cc] / soma : 1 / n }));
+  },
+
+  /** O extrato do Sienge pode trazer o valor sempre positivo, com crédito/débito no tipo da operação. */
+  valorMov(m) {
+    const raw = Number(m.bankMovementAmount) || 0;
+    if (raw <= 0) return raw;
+    const norm = (v) => (v == null || typeof v === "object") ? "" : String(v).trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const tipo = norm(m.bankMovementOperationType || m.operationType);
+    if (/^(S|D)$/.test(tipo) || /DEBIT|SAIDA/.test(tipo)) return -raw;
+    if (/^(E|C)$/.test(tipo) || /CREDIT|ENTRADA/.test(tipo)) return raw;
+    const op = norm(m.bankMovementOperationName);
+    if (/PAGAMENTO|PAGTO|DEBITO|TARIFA|SAIDA/.test(op)) return -raw;
+    if (/RECEBIMENTO|CREDITO|ENTRADA/.test(op)) return raw;
+    if (norm(m.creditorName) && !norm(m.clientName)) return -raw;
+    return raw;
+  },
+
+  /**
+   * Origem do movimento no Sienge: título do contas a pagar/receber ou lançamento direto em caixa e bancos
+   * (avulso, digitado à mão). O código de origem vale primeiro; sem ele, o título vinculado decide.
+   */
+  origemMov(m, valor) {
+    const txt = (v) => (v == null || typeof v === "object") ? "" : String(v).trim();
+    const cod = txt(m.bankMovementOriginId).toUpperCase();
+    const temTitulo = !!txt(m.billId);
+    if (/^CP/.test(cod)) return { tipo: "cp", rotulo: "Contas a pagar", cod };
+    if (/^CR/.test(cod)) return { tipo: "cr", rotulo: "Contas a receber", cod };
+    if (/^(CB|CX|BC)/.test(cod)) return { tipo: "cb", rotulo: "Caixa e bancos", cod };
+    if (/^(TR|TB|TC)/.test(cod)) return { tipo: "tr", rotulo: "Transferência entre contas", cod };
+    if (temTitulo) {
+      if (txt(m.clientName) || txt(m.clientId)) return { tipo: "cr", rotulo: "Contas a receber", cod };
+      if (txt(m.creditorName) || txt(m.creditorId)) return { tipo: "cp", rotulo: "Contas a pagar", cod };
+      return valor >= 0 ? { tipo: "cr", rotulo: "Contas a receber", cod } : { tipo: "cp", rotulo: "Contas a pagar", cod };
+    }
+    if (cod) return { tipo: "outro", rotulo: "Origem " + cod, cod };
+    return { tipo: "cb", rotulo: "Caixa e bancos", cod };
+  },
+
+  conciliadoMov(m) {
+    const v = m.bankMovementReconcile;
+    if (v === true || v === false) return v;
+    const s = String(v == null ? "" : v).trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (/^(S|SIM|Y|YES|TRUE|1|C|CONCILIADO)$/.test(s)) return true;
+    if (/^(N|NAO|NO|FALSE|0|NAO CONCILIADO)$/.test(s)) return false;
+    return null;
+  },
+
+  normMov(m, i) {
+    const txt = (v) => (v == null || typeof v === "object") ? "" : String(v).trim();
+    const cats = Array.isArray(m.financialCategories) ? m.financialCategories : [];
+    const shares = this.sharesDe(cats);
+    const valor = this.valorMov(m);
+    const planos = [...new Set(cats.map((fc) => txt(fc && fc.financialCategoryName)).filter(Boolean))];
+    return {
+      origem: this.origemMov(m, valor),
+      conciliado: this.conciliadoMov(m),
+      planos,
+      movId: txt(m.bankMovementId),
+      id: "m" + i,
+      date: txt(m.bankMovementDate).slice(0, 10),
+      valor,
+      conta: txt(m.accountNumber),
+      companyId: txt(m.companyId),
+      shares,
+      billId: txt(m.billId || m.billPayableId || m.billReceivableId || m.payableBillId || m.receivableBillId || m.titleId),
+      parcela: txt(m.installmentId || m.installmentNumber || m.installment),
+      clientId: txt(m.clientId || m.customerId),
+      party: txt(m.creditorName) || txt(m.creditor) || txt(m.clientName) || txt(m.customerName) || txt(m.client),
+      doc: [txt(m.documentIdentificationId || m.documentId), txt(m.documentIdentificationNumber || m.documentNumber)].filter(Boolean).join(" "),
+      historico: txt(m.historic) || txt(m.history) || txt(m.bankMovementHistoricName) || txt(m.bankMovementOperationName) || txt(m.documentIdentificationName) || txt(m.observations),
+      plano: cats.map((fc) => txt(fc && fc.financialCategoryName)).filter(Boolean)[0] || "",
+      ccNome: cats.map((fc) => txt(fc && fc.costCenterName)).filter(Boolean)[0] || ""
+    };
+  },
+
+  async loadActuals(gen, b, hoje) {
+    const ontem = caixaAddDays(hoje, -1);
+    const fim = ontem < b.end ? ontem : b.end;
+    if (fim < b.start || !window.SiengeApiService || typeof SiengeApiService.getBankMovements !== "function") return;
+    this.progress = "Lendo o que entrou e saiu das contas nos dias anteriores…";
+    this.paintProgress();
+    try {
+      const targets = this.companyIds.length ? this.companyIds.slice() : [""];
+      const list = [];
+      for (const co of targets) {
+        const part = await SiengeApiService.getBankMovements(b.start, fim, co ? { companyId: co } : {});
+        if (this._gen !== gen) return;
+        if (Array.isArray(part)) list.push.apply(list, part);
+      }
+      this.movs = list.map((m, i) => this.normMov(m, i))
+        .filter((m) => m.date && Math.abs(m.valor) >= 0.005 && (!m.companyId || this.companyWanted(m.companyId)));
+    } catch (e) {
+      console.warn("[Caixa diário] movimentos bancários", e);
+      this.error = "Não consegui ler os movimentos bancários dos dias anteriores: " + ((e && e.message) || e);
+    }
+    if (this._gen !== gen) return;
+    this.rebuild();
+    this.render();
+  },
+
+  /** Folha, distribuição, aportes e tributos federais são pagos no dia útil anterior; os demais, no seguinte. */
+  pagaAntes(r) {
+    const SEM_DESLOCAR = /^(FPAG|DIST|APOR|PIS|COFINS|IRPJ|CSLL)$/;
+    const cod = String((r && r.docId) || "").trim().toUpperCase();
+    const nome = String((r && r.docNome) || "").trim().toUpperCase().split(/[\s-]+/)[0];
+    return SEM_DESLOCAR.test(cod) || SEM_DESLOCAR.test(nome);
+  },
+
+  apiPagar() {
+    return window.ComprasControleApp || window.ComprasPrevisoesApp;
+  },
+
+  async loadPayables(gen, b, hoje) {
+    const app = this.apiPagar();
+    if (!app || typeof app.outcomeRange !== "function" || typeof app.transform !== "function") {
+      this.error = this.error || "O módulo de compras não está disponível para ler os títulos a pagar.";
+      this.render();
+      return;
+    }
+    const inicio = hoje > b.start ? hoje : b.start;
+    const horizonte = b.end > caixaAddDays(hoje, 35) ? b.end : caixaAddDays(hoje, 35);
+    // Títulos de fim de semana/feriado nas bordas do período podem entrar nele ao irem para o dia útil.
+    // A folga de 35 dias serve para saber se o dinheiro da conta corrente zera o IOF do CDB.
+    const buscaIni = caixaAddDays(inicio, -4);
+    const buscaFim = caixaAddDays(horizonte, 4);
+    const prevNote = app.noteProgress;
+    app.noteProgress = (text) => {
+      this.progress = text;
+      this.paintProgress();
+    };
+    let rows = [];
+    const rateios = {};
+    try {
+      const targets = this.companyIds.length ? this.companyIds.slice() : [""];
+      const bills = [];
+      for (let i = 0; i < targets.length; i++) {
+        if (this._gen !== gen) return;
+        this.progress = "Buscando contas a pagar…";
+        this.paintProgress();
+        const part = await app.outcomeRange(buscaIni, buscaFim, targets[i]);
+        if (Array.isArray(part)) bills.push.apply(bills, part);
+      }
+      bills.forEach((bill) => {
+        if (!bill || bill.billId == null) return;
+        const k = String(bill.billId) + "|" + (bill.installmentId != null ? String(bill.installmentId) : "");
+        if (!rateios[k]) rateios[k] = this.sharesDe(bill.paymentsCategories);
+      });
+      rows = app.transform({ data: bills }) || [];
+    } finally {
+      app.noteProgress = prevNote;
+    }
+    if (this._gen !== gen) return;
+    const seen = {};
+    const pay = [];
+    rows.forEach((r) => {
+      if (!r || r.pago || r.substituido) return;
+      if (r.natureza !== "programado" && r.natureza !== "previsao") return;
+      const due = String(r.vencimento || "").slice(0, 10);
+      if (!due) return;
+      let pagamento = caixaDiaUtil(due, this.pagaAntes(r) ? -1 : 1);
+      // Antecipado para um dia que já passou, mas ainda em aberto: entra no primeiro dia do período.
+      if (pagamento < inicio && due >= inicio) pagamento = inicio;
+      if (pagamento < inicio || pagamento > horizonte) return;
+      if (!this.companyWanted(r.companyId)) return;
+      const key = r.titulo + "|" + (r.parcela || "") + "|" + due;
+      if (seen[key]) return;
+      seen[key] = true;
+      const saldo = Number(r.saldo);
+      const valor = Number.isFinite(saldo) && saldo > 0 ? saldo : (Number(r.valor) || 0);
+      if (!(valor > 0)) return;
+      const rateio = rateios[r.titulo + "|" + (r.parcela || "")];
+      const shares = rateio && rateio.length ? rateio : (r.ccId ? [{ cc: String(r.ccId), share: 1 }] : []);
+      const contaParceiro = this.contaSaidaParceiroAvare(Object.assign({}, r, { shares }));
+      const conta = contaParceiro || r.conta || "";
+      const cid = (contaParceiro && "1") || r.companyId || "";
+      pay.push({
+        key,
+        shares,
+        date: pagamento,
+        vencimento: due,
+        deslocadoDe: pagamento !== due ? due : "",
+        valor,
+        titulo: r.titulo,
+        parcela: r.parcela || "",
+        credor: r.credor || "",
+        documento: r.documento || "",
+        docId: r.docId || "",
+        docNome: r.docNome || "",
+        companyId: cid,
+        plano: r.plano || "",
+        departamento: r.departamento || "",
+        ccId: r.ccId || "",
+        ccNome: r.ccNome || "",
+        natureza: r.natureza,
+        tipoBaixa: r.tipoBaixa || "",
+        conta,
+        operacao: r.operacao || ""
+      });
+    });
+    this.payItems = pay;
+    this.rebuild();
+    this.render();
+  },
+
+  /** Recebimentos que não são contrato de venda (CT): distribuição, taxa, aluguel e demais previsões em aberto. */
+  async loadOutrasEntradas(gen, b, hoje) {
+    if (typeof window.siengeFetchWithRetry !== "function") return;
+    const inicio = hoje > b.start ? hoje : b.start;
+    const horizonte = b.end > caixaAddDays(hoje, 35) ? b.end : caixaAddDays(hoje, 35);
+    const buscaIni = b.start < caixaAddDays(inicio, -4) ? b.start : caixaAddDays(inicio, -4);
+    const buscaFim = caixaAddDays(horizonte, 4);
+    const fora = { CT: 1, PFIN: 1, TC: 1, CIPT: 1, CREG: 1, IPTU: 1 };
+    const meio = (s, e) => {
+      const dias = Math.round((new Date(e + "T12:00:00") - new Date(s + "T12:00:00")) / 86400000);
+      return dias > 1 ? caixaAddDays(s, Math.floor(dias / 2)) : s;
+    };
+    const path = (s, e, companyId) => "/bulk-data/v1/income?startDate=" + encodeURIComponent(s)
+      + "&endDate=" + encodeURIComponent(e)
+      + "&selectionType=D&correctionIndexerId=0&correctionDate=2022-01-01"
+      + (companyId ? "&companyId=" + encodeURIComponent(companyId) : "");
+    const get = async (s, e, companyId, depth) => {
+      try {
+        const payload = await window.siengeFetchWithRetry(path(s, e, companyId), 2);
+        return (payload && payload.data) || (Array.isArray(payload) ? payload : []);
+      } catch (err) {
+        if (Number(err && err.status) !== 507 || depth > 6) throw err;
+        const m = meio(s, e);
+        if (!m || m <= s || m >= e) throw err;
+        const left = await get(s, m, companyId, depth + 1);
+        const right = await get(caixaAddDays(m, 1), e, companyId, depth + 1);
+        return left.concat(right);
+      }
+    };
+    this.progress = "Lendo outras entradas previstas…";
+    this.paintProgress();
+    const alvos = this.companyIds.length ? this.companyIds.slice() : [""];
+    const rows = [];
+    try {
+      for (let i = 0; i < alvos.length; i++) {
+        if (this._gen !== gen) return;
+        const part = await get(buscaIni, buscaFim, alvos[i], 0);
+        if (Array.isArray(part)) rows.push.apply(rows, part);
+      }
+    } catch (e) {
+      console.warn("[Caixa diário] outras entradas", e);
+      this.error = this.error || ("Não consegui ler as outras entradas previstas: " + ((e && e.message) || e));
+    }
+    if (this._gen !== gen) return;
+    const seen = {};
+    const out = [];
+    rows.forEach((r) => {
+      if (!r) return;
+      const doc = String(r.documentIdentificationId || "").trim().toUpperCase();
+      const recs = Array.isArray(r.receipts) ? r.receipts : [];
+      const recebido = recs.some((x) => x && x.operationTypeName);
+      const due = String(r.dueDate || "").slice(0, 10);
+      const companyId = r.companyId != null ? String(r.companyId) : "";
+      const titulo = r.billId != null ? String(r.billId) : "";
+      const parcela = r.installmentId != null ? String(r.installmentId) : "";
+      const numero = String(r.documentNumber || "");
+      const numUp = numero.toUpperCase();
+      const grupoContrato = numUp.indexOf("G1") >= 0 || numUp.indexOf("G2") >= 0 || numUp.indexOf("G3") >= 0;
+      if (fora[doc]) return;
+      if (grupoContrato) return;
+      if (recebido) return;
+      if (!due) return;
+      const prev = caixaDiaUtil(due, 1);
+      if (prev < inicio || prev > horizonte) return;
+      if (companyId && !this.companyWanted(companyId)) return;
+      const valor = Number(r.originalAmount) || 0;
+      if (!(valor > 0.009)) return;
+      const key = titulo + "|" + parcela + "|" + due;
+      if (seen[key]) return;
+      seen[key] = true;
+      const cats = Array.isArray(r.receiptsCategories) ? r.receiptsCategories : (Array.isArray(r.paymentsCategories) ? r.paymentsCategories : []);
+      const cat = cats.find((c) => c && (c.costCenterId != null || c.costCenterName)) || {};
+      let pagarId = this.idPagarDe(r);
+      if (pagarId === titulo) pagarId = "";
+      out.push({
+        outra: true,
+        date: prev,
+        deslocadoDe: prev !== due ? due : "",
+        valor,
+        saldo: r.correctedBalanceAmount != null ? Number(r.correctedBalanceAmount) : (r.balanceAmount != null ? Number(r.balanceAmount) : null),
+        cliente: r.clientName || "",
+        clientId: r.clientId != null ? String(r.clientId) : "",
+        companyId,
+        empresa: r.companyName || "",
+        cc: cat.costCenterId != null ? String(cat.costCenterId) : "",
+        ccNome: cat.costCenterName || "",
+        unidade: String(r.mainUnit || r.unitName || r.unit || "").trim(),
+        titulo,
+        parcela,
+        docId: doc,
+        documento: numero,
+        vencimento: due,
+        emissao: String(r.issueDate || r.billDate || "").slice(0, 10),
+        pagarId,
+        billId: titulo
+      });
+    });
+    this.outras = out;
+    this.rebuild();
+    this.render();
+  },
+
+  /** Dias anteriores: extrato das contas ligadas. Hoje em diante: previsões. */
+  rebuild() {
+    const hoje = this.hoje();
+    const b = this.monthBounds();
+    this._bloq = this.contasBloqueadas();
+    const excl = this.excludedCcs();
+    const accByKey = {};
+    (this.accounts || []).forEach((a) => { accByKey[this.accountKey(a)] = a; });
+    const days = [];
+    const byDay = {};
+    for (let iso = b.start; iso <= b.end; iso = caixaAddDays(iso, 1)) {
+      const day = { date: iso, real: iso < hoje, entrar: 0, pagar: 0, entrarCc: 0, sairCc: 0, entrarInv: 0, sairInv: 0, itens: [], pagarItens: [] };
+      days.push(day);
+      byDay[iso] = day;
+    }
+    const lanca = (day, valor, inv, saida) => {
+      if (saida) {
+        if (inv) day.sairInv += valor;
+        else day.sairCc += valor;
+      } else if (inv) day.entrarInv += valor;
+      else day.entrarCc += valor;
+    };
+    this.recItems.forEach((it) => {
+      const day = byDay[it.date];
+      if (!day || day.real || excl.has(String(it.cc))) return;
+      day.entrar += it.valor;
+      lanca(day, it.valor, false, false);
+      day.itens.push(it);
+    });
+    (this.outras || []).forEach((it) => {
+      const day = byDay[it.date];
+      if (!day || day.real) return;
+      day.entrar += it.valor;
+      lanca(day, it.valor, false, false);
+      day.itens.push(it);
+    });
+    this.movs.forEach((m) => {
+      const day = byDay[m.date];
+      if (!day || !day.real) return;
+      const contaParceiro = this.contaSaidaParceiroAvare(m);
+      if (contaParceiro && !m.conta) {
+        m.conta = contaParceiro;
+        m.companyId = "1";
+      }
+      if (m.conta && this.ladoConta(m.companyId, m.conta) === "mutuo") return;
+      if (m.conta) {
+        const key = this.accountKey({ companyId: m.companyId, number: m.conta });
+        const norm = this.normNum(m.conta);
+        const acc = accByKey[key] || (this.accounts || []).find((a) => String(a.companyId || "") === String(m.companyId || "") && this.normNum(a.number) === norm);
+        const ok = acc ? this.accountIncluded(acc) : (!this._bloq.has(norm) && this.flags[key] !== false);
+        if (!ok) return;
+      }
+      const fora = this.shareFora(m.shares, excl, m);
+      const v = m.valor * (1 - fora);
+      if (Math.abs(v) < 0.005) return;
+      const inv = this.ladoConta(m.companyId, m.conta) === "investimento";
+      if (v > 0) {
+        day.entrar += v;
+        lanca(day, v, inv, false);
+        day.itens.push(Object.assign({}, m, { real: true, valor: v, tipoConta: inv ? "investimento" : "corrente" }));
+      } else {
+        day.pagar += -v;
+        lanca(day, -v, inv, true);
+        day.pagarItens.push({
+          key: m.id, real: true, natureza: "pago", date: m.date, valor: -v,
+          titulo: m.billId, parcela: m.parcela, credor: m.party, documento: m.doc, historico: m.historico,
+          conta: m.conta, companyId: m.companyId, plano: m.plano, planos: m.planos, ccNome: m.ccNome,
+          origem: m.origem, conciliado: m.conciliado, movId: m.movId, tipoConta: inv ? "investimento" : "corrente"
+        });
+      }
+    });
+    this.payItems.forEach((p) => {
+      const day = byDay[p.date];
+      if (!day || day.real) return;
+      if (p.conta && !this.movContaEntra(p)) return;
+      const fora = this.shareFora(p.shares, excl, p);
+      const v = p.valor * (1 - fora);
+      if (v < 0.005) return;
+      const lado = this.ladoConta(p.companyId, p.conta);
+      if (lado === "mutuo") return;
+      const inv = lado === "investimento";
+      day.pagar += v;
+      lanca(day, v, inv, true);
+      const item = fora > 0 ? Object.assign({}, p, { valor: v }) : p;
+      day.pagarItens.push(Object.assign({}, item, { tipoConta: inv ? "investimento" : "corrente" }));
+    });
+    this.days = days;
+    this.totals.entrar = days.reduce((s, x) => s + x.entrar, 0);
+    this.totals.pagar = days.reduce((s, x) => s + x.pagar, 0);
+    this.recalcSaldo();
+  },
+
+  toggle(iso) {
+    const mesmo = this.openDay === iso;
+    this.openDay = mesmo ? "" : iso;
+    if (!mesmo && this.openDay) this.detOpen = {};
+    this.render();
+    const det = this.openDay && document.querySelector("#fluxo-caixa-diario-root .cxd-daydet");
+    if (det) det.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  },
+
+  toggleGrupo(tipo) {
+    this.detOpen[tipo] = !this.detOpen[tipo];
+    this.render();
+  },
+
+  toggleContas(id) {
+    this.contasAbertas[id] = this.contasAbertas[id] === false;
+    this.render();
+  },
+
+  openEntrada(date, idx) {
+    const day = this.days.find((d) => d.date === date);
+    const it = day && day.itens[idx];
+    if (!it) return;
+    const customerId = it.customerId || it.clientId;
+    if (!customerId || !it.billId || typeof window.visualizarExtratoDireto !== "function") {
+      alert("Este recebimento não está ligado a um cliente e a um título no Sienge, então não há extrato para abrir.");
+      return;
+    }
+    const btn = document.createElement("button");
+    btn.dataset.customerId = customerId;
+    btn.dataset.title = it.billId;
+    btn.dataset.name = it.cliente || it.party || "Cliente";
+    const unidade = (it.unidades && it.unidades[0]) || it.unidade;
+    btn.dataset.unit = unidade ? (it.cc + " - " + unidade) : "";
+    btn.dataset.cc = it.cc || (it.shares && it.shares[0] && it.shares[0].cc) || "";
+    const msg = "Abrindo o extrato do cliente…";
+    this.progress = msg;
+    this.paintProgress();
+    setTimeout(() => {
+      if (this.progress !== msg) return;
+      this.progress = "";
+      this.paintProgress();
+    }, 6000);
+    window.visualizarExtratoDireto(btn);
+  },
+
+  bindCompanyFilter() {
+    if (!window.MlEmpresaFilter) return;
+    const self = this;
+    MlEmpresaFilter.bind("cxd-emp", {
+      toggleOpen() {
+        self.openEmp = !self.openEmp;
+        if (self.openEmp) self.openCc = false;
+        self.render();
+      },
+      setQuery(q) {
+        self.qEmp = q || "";
+        const box = document.getElementById("cxd-emp-list");
+        if (box && window.MlEmpresaFilter) {
+          box.innerHTML = MlEmpresaFilter.listHtml({
+            id: "cxd-emp",
+            items: self.empItems(),
+            selectedIds: self.companyIds,
+            query: self.qEmp,
+            single: true
+          });
+        }
+      },
+      toggleId(id, on) {
+        if (!on) return;
+        const sid = String(id);
+        self.companyIds = [sid];
+        try { localStorage.setItem("cxd_company", sid); } catch (e) {}
+        self.openEmp = false;
+        self.qEmp = "";
+        self.openDay = "";
+        self.load();
+      },
+      selectAll() {},
+      selectNone() {}
+    });
+    const nouns = { singular: "empreendimento", plural: "empreendimentos", none: "Nenhum empreendimento" };
+    MlEmpresaFilter.bind("cxd-cc", {
+      toggleOpen() {
+        self.openCc = !self.openCc;
+        if (self.openCc) self.openEmp = false;
+        self.render();
+      },
+      setQuery(q) {
+        self.qCc = q || "";
+        const box = document.getElementById("cxd-cc-list");
+        if (box && window.MlEmpresaFilter) {
+          box.innerHTML = MlEmpresaFilter.listHtml({ id: "cxd-cc", items: self.ccItems(), selectedIds: self.ccIncluidos(), query: self.qCc, nouns });
+        }
+      },
+      toggleId(id, on) {
+        const excl = self.excludedCcs();
+        if (on) excl.delete(String(id));
+        else excl.add(String(id));
+        self.setCcExcl([...excl]);
+      },
+      selectAll() { self.setCcExcl([]); },
+      selectNone() { self.setCcExcl(self.ccItems().map((c) => c.id)); }
+    });
+  },
+
+  idPagarDe(o) {
+    if (!o || typeof o !== "object") return "";
+    const keys = ["payableBillId", "billPayableId", "accountPayableBillId", "payableId", "originPayableBillId", "sourceBillId", "linkedPayableBillId", "billIdPayable", "originBillId", "accountsPayableBillId"];
+    const vistos = [o];
+    Object.keys(o).forEach((k) => {
+      const v = o[k];
+      if (v && typeof v === "object" && !Array.isArray(v)) vistos.push(v);
+    });
+    const parece = /payable|originbill|sourcebill|linkedbill/i;
+    for (let i = 0; i < vistos.length; i++) {
+      const obj = vistos[i];
+      for (let j = 0; j < keys.length; j++) {
+        const n = obj[keys[j]];
+        if (n != null && String(n).trim() && String(n) !== "0") return String(n).trim();
+      }
+      const nomes = Object.keys(obj);
+      for (let j = 0; j < nomes.length; j++) {
+        if (!parece.test(nomes[j])) continue;
+        const n = obj[nomes[j]];
+        if (n == null || typeof n === "object") continue;
+        const s = String(n).trim();
+        if (/^\d+$/.test(s) && s !== "0") return s;
+      }
+    }
+    return "";
+  },
+
+  normGrupo(s) {
+    return String(s || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Z0-9 ]/g, " ")
+      .replace(/\b(LTDA|S A|SA|SPE|EIRELI|ME|EPP)\b/g, " ")
+      .replace(/\s+/g, " ").trim();
+  },
+
+  /** Cliente e empresa do mesmo grupo: o dinheiro só muda de conta. */
+  mesmoGrupo(a, b) {
+    const na = this.normGrupo(a);
+    const nb = this.normGrupo(b);
+    if (na.length < 4 || nb.length < 4) return false;
+    if (na === nb || na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0) return true;
+    return na.indexOf("MOURA LEITE") >= 0 && nb.indexOf("MOURA LEITE") >= 0;
+  },
+
+  async anexosDe(billId, fonte) {
+    if (fonte === "pagar" && window.ComprasPrevisoesApp && typeof ComprasPrevisoesApp.anexosDoTitulo === "function") {
+      const lista = await ComprasPrevisoesApp.anexosDoTitulo(billId);
+      return (lista || []).map((a) => Object.assign({}, a, { billId: String(billId), fonte: "pagar" }));
+    }
+    const path = fonte === "receber"
+      ? "/accounts-receivable/receivable-bills/" + encodeURIComponent(billId) + "/attachments"
+      : "/bills/" + encodeURIComponent(billId) + "/attachments";
+    const data = await window.siengeFetchWithRetry(path, 1);
+    return ((data && data.results) || []).map((a) => ({
+      id: a.attachmentid != null ? a.attachmentid : a.attachmentId,
+      name: String(a.name || "anexo.pdf"),
+      description: String(a.description || "PDF").trim() || "PDF",
+      billId: String(billId),
+      fonte
+    })).filter((a) => a.id != null && a.id !== "");
+  },
+
+  async acharTituloPagar(item, bill) {
+    const cliente = String((bill && (bill.customerName || bill.clientName)) || item.cliente || "").trim();
+    const empresaNome = String(item.empresa || (bill && bill.companyName) || this.companyName(item.companyId) || "").trim();
+    if (this.mesmoGrupo(cliente, empresaNome)) return { transferencia: true };
+    const titulo = String(item.titulo || "");
+    const direto = item.pagarId || this.idPagarDe(bill);
+    if (direto && direto !== titulo) {
+      try {
+        const b = await window.siengeFetchWithRetry("/bills/" + encodeURIComponent(direto), 1);
+        if (b && (b.id || b.creditorName || b.documentNumber)) return { id: String(b.id || direto), bill: b };
+      } catch (e) { /* segue pela busca do documento */ }
+    }
+    const doc = String((bill && bill.documentNumber) || item.documento || "").trim();
+    const empresaId = String((bill && bill.companyId) || item.companyId || "");
+    const base = String(item.emissao || (bill && (bill.issueDate || bill.billDate)) || item.vencimento || "").slice(0, 10);
+    if (doc.length >= 2 && /^\d{4}-\d{2}-\d{2}$/.test(base)) {
+      const largo = !item.emissao && !(bill && (bill.issueDate || bill.billDate));
+      const ini = caixaAddDays(base, largo ? -240 : -60);
+      const fim = caixaAddDays(base, largo ? 30 : 60);
+      const tipo = String(item.docId || (bill && (bill.documentId || bill.documentIdentificationId)) || "").toUpperCase();
+      const buscar = async (comEmpresa) => {
+        let q = "/bills?startDate=" + encodeURIComponent(ini) + "&endDate=" + encodeURIComponent(fim)
+          + "&documentNumber=" + encodeURIComponent(doc) + "&limit=50";
+        if (comEmpresa && empresaId) q += "&debtorId=" + encodeURIComponent(empresaId);
+        const data = await window.siengeFetchWithRetry(q, 1);
+        return (data && data.results) || [];
+      };
+      let rows = [];
+      try { rows = await buscar(true); } catch (e) { rows = []; }
+      if (!rows.length && empresaId) {
+        try { rows = await buscar(false); } catch (e2) { rows = []; }
+      }
+      const docUp = doc.toUpperCase();
+      const hits = rows.filter((b) => b && String(b.documentNumber || "").trim().toUpperCase() === docUp && String(b.id) !== titulo);
+      const typed = tipo ? hits.filter((b) => String(b.documentIdentificationId || "").toUpperCase() === tipo) : hits;
+      const pool = typed.length === 1 ? typed : (typed.length ? [] : (hits.length === 1 ? hits : []));
+      if (pool.length) return { id: String(pool[0].id), bill: pool[0] };
+    }
+    const porCredor = await this.pagarDoCredor(cliente, item, bill);
+    if (porCredor) return porCredor;
+    return this.pagarDaOutraEmpresa(cliente, empresaNome, item, bill);
+  },
+
+  /** O contas a receber não traz o título de origem. O cliente é o credor: procura o contas a pagar dele. */
+  async pagarDoCredor(nome, item, bill) {
+    if (!nome || nome.length < 3 || typeof window.siengeFetchWithRetry !== "function") return null;
+    const alvo = this.normGrupo(nome);
+    let creds = [];
+    try {
+      const data = await window.siengeFetchWithRetry("/creditors?limit=15&name=" + encodeURIComponent(nome), 1);
+      creds = (data && data.results) || [];
+    } catch (e) { return null; }
+    const cred = creds.find((c) => {
+      const n = this.normGrupo(c.name || "");
+      return n && (n === alvo || n.indexOf(alvo) >= 0 || alvo.indexOf(n) >= 0);
+    });
+    if (!cred || cred.id == null) return null;
+    return this.escolherPagar(item, bill, "&creditorId=" + encodeURIComponent(cred.id));
+  },
+
+  /** O pagamento pode estar na empresa do cliente, com credor igual à empresa que recebe. */
+  async pagarDaOutraEmpresa(cliente, empresa, item, bill) {
+    if (!cliente || typeof window.siengeFetchWithRetry !== "function") return null;
+    const alvo = this.normGrupo(cliente);
+    const devedora = (this.companies || []).find((c) => {
+      const n = this.normGrupo(c.name);
+      return n && String(c.id) !== String(item.companyId || "") && (n === alvo || n.indexOf(alvo) >= 0 || alvo.indexOf(n) >= 0);
+    });
+    if (!devedora) return null;
+    const achado = await this.escolherPagar(item, bill, "&debtorId=" + encodeURIComponent(devedora.id));
+    if (!achado || !achado.bill) return achado;
+    const credor = this.normGrupo(achado.bill.creditorName || "");
+    const recebe = this.normGrupo(empresa);
+    if (recebe && credor && credor.indexOf(recebe) < 0 && recebe.indexOf(credor) < 0) return null;
+    return achado;
+  },
+
+  async escolherPagar(item, bill, filtro) {
+    const base = String(item.vencimento || item.emissao || item.date || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
+    const ini = caixaAddDays(base, -120);
+    const fim = caixaAddDays(base, 45);
+    let rows = [];
+    try {
+      const data = await window.siengeFetchWithRetry(
+        "/bills?startDate=" + encodeURIComponent(ini) + "&endDate=" + encodeURIComponent(fim) + filtro + "&limit=50",
+        1
+      );
+      rows = (data && data.results) || [];
+    } catch (e) { return null; }
+    const titulo = String(item.titulo || "");
+    rows = rows.filter((b) => b && String(b.id) !== titulo);
+    const doc = String((bill && bill.documentNumber) || item.documento || "").trim().toUpperCase();
+    const porDoc = doc.length >= 2 ? rows.filter((b) => String(b.documentNumber || "").trim().toUpperCase() === doc) : [];
+    if (porDoc.length === 1) return { id: String(porDoc[0].id), bill: porDoc[0] };
+    const valor = Number(item.valor) || 0;
+    const porValor = valor > 0 ? rows.filter((b) => Math.abs((Number(b.totalInvoiceAmount) || 0) - valor) < 0.05) : [];
+    if (porValor.length === 1) return { id: String(porValor[0].id), bill: porValor[0] };
+    return null;
+  },
+
+  async openRecebimento(date, idx) {
+    const day = this.days.find((d) => d.date === date);
+    const item = day && day.itens[idx];
+    if (!item || !item.outra || !item.titulo) return;
+    const token = "rec:" + date + ":" + idx;
+    this.detail = { receber: true, token, loading: true, error: "", item, bill: null, parcela: null, pagar: null, attachments: [] };
+    this.render();
+    try {
+      const billId = item.titulo;
+      let bill = null;
+      try {
+        bill = await window.siengeFetchWithRetry("/accounts-receivable/receivable-bills/" + encodeURIComponent(billId), 1);
+      } catch (e) {
+        const st = Number(e && e.status) || 0;
+        const msg = String((e && e.message) || "");
+        if (st !== 404 && !/\b404\b/.test(msg)) throw e;
+      }
+      let inst = [];
+      try {
+        const res = await window.siengeFetchWithRetry("/accounts-receivable/receivable-bills/" + encodeURIComponent(billId) + "/installments?limit=200", 1);
+        inst = (res && res.results) || (Array.isArray(res) ? res : []);
+      } catch (e2) { inst = []; }
+      const parcelaId = String(item.parcela || "");
+      const parcela = inst.find((p) => String(p && (p.installmentId != null ? p.installmentId : p.installmentNumber)) === parcelaId) || null;
+      const pagar = await this.acharTituloPagar(item, bill);
+      let attachments = [];
+      if (pagar && pagar.transferencia) {
+        if (!this.detail || this.detail.token !== token) return;
+        this.detail.loading = false;
+        this.detail.bill = bill;
+        this.detail.parcela = parcela;
+        this.detail.transferencia = true;
+        this.detail.pagar = null;
+        this.detail.attachments = [];
+        if (!bill && !parcela) this.detail.error = "Não encontrei o título a receber " + billId + " no Sienge.";
+        this.render();
+        return;
+      }
+      if (pagar && pagar.id) {
+        try { attachments = await this.anexosDe(pagar.id, "pagar"); } catch (e3) { attachments = []; }
+      }
+      if (!attachments.length) {
+        try { attachments = await this.anexosDe(billId, "receber"); } catch (e4) { attachments = []; }
+      }
+      if (!this.detail || this.detail.token !== token) return;
+      this.detail.loading = false;
+      this.detail.bill = bill;
+      this.detail.parcela = parcela;
+      this.detail.pagar = pagar;
+      this.detail.attachments = attachments;
+      if (!bill && !parcela) this.detail.error = "Não encontrei o título a receber " + billId + " no Sienge.";
+      this.render();
+    } catch (e) {
+      if (!this.detail || this.detail.token !== token) return;
+      this.detail.loading = false;
+      this.detail.error = (e && e.message) ? e.message : "Não consegui abrir o título a receber.";
+      this.render();
+    }
+  },
+
+  async openTitulo(key) {
+    let item = null;
+    this.days.some((d) => {
+      item = (d.pagarItens || []).find((p) => p.key === key) || null;
+      return !!item;
+    });
+    if (!item || !item.titulo) return;
+    this.detail = { loading: true, error: "", item, bill: null, attachments: [], payment: null };
+    this.render();
+    try {
+      const billId = item.titulo;
+      const bill = await window.siengeFetchWithRetry("/bills/" + encodeURIComponent(billId), 1);
+      let attachments = [];
+      if (window.ComprasPrevisoesApp && typeof ComprasPrevisoesApp.anexosDoTitulo === "function") {
+        try { attachments = await ComprasPrevisoesApp.anexosDoTitulo(billId); } catch (e) { attachments = []; }
+      }
+      const payment = await caixaFormaPagamento(billId, item.parcela || 1);
+      if (!this.detail || this.detail.item.key !== key) return;
+      this.detail.loading = false;
+      this.detail.bill = bill || null;
+      this.detail.attachments = attachments;
+      this.detail.payment = payment;
+      this.render();
+    } catch (e) {
+      if (!this.detail || this.detail.item.key !== key) return;
+      this.detail.loading = false;
+      this.detail.error = (e && e.message) ? e.message : "Não consegui abrir o título.";
+      this.render();
+    }
+  },
+
+  closeTitulo() {
+    this.detail = null;
+    this.render();
+  },
+
+  async baixarAnexo(billId, attachmentId, name, fonte) {
+    const base = (window.SIENGE_CONFIG && window.SIENGE_CONFIG.baseUrl) || "/api/sienge-proxy";
+    const path = (fonte === "receber" ? "/accounts-receivable/receivable-bills/" : "/bills/")
+      + encodeURIComponent(billId) + "/attachments/" + encodeURIComponent(attachmentId);
+    const headers = {};
+    if (typeof getBasicAuthHeader === "function") headers.Authorization = getBasicAuthHeader();
+    try {
+      const res = await fetch(base + path, { headers });
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name || ("titulo-" + billId + ".pdf");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } catch (e) {
+      alert("Não foi possível baixar o anexo deste título.");
+    }
+  },
+
+  detailReceberHtml(det) {
+    const item = det.item || {};
+    const bill = det.bill || {};
+    const parc = det.parcela || {};
+    const pagar = det.pagar;
+    const pagarBill = (pagar && pagar.bill) || {};
+    const cliente = item.cliente || bill.customerName || "—";
+    const doc = [item.docId || bill.documentId || bill.documentIdentificationId, item.documento || bill.documentNumber].filter(Boolean).join(" ");
+    const saldo = parc.currentBalance != null ? Number(parc.currentBalance) : (parc.balanceDue != null ? Number(parc.balanceDue) : (item.saldo != null ? Number(item.saldo) : null));
+    const quitado = !!(bill.payOffDate || bill.payoffDate);
+    const situacao = quitado ? "Quitado" : (saldo != null && saldo > 0.009 ? "Em aberto" : (saldo != null ? "Recebido" : "—"));
+    const valorParc = parc.originalValue != null ? Number(parc.originalValue) : (parc.originalAmount != null ? Number(parc.originalAmount) : item.valor);
+    const obs = bill.note || bill.notes || "";
+    const dePagar = (det.attachments || []).some((a) => a.fonte === "pagar");
+    const anexos = (det.attachments || []).map((a) => `
+      <button type="button" class="btn btn-outline btn-sm" style="height:32px;" onclick="FluxoCaixaDiarioApp.baixarAnexo('${caixaEsc(a.billId || item.titulo)}','${caixaEsc(a.id)}','${caixaEsc(a.name || "anexo.pdf")}','${caixaEsc(a.fonte || "pagar")}')">${caixaEsc(a.description || a.name || "Anexo")}</button>
+    `).join("");
+    const semAnexo = dePagar
+      ? "O título a pagar não tem anexo."
+      : (pagar
+        ? "Não há anexo no título a receber nem no contas a pagar de origem."
+        : "Não há anexo neste título a receber. Quando ele nasce de um contas a pagar, os anexos ficam naquele título.");
+    const origem = det.transferencia ? `
+      <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Transferência entre contas</h4>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:0.86rem;color:#334155;">
+        O valor sai do cliente ${caixaEsc(cliente)} e entra na empresa ${caixaEsc(item.empresa || this.companyName(item.companyId) || "—")}. É transferência entre contas do mesmo grupo. Anexo não se aplica.
+      </div>` : (pagar ? `
+      <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Origem no contas a pagar</h4>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:0.86rem;">
+        Título ${caixaEsc(pagar.id)}${pagarBill.creditorName ? " · " + caixaEsc(pagarBill.creditorName) : ""}
+        <div style="color:#64748b;margin-top:4px;">Os anexos deste recebimento ficam no contas a pagar.</div>
+      </div>` : "");
+    return `<div style="position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)FluxoCaixaDiarioApp.closeTitulo()">
+      <div style="background:#fff;border-radius:12px;width:min(720px,96vw);max-height:86vh;overflow:auto;padding:18px 20px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+          <h3 style="margin:0;color:#105436;">Título a receber ${caixaEsc(item.titulo)}${item.parcela ? " · parcela " + caixaEsc(item.parcela) : ""}</h3>
+          <button type="button" class="btn btn-fechar btn-sm" onclick="FluxoCaixaDiarioApp.closeTitulo()">Fechar</button>
+        </div>
+        ${det.loading ? `<p style="color:#64748b;">Abrindo o título a receber…</p>` : ""}
+        ${det.error ? `<p style="color:#b91c1c;">${caixaEsc(det.error)}</p>` : ""}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:12px;font-size:0.86rem;">
+          <div><span style="color:#64748b;">Cliente</span><div style="font-weight:700;">${caixaEsc(cliente)}</div></div>
+          <div><span style="color:#64748b;">Documento</span><div style="font-weight:700;">${caixaEsc(doc || "—")}</div></div>
+          <div><span style="color:#64748b;">Empresa</span><div>${caixaEsc(item.empresa || this.companyName(item.companyId) || item.companyId || "—")}</div></div>
+          <div><span style="color:#64748b;">Vencimento</span><div>${caixaFmtDate(item.vencimento || (parc.dueDate || "").slice(0, 10) || item.date)}</div></div>
+          <div><span style="color:#64748b;">Valor</span><div style="font-weight:700;color:#105436;">${caixaMoney(valorParc)}</div></div>
+          <div><span style="color:#64748b;">Saldo</span><div>${saldo == null || !Number.isFinite(saldo) ? "—" : caixaMoney(saldo)}</div></div>
+          <div><span style="color:#64748b;">Situação</span><div>${situacao}</div></div>
+          <div><span style="color:#64748b;">Centro de custo</span><div>${caixaEsc(item.ccNome || "—")}</div></div>
+          ${item.unidade ? `<div><span style="color:#64748b;">Unidade</span><div>${caixaEsc(item.unidade)}</div></div>` : ""}
+        </div>
+        ${obs ? `<p style="margin:12px 0 0;font-size:0.84rem;"><strong>Observação:</strong> ${caixaEsc(obs)}</p>` : ""}
+        ${origem}
+        ${det.transferencia ? "" : `<h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">${dePagar ? "Anexos do contas a pagar" : "Anexos"}</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">${det.loading ? "" : (anexos || `<span style="color:#64748b;font-size:0.84rem;">${semAnexo}</span>`)}</div>`}
+      </div>
+    </div>`;
+  },
+
+  detailHtml() {
+    const det = this.detail;
+    if (!det) return "";
+    if (det.receber) return this.detailReceberHtml(det);
+    const item = det.item || {};
+    const bill = det.bill || {};
+    const pago = item.natureza === "pago";
+    const credor = bill.creditorName || item.credor || "—";
+    const doc = [item.docId || bill.documentIdentificationId, item.documento || bill.documentNumber].filter(Boolean).join(" ");
+    const anexos = (det.attachments || []).map((a) => `
+      <button type="button" class="btn btn-outline btn-sm" style="height:32px;" onclick="FluxoCaixaDiarioApp.baixarAnexo('${caixaEsc(item.titulo)}','${caixaEsc(a.id)}','${caixaEsc(a.name || "anexo.pdf")}')">${caixaEsc(a.description || a.name || "Anexo")}</button>
+    `).join("");
+    const situacao = pago ? "Pago" : (item.natureza === "previsao" ? "Previsão" : "Programado");
+    return `<div style="position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)FluxoCaixaDiarioApp.closeTitulo()">
+      <div style="background:#fff;border-radius:12px;width:min(720px,96vw);max-height:86vh;overflow:auto;padding:18px 20px;">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+          <h3 style="margin:0;color:#105436;">Título ${caixaEsc(item.titulo)}${item.parcela ? " · parcela " + caixaEsc(item.parcela) : ""}</h3>
+          <button type="button" class="btn btn-fechar btn-sm" onclick="FluxoCaixaDiarioApp.closeTitulo()">Fechar</button>
+        </div>
+        ${det.loading ? `<p style="color:#64748b;">Abrindo título, anexos e forma de pagamento…</p>` : ""}
+        ${det.error ? `<p style="color:#b91c1c;">${caixaEsc(det.error)}</p>` : ""}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin-top:12px;font-size:0.86rem;">
+          <div><span style="color:#64748b;">Credor</span><div style="font-weight:700;">${caixaEsc(credor)}</div></div>
+          <div><span style="color:#64748b;">Documento</span><div style="font-weight:700;">${caixaEsc(doc || "—")}</div></div>
+          <div><span style="color:#64748b;">Empresa</span><div>${caixaEsc(this.companyName(item.companyId) || item.companyId || "—")}</div></div>
+          <div><span style="color:#64748b;">${pago ? "Pagamento" : "Vencimento"}</span><div>${caixaFmtDate(pago ? item.date : (item.vencimento || item.date))}${item.deslocadoDe ? ` <span style="color:#64748b;font-size:.78rem;">(pagamento ${item.date < item.deslocadoDe ? "antecipado" : "no próximo dia útil"}, ${caixaFmtDate(item.date)})</span>` : ""}</div></div>
+          <div><span style="color:#64748b;">${pago ? "Valor pago" : "Valor a pagar"}</span><div style="font-weight:700;color:#c2410c;">${caixaMoney(item.valor)}</div></div>
+          <div><span style="color:#64748b;">Situação</span><div>${situacao}</div></div>
+          <div><span style="color:#64748b;">Centro de custo</span><div>${caixaEsc(item.ccNome || "—")}</div></div>
+          <div><span style="color:#64748b;">Plano financeiro</span><div>${caixaEsc(item.plano || "—")}</div></div>
+          ${item.conta ? `<div><span style="color:#64748b;">Conta de saída</span><div style="font-weight:700;color:#c2410c;">${caixaEsc(this.contaLabel(item))}</div></div>` : ""}
+        </div>
+        ${bill.notes ? `<p style="margin:12px 0 0;font-size:0.84rem;"><strong>Observação:</strong> ${caixaEsc(bill.notes)}</p>` : ""}
+        <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Forma de pagamento</h4>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:0.86rem;">${det.loading ? "" : caixaFormaHtml(det.payment, item)}</div>
+        <h4 style="margin:16px 0 6px;color:#105436;font-size:0.92rem;">Anexos</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">${anexos || `<span style="color:#64748b;font-size:0.84rem;">Este título não tem anexo.</span>`}</div>
+      </div>
+    </div>`;
+  },
+
+  contasComSaldo() {
+    const tipos = [
+      { id: "corrente", name: "Conta corrente", rows: [], total: 0, marcado: 0, ligadas: 0 },
+      { id: "investimento", name: "Investimento", rows: [], total: 0, marcado: 0, ligadas: 0 }
+    ];
+    (this.accounts || []).forEach((a) => {
+      if (!a || a.tipo === "mutuo") return;
+      if ((Math.abs(Number(a.amount) || 0) < 0.005 && Math.abs(Number(a.opening) || 0) < 0.005)) return;
+      const g = a.tipo === "investimento" ? tipos[1] : tipos[0];
+      const v = Number(a.amount) || 0;
+      g.rows.push(a);
+      g.total += v;
+      if (this.accountIncluded(a)) {
+        g.marcado += v;
+        g.ligadas++;
+      }
+    });
+    return tipos.filter((g) => g.rows.length);
+  },
+
+  contaTag(companyId, conta) {
+    const bank = this.bankInfo(companyId, conta);
+    return `<span class="cxd-conta-tag">C/C ${caixaEsc(conta)}${bank.bancoLabel ? " · " + caixaEsc(bank.bancoLabel) : ""}</span>`;
+  },
+
+  contaLabel(it) {
+    if (it && it.conta) {
+      const bank = this.bankInfo(it.companyId, it.conta);
+      const key = this.accountKey({ companyId: it.companyId || "", number: it.conta });
+      const norm = this.normNum(it.conta);
+      const acc = (this.accounts || []).find((a) => this.accountKey(a) === key || (String(a.companyId || "") === String(it.companyId || "") && this.normNum(a.number) === norm));
+      const nome = acc && acc.name && this.normNum(acc.name) !== norm ? acc.name : "";
+      const tipo = (it.tipoConta || this.ladoConta(it.companyId, it.conta)) === "investimento" ? "Investimento" : "Conta corrente";
+      return [tipo, it.conta, nome, bank.bancoLabel].filter(Boolean).join(" · ");
+    }
+    return (it && it.tipoConta) === "investimento" ? "Investimento" : "Conta corrente";
+  },
+
+  ccNomeDe(id) {
+    const hit = (this._ccAll || []).find((c) => String(c.id) === String(id || ""));
+    return hit && hit.name ? String(hit.name).trim() : "";
+  },
+
+  nomeEmp(it) {
+    return String((it && (it.ccNome || this.ccNomeDe(it.cc || it.ccId))) || "").trim();
+  },
+
+  rotuloEmp(it) {
+    const id = String((it && (it.cc || it.ccId)) || "").trim();
+    const nome = this.nomeEmp(it).toUpperCase();
+    if (id && nome) return id + " - " + nome;
+    return nome || id || "Sem empreendimento";
+  },
+
+  /** Conta a pagar: o PMP é de recebimento. A linha mostra o credor e o título. */
+  ehPagar(it) {
+    return !!(it && it.credor && !it.cliente);
+  },
+
+  /** empreendimento - unidade (título) NOME DO CLIENTE */
+  resumoLinha(it, opts) {
+    if (!it) return "—";
+    if (this.ehPagar(it)) {
+      const credor = String(it.credor).trim().toUpperCase();
+      const tit = [it.titulo || it.billId, it.parcela].filter(Boolean).join(" - ");
+      return tit ? credor + " (" + tit + ")" : (credor || "—");
+    }
+    const emp = this.nomeEmp(it).toUpperCase() || String(it.cc || it.ccId || "").trim();
+    const un = String(it.unidade || "").trim() || (it.outra ? String(it.documento || "").trim() : "");
+    const prevista = !it.real && !it.outra && !!(it.titulo || it.billId);
+    const semParcela = !!(opts && opts.semParcela);
+    const tit = prevista
+      ? ["Título " + (it.titulo || it.billId), !semParcela && it.parcela ? "Parcela " + it.parcela : (it.vencimento ? "venc. " + caixaFmtDate(it.vencimento) : "")].filter(Boolean).join(" · ")
+      : [it.titulo || it.billId, !semParcela && it.parcela].filter(Boolean).join("/");
+    const nome = String(it.cliente || it.credor || it.party || "").trim().toUpperCase();
+    if (it.real && !un && !tit) return nome || String(it.historico || "Movimento").trim() || "—";
+    const corpo = [emp, un].filter(Boolean).join(" - ");
+    const comTit = tit ? (corpo ? corpo + " (" + tit + ")" : "(" + tit + ")") : corpo;
+    return [comTit, nome].filter(Boolean).join(" ") || "—";
+  },
+
+  /** Vencimento original, PMP de 3 meses e o motivo da data no caixa. */
+  dicaLinha(it) {
+    if (!it) return "";
+    const ehPagar = this.ehPagar(it);
+    const linhas = [];
+    if (it.vencimento) linhas.push("<b>Vencimento original</b> " + caixaEsc(caixaFmtDate(it.vencimento)));
+    if (!ehPagar && it.unidades && it.unidades.length > 1) {
+      linhas.push("<b>Mesmo título</b> nas unidades " + caixaEsc(it.unidades.join(" e ")) + ". A parcela entra uma vez no caixa.");
+    }
+    if (!it.real && !it.outra && !ehPagar) {
+      const pmp = Number(it.pmp) || 0;
+      const quando = pmp > 0 ? pmp + " dia(s) depois do vencimento" : (pmp < 0 ? Math.abs(pmp) + " dia(s) antes do vencimento" : "no próprio vencimento");
+      linhas.push("<b>PMP</b> " + caixaEsc(String(pmp)) + " dia(s) · média de 3 meses, paga " + caixaEsc(quando));
+      const passos = ["soma o PMP ao vencimento"];
+      if (it.vencimento && !caixaEhUtil(it.vencimento)) passos.push("o vencimento não é dia útil, então parte de " + caixaFmtDate(it.vencEfetivo || caixaDiaUtil(it.vencimento, 1)));
+      if (it.deslocadoDe && it.deslocadoDe !== it.date) passos.push("caiu em " + caixaFmtDate(it.deslocadoDe) + " e foi para " + caixaFmtDate(it.date));
+      else passos.push("a previsão fica em " + caixaFmtDate(it.date));
+      linhas.push(caixaEsc(passos.join("; ")) + ".");
+    } else if (it.outra) {
+      linhas.push(it.deslocadoDe
+        ? caixaEsc("O vencimento não é dia útil. O recebimento entra em " + caixaFmtDate(it.date) + ".")
+        : caixaEsc("Recebimento previsto em " + caixaFmtDate(it.date) + "."));
+    } else if (!it.real && it.vencimento) {
+      linhas.push(it.deslocadoDe
+        ? caixaEsc("O pagamento foi para o dia útil " + caixaFmtDate(it.date) + ".")
+        : caixaEsc("Pagamento previsto em " + caixaFmtDate(it.date) + "."));
+    }
+    if (it.conta) {
+      linhas.push(`<b>Conta ${ehPagar ? "de saída" : "de entrada"} prevista:</b> ` + caixaEsc(this.contaLabel(it)));
+    }
+    return linhas.join("<br>");
+  },
+
+  /** Como o PMP deslocou a previsão: média de 3 meses e o próximo dia útil do vencimento. */
+  pmpTitle(it) {
+    if (!it || it.real || it.outra) return "";
+    const pmp = Number(it.pmp) || 0;
+    const habito = pmp > 0
+      ? `paga em média ${pmp} dia(s) depois do vencimento`
+      : (pmp < 0 ? `paga em média ${Math.abs(pmp)} dia(s) antes do vencimento` : "paga em média no próprio vencimento");
+    const partes = [
+      `PMP ${pmp}d: nos últimos 3 meses, cada recebimento entra com os dias entre o pagamento e o vencimento da parcela. A média arredondada desses dias é o PMP. Este cliente ${habito}.`
+    ];
+    if (it.vencimento && !caixaEhUtil(it.vencimento)) {
+      partes.push(`O vencimento ${caixaFmtDate(it.vencimento)} cai em sábado, domingo ou feriado. O cliente paga no próximo dia útil, ${caixaFmtDate(it.vencEfetivo || caixaDiaUtil(it.vencimento, 1))}.`);
+    } else if (it.vencimento) {
+      partes.push(`Vencimento ${caixaFmtDate(it.vencimento)}.`);
+    }
+    if (it.deslocadoDe && it.deslocadoDe !== it.date) {
+      partes.push(`Somando o PMP, a data caía em ${caixaFmtDate(it.deslocadoDe)} e passou para ${caixaFmtDate(it.date)}.`);
+    } else {
+      partes.push(`A previsão de caixa fica em ${caixaFmtDate(it.date)}.`);
+    }
+    return partes.join(" ");
+  },
+
+  contasHtml() {
+    const grupos = this.contasComSaldo();
+    if (!grupos.length) {
+      return `<div class="cxd-vazio">${this.loading || this.progress ? "Lendo as contas…" : "Nenhuma conta com saldo disponível."}</div>`;
+    }
+    const sinal = (v) => (v < 0 ? "cxd-out" : "cxd-in");
+    return `<div class="cxd-contas-grid">${grupos.map((g) => {
+      const linhas = g.rows.map((a) => {
+        const key = this.accountKey(a);
+        const keyJs = encodeURIComponent(key).replace(/'/g, "%27");
+        const bloq = this.accountBlocked(a);
+        const on = this.accountIncluded(a);
+        const outro = g.id === "investimento" ? "corrente" : "investimento";
+        const titulo = bloq ? "Conta de parceria de um empreendimento fora do caixa" : (on ? "Considerada no saldo inicial" : "Fora do saldo inicial");
+        const comp = this.ehCompromissada(a);
+        const nomeConta = a.descricao || a.name || a.number || "Conta";
+        const nomeJs = encodeURIComponent(nomeConta).replace(/'/g, "%27");
+        return `<tr class="${on ? "" : "cxd-off"}${comp ? " cxd-comp-row" : ""}">
+          <td class="cxd-flag">
+            <label class="moura-switch" title="${titulo}">
+              <input type="checkbox" ${on ? "checked" : ""} ${bloq ? "disabled" : ""} onchange="FluxoCaixaDiarioApp.setFlag(decodeURIComponent('${keyJs}'), this.checked)">
+              <span class="moura-switch-track" aria-hidden="true"></span>
+            </label>
+          </td>
+          <td class="cxd-conta${comp ? " cxd-comp-conta" : ""}" ${comp ? `title="Parametrizar prazo e saldo mínimo" onclick="FluxoCaixaDiarioApp.abrirComp(decodeURIComponent('${nomeJs}'))"` : ""}>
+            <div title="${caixaEsc(nomeConta)}">${caixaEsc(nomeConta)}</div>
+            ${a.descricao && a.number ? `<small>C/C ${caixaEsc(a.number)}</small>` : ""}
+            ${comp ? `<small class="cxd-comp-dica">Clique para parametrizar</small>` : ""}
+            ${bloq ? `<span class="cxd-bloq">empreendimento fora do caixa</span>` : ""}
+          </td>
+          <td class="cxd-banco">${a.banco ? caixaEsc(a.banco) : `<span class="cxd-zero">—</span>`}</td>
+          <td class="cxd-num ${sinal(a.amount)}">${caixaMoney(a.amount)}</td>
+          <td class="cxd-mover">
+            <button type="button" title="Mover para ${outro === "investimento" ? "Investimento" : "Conta corrente"}" onclick="FluxoCaixaDiarioApp.setTipo(decodeURIComponent('${keyJs}'),'${outro}')">
+              <i data-lucide="arrow-left-right" style="width:14px;height:14px;"></i>
+            </button>
+          </td>
+        </tr>`;
+      }).join("");
+      const aberto = this.contasAbertas[g.id] !== false;
+      return `<div class="cxd-gbox cxd-gbox-${g.id}${aberto ? "" : " is-fechado"}">
+        <div class="cxd-gbox-head" role="button" tabindex="0" onclick="FluxoCaixaDiarioApp.toggleContas('${g.id}')">
+          <i data-lucide="${aberto ? "chevron-down" : "chevron-right"}" style="width:16px;height:16px;"></i>
+          <i data-lucide="${g.id === "investimento" ? "trending-up" : "landmark"}" style="width:15px;height:15px;"></i>
+          <span>${caixaEsc(g.name)}</span>
+          <small>${g.rows.length} conta(s) · ${g.ligadas} no caixa</small>
+          <div class="cxd-gbox-tot">
+            <div><label>Total do grupo</label><b>${caixaMoney(g.total)}</b></div>
+            <div class="cxd-gbox-nocaixa"><label>No caixa do dia a dia</label><strong>${caixaMoney(g.marcado)}</strong></div>
+          </div>
+        </div>
+        ${aberto ? `<div class="cxd-gbox-body">
+          <table class="cxd-contas">
+            <thead><tr>
+              <th title="Considerar no saldo inicial">Caixa</th><th>Conta</th><th>Banco</th>
+              <th>Saldo hoje</th><th></th>
+            </tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>` : ""}
+      </div>`;
+    }).join("")}</div>`;
+  },
+
+  planoHtml(it) {
+    const planos = it.planos && it.planos.length ? it.planos : (it.plano ? [it.plano] : []);
+    if (!planos.length) return `<span class="cxd-muted">—</span>`;
+    return `<span title="${caixaEsc(planos.join("\n"))}">${caixaEsc(planos[0])}${planos.length > 1 ? ` <small class="cxd-muted">+${planos.length - 1}</small>` : ""}</span>`;
+  },
+
+  origemHtml(it, lado) {
+    if (it && it.outra) return `<span class="cxd-org cxd-org-outra" title="Recebimento previsto que não é contrato de venda">Outras entradas previstas</span>`;
+    if (!it.real) return `<span class="cxd-org cxd-org-prev">${lado === "in" ? "Contas a receber" : "Contas a pagar"} · previsto</span>`;
+    const o = it.origem || { tipo: "outro", rotulo: "—" };
+    const dica = o.tipo === "cb"
+      ? "Lançado direto em Caixa e bancos, sem título do contas a pagar/receber. Confira se não é inserção manual indevida."
+      : (o.cod ? "Código de origem no Sienge: " + o.cod : "");
+    return `<span class="cxd-org cxd-org-${o.tipo}" title="${caixaEsc(dica)}">${caixaEsc(o.rotulo)}</span>`;
+  },
+
+  conciliacaoHtml(it) {
+    if (!it.real) return `<span class="cxd-muted">—</span>`;
+    if (it.conciliado === true) return `<span class="cxd-conc cxd-conc-ok">Conciliado</span>`;
+    if (it.conciliado === false) return `<span class="cxd-conc cxd-conc-no" title="Movimento ainda não conciliado com o extrato do banco no Sienge">Sem conciliação</span>`;
+    return `<span class="cxd-muted" title="O Sienge não informou a conciliação deste movimento">—</span>`;
+  },
+
+  /** Lançamentos realizados do dia (ou do mês) que pedem atenção: avulsos de caixa e bancos e sem conciliação. */
+  alertasMov(dias) {
+    let manuais = 0;
+    let semConc = 0;
+    let valorSemConc = 0;
+    (dias || []).forEach((d) => {
+      (d.itens || []).concat(d.pagarItens || []).forEach((it) => {
+        if (!it.real) return;
+        if (it.origem && it.origem.tipo === "cb") manuais += 1;
+        if (it.conciliado === false) {
+          semConc += 1;
+          valorSemConc += Math.abs(Number(it.valor) || 0);
+        }
+      });
+    });
+    return { manuais, semConc, valorSemConc };
+  },
+
+  listaSemConc(dias) {
+    const out = [];
+    (dias || []).forEach((d) => {
+      (d.itens || []).forEach((it) => {
+        if (!it.real || it.conciliado !== false) return;
+        out.push({ it, data: d.date, valor: Number(it.valor) || 0 });
+      });
+      (d.pagarItens || []).forEach((it) => {
+        if (!it.real || it.conciliado !== false) return;
+        out.push({ it, data: d.date, valor: -Math.abs(Number(it.valor) || 0) });
+      });
+    });
+    out.sort((a, b) => String(a.data).localeCompare(String(b.data)) || Math.abs(b.valor) - Math.abs(a.valor));
+    return out;
+  },
+
+  abrirSemConc(date) {
+    this.semConcDia = date || "";
+    this.semConcAberto = true;
+    this.render();
+  },
+
+  fecharSemConc() {
+    this.semConcAberto = false;
+    this.semConcDia = "";
+    this.render();
+  },
+
+  irDiaSemConc(iso) {
+    this.semConcAberto = false;
+    this.semConcDia = "";
+    if (this.openDay !== iso) {
+      this.openDay = iso;
+      this.detOpen = {};
+    }
+    this.render();
+    const det = document.querySelector("#fluxo-caixa-diario-root .cxd-daydet");
+    if (det) det.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  },
+
+  semConcHtml() {
+    if (!this.semConcAberto) return "";
+    const dias = this.semConcDia
+      ? (this.days || []).filter((d) => d.date === this.semConcDia)
+      : (this.days || []);
+    const lista = this.listaSemConc(dias);
+    const abs = lista.reduce((s, r) => s + Math.abs(r.valor), 0);
+    const linhas = lista.map((r) => {
+      const it = r.it;
+      const resumo = this.resumoLinha(it);
+      const hist = String(it.historico || "").trim();
+      const extra = hist && hist.toUpperCase() !== String(resumo).toUpperCase() ? hist : "";
+      const plano = [it.plano, it.ccNome].filter(Boolean).join(" · ");
+      const origem = (it.origem && it.origem.rotulo) || "—";
+      return `<tr>
+        <td>${caixaFmtDate(r.data)}</td>
+        <td>${caixaEsc(this.contaLabel(it))}</td>
+        <td>${caixaEsc(resumo)}${extra ? `<div class="cxd-muted">${caixaEsc(extra)}</div>` : ""}${plano ? `<div class="cxd-muted">${caixaEsc(plano)}</div>` : ""}</td>
+        <td>${caixaEsc(origem)}</td>
+        <td class="cxd-num ${r.valor < 0 ? "cxd-out" : "cxd-in"}">${caixaMoney(r.valor)}</td>
+        <td><button type="button" class="btn btn-outline btn-sm" onclick="FluxoCaixaDiarioApp.irDiaSemConc('${r.data}')">Abrir o dia</button></td>
+      </tr>`;
+    }).join("");
+    const titulo = this.semConcDia ? "Sem conciliação em " + caixaFmtDate(this.semConcDia) : "Sem conciliação no período";
+    return `<div style="position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px;" onclick="if(event.target===this)FluxoCaixaDiarioApp.fecharSemConc()">
+      <div style="background:#fff;border-radius:12px;width:min(920px,96vw);max-height:86vh;overflow:auto;padding:18px 20px;" role="dialog" aria-label="${caixaEsc(titulo)}">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+          <h3 style="margin:0;color:#b91c1c;">${caixaEsc(titulo)}</h3>
+          <button type="button" class="btn btn-fechar btn-sm" onclick="FluxoCaixaDiarioApp.fecharSemConc()">Fechar</button>
+        </div>
+        <p style="margin:8px 0 12px;color:#64748b;font-size:0.84rem;">Movimento realizado que o Sienge ainda não conciliou com o extrato do banco. A soma dos valores absolutos é ${caixaMoney(abs)}.</p>
+        <table class="cxd-sheet cxd-analitico">
+          <thead><tr><th>Data</th><th>Conta</th><th>Lançamento</th><th>Origem</th><th class="cxd-num">Valor</th><th></th></tr></thead>
+          <tbody>${linhas || `<tr><td colspan="6">Nenhum movimento sem conciliação neste recorte.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`;
+  },
+
+  /** Prazo mínimo da compromissada e piso que fica na conta corrente. */
+  parametrosComp() {
+    let prazo = 10;
+    let piso = 200000;
+    try {
+      const raw = JSON.parse(localStorage.getItem("cxd_comp") || "{}");
+      const p = Math.round(Number(raw.prazo));
+      const s = Number(raw.piso);
+      if (p >= 1) prazo = p;
+      if (Number.isFinite(s) && s >= 0) piso = s;
+    } catch (e) {}
+    return { prazo, piso };
+  },
+
+  ehCompromissada(a) {
+    const txt = [a && a.descricao, a && a.name, a && a.number].filter(Boolean).join(" ").toUpperCase();
+    return /COMPROMISS/.test(txt);
+  },
+
+  abrirComp(nome) {
+    this.compContaNome = nome || "Compromissada";
+    this.compAberto = true;
+    this.render();
+  },
+
+  fecharComp() {
+    this.compAberto = false;
+    this.render();
+  },
+
+  salvarComp() {
+    const prazoEl = document.getElementById("cxd-comp-prazo");
+    const pisoEl = document.getElementById("cxd-comp-piso");
+    const prazo = Math.max(1, Math.round(Number(prazoEl && prazoEl.value) || 10));
+    const piso = Math.max(0, caixaParseMoney(pisoEl && pisoEl.value));
+    try { localStorage.setItem("cxd_comp", JSON.stringify({ prazo, piso })); } catch (e) {}
+    this.compAberto = false;
+    this.render();
+  },
+
+  resumoAlertaCaixa(a, limite) {
+    const sem = a && a.semSaldo;
+    const falta = sem && sem.date && sem.date <= limite ? sem : null;
+    const cdb = a && a.cdb > 0.5 ? a.cdb : 0;
+    const comp = a && a.comp > 0.5 ? a.comp : 0;
+    if (!falta && !(cdb > 0.5) && !(comp > 0.5)) return null;
+    return {
+      falta,
+      cdb,
+      comp,
+      fimCdb: (a && a.fimCdb) || "",
+      fimComp: (a && a.fimComp) || ""
+    };
+  },
+
+  /** Ao entrar na tela, avisa falta de caixa ou sobra para aplicar nas empresas geridas, nos próximos 30 dias. */
+  async avisarCaixa() {
+    if (this._avisoDisparado) return;
+    this._avisoDisparado = true;
+    const token = this._avisoToken;
+    const hoje = this.hoje();
+    const limite = caixaAddDays(hoje, 29);
+    const empresas = this.empresasGeridas();
+    const atual = this.companyKey();
+    const itens = [];
+    const guardar = (id, nome, a) => {
+      const r = this.resumoAlertaCaixa(a, limite);
+      if (!r) return;
+      itens.push(Object.assign({ id: String(id), nome: nome || this.companyName(id) }, r));
+    };
+    if (atual) guardar(atual, this.companyName(atual), this.analiseCaixa(this.linhasProjecao().linhas));
+    const outros = empresas.map((c) => String(c.id)).filter((id) => id !== atual);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < outros.length) {
+        if (this._avisoToken !== token) return;
+        const id = outros[cursor++];
+        try {
+          const r = await this.projetarEmpresa(id);
+          if (this._avisoToken !== token) return;
+          if (r && r.erro) continue;
+          guardar(id, r && r.nome, r);
+        } catch (e) {
+          console.warn("[Caixa diário] aviso de caixa", id, e);
+        }
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    if (this._avisoToken !== token || !itens.length) return;
+    itens.sort((a, b) => {
+      const fa = a.falta ? 0 : 1;
+      const fb = b.falta ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      if (a.falta && b.falta && a.falta.date !== b.falta.date) return String(a.falta.date).localeCompare(String(b.falta.date));
+      return String(a.nome).localeCompare(String(b.nome), "pt");
+    });
+    this.avisoCaixa = itens;
+    this.render();
+  },
+
+  fecharAviso() {
+    this.avisoCaixa = null;
+    this.render();
+  },
+
+  abrirEmpresaAviso(id) {
+    const sid = String(id || "");
+    this.avisoCaixa = null;
+    if (!sid || this.companyIds[0] === sid) {
+      this.render();
+      return;
+    }
+    this.companyIds = [sid];
+    try { localStorage.setItem("cxd_company", sid); } catch (e) {}
+    this.openEmp = false;
+    this.qEmp = "";
+    this.openDay = "";
+    this.load();
+  },
+
+  avisoHtml() {
+    const itens = this.avisoCaixa;
+    if (!itens || !itens.length) return "";
+    const n = itens.length;
+    const cards = itens.map((it) => {
+      const blocos = [];
+      if (it.falta) {
+        const pior = it.falta.menorData && it.falta.menorData !== it.falta.date
+          ? ` O ponto mais baixo é ${caixaFmtDate(it.falta.menorData)}, com ${caixaMoney(it.falta.menor)}.`
+          : "";
+        blocos.push(`<p class="cxd-sem-saldo"><b>Falta caixa em ${caixaFmtDate(it.falta.date)}</b>Conta corrente e aplicação somadas: ${caixaMoney(it.falta.valor)}.${pior}</p>`);
+      }
+      if (it.cdb > 0.5) {
+        blocos.push(`<p class="cxd-aplica-cdb"><b>Aplicar em CDB:</b> ${caixaMoney(it.cdb)}${it.fimCdb ? `, até ${caixaFmtDate(it.fimCdb)}` : ""}.</p>`);
+      }
+      if (it.comp > 0.5) {
+        blocos.push(`<p class="cxd-aplica-comp"><b>Aplicar na compromissada:</b> ${caixaMoney(it.comp)}${it.fimComp ? `, até ${caixaFmtDate(it.fimComp)}` : ""}.</p>`);
+      }
+      return `<article class="cxd-aviso-emp">
+        <header>
+          <strong>${caixaEsc(it.id)} - ${caixaEsc(it.nome)}</strong>
+          <button type="button" class="btn btn-outline" onclick="FluxoCaixaDiarioApp.abrirEmpresaAviso('${caixaEsc(it.id)}')">Abrir</button>
+        </header>
+        ${blocos.join("")}
+      </article>`;
+    }).join("");
+    return `<div class="cxd-aviso-modal" onclick="if(event.target===this)FluxoCaixaDiarioApp.fecharAviso()">
+      <div class="cxd-aviso-dialog" role="dialog" aria-label="Caixa nos próximos 30 dias">
+        <h3>Caixa nos próximos 30 dias</h3>
+        <p>${n === 1 ? "1 empresa" : n + " empresas"} com falta de caixa ou dinheiro parado para aplicar.</p>
+        <div class="cxd-aviso-lista">${cards}</div>
+        <div class="cxd-comp-actions">
+          <button type="button" class="btn btn-fechar" onclick="FluxoCaixaDiarioApp.fecharAviso()">Fechar</button>
+        </div>
+      </div>
+    </div>`;
+  },
+
+  compModalHtml() {
+    if (!this.compAberto) return "";
+    const p = this.parametrosComp();
+    const pisoTxt = p.piso.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `<div class="cxd-comp-modal" onclick="if(event.target===this)FluxoCaixaDiarioApp.fecharComp()">
+      <div class="cxd-comp-dialog" role="dialog" aria-label="Parametrizar compromissada">
+        <h3>Parametrizar compromissada</h3>
+        <p>${caixaEsc(this.compContaNome || "Compromissada")}</p>
+        <label>Prazo mínimo
+          <input id="cxd-comp-prazo" type="number" min="1" step="1" value="${p.prazo}">
+          <small>dias</small>
+        </label>
+        <label>Saldo mínimo na conta corrente
+          <input id="cxd-comp-piso" type="text" inputmode="decimal" value="${pisoTxt}">
+        </label>
+        <div class="cxd-comp-actions">
+          <button type="button" class="btn btn-cancel" onclick="FluxoCaixaDiarioApp.fecharComp()">Cancelar</button>
+          <button type="button" class="btn btn-primary" onclick="FluxoCaixaDiarioApp.salvarComp()">Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  },
+
+  /**
+   * Sobra da conta corrente acima do saldo mínimo.
+   * De 10 a 31 dias, a sugestão é compromissada. Acima de 31 dias, CDB, porque o IOF zera.
+   * O resgate olha só os próximos 30 dias corridos: o dia em que a conta corrente
+   * ficaria negativa e o valor para cobrir as despesas de 7 dias úteis.
+   */
+  DIAS_SEM_SALDO: 60,
+
+  /**
+   * Leitura dos próximos dias: quanto da conta corrente pode ir para CDB ou compromissada,
+   * os resgates dos próximos 30 dias e o primeiro dia, nos próximos 60, em que conta corrente
+   * e aplicação somadas ficam negativas.
+   */
+  analiseCaixa(linhas) {
+    const hoje = this.hoje();
+    const fut = (linhas || []).filter((l) => l.d.date >= hoje);
+    const par = this.parametrosComp();
+    const vazio = { serie: [], par, cdb: 0, comp: 0, fimCdb: "", fimComp: "", diasCdb: 0, diasComp: 0, plano: [], semSaldo: null };
+    if (!fut.length) return vazio;
+    const IOF = 31;
+    const serie = fut.map((l) => ({ date: l.d.date, cc: l.acumCc, inv: l.acumInv }));
+    const minAte = (n) => {
+      let m = Infinity;
+      const fim = Math.min(n, serie.length);
+      for (let i = 0; i < fim; i++) m = Math.min(m, serie[i].cc);
+      return m;
+    };
+    const cabe = (n) => {
+      if (n < 1 || !serie.length) return 0;
+      const folga = minAte(n) - par.piso;
+      return folga > 0.5 ? folga : 0;
+    };
+    const cdb = cabe(IOF + 1);
+    const comp = Math.max(0, cabe(par.prazo) - cdb);
+    const ate = (valor) => {
+      let last = "";
+      if (!(valor > 0.5)) return last;
+      for (let i = 0; i < serie.length; i++) {
+        if (serie[i].cc - par.piso + 0.05 < valor) break;
+        last = serie[i].date;
+      }
+      return last;
+    };
+    const diasDe = (iso) => {
+      if (!iso || !serie.length) return 0;
+      const a = new Date(serie[0].date + "T12:00:00");
+      const b = new Date(iso + "T12:00:00");
+      return Math.round((b - a) / 86400000) + 1;
+    };
+    const fimCdb = ate(cdb);
+    const fimComp = ate(comp);
+    const plano = this.planoResgates(serie.filter((p) => p.date <= caixaAddDays(hoje, 29)));
+    const limite = caixaAddDays(hoje, this.DIAS_SEM_SALDO - 1);
+    let semSaldo = null;
+    serie.forEach((p) => {
+      if (p.date > limite) return;
+      const total = p.cc + p.inv;
+      if (total >= -0.5) return;
+      if (!semSaldo) semSaldo = { date: p.date, valor: total, menor: total, menorData: p.date };
+      else if (total < semSaldo.menor) {
+        semSaldo.menor = total;
+        semSaldo.menorData = p.date;
+      }
+    });
+    return { serie, par, cdb, comp, fimCdb, fimComp, diasCdb: diasDe(fimCdb), diasComp: diasDe(fimComp), plano, semSaldo };
+  },
+
+  semSaldoHtml(s) {
+    if (!s) return "";
+    const pior = s.menorData !== s.date
+      ? ` O ponto mais baixo é ${caixaFmtDate(s.menorData)}, com ${caixaMoney(s.menor)}.`
+      : "";
+    return `<div class="cxd-sem-saldo" role="alert"><b>Sem dinheiro em ${caixaFmtDate(s.date)}</b>Nos próximos ${this.DIAS_SEM_SALDO} dias, a conta corrente e a aplicação somadas ficam negativas: ${caixaMoney(s.valor)} nesse dia.${pior}</div>`;
+  },
+
+  aplicacaoHtml(linhas) {
+    const a = this.analiseCaixa(linhas);
+    if (!a.serie.length) return "";
+    const par = a.par;
+    const cdb = a.cdb;
+    const comp = a.comp;
+    const pisoTxt = caixaMoney(par.piso);
+    const msgs = [];
+    if (a.semSaldo) msgs.push(this.semSaldoHtml(a.semSaldo));
+    if (cdb > 0.5) {
+      msgs.push(`<p class="cxd-aplica-cdb"><b>Aplicar em CDB:</b> ${caixaMoney(cdb)}. Esse valor fica acima do mínimo da conta corrente por ${a.diasCdb} dias, até ${caixaFmtDate(a.fimCdb)}, mais do que os 31 dias em que o IOF zera. Mantenha ${pisoTxt} na conta corrente.</p>`);
+    }
+    if (comp > 0.5) {
+      msgs.push(`<p class="cxd-aplica-comp"><b>Aplicar na compromissada:</b> ${caixaMoney(comp)}. Esse valor pode ficar aplicado por ${a.diasComp} dias, até ${caixaFmtDate(a.fimComp)}, entre o prazo mínimo de ${par.prazo} dias e os 31 dias em que o IOF do CDB zera. Mantenha ${pisoTxt} na conta corrente.</p>`);
+    }
+    const plano = a.plano;
+    if (plano.length) {
+      const itens = plano.map((r) => {
+        const cobre = r.uteis >= 7
+          ? `cobre as despesas de 7 dias úteis, até ${caixaFmtDate(r.fim)}`
+          : `cobre as despesas de ${r.uteis} dia${r.uteis === 1 ? " útil" : "s úteis"}, até ${caixaFmtDate(r.fim)}`;
+        const falta = r.falta > 0.5 ? ` O saldo da aplicação não alcança o restante (${caixaMoney(r.falta)}).` : "";
+        return `<li><b>Resgatar em ${caixaFmtDate(r.dia)}:</b> ${caixaMoney(r.valor)}. Esse valor ${cobre}.${falta}</li>`;
+      }).join("");
+      msgs.push(`<div class="cxd-aplica-resgate"><b>Resgate da aplicação</b><ul>${itens}</ul></div>`);
+    }
+    return msgs.length ? `<div class="cxd-aplica">${msgs.join("")}</div>` : "";
+  },
+
+  /** Próximos resgates: no dia em que a conta corrente ficaria negativa, o valor do buraco dos 7 dias úteis seguintes. */
+  planoResgates(serie) {
+    const out = [];
+    if (!serie.length) return out;
+    let retirado = 0;
+    let desde = 0;
+    const setimo = (iso) => {
+      let d = String(iso || "").slice(0, 10);
+      let n = 0;
+      for (let g = 0; g < 40 && n < 7; g++) {
+        if (caixaEhUtil(d)) n += 1;
+        if (n >= 7) return d;
+        d = caixaAddDays(d, 1);
+      }
+      return d;
+    };
+    for (let volta = 0; volta < 40; volta++) {
+      let i = -1;
+      for (let k = desde; k < serie.length; k++) {
+        if (serie[k].cc + retirado < -0.5 && serie[k].inv - retirado > 0.5) { i = k; break; }
+      }
+      if (i < 0) break;
+      const queda = serie[i].date;
+      let dia = caixaDiaUtil(queda, -1);
+      if (dia < serie[0].date) dia = caixaEhUtil(serie[0].date) ? serie[0].date : caixaDiaUtil(serie[0].date, 1);
+      const fimAlvo = setimo(dia);
+      const fimSerie = serie[serie.length - 1].date;
+      const fim = fimAlvo > fimSerie ? fimSerie : fimAlvo;
+      const inicio = queda < dia ? queda : dia;
+      let minCc = 0;
+      let uteis = 0;
+      for (let d = dia; d <= fim; d = caixaAddDays(d, 1)) {
+        if (caixaEhUtil(d)) uteis += 1;
+      }
+      serie.forEach((p) => {
+        if (p.date < inicio || p.date > fim) return;
+        minCc = Math.min(minCc, p.cc + retirado);
+      });
+      const precisa = Math.max(0, -minCc);
+      const disponivel = Math.max(0, serie[i].inv - retirado);
+      const valor = Math.min(precisa, disponivel);
+      if (!(valor > 0.5)) break;
+      out.push({
+        dia,
+        valor: Math.round(valor * 100) / 100,
+        fim,
+        uteis,
+        falta: Math.round(Math.max(0, precisa - valor) * 100) / 100
+      });
+      retirado += valor;
+      desde = i + 1;
+      if (valor + 0.5 < precisa) break;
+    }
+    return out;
+  },
+
+  /** Movimento que é só juros ou só desconto do recebimento, sem a parcela em si. */
+  tipoAcessorio(it) {
+    const nomes = [];
+    if (it && Array.isArray(it.planos) && it.planos.length) nomes.push.apply(nomes, it.planos);
+    else if (it && it.plano) nomes.push(it.plano);
+    else if (it && it.historico) nomes.push(it.historico);
+    const norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+    const hits = nomes.map(norm).filter(Boolean);
+    if (!hits.length || !hits.every((n) => /JUROS|DESCONTO/.test(n))) return "";
+    return hits.some((n) => /DESCONTO/.test(n)) ? "desconto" : "juros";
+  },
+
+  notaAcessorio(itens) {
+    const soma = { juros: 0, desconto: 0 };
+    (itens || []).forEach((x) => {
+      const tipo = this.tipoAcessorio(x.it || x);
+      if (tipo) soma[tipo] += Number((x.it || x).valor) || 0;
+    });
+    const partes = [];
+    if (Math.abs(soma.juros) >= 0.005) partes.push("juros " + caixaMoney(soma.juros));
+    if (Math.abs(soma.desconto) >= 0.005) partes.push("desconto " + caixaMoney(soma.desconto));
+    return partes.length ? `<span class="cxd-extra">${partes.join(" · ")}</span>` : "";
+  },
+
+  /**
+   * Contas recebidas do extrato: um título por linha. Juros e desconto ficam nessa linha.
+   * Várias parcelas do mesmo título abrem numa lista.
+   */
+  linhasRecebidas(lista, date) {
+    const soltos = [];
+    const grupos = {};
+    const ordem = [];
+    (lista || []).forEach((x) => {
+      const tit = String((x.it && (x.it.billId || x.it.titulo)) || "").trim();
+      if (!tit) { soltos.push(x); return; }
+      if (!grupos[tit]) {
+        grupos[tit] = { tit, itens: [] };
+        ordem.push(tit);
+      }
+      grupos[tit].itens.push(x);
+    });
+    const blocos = [];
+    const clickDe = (x) => {
+      if (!x) return "";
+      if (x.it.outra && (x.it.titulo || x.it.billId)) {
+        return `onclick="FluxoCaixaDiarioApp.openRecebimento('${date}',${x.i})" title="Abrir o título a receber"`;
+      }
+      const abre = !!((x.it.customerId || x.it.clientId) && x.it.billId);
+      return abre ? `onclick="FluxoCaixaDiarioApp.openEntrada('${date}',${x.i})"` : "";
+    };
+    const linhaSimples = (x) => {
+      blocos.push({ valor: Number(x.it.valor) || 0, html: this.linhaDetalhe(x.it, "cxd-det-in", clickDe(x)) });
+    };
+    soltos.forEach(linhaSimples);
+    ordem.forEach((tit) => {
+      const g = grupos[tit];
+      if (g.itens.length < 2) { linhaSimples(g.itens[0]); return; }
+      const principais = g.itens.filter((x) => !this.tipoAcessorio(x.it));
+      const acessorios = g.itens.filter((x) => this.tipoAcessorio(x.it));
+      const porParc = {};
+      const base = principais.length ? principais : g.itens;
+      base.forEach((x) => {
+        const p = String(x.it.parcela || "").trim() || "—";
+        if (!porParc[p]) porParc[p] = [];
+        porParc[p].push(x);
+      });
+      if (principais.length) {
+        acessorios.forEach((x) => {
+          const p = String(x.it.parcela || "").trim();
+          const chaves = Object.keys(porParc);
+          const destino = (p && porParc[p]) ? p : (chaves.length === 1 ? chaves[0] : "");
+          if (destino) porParc[destino].push(x);
+          else {
+            if (!porParc["—"]) porParc["—"] = [];
+            porParc["—"].push(x);
+          }
+        });
+      }
+      const parcelas = Object.keys(porParc).filter((p) => porParc[p].some((x) => !this.tipoAcessorio(x.it)));
+      const varias = parcelas.length > 1;
+      const baseItem = (principais.slice().sort((a, b) => (Number(b.it.valor) || 0) - (Number(a.it.valor) || 0))[0]) || g.itens[0];
+      const total = g.itens.reduce((s, x) => s + (Number(x.it.valor) || 0), 0);
+      const nota = this.notaAcessorio(acessorios);
+      const id = "parc:" + date + ":" + tit;
+      const aberto = this.detOpen[id] === true;
+      const abre = clickDe(baseItem);
+      const nParc = parcelas.length;
+      const dica = this.dicaLinha(baseItem.it);
+      let html = `<tr class="cxd-det-in${abre ? " cxd-click" : ""}" ${abre}>
+          <td class="cxd-desc cxd-tip">${varias ? `<button type="button" class="cxd-abre" onclick="event.stopPropagation(); FluxoCaixaDiarioApp.toggleGrupo('${id}')"><i data-lucide="${aberto ? "chevron-down" : "chevron-right"}" style="width:14px;height:14px;"></i></button>` : ""}${caixaEsc(this.resumoLinha(baseItem.it, varias ? { semParcela: true } : null))}${varias ? `<button type="button" class="cxd-abre" onclick="event.stopPropagation(); FluxoCaixaDiarioApp.toggleGrupo('${id}')">${nParc} parcelas</button>` : ""}${nota}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
+          <td class="cxd-num">${caixaMoney(total)}</td>
+        </tr>`;
+      if (varias && aberto) {
+        parcelas.sort((a, b) => (Number(a) || 0) - (Number(b) || 0));
+        html += parcelas.map((p) => {
+          const itens = porParc[p];
+          const soma = itens.reduce((s, x) => s + (Number(x.it.valor) || 0), 0);
+          const ref = itens.slice().sort((a, b) => (Number(b.it.valor) || 0) - (Number(a.it.valor) || 0))[0];
+          const abreP = clickDe(ref);
+          return `<tr class="cxd-det-in cxd-parc${abreP ? " cxd-click" : ""}" ${abreP}>
+              <td class="cxd-desc">Parcela ${caixaEsc(p)}${this.notaAcessorio(itens)}</td>
+              <td class="cxd-num">${caixaMoney(soma)}</td>
+            </tr>`;
+        }).join("");
+      }
+      blocos.push({ valor: total, html });
+    });
+    blocos.sort((a, b) => b.valor - a.valor);
+    return blocos.map((l) => l.html).join("");
+  },
+
+  linhaDetalhe(it, cls, click) {
+    const dica = this.dicaLinha(it);
+    const tagConta = it && it.conta ? `<span class="cxd-extra">C/C ${caixaEsc(it.conta)}</span>` : "";
+    return `<tr class="${cls}${click ? " cxd-click" : ""}" ${click || ""}>
+      <td class="cxd-desc cxd-tip">${caixaEsc(this.resumoLinha(it))}${tagConta}${dica ? `<span class="cxd-tip-box">${dica}</span>` : ""}</td>
+      <td class="cxd-num">${caixaMoney(it.valor)}</td>
+    </tr>`;
+  },
+
+  tabelaLinhas(rows) {
+    return `<table class="cxd-sheet cxd-analitico cxd-linhas"><tbody>${rows}</tbody></table>`;
+  },
+
+  grupoDetalhe(tipo, titulo, qtd, total, corpo, extra) {
+    const open = this.detOpen[tipo] === true;
+    return `<div class="cxd-grp cxd-grp-${extra || tipo}">
+      <button type="button" class="cxd-grp-head" onclick="FluxoCaixaDiarioApp.toggleGrupo('${tipo}')">
+        <i data-lucide="${open ? "chevron-down" : "chevron-right"}" style="width:16px;height:16px;"></i>
+        <strong>${titulo}</strong>
+        <span>${qtd} lançamento(s)</span>
+        <b>${caixaMoney(total)}</b>
+      </button>
+      ${open ? corpo : ""}
+    </div>`;
+  },
+
+  diaDetalheHtml(aberto) {
+    const d = aberto.d;
+    const lista = (d.itens || []).map((it, i) => ({ it, i }));
+    const carteira = lista.filter((x) => !x.it.real && !x.it.outra);
+    const outros = lista.filter((x) => x.it.outra);
+    const reais = lista.filter((x) => x.it.real);
+    const porEmp = [];
+    const empMap = {};
+    carteira.forEach((x) => {
+      const key = String(x.it.cc || x.it.ccId || "");
+      if (!empMap[key]) {
+        empMap[key] = { key, rotulo: this.rotuloEmp(x.it), itens: [], total: 0 };
+        porEmp.push(empMap[key]);
+      }
+      empMap[key].itens.push(x);
+      empMap[key].total += Number(x.it.valor) || 0;
+    });
+    porEmp.sort((a, b) => b.total - a.total);
+    porEmp.forEach((g) => g.itens.sort((a, b) => (Number(b.it.valor) || 0) - (Number(a.it.valor) || 0)));
+    const linhaIn = (x) => {
+      if (x.it.outra && (x.it.titulo || x.it.billId)) {
+        return this.linhaDetalhe(x.it, "cxd-det-in", `onclick="FluxoCaixaDiarioApp.openRecebimento('${d.date}',${x.i})" title="Abrir o título a receber"`);
+      }
+      const abre = !!((x.it.customerId || x.it.clientId) && x.it.billId);
+      return this.linhaDetalhe(x.it, "cxd-det-in", abre ? `onclick="FluxoCaixaDiarioApp.openEntrada('${d.date}',${x.i})"` : "");
+    };
+    const subs = porEmp.map((g) => {
+      const id = "emp:" + g.key;
+      const abertoEmp = this.detOpen[id] === true;
+      const linhas = g.itens.map(linhaIn).join("");
+      return `<div class="cxd-sub">
+        <button type="button" class="cxd-grp-head" onclick="FluxoCaixaDiarioApp.toggleGrupo('${id}')">
+          <i data-lucide="${abertoEmp ? "chevron-down" : "chevron-right"}" style="width:16px;height:16px;"></i>
+          <strong>${caixaEsc(g.rotulo)}</strong>
+          <span>${g.itens.length} lançamento(s)</span>
+          <b>${caixaMoney(g.total)}</b>
+        </button>
+        ${abertoEmp ? this.tabelaLinhas(linhas) : ""}
+      </div>`;
+    }).join("");
+    const totalCarteira = carteira.reduce((s, x) => s + (Number(x.it.valor) || 0), 0);
+    const totalOutros = outros.reduce((s, x) => s + (Number(x.it.valor) || 0), 0);
+    const totalReais = reais.reduce((s, x) => s + (Number(x.it.valor) || 0), 0);
+    const porValor = (a, b) => (Number(b.it.valor) || 0) - (Number(a.it.valor) || 0);
+    outros.sort(porValor);
+    reais.sort(porValor);
+    const linhasOutros = outros.map(linhaIn).join("");
+    const linhasReais = this.linhasRecebidas(reais, d.date);
+    const saidas = (d.pagarItens || []).slice().sort((a, b) => (Number(b.valor) || 0) - (Number(a.valor) || 0));
+    const linhaSaida = (it) => {
+      const abre = !!it.titulo;
+      return this.linhaDetalhe(it, "cxd-det-out", abre ? `onclick="FluxoCaixaDiarioApp.openTitulo('${caixaEsc(it.key)}')"` : "");
+    };
+    const grupoSaida = (chave, rotulo, lista) => {
+      if (!lista.length) return "";
+      const total = lista.reduce((s, it) => s + (Number(it.valor) || 0), 0);
+      const id = "saida:" + chave;
+      const abertoGrp = this.detOpen[id] === true;
+      return `<div class="cxd-sub">
+        <button type="button" class="cxd-grp-head" onclick="FluxoCaixaDiarioApp.toggleGrupo('${id}')">
+          <i data-lucide="${abertoGrp ? "chevron-down" : "chevron-right"}" style="width:16px;height:16px;"></i>
+          <strong>${rotulo}</strong>
+          <span>${lista.length} lançamento(s)</span>
+          <b>${caixaMoney(total)}</b>
+        </button>
+        ${abertoGrp ? this.tabelaLinhas(lista.map(linhaSaida).join("")) : ""}
+      </div>`;
+    };
+    const comprometidas = saidas.filter((it) => it.natureza !== "previsao");
+    const previsoes = saidas.filter((it) => it.natureza === "previsao");
+    const corpoSaidas = grupoSaida("comprometido", "Comprometido", comprometidas) + grupoSaida("previsao", "Previsões", previsoes);
+    const blocos = [];
+    if (carteira.length) blocos.push(this.grupoDetalhe("carteira", "Carteira Prevista", carteira.length, totalCarteira, subs, "in"));
+    if (outros.length) blocos.push(this.grupoDetalhe("outros", "Outros Recebimentos", outros.length, totalOutros, this.tabelaLinhas(linhasOutros), "outros"));
+    if (reais.length) blocos.push(this.grupoDetalhe("reais", "Entradas", reais.length, totalReais, this.tabelaLinhas(linhasReais), "in"));
+    if (saidas.length) blocos.push(this.grupoDetalhe("saidas", "Saídas", saidas.length, aberto.sair, corpoSaidas, "out"));
+    const al = this.alertasMov([d]);
+    return `<div class="cxd-daydet">
+      <div class="cxd-daydet-head">
+        <strong>${caixaFmtDate(d.date)}</strong>
+        <span class="cxd-chip ${d.real ? "cxd-chip-real" : "cxd-chip-prev"}">${d.real ? "Realizado · extrato bancário" : "Previsto"}</span>
+        ${al.manuais ? `<span class="cxd-chip cxd-chip-cb" title="Lançamentos direto em Caixa e bancos, sem título do contas a pagar/receber">${al.manuais} lançamento(s) de caixa e bancos</span>` : ""}
+        ${al.semConc ? `<button type="button" class="cxd-chip cxd-chip-nc cxd-chip-btn" title="Clique para ver os movimentos sem conciliação" onclick="FluxoCaixaDiarioApp.abrirSemConc('${d.date}')">${al.semConc} sem conciliação · ${caixaMoney(al.valorSemConc)}</button>` : ""}
+        <span class="cxd-daydet-res">Saldo do dia <b class="${aberto.movimento < 0 ? "cxd-out" : "cxd-in"}">${caixaMoney(aberto.movimento)}</b></span>
+        <button type="button" class="btn btn-fechar btn-sm" onclick="FluxoCaixaDiarioApp.toggle('${d.date}')">Fechar</button>
+      </div>
+      ${blocos.join("")}
+    </div>`;
+  },
+
+  /** Saldo de cada dia: começa nas contas ligadas e soma entradas e saídas da conta corrente e da aplicação. */
+  linhasProjecao() {
+    const saldoTipos = this.saldoPorTipo();
+    let cc = saldoTipos.corrente;
+    let inv = saldoTipos.investimento;
+    const linhas = (this.days || []).map((d) => {
+      const entrar = Number(d.entrar) || 0;
+      const sair = Number(d.pagar) || 0;
+      const movimento = entrar - sair;
+      const inicialCc = cc;
+      const inicialInv = inv;
+      cc += (Number(d.entrarCc) || 0) - (Number(d.sairCc) || 0);
+      inv += (Number(d.entrarInv) || 0) - (Number(d.sairInv) || 0);
+      return {
+        d, entrar, sair, movimento,
+        inicial: inicialCc + inicialInv, inicialCc, inicialInv,
+        acumCc: cc, acumInv: inv, acum: cc + inv, passado: d.real
+      };
+    });
+    return { linhas, saldoTipos, fimCc: cc, fimInv: inv };
+  },
+
+  /** Caixa de uma empresa calculado sem desenhar a tela (painel da pagadoria). */
+  async projetarEmpresa(companyId) {
+    const id = String(companyId);
+    const app = Object.create(FluxoCaixaDiarioApp);
+    Object.assign(app, {
+      companyIds: [id],
+      days: [], accounts: [], recItems: [], outras: [], movs: [], payItems: [],
+      totals: { saldo: 0, entrar: 0, pagar: 0 },
+      openingDate: "", progress: "", error: "", loading: false,
+      detOpen: {}, flags: {}, tipos: {}, ccExcl: {},
+      _types: {}, _banks: {}, _nomes: {}, _gen: 0,
+      render() {},
+      paintProgress() {},
+      ensureCompany() {},
+      apiPagar() {
+        const base = FluxoCaixaDiarioApp.apiPagar();
+        if (!base) return base;
+        const api = Object.create(base);
+        api.noteProgress = () => {};
+        return api;
+      }
+    });
+    await app.load();
+    const hoje = app.hoje();
+    const proj = app.linhasProjecao();
+    const a = app.analiseCaixa(proj.linhas);
+    const agora = proj.linhas.find((l) => l.d.date === hoje);
+    return {
+      companyId: id,
+      nome: app.companyName(id),
+      contas: (app.accounts || []).filter((x) => app.accountIncluded(x)).length,
+      cc: agora ? agora.inicialCc : proj.saldoTipos.corrente,
+      inv: agora ? agora.inicialInv : proj.saldoTipos.investimento,
+      cdb: a.cdb,
+      comp: a.comp,
+      fimCdb: a.fimCdb,
+      fimComp: a.fimComp,
+      resgates: a.plano.map((r) => ({ dia: r.dia, valor: r.valor, falta: r.falta || 0 })),
+      semSaldo: a.semSaldo,
+      erro: app.error || ""
+    };
+  },
+
+  render() {
+    const root = document.getElementById("fluxo-caixa-diario-root");
+    if (!root) return;
+    const hoje = this.hoje();
+    const proj = this.linhasProjecao();
+    const saldoTipos = proj.saldoTipos;
+    const saldoInicial = saldoTipos.total;
+    const linhas = proj.linhas;
+    const fimCc = proj.fimCc;
+    const fimInv = proj.fimInv;
+    const fim = fimCc + fimInv;
+    const visiveis = linhas.filter((l) => {
+      const iso = l.d.date;
+      if (caixaEhUtil(iso) || iso === hoje || iso === this.openDay) return true;
+      return Math.abs(l.entrar) >= 0.005 || Math.abs(l.sair) >= 0.005;
+    });
+    const alMes = this.alertasMov(this.days);
+    const prevWrap = root.querySelector(".cxd-wrap-mx");
+    const prevScroll = prevWrap && prevWrap.scrollLeft > 0 ? prevWrap.scrollLeft : null;
+    const prevBody = root.querySelector(".cxd-body");
+    const prevTop = prevBody ? prevBody.scrollTop : 0;
+    const prevContas = Array.from(root.querySelectorAll(".cxd-gbox-body")).map((el) => el.scrollTop);
+    const prevListas = ["cxd-emp-list", "cxd-cc-list"].map((id) => {
+      const el = document.getElementById(id);
+      return el ? el.scrollTop : 0;
+    });
+    const totEntrar = Number(this.totals.entrar) || 0;
+    const totSair = Number(this.totals.pagar) || 0;
+    const semana = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+    const colCls = (line) => {
+      const c = [];
+      if (line.d.date === hoje) c.push("cxd-col-hoje");
+      if (this.openDay === line.d.date) c.push("cxd-col-open");
+      if (line.passado) c.push("cxd-col-past");
+      if (!caixaEhUtil(line.d.date)) c.push("cxd-col-naoutil");
+      return c.join(" ");
+    };
+    const cell = (line, html, cls, extra) => `<td class="${colCls(line)} ${cls || ""}" data-col="${line.d.date}" onclick="FluxoCaixaDiarioApp.toggle('${line.d.date}')"${extra || ""}>${html}</td>`;
+    const cabecalho = visiveis.map((line) => {
+      const d = line.d;
+      const has = (d.itens && d.itens.length) || (d.pagarItens && d.pagarItens.length);
+      const wd = semana[new Date(d.date + "T12:00:00").getDay()];
+      const al = d.real ? this.alertasMov([d]) : { semConc: 0, manuais: 0 };
+      const marcas = [al.semConc ? `${al.semConc} sem conciliação` : "", al.manuais ? `${al.manuais} de caixa e bancos` : ""].filter(Boolean).join(" · ");
+      return `<th class="${colCls(line)}" data-col="${d.date}" onclick="FluxoCaixaDiarioApp.toggle('${d.date}')" title="${d.real ? "Realizado (extrato bancário)" : "Previsto"}${!caixaEhUtil(d.date) ? " · fim de semana ou feriado" : ""}${marcas ? " · " + marcas : ""}${has ? " · clique para ver entradas e saídas" : ""}">
+        <div>${caixaFmtDate(d.date).slice(0, 5)}</div>
+        <div class="cxd-wd">${d.date === hoje ? '<span class="cxd-tag">hoje</span>' : wd}${al.semConc ? '<span class="cxd-dot cxd-dot-nc"></span>' : (has ? '<span class="cxd-dot"></span>' : "")}</div>
+      </th>`;
+    }).join("");
+    const sinal = (v) => (v < 0 ? "cxd-out" : (v > 0 ? "cxd-in" : "cxd-zero"));
+    const linhaInicial = visiveis.map((l) => cell(l, caixaMoney(l.inicial), sinal(l.inicial))).join("");
+    const linhaEntradas = visiveis.map((l) => cell(l, caixaMoney(l.entrar), l.entrar ? "cxd-in" : "cxd-zero")).join("");
+    const linhaSaidas = visiveis.map((l) => cell(l, caixaMoney(l.sair), l.sair ? "cxd-out" : "cxd-zero")).join("");
+    const linhaDia = visiveis.map((l) => cell(l, caixaMoney(l.movimento), sinal(l.movimento))).join("");
+    const tipSaldo = (ccV, invV) => `<span class="cxd-tip-box"><b>Conta corrente</b> ${caixaMoney(ccV)}<br><b>Investimento</b> ${caixaMoney(invV)}</span>`;
+    const linhaAcum = visiveis.map((l) => cell(l, caixaMoney(l.acum) + tipSaldo(l.acumCc, l.acumInv), `cxd-tip ${sinal(l.acum)}`)).join("");
+    const linhaCc = visiveis.map((l) => cell(l, caixaMoney(l.acumCc), `${sinal(l.acumCc)}${l.acumCc < -0.5 ? " cxd-resgate" : ""}`)).join("");
+    const avisoAplicacao = this.aplicacaoHtml(linhas);
+    const aberto = linhas.find((l) => l.d.date === this.openDay);
+    const detalheDia = aberto ? this.diaDetalheHtml(aberto) : "";
+    const filtro = window.MlEmpresaFilter ? MlEmpresaFilter.html({
+      id: "cxd-emp",
+      label: "EMPRESA",
+      items: this.empItems(),
+      selectedIds: this.companyIds,
+      open: this.openEmp,
+      query: this.qEmp,
+      emptyMeansAll: false,
+      single: true
+    }) : "";
+    const filtroCc = window.MlEmpresaFilter ? MlEmpresaFilter.html({
+      id: "cxd-cc",
+      label: "EMPREENDIMENTOS NO CAIXA",
+      items: this.ccItems(),
+      selectedIds: this.ccIncluidos(),
+      open: this.openCc,
+      query: this.qCc,
+      countMode: true,
+      nouns: { singular: "empreendimento", plural: "empreendimentos", none: "Nenhum empreendimento" }
+    }) : "";
+    const iniLabel = this.openingDate
+      ? `Saldo inicial · contas ligadas em ${caixaFmtDate(this.openingDate)}`
+      : "Saldo inicial · contas ligadas";
+    root.innerHTML = `
+      <style>
+        #fluxo-caixa-diario-root { color:#0f172a; }
+        #fluxo-caixa-diario-root .cxd-page { display:flex; flex-direction:column; }
+        #fluxo-caixa-diario-root .cxd-head { background:#105436; padding:16px 20px; border-radius:12px 12px 0 0; }
+        #fluxo-caixa-diario-root .cxd-head h2 { margin:0; color:#fff; font-size:1.15rem; }
+        #fluxo-caixa-diario-root .cxd-head p { margin:4px 0 0; color:rgba(255,255,255,.8); font-size:.75rem; }
+        #fluxo-caixa-diario-root .cxd-body { background:#f8fafc; border:1px solid #e2e8f0; border-top:none; border-radius:0 0 12px 12px; padding:14px 16px; }
+        #fluxo-caixa-diario-root .cxd-tools { display:flex; gap:12px; align-items:flex-end; margin-bottom:12px; flex-wrap:nowrap; }
+        #fluxo-caixa-diario-root .cxd-tools label { font-size:.75rem; font-weight:700; color:#475569; flex:0 0 auto; }
+        #fluxo-caixa-diario-root .cxd-tools input[type=month] { display:block; height:34px; border:1px solid #e2e8f0; border-radius:6px; padding:0 8px; margin-top:4px; }
+        #fluxo-caixa-diario-root .cxd-tools .ml-emp-filter { flex:1 1 0; min-width:180px; width:auto; max-width:480px; }
+        #fluxo-caixa-diario-root .cxd-fora { flex:0 0 auto; white-space:nowrap; font-size:.74rem; color:#9a3412; background:#ffedd5; border-radius:999px; padding:3px 10px; font-weight:600; align-self:center; }
+        #fluxo-caixa-diario-root .cxd-sheet { width:100%; border-collapse:collapse; background:#fff; font-size:.82rem; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-sheet td { padding:7px 10px; border-bottom:1px solid #eef2f6; }
+        #fluxo-caixa-diario-root .cxd-num { text-align:right; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-in { color:#105436; }
+        #fluxo-caixa-diario-root .cxd-out { color:#c2410c; }
+        #fluxo-caixa-diario-root .cxd-zero { color:#94a3b8; }
+        #fluxo-caixa-diario-root .cxd-tag { margin-left:8px; background:#105436; color:#fff; border-radius:999px; padding:1px 7px; font-size:.66rem; font-weight:700; }
+        #fluxo-caixa-diario-root .cxd-wrap { border:1px solid #e2e8f0; border-radius:8px; overflow-x:auto; overflow-y:hidden; background:#fff; margin-bottom:14px; }
+        #fluxo-caixa-diario-root .cxd-title { margin:0 0 6px; font-size:.78rem; font-weight:700; color:#105436; letter-spacing:.03em; }
+        #fluxo-caixa-diario-root .cxd-title span { font-weight:500; color:#64748b; letter-spacing:0; }
+        #fluxo-caixa-diario-root .cxd-disp-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px; }
+        #fluxo-caixa-diario-root .cxd-disp-bar .cxd-title { margin:0; flex:1 1 auto; }
+        #fluxo-caixa-diario-root .cxd-disp-aviso { font-size:.76rem; font-weight:700; color:#9a3412; background:#fff7ed; border:1px solid #fed7aa; border-radius:999px; padding:3px 10px; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-info { font-size:.74rem; color:#64748b; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-disp-btn { height:40px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-vazio { padding:16px; color:#64748b; background:#fff; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:10px; font-size:.84rem; }
+        #fluxo-caixa-diario-root .cxd-contas-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(520px, 1fr)); gap:12px; margin-bottom:10px; align-items:start; }
+        #fluxo-caixa-diario-root .cxd-gbox { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+        #fluxo-caixa-diario-root .cxd-gbox-head { display:flex; align-items:center; gap:8px; width:100%; padding:9px 12px; background:#e7f6ee; color:#105436; font-weight:700; font-size:.84rem; border:0; cursor:pointer; text-align:left; font-family:inherit; }
+        #fluxo-caixa-diario-root .cxd-gbox-investimento .cxd-gbox-head { background:#fff7ed; color:#9a3412; }
+        #fluxo-caixa-diario-root .cxd-gbox-head small { flex:1; font-weight:500; font-size:.74rem; opacity:.85; }
+        #fluxo-caixa-diario-root .cxd-gbox-head strong { font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-gbox-tot { display:flex; gap:18px; text-align:right; }
+        #fluxo-caixa-diario-root .cxd-vr-barra { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 10px; flex-wrap:wrap; }
+        #fluxo-caixa-diario-root .cxd-vr-info { display:flex; align-items:center; gap:8px; font-size:.8rem; font-weight:600; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-vr-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin:0 0 12px; }
+        #fluxo-caixa-diario-root .cxd-vr-card { border:1px solid #e2e8f0; border-radius:8px; background:#fff; padding:10px 12px; display:flex; flex-direction:column; gap:2px; }
+        #fluxo-caixa-diario-root .cxd-vr-card span { font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-vr-card strong { font-size:1.05rem; color:#105436; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-vr-card small { font-size:.72rem; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-vr-card.is-vencidas strong { color:#b91c1c; }
+        #fluxo-caixa-diario-root .cxd-vr-table td.is-right { font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo:hover td { background:#e7f6ee; color:#105436; font-weight:700; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo.is-vencidas td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-grupo.is-vencidas:hover td { color:#b91c1c; }
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-total td,
+        #fluxo-caixa-diario-root .cc-table tbody tr.cxd-vr-total:hover td { background:#105436; color:#fff; font-weight:700; }
+        #fluxo-caixa-diario-root .cxd-gbox-tot label { display:block; font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; opacity:.7; }
+        #fluxo-caixa-diario-root .cxd-gbox-tot b { font-weight:600; font-variant-numeric:tabular-nums; opacity:.8; }
+        #fluxo-caixa-diario-root .cxd-gbox-nocaixa strong { font-size:.95rem; }
+        #fluxo-caixa-diario-root .cxd-gbox-body { max-height:250px; overflow:auto; }
+        #fluxo-caixa-diario-root .cxd-contas { width:100%; border-collapse:collapse; font-size:.8rem; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-contas th { background:#f1f5f9; color:#475569; font-weight:700; font-size:.72rem; text-align:left; padding:6px 10px; position:sticky; top:0; z-index:1; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-contas th.cxd-r, #fluxo-caixa-diario-root .cxd-contas th:nth-last-child(2), #fluxo-caixa-diario-root .cxd-contas th:nth-last-child(3) { text-align:right; }
+        #fluxo-caixa-diario-root .cxd-contas th:nth-child(2), #fluxo-caixa-diario-root .cxd-contas th:nth-child(3) { text-align:left; }
+        #fluxo-caixa-diario-root .cxd-contas td { padding:6px 10px; border-bottom:1px solid #eef2f6; vertical-align:middle; }
+        #fluxo-caixa-diario-root .cxd-contas td.cxd-flag { width:56px; padding:4px 6px 4px 12px; }
+        #fluxo-caixa-diario-root .cxd-conta small, #fluxo-caixa-diario-root .cxd-banco small { display:block; font-size:.7rem; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-banco { white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-bloq { display:inline-block; margin-top:2px; font-size:.64rem; font-weight:700; color:#9a3412; background:#ffedd5; border-radius:999px; padding:1px 7px; }
+        #fluxo-caixa-diario-root .cxd-contas tr.cxd-off td.cxd-conta,
+        #fluxo-caixa-diario-root .cxd-contas tr.cxd-off td.cxd-banco,
+        #fluxo-caixa-diario-root .cxd-contas tr.cxd-off td.cxd-num { opacity:.45; }
+        #fluxo-caixa-diario-root .cxd-mover { width:34px; text-align:right; }
+        #fluxo-caixa-diario-root .cxd-mover button { border:0; background:transparent; color:#94a3b8; cursor:pointer; padding:4px; border-radius:6px; display:inline-flex; }
+        #fluxo-caixa-diario-root .cxd-mover button:hover { color:#105436; background:#f1f5f9; }
+        #fluxo-caixa-diario-root .cxd-saldo-ini { display:flex; justify-content:space-between; align-items:center; background:#0c3d28; color:#fff; font-weight:700; padding:9px 14px; border-radius:8px; margin-bottom:16px; font-size:.84rem; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-wrap-mx { width:0; min-width:100%; }
+        #fluxo-caixa-diario-root .cxd-mx { border-collapse:separate; border-spacing:0; background:#fff; font-size:.8rem; font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-mx th, #fluxo-caixa-diario-root .cxd-mx td { padding:7px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid #e2e8f0; min-width:108px; }
+        #fluxo-caixa-diario-root .cxd-mx th { background:#105436; color:#fff; font-weight:600; position:sticky; top:0; z-index:2; cursor:pointer; vertical-align:top; }
+        #fluxo-caixa-diario-root .cxd-mx td { cursor:pointer; }
+        #fluxo-caixa-diario-root .cxd-mx .cxd-lbl { position:sticky; left:0; z-index:1; background:#fff; text-align:left; font-weight:700; color:#0f172a; min-width:210px; border-right:1px solid #e2e8f0; cursor:default; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-lbl { z-index:3; background:#105436; color:#fff; }
+        #fluxo-caixa-diario-root .cxd-mx .cxd-wd { font-size:.68rem; font-weight:500; opacity:.85; margin-top:2px; display:flex; justify-content:flex-end; align-items:center; gap:5px; }
+        #fluxo-caixa-diario-root .cxd-mx .cxd-wd .cxd-tag { margin-left:0; background:#fff; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-dot { width:6px; height:6px; border-radius:50%; background:#f37021; display:inline-block; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-col-past { background:#2f5d48; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-col-hoje { background:#0c3d28; }
+        #fluxo-caixa-diario-root .cxd-mx td.cxd-col-hoje { background:#e7f6ee; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-col-open { background:#f37021; }
+        #fluxo-caixa-diario-root .cxd-mx td.cxd-col-open { background:#fff4ec; }
+        #fluxo-caixa-diario-root .cxd-mx td.cxd-col-past { background:#fafafa; }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-hot td,
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-hot,
+        #fluxo-caixa-diario-root .cxd-mx td.cxd-hot { box-shadow:inset 0 0 0 999px rgba(243,112,33,.16); }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-hot td.cxd-hot,
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-hot th.cxd-hot { box-shadow:inset 0 0 0 999px rgba(243,112,33,.34); }
+        #fluxo-caixa-diario-root .cxd-tip-box { display:none; }
+        #cxd-float-tip { position:fixed; z-index:80; background:#0c3d28; color:#fff; padding:8px 10px; border-radius:8px; font-size:.72rem; font-weight:600; line-height:1.45; text-align:left; white-space:nowrap; box-shadow:0 8px 20px rgba(15,23,42,.2); pointer-events:none; }
+        #cxd-float-tip b { font-weight:700; margin-right:6px; }
+        #fluxo-caixa-diario-root .cxd-comp-conta { cursor:pointer; }
+        #fluxo-caixa-diario-root tr.cxd-comp-row:hover td.cxd-comp-conta { background:#eff6ff; }
+        #fluxo-caixa-diario-root .cxd-comp-dica { color:#1d4ed8; font-weight:700; }
+        #fluxo-caixa-diario-root .cxd-comp-modal { position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:80; display:flex; align-items:center; justify-content:center; padding:16px; }
+        #fluxo-caixa-diario-root .cxd-comp-dialog { background:#fff; border-radius:12px; width:min(420px, 96vw); padding:18px 20px; box-shadow:0 16px 40px rgba(15,23,42,.18); }
+        #fluxo-caixa-diario-root .cxd-comp-dialog h3 { margin:0; color:#105436; font-size:1.05rem; }
+        #fluxo-caixa-diario-root .cxd-comp-dialog > p { margin:4px 0 14px; color:#64748b; font-size:.82rem; }
+        #fluxo-caixa-diario-root .cxd-comp-dialog label { display:block; margin-bottom:12px; font-size:.72rem; font-weight:700; color:#334155; text-transform:uppercase; }
+        #fluxo-caixa-diario-root .cxd-comp-dialog input { display:block; width:100%; height:38px; margin-top:4px; border:1px solid #cbd5e1; border-radius:8px; padding:0 10px; font-size:.9rem; box-sizing:border-box; text-transform:none; font-weight:600; }
+        #fluxo-caixa-diario-root .cxd-comp-dialog small { display:block; margin-top:2px; font-weight:600; color:#64748b; text-transform:none; }
+        #fluxo-caixa-diario-root .cxd-comp-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
+        #fluxo-caixa-diario-root .cxd-comp-actions .btn { height:36px; }
+        #fluxo-caixa-diario-root .cxd-aviso-modal { position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:90; display:flex; align-items:center; justify-content:center; padding:16px; }
+        #fluxo-caixa-diario-root .cxd-aviso-dialog { background:#fff; border-radius:12px; width:min(640px, 96vw); max-height:min(78vh, 720px); display:flex; flex-direction:column; padding:18px 20px; box-shadow:0 16px 40px rgba(15,23,42,.18); }
+        #fluxo-caixa-diario-root .cxd-aviso-dialog h3 { margin:0; color:#105436; font-size:1.05rem; }
+        #fluxo-caixa-diario-root .cxd-aviso-dialog > p { margin:4px 0 12px; color:#64748b; font-size:.82rem; }
+        #fluxo-caixa-diario-root .cxd-aviso-lista { overflow:auto; display:flex; flex-direction:column; gap:10px; min-height:0; }
+        #fluxo-caixa-diario-root .cxd-aviso-emp { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; }
+        #fluxo-caixa-diario-root .cxd-aviso-emp header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+        #fluxo-caixa-diario-root .cxd-aviso-emp header strong { color:#0f172a; font-size:.86rem; }
+        #fluxo-caixa-diario-root .cxd-aviso-emp header .btn { height:32px; padding:0 12px; }
+        #fluxo-caixa-diario-root .cxd-aviso-emp p { margin:0; }
+        #fluxo-caixa-diario-root .cxd-mx .cxd-col-tot { background:#f1f5f9; font-weight:800; border-left:1px solid #cbd5e1; cursor:default; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-col-tot { background:#0c3d28; }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-cc td { background:#f8fafc; }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-inv td { background:#fffaf5; }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-acum td { font-weight:800; border-top:2px solid #105436; }
+        #fluxo-caixa-diario-root .cxd-mx td.cxd-resgate { box-shadow:inset 0 -2px 0 #c2410c; }
+        #fluxo-caixa-diario-root .cxd-aplica { display:flex; flex-direction:column; gap:6px; margin:0 0 12px; }
+        #fluxo-caixa-diario-root .cxd-aplica p { margin:0; padding:8px 12px; border-radius:8px; font-size:.8rem; font-weight:600; }
+        #fluxo-caixa-diario-root .cxd-aplica-cdb { background:#e7f6ee; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-aplica-comp { background:#eff6ff; color:#1e3a8a; }
+        #fluxo-caixa-diario-root .cxd-sem-saldo { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; border-left:4px solid #dc2626; padding:8px 12px; border-radius:8px; font-size:.8rem; font-weight:600; }
+        #fluxo-caixa-diario-root .cxd-sem-saldo b { display:block; color:#b91c1c; font-size:.84rem; margin-bottom:2px; }
+        #fluxo-caixa-diario-root .cxd-aplica-resgate { background:#fff7ed; color:#9a3412; padding:8px 12px; border-radius:8px; font-size:.8rem; font-weight:600; }
+        #fluxo-caixa-diario-root .cxd-aplica-resgate > span { display:block; margin-top:2px; font-weight:500; }
+        #fluxo-caixa-diario-root .cxd-aplica-resgate ul { margin:6px 0 0; padding-left:18px; }
+        #fluxo-caixa-diario-root .cxd-aplica-resgate li { margin:4px 0; }
+        #fluxo-caixa-diario-root .cxd-org-outra { background:#ecfeff; color:#0e7490; }
+        #fluxo-caixa-diario-root .cxd-analitico td.cxd-conta { white-space:normal; color:#334155 !important; font-size:.74rem; }
+        #fluxo-caixa-diario-root .cxd-mx tr.cxd-row-dia td { font-weight:700; }
+        #fluxo-caixa-diario-root .cxd-daydet { border:1px solid #e2e8f0; border-radius:8px; background:#fff; margin-bottom:14px; overflow:hidden; }
+        #fluxo-caixa-diario-root .cxd-daydet-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 12px; background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+        #fluxo-caixa-diario-root .cxd-daydet-head strong { color:#0f172a; font-size:.92rem; }
+        #fluxo-caixa-diario-root .cxd-daydet-res { flex:1; text-align:right; color:#475569; font-size:.82rem; }
+        #fluxo-caixa-diario-root .cxd-chip { font-size:.7rem; font-weight:700; border-radius:999px; padding:2px 9px; }
+        #fluxo-caixa-diario-root .cxd-chip-real { background:#e2e8f0; color:#334155; }
+        #fluxo-caixa-diario-root .cxd-chip-prev { background:#e7f6ee; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-grp-head { width:100%; display:flex; align-items:center; gap:10px; border:0; padding:9px 12px; cursor:pointer; font-size:.84rem; text-align:left; font-family:inherit; }
+        #fluxo-caixa-diario-root .cxd-grp-head span { flex:1; font-weight:500; opacity:.85; font-size:.78rem; }
+        #fluxo-caixa-diario-root .cxd-grp-head b { font-variant-numeric:tabular-nums; }
+        #fluxo-caixa-diario-root .cxd-grp-in .cxd-grp-head { background:#e7f6ee; color:#105436; border-left:4px solid #105436; }
+        #fluxo-caixa-diario-root .cxd-grp-outros .cxd-grp-head { background:#ecfeff; color:#0e7490; border-left:4px solid #0891b2; }
+        #fluxo-caixa-diario-root .cxd-grp-out .cxd-grp-head { background:#fff4ec; color:#c2410c; border-left:4px solid #f37021; }
+        #fluxo-caixa-diario-root .cxd-sub { margin:0 10px 0 20px; }
+        #fluxo-caixa-diario-root .cxd-sub .cxd-grp-head { background:#f8fafc; color:#0f172a; border-left:4px solid #105436; }
+        #fluxo-caixa-diario-root .cxd-grp .cxd-linhas td:first-child { width:auto; font-weight:700; font-size:.8rem; }
+        #fluxo-caixa-diario-root .cxd-linhas td.cxd-num { width:140px; font-weight:800; }
+        #fluxo-caixa-diario-root .cxd-grp-in td { background:#f7fcf9; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-grp-out td { background:#fffaf6; color:#9a3412; }
+        #fluxo-caixa-diario-root .cxd-grp td:first-child { width:96px; font-weight:700; font-size:.76rem; }
+        #fluxo-caixa-diario-root .cxd-grp td { font-size:.78rem; }
+        #fluxo-caixa-diario-root .cxd-grp-vazio { color:#94a3b8 !important; padding:12px !important; }
+        #fluxo-caixa-diario-root tr.cxd-click { cursor:pointer; }
+        #fluxo-caixa-diario-root tr.cxd-det-in.cxd-click:hover td { background:#e7f6ee; }
+        #fluxo-caixa-diario-root tr.cxd-det-out.cxd-click:hover td { background:#ffedd5; }
+        #fluxo-caixa-diario-root .cxd-conta-tag { margin-left:6px; font-size:.7rem; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-mx-bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px; }
+        #fluxo-caixa-diario-root .cxd-mx-bar .cxd-title { margin:0; flex:1 1 auto; }
+        #fluxo-caixa-diario-root .cxd-naoutil-sw { margin-left:auto; }
+        #fluxo-caixa-diario-root .cxd-mx th.cxd-col-naoutil:not(.cxd-col-open):not(.cxd-col-hoje) { background:#64748b; }
+        #fluxo-caixa-diario-root .cxd-dot-nc { background:#dc2626; box-shadow:0 0 0 2px rgba(255,255,255,.7); }
+        #fluxo-caixa-diario-root .cxd-chip-cb { background:#ffedd5; color:#9a3412; }
+        #fluxo-caixa-diario-root .cxd-chip-nc { background:#fee2e2; color:#b91c1c; }
+        #fluxo-caixa-diario-root .cxd-chip-btn { border:0; cursor:pointer; font-family:inherit; }
+        #fluxo-caixa-diario-root .cxd-chip-btn:hover { filter:brightness(.96); }
+        #fluxo-caixa-diario-root .cxd-analitico { table-layout:fixed; }
+        #fluxo-caixa-diario-root .cxd-analitico thead th { background:#f1f5f9; color:#475569; font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em; text-align:left; padding:6px 10px; border-bottom:1px solid #e2e8f0; }
+        #fluxo-caixa-diario-root .cxd-analitico thead th.cxd-num { text-align:right; }
+        #fluxo-caixa-diario-root .cxd-analitico td { overflow:hidden; text-overflow:ellipsis; }
+        #fluxo-caixa-diario-root .cxd-analitico td.cxd-desc { white-space:normal; }
+        #fluxo-caixa-diario-root .cxd-extra { display:inline; margin-left:8px; font-weight:600; font-size:.72rem; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-abre { border:0; background:transparent; color:#105436; font-weight:700; font-size:.72rem; cursor:pointer; padding:0 0 0 6px; vertical-align:middle; }
+        #fluxo-caixa-diario-root tr.cxd-parc td { font-weight:600; color:#475569; }
+        #fluxo-caixa-diario-root tr.cxd-parc td.cxd-desc { padding-left:28px; }
+        #fluxo-caixa-diario-root .cxd-analitico td.cxd-plano { white-space:nowrap; color:#334155 !important; }
+        #fluxo-caixa-diario-root .cxd-muted { color:#94a3b8; }
+        #fluxo-caixa-diario-root .cxd-org, #fluxo-caixa-diario-root .cxd-conc { display:inline-block; font-size:.68rem; font-weight:700; border-radius:999px; padding:2px 8px; white-space:nowrap; }
+        #fluxo-caixa-diario-root .cxd-org-cp { background:#fff4ec; color:#c2410c; }
+        #fluxo-caixa-diario-root .cxd-org-cr { background:#e7f6ee; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-org-cb { background:#ffedd5; color:#9a3412; border:1px solid #fdba74; }
+        #fluxo-caixa-diario-root .cxd-org-tr { background:#e0f2fe; color:#075985; }
+        #fluxo-caixa-diario-root .cxd-org-outro, #fluxo-caixa-diario-root .cxd-org-prev { background:#f1f5f9; color:#64748b; }
+        #fluxo-caixa-diario-root .cxd-conc-ok { background:#e7f6ee; color:#105436; }
+        #fluxo-caixa-diario-root .cxd-conc-no { background:#fee2e2; color:#b91c1c; }
+        #fluxo-caixa-diario-root .cxd-abas { margin:0 0 16px; }
+        #fluxo-caixa-diario-root .cxd-radar-meses { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 10px; }
+        #fluxo-caixa-diario-root .cxd-radar-mes { border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:999px; padding:6px 12px; font-weight:700; font-size:.78rem; cursor:pointer; }
+        #fluxo-caixa-diario-root .cxd-radar-mes.is-on { background:#105436; color:#fff; border-color:#105436; }
+        #fluxo-caixa-diario-root .cxd-radar-nota { margin:0 0 8px; color:#64748b; font-size:.8rem; max-width:820px; }
+        #fluxo-caixa-diario-root .cxd-radar-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin:0 0 10px; }
+        #fluxo-caixa-diario-root .cxd-radar-card { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; }
+        #fluxo-caixa-diario-root .cxd-radar-card span { display:block; color:#64748b; font-size:.72rem; font-weight:700; }
+        #fluxo-caixa-diario-root .cxd-radar-card strong { font-size:1.05rem; }
+      </style>
+      <div class="cxd-page">
+        <div class="cxd-head">
+          <p>Mês atual e os próximos 3 meses, de ${caixaEsc(this.rotuloPeriodo())}. Saldo inicial no 1º dia. Nos dias anteriores, o extrato das contas ligadas; de hoje em diante, a previsão.</p>
+        </div>
+        <div class="cxd-body">
+          ${this.abasHtml()}
+          <div class="cxd-tools">
+            ${filtro}
+            ${this.aba === "receber" ? "" : filtroCc}
+          </div>
+          <p id="cxd-progress" style="margin:0 0 10px;color:#105436;font-size:0.8rem;font-weight:600;" ${this.progress ? "" : "hidden"}>${caixaEsc(this.progress || "")}</p>
+          ${this.error ? `<div style="margin-bottom:10px;padding:10px;background:#fff7ed;color:#9a3412;border-radius:8px;font-size:0.82rem;">${caixaEsc(this.error)}</div>` : ""}
+          ${this.aba === "receber" ? this.valorAReceberHtml() : ""}
+          <div class="cxd-miolo-mov" ${this.aba === "receber" ? "hidden" : ""}>
+          ${this.disponivelBarHtml()}
+          ${this.contasHtml()}
+          <div class="cxd-saldo-ini"><span>${iniLabel}</span><span>${caixaMoney(saldoInicial)}</span></div>
+          ${avisoAplicacao}
+          ${this.loading ? `<p style="color:#64748b;">Montando o fluxo…</p>` : `
+          <div class="cxd-mx-bar">
+            <p class="cxd-title">MOVIMENTO <span>· ${caixaEsc(this.rotuloPeriodo())} · dias anteriores realizados, de hoje em diante previstos · clique no dia para ver entradas e saídas</span></p>
+            ${alMes.manuais ? `<span class="cxd-chip cxd-chip-cb" title="Lançamentos direto em Caixa e bancos, sem título do contas a pagar/receber. Abra o dia para conferir.">${alMes.manuais} lançamento(s) de caixa e bancos no mês</span>` : ""}
+            ${alMes.semConc ? `<button type="button" class="cxd-chip cxd-chip-nc cxd-chip-btn" title="Clique para ver de quais movimentos é esse valor" onclick="FluxoCaixaDiarioApp.abrirSemConc()">${alMes.semConc} sem conciliação · ${caixaMoney(alMes.valorSemConc)}</button>` : ""}
+          </div>
+          <div class="cxd-wrap cxd-wrap-mx">
+            <table class="cxd-mx">
+              <thead><tr>
+                <th class="cxd-lbl">Dia</th>
+                ${cabecalho}
+                <th class="cxd-col-tot" data-col="tot">Total</th>
+              </tr></thead>
+              <tbody>
+                <tr><td class="cxd-lbl">Saldo inicial</td>${linhaInicial}<td class="cxd-col-tot" data-col="tot">${caixaMoney(saldoInicial)}</td></tr>
+                <tr><td class="cxd-lbl">Entradas</td>${linhaEntradas}<td class="cxd-col-tot cxd-in" data-col="tot">${caixaMoney(totEntrar)}</td></tr>
+                <tr><td class="cxd-lbl">Saídas</td>${linhaSaidas}<td class="cxd-col-tot cxd-out" data-col="tot">${caixaMoney(totSair)}</td></tr>
+                <tr class="cxd-row-dia"><td class="cxd-lbl">Saldo do dia</td>${linhaDia}<td class="cxd-col-tot ${sinal(totEntrar - totSair)}" data-col="tot">${caixaMoney(totEntrar - totSair)}</td></tr>
+                <tr class="cxd-row-cc"><td class="cxd-lbl" title="Saldo das contas correntes ligadas, depois das entradas e saídas do dia">Saldo acum. conta corrente</td>${linhaCc}<td class="cxd-col-tot ${sinal(fimCc)}" data-col="tot">${caixaMoney(fimCc)}</td></tr>
+                <tr class="cxd-row-acum"><td class="cxd-lbl">Saldo total</td>${linhaAcum}<td class="cxd-col-tot cxd-tip ${sinal(fim)}" data-col="tot">${caixaMoney(fim)}${tipSaldo(fimCc, fimInv)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+          ${detalheDia}`}
+          </div>
+        </div>
+      </div>
+      ${this.detailHtml()}
+      ${this.compModalHtml()}
+      ${this.semConcHtml()}
+      ${this.avisoHtml()}`;
+    const wrap = root.querySelector(".cxd-wrap-mx");
+    if (wrap) {
+      if (prevScroll != null) wrap.scrollLeft = prevScroll;
+      else {
+        const th = wrap.querySelector("th.cxd-col-hoje");
+        const lbl = wrap.querySelector("th.cxd-lbl");
+        if (th) wrap.scrollLeft = Math.max(0, th.offsetLeft - (lbl ? lbl.offsetWidth : 0) - th.offsetWidth);
+      }
+    }
+    const body = root.querySelector(".cxd-body");
+    if (body && prevTop) body.scrollTop = prevTop;
+    root.querySelectorAll(".cxd-gbox-body").forEach((el, i) => { if (prevContas[i]) el.scrollTop = prevContas[i]; });
+    ["cxd-emp-list", "cxd-cc-list"].forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (el && prevListas[i]) el.scrollTop = prevListas[i];
+    });
+    this.bindCompanyFilter();
+    this.bindMxHover();
+    if (window.lucide) lucide.createIcons();
+  },
+
+  bindMxHover() {
+    const table = document.querySelector("#fluxo-caixa-diario-root .cxd-mx");
+    const dropTip = () => {
+      const tip = document.getElementById("cxd-float-tip");
+      if (tip) tip.remove();
+    };
+    if (!table) { dropTip(); return; }
+    const clear = () => {
+      table.querySelectorAll(".cxd-hot").forEach((el) => el.classList.remove("cxd-hot"));
+      table.querySelectorAll("tr.cxd-row-hot").forEach((el) => el.classList.remove("cxd-row-hot"));
+      dropTip();
+    };
+    const showTip = (cell) => {
+      const tipCell = cell && cell.closest
+        ? (cell.classList.contains("cxd-tip") ? cell : cell.closest(".cxd-tip"))
+        : null;
+      const box = tipCell ? tipCell.querySelector(".cxd-tip-box") : null;
+      if (!box) { dropTip(); return; }
+      let tip = document.getElementById("cxd-float-tip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "cxd-float-tip";
+        document.body.appendChild(tip);
+      }
+      tip.innerHTML = box.innerHTML;
+      const r = tipCell.getBoundingClientRect();
+      const w = tip.offsetWidth;
+      const h = tip.offsetHeight;
+      tip.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + "px";
+      tip.style.top = Math.max(8, r.top - h - 6) + "px";
+    };
+    table.addEventListener("mouseover", (ev) => {
+      const cell = ev.target.closest("td, th");
+      if (!cell || !table.contains(cell)) return;
+      table.querySelectorAll(".cxd-hot").forEach((el) => el.classList.remove("cxd-hot"));
+      table.querySelectorAll("tr.cxd-row-hot").forEach((el) => el.classList.remove("cxd-row-hot"));
+      const tr = cell.parentElement;
+      if (tr) tr.classList.add("cxd-row-hot");
+      const col = cell.getAttribute("data-col");
+      if (col != null) table.querySelectorAll('[data-col="' + col + '"]').forEach((el) => el.classList.add("cxd-hot"));
+      showTip(cell);
+    });
+    table.addEventListener("mouseleave", clear);
+    const det = document.querySelector("#fluxo-caixa-diario-root .cxd-daydet");
+    if (det) {
+      det.addEventListener("mouseover", (ev) => showTip(ev.target));
+      det.addEventListener("mouseleave", dropTip);
+    }
+  }
+};
+
+
+window.CaixaPosicaoStore = CaixaPosicaoStore;
+window.FluxoCaixaDiarioApp = FluxoCaixaDiarioApp;
+
+document.addEventListener("tabChanged", (e) => {
+  if (e.detail === "fluxo-caixa-diario") FluxoCaixaDiarioApp.init();
+});

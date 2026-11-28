@@ -1,0 +1,2292 @@
+// Investimento — saldos (accounts-balances) × movimento de caixa/banco das contas de aplicação
+
+const InvestimentoApp = {
+  startDate: "",
+  endDate: "",
+  selectedCompanyIds: [],
+  onlyInvestment: true,
+  loading: false,
+  loadingHint: "",
+  error: "",
+  accounts: [],
+  months: [],
+  expanded: new Set(),
+  companyQuery: "",
+  accountQuery: "",
+  companyDropOpen: false,
+  accountDropOpen: false,
+  selectedAccountKeys: null,
+  filterCatalog: [],
+  catalogByCompany: {},
+  catalogLoading: false,
+  _catalogGen: 0,
+  groupByCompany: true,
+  collapsedCompanies: new Set(),
+  collapsedAccounts: new Set(),
+  cdiByMonth: {},
+  kpis: { opening: 0, aportes: 0, resgates: 0, rendimento: 0, tarifas: 0, closing: 0 },
+
+  FILTER_KEY: "crm_investimento_periodo",
+
+  defaultStartDate() {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    return `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-01`;
+  },
+
+  defaultEndDate() {
+    const now = new Date();
+    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(last).padStart(2, "0")}`;
+  },
+
+  isIsoDate(v) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+  },
+
+  persistPeriod() {
+    try {
+      let prev = {};
+      try { prev = JSON.parse(localStorage.getItem(this.FILTER_KEY) || "null") || {}; } catch (e) { prev = {}; }
+      const companies = (this.selectedCompanyIds || []).map(String).filter(Boolean);
+      const selectedCompanyIds = (companies.length || this._clearedCompanies)
+        ? companies
+        : (Array.isArray(prev.selectedCompanyIds) ? prev.selectedCompanyIds : []);
+      let selectedAccountKeys = this.selectedAccountKeys;
+      if (this._clearedAccounts) {
+        selectedAccountKeys = [];
+      } else if (!Array.isArray(selectedAccountKeys)) {
+        selectedAccountKeys = prev.selectedAccountKeys;
+      } else if (!selectedAccountKeys.length && Array.isArray(prev.selectedAccountKeys) && prev.selectedAccountKeys.length && !this.filterCatalog.length) {
+        selectedAccountKeys = prev.selectedAccountKeys;
+      }
+      localStorage.setItem(this.FILTER_KEY, JSON.stringify({
+        startDate: this.startDate,
+        endDate: this.endDate,
+        consultStart: this.consultStart || prev.consultStart || "",
+        consultEnd: this.consultEnd || prev.consultEnd || "",
+        selectedCompanyIds,
+        selectedAccountKeys,
+        groupByCompany: this.groupByCompany !== false
+      }));
+    } catch (e) { /* ignore quota */ }
+  },
+
+  restorePeriod() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.FILTER_KEY) || "null");
+      if (!saved || typeof saved !== "object") return;
+      const start = this.isIsoDate(saved.consultStart) ? saved.consultStart : saved.startDate;
+      const end = this.isIsoDate(saved.consultEnd) ? saved.consultEnd : saved.endDate;
+      if (this.isIsoDate(start)) this.startDate = start;
+      if (this.isIsoDate(end)) this.endDate = end;
+      if (this.isIsoDate(saved.consultStart)) this.consultStart = saved.consultStart;
+      if (this.isIsoDate(saved.consultEnd)) this.consultEnd = saved.consultEnd;
+      if (Array.isArray(saved.selectedCompanyIds) && saved.selectedCompanyIds.length) {
+        this.selectedCompanyIds = saved.selectedCompanyIds.map(String).filter(Boolean);
+        this._hadSavedCompanyIds = true;
+      }
+      if (Array.isArray(saved.selectedAccountKeys)) {
+        this.selectedAccountKeys = saved.selectedAccountKeys.map(String).filter(Boolean);
+        this._hadSavedAccountKeys = true;
+      }
+      if (typeof saved.groupByCompany === "boolean") this.groupByCompany = saved.groupByCompany;
+    } catch (e) { /* ignore */ }
+  },
+
+  setStartDate(v) {
+    this.startDate = v;
+    this.persistPeriod();
+  },
+
+  setEndDate(v) {
+    this.endDate = v;
+    this.persistPeriod();
+  },
+
+  syncGeridasSelection() {
+    const geridas = this.geridasCompanies();
+    if (!geridas.length) return;
+    const allowed = new Set(geridas.map(c => String(c.id)));
+    const kept = (this.selectedCompanyIds || []).filter(id => allowed.has(String(id)));
+    if (this._clearedCompanies) {
+      this.selectedCompanyIds = kept;
+      return;
+    }
+    if (kept.length) {
+      this.selectedCompanyIds = kept;
+      return;
+    }
+    this.selectedCompanyIds = geridas.map(c => String(c.id));
+  },
+
+  init() {
+    if (!this._filtersReady) {
+      this.restorePeriod();
+      if (!this.isIsoDate(this.startDate)) this.startDate = this.defaultStartDate();
+      if (!this.isIsoDate(this.endDate)) this.endDate = this.defaultEndDate();
+      if (this.startDate && this.endDate && this.startDate > this.endDate) {
+        const tmp = this.startDate;
+        this.startDate = this.endDate;
+        this.endDate = tmp;
+      }
+      this._filtersReady = true;
+    }
+    this.syncGeridasSelection();
+    if (!window._invDropBound) {
+      window._invDropBound = true;
+      document.addEventListener("mousedown", (e) => {
+        const t = e.target;
+        if (t && t.closest && (
+          t.closest("#inv-emp") ||
+          t.closest("#inv-emp-panel") ||
+          t.closest("#inv-acc-drop") ||
+          t.closest("#inv-acc-panel")
+        )) return;
+        let changed = false;
+        if (InvestimentoApp.companyDropOpen) {
+          InvestimentoApp.companyDropOpen = false;
+          changed = true;
+        }
+        if (InvestimentoApp.accountDropOpen) {
+          InvestimentoApp.accountDropOpen = false;
+          changed = true;
+        }
+        if (changed) InvestimentoApp.applyDropOpenState();
+      });
+    }
+    this.render();
+    this.refreshFilterCatalog();
+  },
+
+  empresasCustom() {
+    let fromLs = {};
+    try {
+      fromLs = JSON.parse(localStorage.getItem("crm_empresas_custom") || "{}") || {};
+    } catch (e) { fromLs = {}; }
+    let fromState = {};
+    if (typeof EmpresasState !== "undefined" && EmpresasState.customFields && typeof EmpresasState.customFields === "object") {
+      fromState = EmpresasState.customFields;
+    }
+    const merged = {};
+    const put = (item) => {
+      if (!item || typeof item !== "object" || item.company_id == null) return;
+      merged[item.company_id] = item;
+      merged[String(item.company_id)] = item;
+    };
+    Object.values(fromLs).forEach(put);
+    Object.values(fromState).forEach(put);
+    Object.keys(fromLs).forEach(k => {
+      if (k === "_v2") return;
+      const item = fromLs[k];
+      if (item && typeof item === "object") {
+        merged[k] = Object.assign({}, merged[k] || {}, item);
+        put(merged[k]);
+      }
+    });
+    Object.keys(fromState).forEach(k => {
+      const item = fromState[k];
+      if (item && typeof item === "object") {
+        merged[k] = Object.assign({}, merged[k] || {}, item);
+        put(merged[k]);
+      }
+    });
+    return merged;
+  },
+
+  isGeridaFlag(cfg) {
+    if (!cfg) return false;
+    const v = cfg.gerida_pelo_grupo != null ? cfg.gerida_pelo_grupo : cfg.gerida_grupo;
+    return v === 1 || v === true || v === "1" || Number(v) === 1;
+  },
+
+  geridasCompanies() {
+    const custom = this.empresasCustom();
+    const all = (window.AppState && AppState.companies) || [];
+    const seen = new Set();
+    const out = [];
+    const add = (id, usual, legal) => {
+      const sid = String(id);
+      if (!sid || seen.has(sid)) return;
+      seen.add(sid);
+      const legalName = legal || usual || `Empresa ${sid}`;
+      out.push({ id: sid, name: usual || legalName, legalName });
+    };
+    all.forEach(c => {
+      const cfg = custom[c.id] || custom[String(c.id)] || {};
+      if (this.isGeridaFlag(cfg)) add(c.id, cfg.nome_usual, c.name);
+    });
+    Object.values(custom).forEach(cfg => {
+      if (!cfg || typeof cfg !== "object" || cfg.company_id == null) return;
+      const found = all.find(x => String(x.id) === String(cfg.company_id));
+      if (this.isGeridaFlag(cfg)) add(cfg.company_id, cfg.nome_usual, found && found.name);
+    });
+    return out.sort((a, b) => Number(a.id) - Number(b.id));
+  },
+
+  consolidacaoCompanies() {
+    return this.geridasCompanies();
+  },
+
+  companyName(id) {
+    const custom = this.empresasCustom();
+    const cfg = custom[id] || custom[String(id)] || {};
+    if (cfg.nome_usual) return cfg.nome_usual;
+    const c = ((window.AppState && AppState.companies) || []).find(x => String(x.id) === String(id));
+    return (c && c.name) || `Empresa ${id}`;
+  },
+
+  fmt(n) {
+    return (Number(n) || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  },
+
+  addDaysIso(iso, n) {
+    const d = new Date(String(iso).slice(0, 10) + "T12:00:00");
+    d.setDate(d.getDate() + n);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  },
+
+  monthKeys(start, end) {
+    const keys = [];
+    const s = new Date(start + "T12:00:00");
+    const e = new Date(end + "T12:00:00");
+    const cur = new Date(s.getFullYear(), s.getMonth(), 1);
+    const last = new Date(e.getFullYear(), e.getMonth(), 1);
+    while (cur <= last) {
+      keys.push(`${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`);
+      cur.setMonth(cur.getMonth() + 1);
+    }
+    return keys;
+  },
+
+  lastDayOfMonth(ym) {
+    const [y, m] = String(ym).split("-").map(Number);
+    const d = new Date(y, m, 0);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  },
+
+  clampDate(iso, maxIso) {
+    return iso > maxIso ? maxIso : iso;
+  },
+
+  monthLabel(key) {
+    const [y, m] = String(key).split("-");
+    const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+    return `${names[Number(m) - 1]}/${y}`;
+  },
+
+  normAcc(s) {
+    return String(s || "").replace(/\D/g, "");
+  },
+
+  movAccount(mov) {
+    return String(
+      mov.accountNumber ||
+      mov.bankAccountNumber ||
+      mov.checkingAccountNumber ||
+      mov.account ||
+      ""
+    ).trim();
+  },
+
+  accIdentity(accountNumber, extra) {
+    const raw = String(accountNumber || (extra && (extra.accountNumber || extra.account || extra.code)) || "").trim();
+    const digits = this.normAcc(raw);
+    if (digits) return digits;
+    if (raw) return raw.toUpperCase();
+    const fallback = extra && (extra.checkingAccountId || extra.idCheckingAccount || extra.id);
+    return fallback != null ? String(fallback) : "";
+  },
+
+  catalogAccount(raw, companyId) {
+    const type = raw && raw.accountType;
+    const typeId = type && typeof type === "object" ? type.id : (raw.accountTypeId || raw.accountKind || "");
+    const typeDesc = type && typeof type === "object"
+      ? (type.description || type.name || type.label || "")
+      : (type || raw.accountKind || raw.type || "");
+    const accountNumber = String(
+      raw.accountNumber ||
+      raw.number ||
+      raw.bankAccountNumber ||
+      raw.checkingAccountNumber ||
+      raw.code ||
+      ""
+    ).trim();
+    const accountName = String(raw.accountName || raw.name || raw.description || "").trim();
+    return {
+      ...raw,
+      companyId: raw.companyId || raw.idCompany || companyId,
+      accountNumber: accountNumber || accountName,
+      accountName: accountName || accountNumber || "Conta",
+      mask: raw.mask || raw.accountMask || raw.nickname || "",
+      accountType: type && typeof type === "object" ? type : typeDesc,
+      accountTypeId: typeId,
+      accountTypeLabel: typeDesc
+    };
+  },
+
+  accKey(companyId, accountNumber, extra) {
+    return `${companyId}|${this.accIdentity(accountNumber, extra)}`;
+  },
+
+  movementCompanyId(mov) {
+    if (!mov) return "";
+    return mov.companyId != null && mov.companyId !== ""
+      ? mov.companyId
+      : (mov.idCompany != null && mov.idCompany !== "" ? mov.idCompany : "");
+  },
+
+  apiCompanyId(id) {
+    const n = Number(id);
+    return Number.isFinite(n) && String(n) === String(id).trim() ? n : id;
+  },
+
+  pruneAccountKeysToCompanies() {
+    const ids = new Set((this.selectedCompanyIds || []).map(String));
+    if (!ids.size) {
+      this.selectedAccountKeys = [];
+      return;
+    }
+    if (!Array.isArray(this.selectedAccountKeys)) return;
+    this.selectedAccountKeys = this.selectedAccountKeys.filter(k => ids.has(String(k).split("|")[0]));
+  },
+
+  siengeAccountType(acc) {
+    const type = acc && acc.accountType;
+    const id = String(
+      (type && typeof type === "object" && type.id) ||
+      acc.accountTypeId ||
+      ""
+    ).trim().toUpperCase();
+    const desc = String(
+      (type && typeof type === "object" && (type.description || type.name || type.label)) ||
+      acc.accountTypeLabel ||
+      (typeof type === "string" ? type : "") ||
+      acc.accountKind ||
+      acc.type ||
+      ""
+    ).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+    return { id, desc };
+  },
+
+  isInvestmentAccount(acc) {
+    const { id, desc } = this.siengeAccountType(acc);
+    if (id === "I" || id === "A") return true;
+    if (/^INVEST/.test(desc) || desc.includes("INVESTIMENTO")) return true;
+    if (/^APLIC/.test(desc) || desc === "APPLICATION" || desc === "INVESTMENT") return true;
+    return false;
+  },
+
+  keysForAccount(acc) {
+    const cid = acc.companyId;
+    const keys = new Set();
+    [
+      acc.accountNumber,
+      acc.accountName,
+      acc.code,
+      acc.mask,
+      acc.checkingAccountId,
+      acc.idCheckingAccount,
+      acc.id
+    ].forEach(v => {
+      const id = this.accIdentity(v, acc);
+      if (id) keys.add(`${cid}|${id}`);
+    });
+    const sid = acc.checkingAccountId || acc.idCheckingAccount || acc.id;
+    if (sid != null && sid !== "") keys.add(`${cid}|id:${sid}`);
+    return keys;
+  },
+
+  filterAccKey(acc) {
+    return this.accKey(acc.companyId, acc.accountNumber, acc);
+  },
+
+  async fetchCompanyInvestmentAccounts(id) {
+    const sid = String(id);
+    if (this.catalogByCompany[sid]) return this.catalogByCompany[sid];
+    let res = await SiengeApiService.getCheckingAccounts(sid, { allStatuses: true });
+    let list = (res && res.results) || [];
+    if (!list.length) {
+      res = await SiengeApiService.getCheckingAccounts(sid);
+      list = (res && res.results) || [];
+    }
+    const mapped = list
+      .map(a => this.catalogAccount(a, sid))
+      .filter(a => this.isInvestmentAccount(a));
+    const seen = new Set();
+    const unique = mapped.filter(a => {
+      const key = this.filterAccKey(a);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    unique.sort((a, b) => String(a.accountNumber).localeCompare(String(b.accountNumber), "pt-BR"));
+    this.catalogByCompany[sid] = unique;
+    return unique;
+  },
+
+  syncSelectedAccountKeys() {
+    const available = this.filterCatalog.map(a => this.filterAccKey(a));
+    const availSet = new Set(available);
+    if (this.selectedAccountKeys == null) {
+      this.selectedAccountKeys = available;
+      return;
+    }
+    if (!available.length) return;
+    const kept = this.selectedAccountKeys.filter(k => availSet.has(k));
+    this.selectedAccountKeys = kept.length ? kept : available;
+  },
+
+  async refreshFilterCatalog() {
+    const gen = ++this._catalogGen;
+    const ids = (this.selectedCompanyIds || []).map(String);
+    const keepDrops = this.companyDropOpen || this.accountDropOpen;
+    if (!ids.length) {
+      this.filterCatalog = [];
+      this.catalogLoading = false;
+      if (keepDrops) this.patchAccountFilter();
+      else this.render();
+      return;
+    }
+    this.catalogLoading = true;
+    if (keepDrops) this.patchAccountFilter();
+    else this.render();
+    try {
+      const chunks = await Promise.all(ids.map(id => this.fetchCompanyInvestmentAccounts(id)));
+      if (gen !== this._catalogGen) return;
+      this.filterCatalog = chunks.flat();
+      this.syncSelectedAccountKeys();
+      this.persistPeriod();
+    } catch (e) {
+      console.warn("[Investimento] Catálogo de contas:", e);
+    } finally {
+      if (gen === this._catalogGen) {
+        this.catalogLoading = false;
+        if (this.companyDropOpen || this.accountDropOpen) this.patchAccountFilter();
+        else this.render();
+      }
+    }
+  },
+
+  classifyByHistoric(mov) {
+    const blob = [
+      mov.historic, mov.history, mov.bankMovementHistoricName, mov.bankMovementOperationName,
+      mov.origin, mov.originDescription, mov.originId, mov.bankMovementOriginId,
+      mov.documentType, mov.documentIdentification, mov.documentIdentificationName, mov.observations, mov.note,
+      ...((mov.financialCategories || []).map(c => `${c.financialCategoryName || ""} ${c.financialCategoryId || ""}`))
+    ].join(" ").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (/IRRF|\bIOF\b|TARIFA|IMPOSTO DE RENDA|\bIR SOBRE|RETIDO NA FONTE/.test(blob)) return "tarifas";
+    if (/RENDIM|RENDTO|\bJUROS\b|RECEITA FINANCEIRA/.test(blob)) return "rendimento";
+    if (/RESGATE/.test(blob)) return "resgate";
+    if (/APLICA|APORTE/.test(blob)) return "aporte";
+    return "";
+  },
+
+  movAmount(mov) {
+    const raw = Number(mov.bankMovementAmount);
+    if (!Number.isFinite(raw) || raw === 0) return 0;
+    const abs = Math.abs(raw);
+    const hint = this.classifyByHistoric(mov);
+    if (hint === "resgate" || hint === "tarifas") return -abs;
+    if (hint === "aporte" || hint === "rendimento") return abs;
+    const type = String(mov.bankMovementOperationType || mov.operationType || mov.bankMovementOperationName || "")
+      .trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (/^(S|D)$/.test(type) || /DEBITO|DEBIT|^SAIDA$/.test(type) || type.includes("SAIDA")) return -abs;
+    if (/^(E|C)$/.test(type) || /CREDITO|CREDIT|^ENTRADA$/.test(type) || type.includes("ENTRADA")) return abs;
+    return raw;
+  },
+
+  classifyMovement(mov) {
+    const hint = this.classifyByHistoric(mov);
+    if (hint) return hint;
+    const amount = this.movAmount(mov);
+    if (!amount) return "aporte";
+    if (amount >= 0) return "aporte";
+    return "resgate";
+  },
+
+  compactName(s) {
+    return String(s || "")
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Z0-9]/g, "");
+  },
+
+  parseMoney(v) {
+    if (v == null || v === "") return null;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    const s = String(v).trim().replace(/\s/g, "");
+    if (!s) return null;
+    let n;
+    if (s.includes(",") && s.includes(".")) {
+      n = s.lastIndexOf(",") > s.lastIndexOf(".")
+        ? Number(s.replace(/\./g, "").replace(",", "."))
+        : Number(s.replace(/,/g, ""));
+    } else if (s.includes(",")) {
+      n = Number(s.replace(/\./g, "").replace(",", "."));
+    } else {
+      n = Number(s);
+    }
+    return Number.isFinite(n) ? n : null;
+  },
+
+  bankToken(s) {
+    const t = this.compactName(s);
+    const banks = ["BANCODOBRASIL", "SANTANDER", "BRADESCO", "BANRISUL", "SICOOB", "SICREDI", "ORIGINAL", "NUBANK", "SAFRA", "CAIXA", "ITAU", "BTG", "C6", "CEF"];
+    return banks.find(b => t.includes(b)) || "";
+  },
+
+  productToken(s) {
+    const t = this.compactName(s);
+    if (t.includes("COMPROMISSADA") || t.includes("COMPR")) return "COMPR";
+    if (t.includes("CDBDI")) return "CDBDI";
+    if (t.includes("CDB")) return "CDB";
+    return "";
+  },
+
+  shapeBalance(b, cid) {
+    return {
+      companyId: cid,
+      accountNumber: b.accountNumber || b.number || b.account || b.bankAccountNumber || "",
+      accountName: b.accountName || b.name || b.description || "",
+      mask: b.mask || b.accountMask || "",
+      checkingAccountId: b.checkingAccountId || b.idCheckingAccount || b.idAccount,
+      idCheckingAccount: b.idCheckingAccount,
+      id: b.id || b.idAccount || b.idCheckingAccount
+    };
+  },
+
+  scoreOpeningBalance(acc, b) {
+    const cid = String(acc.companyId);
+    const shaped = this.shapeBalance(b, cid);
+    const blobA = `${acc.accountNumber || ""} ${acc.accountName || ""} ${acc.mask || ""}`;
+    const blobB = `${shaped.accountNumber} ${shaped.accountName} ${shaped.mask}`;
+    const fullA = this.compactName(blobA);
+    const fullB = this.compactName(blobB);
+    const idA = String(acc.checkingAccountId || acc.idCheckingAccount || acc.id || "").trim();
+    const idB = String(shaped.checkingAccountId || shaped.idCheckingAccount || shaped.id || b.accountId || "").trim();
+    if (idA && idB && idA === idB) return 1000;
+    const bankA = this.bankToken(blobA);
+    const bankB = this.bankToken(blobB);
+    if (bankA && bankB && bankA !== bankB) return 0;
+    const prodA = this.productToken(blobA);
+    const prodB = this.productToken(blobB);
+    if (prodA && prodB && prodA !== prodB) return 0;
+    const nameA = this.compactName(acc.accountName || acc.name || "");
+    const nameB = this.compactName(shaped.accountName);
+    const numA = this.compactName(acc.accountNumber || acc.mask || "");
+    const numB = this.compactName(shaped.accountNumber);
+    const digA = this.normAcc(acc.accountNumber || acc.mask || "");
+    const digB = this.normAcc(shaped.accountNumber);
+    let score = 0;
+    if (digA && digB && digA === digB && digA.length >= 5) score += 200;
+    if (nameA && nameB && nameA === nameB) score += 160;
+    if (fullA && fullB && fullA.length >= 8 && fullB.includes(fullA)) score += 180;
+    if (nameA && fullB && nameA.length >= 8 && fullB.includes(nameA)) score += 140;
+    if (bankA && (bankB === bankA || fullB.includes(bankA))) score += 80;
+    if (prodA && prodB && prodA === prodB) score += 50;
+    if (fullA.includes("MLDU") && fullB.includes("MLDU")) score += 40;
+    if (numA && numB && numA === numB) score += numA.length >= 6 ? 80 : 45;
+    if (nameA.length >= 14 && nameB.length >= 14 && (nameA.includes(nameB) || nameB.includes(nameA))) score += 40;
+    return score;
+  },
+
+  balanceAmount(b) {
+    const candidates = [
+      b.amount,
+      b.balance,
+      b.balanceAmount,
+      b.currentBalance,
+      b.lastBalance,
+      b.lastBalanceAmount,
+      b.availableAmount,
+      b.availableBalance,
+      b.reconciledAmount,
+      b.reconciledBalance,
+      b.value
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+      const n = this.parseMoney(candidates[i]);
+      if (n != null) return n;
+    }
+    return null;
+  },
+
+  pickOpeningBalance(list, acc) {
+    const cid = String(acc.companyId);
+    const seen = new Set();
+    const ranked = (list || []).map(b => {
+      const bCid = b.companyId != null ? String(b.companyId) : (b.idCompany != null ? String(b.idCompany) : "");
+      if (bCid && bCid !== cid) return null;
+      const ident = `${bCid}|${this.accIdentity(b.accountNumber || b.number, b)}|${String(b.balanceDate || b.date || "")}|${this.balanceAmount(b)}`;
+      if (seen.has(ident)) return null;
+      seen.add(ident);
+      return { b, score: this.scoreOpeningBalance(acc, b) };
+    }).filter(x => x && x.score >= 70);
+    if (!ranked.length) return null;
+    ranked.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const da = String(a.b.balanceDate || a.b.date || "");
+      const dbd = String(b.b.balanceDate || b.b.date || "");
+      return dbd.localeCompare(da);
+    });
+    return this.balanceAmount(ranked[0].b);
+  },
+
+  isNamedInvestAccount(acc) {
+    const dig = this.normAcc(acc.accountNumber || acc.mask || "");
+    return !dig || dig.length < 5;
+  },
+
+  emptyFlow() {
+    return { aportes: 0, resgates: 0, rendimento: 0, tarifas: 0 };
+  },
+
+  monthKeyFromBcbDate(data) {
+    const s = String(data || "").trim();
+    const br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (br) return `${br[3]}-${String(br[2]).padStart(2, "0")}`;
+    const iso = s.match(/^(\d{4})-(\d{1,2})/);
+    if (iso) return `${iso[1]}-${String(iso[2]).padStart(2, "0")}`;
+    return "";
+  },
+
+  ingestCdiRows(rows) {
+    this.cdiByMonth = this.cdiByMonth || {};
+    (rows || []).forEach(r => {
+      const key = this.monthKeyFromBcbDate(r && r.data);
+      if (!key) return;
+      const n = Number(String(r.valor == null ? "" : r.valor).replace(",", ".").replace("%", ""));
+      if (Number.isFinite(n) && n !== 0) this.cdiByMonth[key] = n;
+    });
+  },
+
+  async fetchCdiSeries() {
+    const months = this.months || [];
+    let dataInicial = "01/01/2018";
+    let dataFinal = "";
+    if (months.length) {
+      const [ys, ms] = months[0].split("-");
+      const [ye, me] = months[months.length - 1].split("-");
+      dataInicial = `01/${ms}/${ys}`;
+      const last = new Date(Number(ye), Number(me), 0);
+      dataFinal = `${String(last.getDate()).padStart(2, "0")}/${String(last.getMonth() + 1).padStart(2, "0")}/${last.getFullYear()}`;
+    }
+    const q = `code=4391&dataInicial=${encodeURIComponent(dataInicial)}${dataFinal ? `&dataFinal=${encodeURIComponent(dataFinal)}` : ""}`;
+    const urls = [
+      `/api/bcb-sgs?${q}`,
+      `https://api.bcb.gov.br/dados/serie/bcdata.sgs.4391/dados?formato=json&dataInicial=${encodeURIComponent(dataInicial)}${dataFinal ? `&dataFinal=${encodeURIComponent(dataFinal)}` : ""}`
+    ];
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (Array.isArray(json) && json.length) return json;
+      } catch (e) {
+        console.warn("[Investimento] CDI fetch", url, e);
+      }
+    }
+    return [];
+  },
+
+  async ensureCdi() {
+    this.cdiByMonth = this.cdiByMonth || {};
+    const needed = this.months || [];
+    const missing = needed.filter(mk => !(Number(this.cdiByMonth[mk]) > 0));
+    if (needed.length && !missing.length) return;
+    try {
+      const json = await this.fetchCdiSeries();
+      this.ingestCdiRows(json);
+    } catch (e) {
+      console.warn("[Investimento] CDI BCB 4391:", e);
+    }
+  },
+
+  cdiTip(rendimento, opening, mk) {
+    const cdi = Number(this.cdiByMonth[mk]) || 0;
+    const yld = opening > 0.009 ? (Number(rendimento) / opening) * 100 : null;
+    if (yld == null && !cdi) return "CDI do mês indisponível";
+    if (yld == null) return `CDI ${cdi.toFixed(2).replace(".", ",")}% a.m.`;
+    if (!cdi) return `Rendimento ${yld.toFixed(2).replace(".", ",")}% no mês · CDI indisponível`;
+    const pct = (yld / cdi) * 100;
+    return `Rendimento ${yld.toFixed(2).replace(".", ",")}% no mês · CDI ${cdi.toFixed(2).replace(".", ",")}% a.m. · ${pct.toFixed(0)}% do CDI`;
+  },
+
+  periodRendimento(monthFlow) {
+    return (monthFlow || []).reduce((s, f) => s + (Number(f.rendimento) || 0), 0);
+  },
+
+  periodImposto(monthFlow) {
+    return (monthFlow || []).reduce((s, f) => s + (Number(f.tarifas) || 0), 0);
+  },
+
+  avgCdiPeriod() {
+    const keys = this.months || [];
+    const vals = keys.map(mk => Number(this.cdiByMonth[mk]) || 0).filter(n => n > 0);
+    if (!vals.length) return null;
+    return vals.reduce((s, n) => s + n, 0) / vals.length;
+  },
+
+  accountPeriodMetaHtml(monthFlow, source) {
+    const rend = this.periodRendimento(monthFlow);
+    const imposto = Math.abs(this.periodImposto(monthFlow));
+    const avg = this.avgCdiPeriod();
+    const n = (this.months || []).filter(mk => Number(this.cdiByMonth[mk]) > 0).length;
+    const cdiTxt = avg == null
+      ? "CDI médio indisponível no período"
+      : `CDI médio ${avg.toFixed(2).replace(".", ",")}% a.m. (${n} ${n === 1 ? "mês" : "meses"})`;
+    const src = encodeURIComponent(source || "");
+    const tip = this.esc(`Rendimento ${this.fmt(rend)} · Imposto retido ${this.fmt(imposto)} · ${cdiTxt}`);
+    return `<div title="${tip}" style="margin-top:8px;padding:6px 8px;background:#fef9c3;border:1px solid #facc15;border-radius:6px;max-width:100%;box-sizing:border-box;overflow:hidden;display:flex;flex-direction:column;gap:2px;line-height:1.25;">
+      <span role="button" onclick="event.stopPropagation();InvestimentoApp.openMovimentos('${src}','rendimento','period')" style="font-size:0.68rem;font-weight:800;color:#0369a1;cursor:pointer;text-decoration:underline;text-decoration-color:#93c5fd;white-space:normal;word-break:break-word;">Rendimento ${this.fmt(rend)}</span>
+      <span role="button" onclick="event.stopPropagation();InvestimentoApp.openMovimentos('${src}','tarifas','period')" style="font-size:0.65rem;font-weight:700;color:#9a3412;cursor:pointer;text-decoration:underline;text-decoration-color:#fdba74;white-space:normal;word-break:break-word;">Imposto retido ${this.fmt(imposto)}</span>
+      <span style="font-size:0.65rem;font-weight:700;color:#854d0e;white-space:normal;word-break:break-word;">${this.esc(cdiTxt)}</span>
+    </div>`;
+  },
+
+  accountPeriodMetaLines(monthFlow) {
+    const rend = this.periodRendimento(monthFlow);
+    const imposto = Math.abs(this.periodImposto(monthFlow));
+    const avg = this.avgCdiPeriod();
+    const cdiTxt = avg == null ? "CDI médio indisponível" : `CDI médio ${avg.toFixed(2).replace(".", ",")}% a.m.`;
+    return [
+      `Rendimento ${this.fmt(rend)}`,
+      `Imposto retido ${this.fmt(imposto)}`,
+      cdiTxt
+    ];
+  },
+
+  accountPeriodMetaText(monthFlow) {
+    return this.accountPeriodMetaLines(monthFlow).join("\n");
+  },
+
+  excelSplitDot(text) {
+    return String(text || "")
+      .split(/\s*·\s*|\n/)
+      .map(p => p.trim())
+      .filter(Boolean);
+  },
+
+  excelAccountCell(label, sub, monthFlow) {
+    const lines = [String(label || "").trim()].filter(Boolean);
+    this.excelSplitDot(sub).forEach(p => {
+      if (p && p !== label) lines.push(p);
+    });
+    this.accountPeriodMetaLines(monthFlow).forEach(l => lines.push(l));
+    return lines.join("\n");
+  },
+
+  async load() {
+    if (!this.startDate || !this.endDate) {
+      this.error = "Informe o período.";
+      this.render();
+      return;
+    }
+    if (!this.selectedCompanyIds.length) {
+      this.error = "Selecione ao menos uma empresa.";
+      this.render();
+      return;
+    }
+    this.loading = true;
+    this.error = "";
+    this.consultStart = this.startDate;
+    this.consultEnd = this.endDate;
+    this.persistPeriod();
+    this.render();
+    this.months = this.monthKeys(this.startDate, this.endDate);
+    await this.refreshFilterCatalog();
+    this.pruneAccountKeysToCompanies();
+    if (!(this.selectedAccountKeys || []).length && (this.filterCatalog || []).length) {
+      this.selectedAccountKeys = this.filterCatalog.map(a => this.filterAccKey(a));
+    }
+    if (!(this.selectedAccountKeys || []).length) {
+      this.loading = false;
+      this.error = "Selecione ao menos uma conta de investimento.";
+      this.render();
+      return;
+    }
+    await this.ensureCdi();
+    const openingDate = this.addDaysIso(this.startDate, -1);
+    const histStart = this.addDaysIso(this.startDate, -730);
+    try {
+      const companyIds = this.selectedCompanyIds.map(id => String(id)).filter(Boolean);
+      const [accountsChunks, movChunks, balByCo] = await Promise.all([
+        Promise.all(companyIds.map(id => this.fetchCompanyInvestmentAccounts(id))),
+        (async () => {
+          const rows = [];
+          const limit = Math.min(2, companyIds.length);
+          let next = 0;
+          const worker = async () => {
+            while (next < companyIds.length) {
+              const id = companyIds[next++];
+              const data = await SiengeApiService.getBankMovements(histStart, this.endDate, {
+                selectionType: "M",
+                companyId: this.apiCompanyId(id),
+                concurrency: 3
+              });
+              rows.push((data || [])
+                .filter(m => {
+                  const mid = this.movementCompanyId(m);
+                  return !mid || String(mid) === String(id);
+                })
+                .map(m => ({ ...m, companyId: this.movementCompanyId(m) || id })));
+            }
+          };
+          await Promise.all(Array.from({ length: limit }, worker));
+          return rows;
+        })(),
+        Promise.all(companyIds.map(id => SiengeApiService.getAccountBalances(openingDate, { companyId: this.apiCompanyId(id) })))
+      ]);
+      const balances = (balByCo || []).flat();
+
+      let catalog = accountsChunks.flat();
+      const wantAcc = new Set(this.selectedAccountKeys || []);
+      if (wantAcc.size) catalog = catalog.filter(a => wantAcc.has(this.filterAccKey(a)));
+      const seen = new Set();
+      catalog = catalog.filter(a => {
+        const rawNum = String(a.accountNumber || "").trim().toUpperCase();
+        const key = rawNum
+          ? `${a.companyId}|${rawNum}`
+          : this.accKey(a.companyId, a.accountNumber, a);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      const investKeys = new Set();
+      catalog.forEach(a => this.keysForAccount(a).forEach(k => investKeys.add(k)));
+      const movements = movChunks.flat().filter(m => {
+        const raw = this.movAccount(m);
+        const key = this.accKey(m.companyId, raw, m);
+        const idKey = m.checkingAccountId != null ? `${m.companyId}|id:${m.checkingAccountId}` : "";
+        if (!this.accIdentity(raw, m) && !idKey) return false;
+        if (String(this.movementCompanyId(m) || m.companyId) && !this.selectedCompanyIds.includes(String(this.movementCompanyId(m) || m.companyId))) {
+          return false;
+        }
+        if (!catalog.length) return false;
+        if (!this.onlyInvestment) {
+          return this.selectedCompanyIds.includes(String(this.movementCompanyId(m) || m.companyId));
+        }
+        return investKeys.has(key) || (idKey && investKeys.has(idKey));
+      });
+
+      if (!catalog.length && this.onlyInvestment) {
+        this.accounts = [];
+        this.kpis = { opening: 0, aportes: 0, resgates: 0, rendimento: 0, tarifas: 0, closing: 0 };
+        this.error = "Nenhuma conta de investimento/aplicação identificada nas empresas selecionadas.";
+        return;
+      }
+
+      const byAcc = new Map();
+      const ensure = (acc) => {
+        const num = String(acc.accountNumber || acc.accountName || acc.name || "").trim();
+        const key = this.accKey(acc.companyId, num, acc);
+        if (!byAcc.has(key)) {
+          byAcc.set(key, {
+            key,
+            companyId: acc.companyId,
+            companyName: this.companyName(acc.companyId),
+            accountNumber: num,
+            accountName: acc.accountName || acc.name || acc.description || "Conta",
+            accountType: acc.accountType || "",
+            checkingAccountId: acc.checkingAccountId || acc.idCheckingAccount || acc.id || "",
+            mask: acc.mask || "",
+            opening: 0,
+            closingApi: 0,
+            aportes: 0,
+            resgates: 0,
+            rendimento: 0,
+            tarifas: 0,
+            months: {},
+            movements: []
+          });
+          this.months.forEach(mk => { byAcc.get(key).months[mk] = this.emptyFlow(); });
+        }
+        return byAcc.get(key);
+      };
+      catalog.forEach(a => {
+        const row = ensure(a);
+        const apiOpen = this.pickOpeningBalance(balances, a);
+        if (apiOpen != null) {
+          row.opening = apiOpen;
+          row.openingFromApi = true;
+        }
+      });
+
+      movements.forEach(mov => {
+        const num = this.movAccount(mov);
+        const key = this.accKey(mov.companyId, num, mov);
+        let row = byAcc.get(key);
+        if (!row) {
+          row = ensure({ companyId: mov.companyId, accountNumber: num, accountName: mov.accountName || num });
+          if (!row.openingFromApi) {
+            const apiOpen = this.pickOpeningBalance(balances, row);
+            if (apiOpen != null) {
+              row.opening = apiOpen;
+              row.openingFromApi = true;
+            }
+          }
+        }
+        const kind = this.classifyMovement(mov);
+        const amount = this.movAmount(mov);
+        const day = String(mov.bankMovementDate || "").slice(0, 10);
+        if (day && day < this.startDate) {
+          if (!row.openingFromApi && !this.isNamedInvestAccount(row)) row.opening += amount;
+          return;
+        }
+        const mk = String(mov.bankMovementDate || "").slice(0, 7);
+        if (!row.months[mk]) row.months[mk] = this.emptyFlow();
+        if (kind === "aporte") { row.aportes += amount; row.months[mk].aportes += amount; }
+        else if (kind === "resgate") { row.resgates += amount; row.months[mk].resgates += amount; }
+        else if (kind === "rendimento") { row.rendimento += amount; row.months[mk].rendimento += amount; }
+        else { row.tarifas += amount; row.months[mk].tarifas += amount; }
+        row.movements.push({ ...mov, _kind: kind, _amount: amount });
+      });
+
+      byAcc.forEach(row => {
+        if (row.openingFromApi) return;
+        const sample = (row.movements || [])[0];
+        const probe = sample
+          ? Object.assign({}, row, { accountNumber: this.movAccount(sample) })
+          : row;
+        const apiOpen = this.pickOpeningBalance(balances, probe);
+        if (apiOpen != null) {
+          row.opening = apiOpen;
+          row.openingFromApi = true;
+        }
+      });
+
+      const accounts = [...byAcc.values()].map(row => {
+        let run = row.opening;
+        this.months.forEach(mk => {
+          const f = row.months[mk] || this.emptyFlow();
+          row.months[mk] = f;
+          run = run + f.aportes + f.resgates + f.tarifas + f.rendimento;
+          f.closing = run;
+        });
+        row.aportes = this.months.reduce((s, mk) => s + ((row.months[mk] && row.months[mk].aportes) || 0), 0);
+        row.resgates = this.months.reduce((s, mk) => s + ((row.months[mk] && row.months[mk].resgates) || 0), 0);
+        row.rendimento = this.months.reduce((s, mk) => s + ((row.months[mk] && row.months[mk].rendimento) || 0), 0);
+        row.tarifas = this.months.reduce((s, mk) => s + ((row.months[mk] && row.months[mk].tarifas) || 0), 0);
+        row.closing = run;
+        row.variacao = row.closing - row.opening;
+        return row;
+      }).sort((a, b) => b.closing - a.closing);
+
+      this.accounts = accounts;
+      this.collapsedAccounts = new Set(accounts.map(r => r.key));
+      this.kpis = accounts.reduce((acc, r) => {
+        acc.opening += r.opening;
+        acc.aportes += r.aportes;
+        acc.resgates += r.resgates;
+        acc.rendimento += r.rendimento;
+        acc.tarifas += r.tarifas;
+        acc.closing += r.closing;
+        return acc;
+      }, { opening: 0, aportes: 0, resgates: 0, rendimento: 0, tarifas: 0, closing: 0 });
+      if (!accounts.length) this.error = "Nenhum movimento ou saldo de investimento no período.";
+    } catch (err) {
+      console.error("[Investimento]", err);
+      this.error = err && err.message ? err.message : "Falha ao consultar saldos e movimentos de caixa/banco.";
+      this.accounts = [];
+    } finally {
+      this.loading = false;
+      this.render();
+    }
+  },
+
+  toggle(key) {
+    if (this.expanded.has(key)) this.expanded.delete(key);
+    else this.expanded.add(key);
+    this.render();
+  },
+
+  allCompaniesSelected() {
+    const all = this.geridasCompanies();
+    return all.length > 0 && this.selectedCompanyIds.length === all.length;
+  },
+
+  companyDropLabel() {
+    const all = this.geridasCompanies();
+    const n = this.selectedCompanyIds.length;
+    if (!all.length) return "Nenhuma empresa gerida";
+    if (!n) return "Selecione empresas";
+    if (n === all.length) return `Todos (${all.length})`;
+    return `${n} de ${all.length} empresas`;
+  },
+
+  applyDropOpenState() {
+    const emp = document.getElementById("inv-emp");
+    const panel = document.getElementById("inv-emp-panel");
+    if (emp) emp.classList.toggle("is-open", !!this.companyDropOpen);
+    if (panel) {
+      if (this.companyDropOpen) {
+        if (emp && panel.parentElement !== emp) emp.appendChild(panel);
+        panel.style.display = "block";
+        panel.classList.add("is-open");
+        panel.style.position = "absolute";
+        panel.style.left = "0";
+        panel.style.right = "0";
+        panel.style.top = "calc(100% + 4px)";
+        panel.style.width = "100%";
+        panel.style.maxWidth = "100%";
+        panel.style.minWidth = "0";
+        panel.style.zIndex = "230";
+        panel.style.maxHeight = "";
+      } else {
+        panel.style.display = "none";
+        panel.classList.remove("is-open");
+        if (emp && panel.parentElement !== emp) emp.appendChild(panel);
+      }
+    }
+    const accPanel = document.getElementById("inv-acc-panel");
+    if (accPanel) accPanel.style.display = this.accountDropOpen ? "block" : "none";
+  },
+
+  patchCompanyFilter() {
+    if (!window.MlEmpresaFilter) {
+      this.render();
+      return;
+    }
+    const wrap = document.getElementById("inv-emp");
+    if (!wrap) {
+      this.render();
+      return;
+    }
+    wrap.classList.toggle("is-open", !!this.companyDropOpen);
+    const btn = wrap.querySelector(".ml-emp-filter-btn span");
+    if (btn) btn.textContent = MlEmpresaFilter.buttonLabel(this.companyFilterItems(), this.selectedCompanyIds, false, true);
+    const list = document.getElementById("inv-emp-list");
+    if (list) {
+      list.innerHTML = MlEmpresaFilter.listHtml({
+        id: "inv-emp",
+        items: this.companyFilterItems(),
+        selectedIds: this.selectedCompanyIds,
+        query: this.companyQuery
+      });
+    }
+    this.patchAccountFilter();
+  },
+
+  patchAccountFilter() {
+    const wrap = document.getElementById("inv-acc-drop");
+    if (!wrap) return;
+    const btn = wrap.querySelector("button span");
+    if (btn) btn.textContent = this.accountDropLabel();
+    const list = document.getElementById("inv-acc-list");
+    if (list) {
+      list.innerHTML = this.catalogLoading
+        ? `<div style="padding:10px;color:#64748b;font-size:0.78rem;">Carregando contas do cadastro...</div>`
+        : this.accountListHtml();
+    }
+    const accBtn = wrap.querySelector("button[type='button']");
+    if (accBtn) {
+      const disabled = !this.selectedCompanyIds.length;
+      accBtn.disabled = disabled;
+      accBtn.style.background = disabled ? "#f8fafc" : "#fff";
+      accBtn.style.cursor = disabled ? "not-allowed" : "pointer";
+    }
+    this.applyDropOpenState();
+  },
+
+  toggleCompanyDrop(ev) {
+    if (ev) ev.stopPropagation();
+    this.companyDropOpen = !this.companyDropOpen;
+    if (this.companyDropOpen) this.accountDropOpen = false;
+    this.applyDropOpenState();
+  },
+
+  filterCompanyList(q) {
+    this.companyQuery = q || "";
+    const box = document.getElementById("inv-emp-list");
+    if (!box) return;
+    if (window.MlEmpresaFilter) {
+      box.innerHTML = MlEmpresaFilter.listHtml({
+        id: "inv-emp",
+        items: this.companyFilterItems(),
+        selectedIds: this.selectedCompanyIds,
+        query: this.companyQuery
+      });
+      return;
+    }
+    box.innerHTML = this.companyListHtml();
+  },
+
+  companyFullLabel(c) {
+    const legal = String((c && (c.legalName || c.name)) || "").toUpperCase();
+    return `${c.id} - ${legal}`;
+  },
+
+  companyFilterItems() {
+    return this.geridasCompanies().map(c => ({ id: String(c.id), label: this.companyFullLabel(c) }));
+  },
+
+  bindCompanyFilter() {
+    if (window.MlEmpresaFilter) {
+      MlEmpresaFilter.bind("inv-emp", {
+        toggleOpen: () => this.toggleCompanyDrop(),
+        setQuery: (q) => this.filterCompanyList(q),
+        toggleId: (id, on) => this.toggleCompany(id, on),
+        selectAll: () => this.selectAllGeridas(),
+        selectNone: () => this.clearGeridas()
+      });
+    }
+    const btn = document.querySelector("#inv-emp .ml-emp-filter-btn");
+    if (btn) {
+      btn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleCompanyDrop(e);
+      };
+    }
+    const allBtn = document.querySelector("#inv-emp .ml-emp-filter-all");
+    const noneBtn = document.querySelector("#inv-emp .ml-emp-filter-none");
+    if (allBtn) {
+      allBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.selectAllGeridas();
+      };
+    }
+    if (noneBtn) {
+      noneBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.clearGeridas();
+      };
+    }
+  },
+
+  companyListHtml() {
+    const companies = this.geridasCompanies();
+    const q = (this.companyQuery || "").toLowerCase().trim();
+    const filtered = companies.filter(c => {
+      if (!q) return true;
+      const blob = `${c.id} ${c.name} ${c.legalName || ""}`.toLowerCase();
+      return blob.includes(q);
+    });
+    if (!filtered.length) return `<div style="padding:10px;color:#94a3b8;font-size:0.78rem;">Nenhuma empresa com esse nome.</div>`;
+    return filtered.map(c => {
+      const on = this.selectedCompanyIds.includes(String(c.id));
+      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:0.8rem;background:${on ? "#ecfdf5" : "#fff"};">
+        <input type="checkbox" ${on ? "checked" : ""} onchange="InvestimentoApp.toggleCompany('${c.id}', this.checked)" style="margin-top:3px;flex-shrink:0;">
+        <span style="font-weight:${on ? 700 : 600};color:#334155;line-height:1.35;white-space:normal;">${this.esc(this.companyFullLabel(c))}</span>
+      </label>`;
+    }).join("");
+  },
+
+  companyDropHtml() {
+    const companies = this.geridasCompanies();
+    if (!companies.length) {
+      return `<div style="padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;color:#9a3412;font-size:0.8rem;">Nenhuma empresa com a flag <strong>Gerida pelo grupo</strong> no cadastro de empresas.</div>`;
+    }
+    if (window.MlEmpresaFilter) {
+      return MlEmpresaFilter.html({
+        id: "inv-emp",
+        label: "Empresas geridas pelo grupo",
+        items: this.companyFilterItems(),
+        selectedIds: this.selectedCompanyIds,
+        open: this.companyDropOpen,
+        query: this.companyQuery,
+        emptyMeansAll: false,
+        countMode: true,
+        toggleJs: "InvestimentoApp.toggleCompanyDrop(event)",
+        selectAllJs: "InvestimentoApp.selectAllGeridas()",
+        selectNoneJs: "InvestimentoApp.clearGeridas()"
+      });
+    }
+    return `<div id="inv-emp">${this.companyListHtml()}</div>`;
+  },
+
+  accountDropLabel() {
+    if (!this.selectedCompanyIds.length) return "Selecione uma empresa";
+    if (this.catalogLoading) return "Carregando contas...";
+    const all = this.filterCatalog;
+    const n = (this.selectedAccountKeys || []).length;
+    if (!all.length) return "Nenhuma conta de investimento";
+    if (n === all.length) return `Todas (${n})`;
+    if (n === 1) {
+      const key = this.selectedAccountKeys[0];
+      const a = all.find(x => this.filterAccKey(x) === key);
+      if (a) return `${a.accountNumber} · ${a.accountName}`;
+    }
+    if (n === 0) return "Selecione contas";
+    return `${n} de ${all.length} contas`;
+  },
+
+  toggleAccountDrop(ev) {
+    if (ev) ev.stopPropagation();
+    if (!this.selectedCompanyIds.length) return;
+    this.accountDropOpen = !this.accountDropOpen;
+    if (this.accountDropOpen) this.companyDropOpen = false;
+    this.applyDropOpenState();
+  },
+
+  filterAccountList(q) {
+    this.accountQuery = q || "";
+    const box = document.getElementById("inv-acc-list");
+    if (!box) return;
+    box.innerHTML = this.accountListHtml();
+  },
+
+  toggleFilterAccount(key, on) {
+    const k = String(key);
+    const cur = this.selectedAccountKeys || [];
+    this._clearedAccounts = false;
+    if (on) {
+      if (!cur.includes(k)) this.selectedAccountKeys = cur.concat([k]);
+    } else {
+      this.selectedAccountKeys = cur.filter(x => x !== k);
+    }
+    this.accountDropOpen = true;
+    this.persistPeriod();
+    this.patchAccountFilter();
+  },
+
+  selectAllFilterAccounts() {
+    this._clearedAccounts = false;
+    this.selectedAccountKeys = this.filterCatalog.map(a => this.filterAccKey(a));
+    this.accountDropOpen = true;
+    this.persistPeriod();
+    this.patchAccountFilter();
+  },
+
+  clearFilterAccounts() {
+    this._clearedAccounts = true;
+    this.selectedAccountKeys = [];
+    this.accountDropOpen = true;
+    this.persistPeriod();
+    this.patchAccountFilter();
+  },
+
+  accountListHtml() {
+    const q = (this.accountQuery || "").toLowerCase().trim();
+    const nq = this.normAcc(this.accountQuery);
+    const grouped = [];
+    const byCo = {};
+    this.filterCatalog.forEach(a => {
+      const blob = `${a.accountNumber} ${a.accountName} ${this.companyName(a.companyId)}`.toLowerCase();
+      if (q && !blob.includes(q) && !(nq && this.normAcc(a.accountNumber).includes(nq))) return;
+      const cid = String(a.companyId);
+      if (!byCo[cid]) {
+        byCo[cid] = [];
+        grouped.push(cid);
+      }
+      byCo[cid].push(a);
+    });
+    if (!this.filterCatalog.length) {
+      return `<div style="padding:10px;color:#94a3b8;font-size:0.78rem;">Nenhuma conta tipo Investimento nas empresas selecionadas.</div>`;
+    }
+    if (!grouped.length) return `<div style="padding:10px;color:#94a3b8;font-size:0.78rem;">Nenhuma conta com esse filtro.</div>`;
+    const showGroup = this.selectedCompanyIds.length > 1;
+    const want = new Set(this.selectedAccountKeys || []);
+    return grouped.map(cid => {
+      const rows = byCo[cid].map(a => {
+        const key = this.filterAccKey(a);
+        const on = want.has(key);
+        return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:0.8rem;background:${on ? "#ecfdf5" : "#fff"};">
+          <input type="checkbox" ${on ? "checked" : ""} onchange="InvestimentoApp.toggleFilterAccount(decodeURIComponent('${encodeURIComponent(key)}'), this.checked)" style="margin-top:3px;flex-shrink:0;">
+          <span style="line-height:1.35;">
+            <span style="font-weight:${on ? 700 : 600};color:#0f172a;">${this.esc(a.accountNumber)}</span>
+            <span style="display:block;font-size:0.72rem;color:#64748b;">${this.esc(a.accountName)}</span>
+          </span>
+        </label>`;
+      }).join("");
+      if (!showGroup) return rows;
+      return `<div style="padding:6px 12px;background:#f8fafc;font-size:0.7rem;font-weight:800;color:#0f766e;border-bottom:1px solid #e2e8f0;">${this.esc(this.companyName(cid))}</div>${rows}`;
+    }).join("");
+  },
+
+  accountDropHtml() {
+    const disabled = !this.selectedCompanyIds.length;
+    const panelDisplay = this.accountDropOpen && !disabled ? "block" : "none";
+    return `<div id="inv-acc-drop" style="position:relative;flex:1;min-width:280px;max-width:420px;z-index:${this.accountDropOpen ? 210 : 30};" onmousedown="event.stopPropagation()" onclick="event.stopPropagation()">
+      <div style="font-size:0.75rem;font-weight:700;color:#475569;margin-bottom:4px;">Contas de investimento</div>
+      <button type="button" onclick="InvestimentoApp.toggleAccountDrop(event)" ${disabled ? "disabled" : ""}
+        style="width:100%;min-height:34px;border:1px solid #e2e8f0;border-radius:6px;background:${disabled ? "#f8fafc" : "#fff"};display:flex;align-items:center;justify-content:space-between;padding:6px 10px;cursor:${disabled ? "not-allowed" : "pointer"};font-size:0.82rem;font-weight:700;color:#0f172a;text-align:left;gap:8px;">
+        <span style="white-space:normal;line-height:1.3;">${this.esc(this.accountDropLabel())}</span>
+        <i data-lucide="chevron-down" style="width:16px;height:16px;color:#64748b;flex-shrink:0;"></i>
+      </button>
+      <div id="inv-acc-panel" style="display:${panelDisplay};position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:210;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 12px 28px rgba(15,23,42,0.12);overflow:hidden;">
+        <div style="display:flex;gap:8px;padding:8px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+          <button type="button" onclick="event.stopPropagation();InvestimentoApp.selectAllFilterAccounts()" style="flex:1;height:30px;border:1px solid #86efac;background:#ecfdf5;color:#105436;border-radius:6px;font-size:0.75rem;font-weight:800;cursor:pointer;">Marcar todas</button>
+          <button type="button" onclick="event.stopPropagation();InvestimentoApp.clearFilterAccounts()" style="flex:1;height:30px;border:1px solid #e2e8f0;background:#fff;color:#64748b;border-radius:6px;font-size:0.75rem;font-weight:800;cursor:pointer;">Desmarcar todas</button>
+        </div>
+        <input id="inv-acc-search" placeholder="Buscar conta..." value="${this.esc(this.accountQuery)}"
+          onclick="event.stopPropagation()"
+          oninput="InvestimentoApp.filterAccountList(this.value)"
+          style="width:100%;height:32px;border:none;border-bottom:1px solid #e2e8f0;padding:0 10px;box-sizing:border-box;font-size:0.8rem;">
+        <div id="inv-acc-list" style="max-height:280px;overflow:auto;">
+          ${this.catalogLoading ? `<div style="padding:10px;color:#64748b;font-size:0.78rem;">Carregando contas do cadastro...</div>` : this.accountListHtml()}
+        </div>
+      </div>
+    </div>`;
+  },
+
+  toggleCompany(id, on) {
+    const sid = String(id);
+    this._clearedCompanies = false;
+    if (on) {
+      if (!this.selectedCompanyIds.includes(sid)) this.selectedCompanyIds.push(sid);
+    } else {
+      this.selectedCompanyIds = this.selectedCompanyIds.filter(x => x !== sid);
+    }
+    this.pruneAccountKeysToCompanies();
+    this.companyDropOpen = true;
+    this.persistPeriod();
+    this.patchCompanyFilter();
+    this.refreshFilterCatalog().then(() => {
+      if (!on) return;
+      this.filterCatalog.forEach(a => {
+        if (String(a.companyId) !== sid) return;
+        const k = this.filterAccKey(a);
+        if (!(this.selectedAccountKeys || []).includes(k)) {
+          this.selectedAccountKeys = this.selectedAccountKeys || [];
+          this.selectedAccountKeys.push(k);
+        }
+      });
+      this.persistPeriod();
+      this.patchAccountFilter();
+    });
+  },
+
+  selectAllGeridas() {
+    this._clearedCompanies = false;
+    this.selectedCompanyIds = this.geridasCompanies().map(c => String(c.id));
+    this.companyDropOpen = true;
+    this.groupByCompany = true;
+    this.persistPeriod();
+    this.patchCompanyFilter();
+    this.refreshFilterCatalog().then(() => {
+      this.selectedAccountKeys = this.filterCatalog.map(a => this.filterAccKey(a));
+      this.persistPeriod();
+      this.patchAccountFilter();
+    });
+  },
+
+  clearGeridas() {
+    this._clearedCompanies = true;
+    this._clearedAccounts = true;
+    this.selectedCompanyIds = [];
+    this.selectedAccountKeys = [];
+    this.filterCatalog = [];
+    this.companyDropOpen = true;
+    this.persistPeriod();
+    this.patchCompanyFilter();
+  },
+
+  toggleGroupByCompany() {
+    this.groupByCompany = !this.groupByCompany;
+    this.persistPeriod();
+    this.render();
+  },
+
+  toggleCompanyCollapse(id) {
+    const s = String(id);
+    if (this.collapsedCompanies.has(s)) this.collapsedCompanies.delete(s);
+    else this.collapsedCompanies.add(s);
+    this.render();
+  },
+
+  toggleAccountCollapse(key) {
+    const s = String(key);
+    if (this.collapsedAccounts.has(s)) this.collapsedAccounts.delete(s);
+    else this.collapsedAccounts.add(s);
+    this.render();
+  },
+
+  kindLabel(kind) {
+    return ({
+      aporte: "Entrada",
+      resgate: "Saída",
+      rendimento: "Rendimento",
+      tarifas: "Imposto retido",
+      saldo: "Saldo (lançamentos do mês)",
+      opening: "Saldo inicial"
+    })[kind] || kind;
+  },
+
+  fmtDatePt(iso) {
+    const s = String(iso || "").slice(0, 10);
+    const p = s.split("-");
+    if (p.length !== 3) return s || "—";
+    return `${p[2]}/${p[1]}/${p[0]}`;
+  },
+
+  accountsForSource(source) {
+    const vis = this.visibleAccounts();
+    const s = String(source || "");
+    if (!s || s === "all") return vis;
+    if (s.indexOf("co-") === 0) return this.companyAccounts(s.slice(3), vis);
+    return vis.filter(r => String(r.key) === s);
+  },
+
+  movementsFor(source, kind, month) {
+    const rows = this.accountsForSource(source);
+    const list = [];
+    rows.forEach(r => {
+      (r.movements || []).forEach(m => {
+        const day = String(m.bankMovementDate || "").slice(0, 10);
+        const mk = day.slice(0, 7);
+        if (month && month !== "period" && mk !== month) return;
+        const k = m._kind || this.classifyMovement(m);
+        if (kind && kind !== "saldo" && kind !== "opening" && k !== kind) return;
+        list.push({
+          ...m,
+          _kind: k,
+          _amount: m._amount != null ? m._amount : this.movAmount(m),
+          _accLabel: r.accountNumber || r.accountName,
+          _accName: r.accountName
+        });
+      });
+    });
+    list.sort((a, b) => String(a.bankMovementDate || "").localeCompare(String(b.bankMovementDate || "")));
+    return list;
+  },
+
+  movNumber(m) {
+    return m.bankMovementId || m.id || m.movementId || m.documentNumber || m.documentIdentification || m.document || "—";
+  },
+
+  movHistoric(m) {
+    return m.historic || m.history || m.bankMovementHistoricName || m.bankMovementOperationName || m.originDescription || m.observations || m.note || "";
+  },
+
+  closeMovimentos() {
+    const el = document.getElementById("inv-mov-modal");
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  },
+
+  openMovimentos(sourceEnc, kind, monthEnc) {
+    const source = decodeURIComponent(sourceEnc || "");
+    const month = decodeURIComponent(monthEnc || "");
+    const rows = this.accountsForSource(source);
+    const titleAcc = rows.length === 1
+      ? `${rows[0].accountNumber || ""} — ${rows[0].accountName || ""}`
+      : (source.indexOf("co-") === 0 ? this.companyName(source.slice(3)) : "Consolidado");
+    const periodLabel = !month || month === "period"
+      ? "período consultado"
+      : this.monthLabel(month);
+    const list = kind === "opening" ? [] : this.movementsFor(source, kind, month);
+    const total = list.reduce((s, m) => s + (Number(m._amount) || 0), 0);
+    const displayTotal = kind === "resgate" || kind === "tarifas" ? Math.abs(total) : total;
+    const openingHint = kind === "opening"
+      ? `<div style="padding:10px 12px;background:#fef9c3;border:1px solid #facc15;border-radius:8px;margin-bottom:12px;font-size:0.82rem;color:#854d0e;">
+          Saldo inicial da posição no Sienge em ${this.esc(this.fmtDatePt(this.addDaysIso(this.startDate, -1)))}:
+          <strong>${this.fmt(rows.reduce((s, r) => s + (Number(r.opening) || 0), 0))}</strong>
+          ${rows.some(r => r.openingFromApi) ? " (saldo oficial da conta, não é soma de lançamentos do período)." : " (quando não há saldo oficial, o sistema soma movimentos anteriores ao início)."}
+        </div>`
+      : "";
+    const body = list.length
+      ? `<div style="overflow:auto;max-height:calc(80vh - 160px);" class="crm-scroll-table">
+          <table class="custom-table" style="width:100%;border-collapse:collapse;font-size:0.78rem;">
+            <thead>
+              <tr>
+                <th style="padding:8px;background:#105436;color:#fff;text-align:left;">Data</th>
+                <th style="padding:8px;background:#105436;color:#fff;text-align:left;">Nº movimento</th>
+                <th style="padding:8px;background:#105436;color:#fff;text-align:left;">Documento</th>
+                <th style="padding:8px;background:#105436;color:#fff;text-align:left;">Histórico</th>
+                <th style="padding:8px;background:#105436;color:#fff;text-align:left;">Tipo</th>
+                ${rows.length > 1 ? `<th style="padding:8px;background:#105436;color:#fff;text-align:left;">Conta</th>` : ""}
+                <th style="padding:8px;background:#105436;color:#fff;text-align:right;">Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${list.map(m => {
+                const amt = Number(m._amount) || 0;
+                const shown = kind === "resgate" || kind === "tarifas" ? Math.abs(amt) : amt;
+                const color = amt < 0 ? "#b91c1c" : (m._kind === "rendimento" ? "#0369a1" : (m._kind === "tarifas" ? "#9a3412" : "#0f172a"));
+                return `<tr style="border-bottom:1px solid #e2e8f0;">
+                  <td style="padding:7px 8px;white-space:nowrap;">${this.esc(this.fmtDatePt(m.bankMovementDate))}</td>
+                  <td style="padding:7px 8px;font-weight:700;color:#105436;">${this.esc(this.movNumber(m))}</td>
+                  <td style="padding:7px 8px;">${this.esc(m.documentIdentification || m.documentNumber || m.document || "—")}</td>
+                  <td style="padding:7px 8px;max-width:360px;">${this.esc(this.movHistoric(m))}</td>
+                  <td style="padding:7px 8px;white-space:nowrap;">${this.esc(this.kindLabel(m._kind))}</td>
+                  ${rows.length > 1 ? `<td style="padding:7px 8px;">${this.esc(m._accLabel || "")}</td>` : ""}
+                  <td style="padding:7px 8px;text-align:right;font-weight:700;color:${color};font-variant-numeric:tabular-nums;">${this.fmt(shown)}</td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colspan="${rows.length > 1 ? 6 : 5}" style="padding:8px;font-weight:800;text-align:right;">Total (${list.length} lançamento${list.length === 1 ? "" : "s"})</td>
+                <td style="padding:8px;text-align:right;font-weight:800;font-variant-numeric:tabular-nums;">${this.fmt(displayTotal)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>`
+      : `<div style="padding:28px;text-align:center;color:#64748b;">Nenhum lançamento neste recorte.</div>`;
+    this.closeMovimentos();
+    const overlay = document.createElement("div");
+    overlay.id = "inv-mov-modal";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(15,23,42,0.45);display:flex;align-items:center;justify-content:center;padding:24px;";
+    overlay.onclick = (e) => { if (e.target === overlay) this.closeMovimentos(); };
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;width:min(1100px,96vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,0.25);">
+        <div style="padding:14px 16px;background:#105436;color:#fff;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-radius:12px 12px 0 0;">
+          <div>
+            <div style="font-size:1rem;font-weight:800;">${this.esc(this.kindLabel(kind))} · ${this.esc(periodLabel)}</div>
+            <div style="font-size:0.78rem;opacity:.9;margin-top:3px;">${this.esc(titleAcc)}</div>
+          </div>
+          <button type="button" class="btn btn-fechar" onclick="InvestimentoApp.closeMovimentos()">Fechar</button>
+        </div>
+        <div style="padding:14px 16px 18px;">
+          ${openingHint}
+          ${body}
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+  },
+
+  companyAccounts(companyId, list) {
+    return (list || this.accounts).filter(r => String(r.companyId) === String(companyId));
+  },
+
+  visibleAccounts() {
+    const q = (this.accountQuery || "").toLowerCase().trim();
+    const nq = this.normAcc(this.accountQuery);
+    const want = new Set(this.selectedAccountKeys || []);
+    const companies = new Set((this.selectedCompanyIds || []).map(String));
+    return this.accounts.filter(r => {
+      if (companies.size && !companies.has(String(r.companyId))) return false;
+      if (want.size && !want.has(r.key) && !want.has(this.accKey(r.companyId, r.accountNumber, r))) return false;
+      if (!q) return true;
+      const blob = `${r.accountNumber} ${r.accountName} ${r.companyName}`.toLowerCase();
+      if (blob.includes(q)) return true;
+      return !!(nq && this.normAcc(r.accountNumber).includes(nq));
+    });
+  },
+
+  aggregateFlow(accs) {
+    const keys = this.months;
+    const opening = accs.reduce((s, r) => s + (Number(r.opening) || 0), 0);
+    let running = opening;
+    const months = keys.map(mk => {
+      const f = accs.reduce((acc, r) => {
+        const m = (r.months && r.months[mk]) || this.emptyFlow();
+        acc.aportes += m.aportes || 0;
+        acc.resgates += m.resgates || 0;
+        acc.rendimento += m.rendimento || 0;
+        acc.tarifas += m.tarifas || 0;
+        return acc;
+      }, this.emptyFlow());
+      const monthOpening = running;
+      const net = f.aportes + f.resgates + f.rendimento + f.tarifas;
+      running = monthOpening + net;
+      return { month: mk, opening: monthOpening, ...f, closing: running };
+    });
+    return { opening, months };
+  },
+
+  cell(n, bold) {
+    const color = n < 0 ? "#b91c1c" : (n > 0 ? "#105436" : "#94a3b8");
+    return `text-align:right;font-variant-numeric:tabular-nums;color:${color};font-weight:${bold ? 800 : 600};white-space:nowrap;`;
+  },
+
+  kpisFromAccounts(accounts) {
+    return (accounts || []).reduce((acc, r) => {
+      acc.opening += r.opening || 0;
+      acc.aportes += r.aportes || 0;
+      acc.resgates += r.resgates || 0;
+      acc.rendimento += r.rendimento || 0;
+      acc.tarifas += r.tarifas || 0;
+      acc.closing += r.closing || 0;
+      return acc;
+    }, { opening: 0, aportes: 0, resgates: 0, rendimento: 0, tarifas: 0, closing: 0 });
+  },
+
+  periodLabel() {
+    const a = String(this.consultStart || this.startDate || "").split("-").reverse().join("/");
+    const b = String(this.consultEnd || this.endDate || "").split("-").reverse().join("/");
+    return `Período ${a} a ${b}`;
+  },
+
+  compactKpiHtml(label, value, color) {
+    return `<div style="min-width:108px;">
+      <div style="font-size:0.65rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;">${label}</div>
+      <div style="margin-top:2px;font-size:1.05rem;font-weight:800;color:${color};font-variant-numeric:tabular-nums;">${this.fmt(value)}</div>
+    </div>`;
+  },
+
+  kpiStripHtml(k) {
+    return `<div style="display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;justify-content:flex-end;">
+      ${this.compactKpiHtml("Saldo inicial", k.opening, "#0f172a")}
+      ${this.compactKpiHtml("Entradas", k.aportes, "#105436")}
+      ${this.compactKpiHtml("Saídas", Math.abs(k.resgates), "#b91c1c")}
+      ${this.compactKpiHtml("Imposto retido", Math.abs(k.tarifas), "#9a3412")}
+      ${this.compactKpiHtml("Rendimento", k.rendimento, "#0369a1")}
+      ${this.compactKpiHtml("Saldo acumulado", k.closing, "#0f172a")}
+    </div>`;
+  },
+
+  monthFlowOf(row) {
+    const keys = this.months.length ? this.months : Object.keys(row.months || {}).sort();
+    let running = row.opening;
+    return keys.map(mk => {
+      const f = (row.months && row.months[mk]) || this.emptyFlow();
+      const opening = running;
+      const net = (f.aportes || 0) + (f.resgates || 0) + (f.rendimento || 0) + (f.tarifas || 0);
+      running = f.closing != null ? f.closing : (opening + net);
+      return { month: mk, opening, ...f, closing: running };
+    });
+  },
+
+  consolidatedFlow() {
+    const keys = this.months;
+    let running = this.kpis.opening;
+    return keys.map(mk => {
+      const f = this.accounts.reduce((acc, r) => {
+        const m = (r.months && r.months[mk]) || this.emptyFlow();
+        acc.aportes += m.aportes || 0;
+        acc.resgates += m.resgates || 0;
+        acc.rendimento += m.rendimento || 0;
+        acc.tarifas += m.tarifas || 0;
+        return acc;
+      }, this.emptyFlow());
+      const opening = running;
+      const net = f.aportes + f.resgates + f.rendimento + f.tarifas;
+      running = opening + net;
+      return { month: mk, opening, ...f, closing: running };
+    });
+  },
+
+  render() {
+    const root = document.getElementById("investimento-root");
+    if (!root) return;
+    const k = this.accounts.length ? this.kpisFromAccounts(this.visibleAccounts()) : this.kpis;
+    root.innerHTML = `
+      <div style="display:flex;flex-direction:column;height:calc(100vh - 85px);font-family:inherit;">
+        <div style="background:#105436;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;border-radius:12px 12px 0 0;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="width:36px;height:36px;background:rgba(255,255,255,0.2);border-radius:8px;display:flex;align-items:center;justify-content:center;">
+              <i data-lucide="trending-up" style="width:18px;height:18px;color:#fff;"></i>
+            </div>
+            <div>
+              <h2 style="margin:0;color:#fff;font-size:1.15rem;font-weight:600;">Investimento</h2>
+              <p style="margin:2px 0 0;color:rgba(255,255,255,0.75);font-size:0.75rem;">Aplicações das empresas geridas pelo grupo · fluxo mês a mês</p>
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;min-height:0;overflow:visible;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 12px 12px;display:flex;flex-direction:column;">
+          <div style="padding:14px 16px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;position:relative;z-index:200;overflow:visible;flex-shrink:0;">
+            ${this.companyDropHtml()}
+            <label style="font-size:0.75rem;font-weight:700;color:#475569;">Início
+              <input type="date" value="${this.startDate}" onchange="InvestimentoApp.setStartDate(this.value)"
+                style="display:block;height:34px;border:1px solid #e2e8f0;border-radius:6px;padding:0 8px;margin-top:4px;">
+            </label>
+            <label style="font-size:0.75rem;font-weight:700;color:#475569;">Fim
+              <input type="date" value="${this.endDate}" onchange="InvestimentoApp.setEndDate(this.value)"
+                style="display:block;height:34px;border:1px solid #e2e8f0;border-radius:6px;padding:0 8px;margin-top:4px;">
+            </label>
+            ${this.accountDropHtml()}
+            <button class="btn btn-primary" onclick="InvestimentoApp.load()" style="height:34px;display:inline-flex;align-items:center;gap:8px;" ${this.loading ? "disabled" : ""}>Consultar</button>
+            <button type="button" class="btn btn-sm btn-excel" onclick="InvestimentoApp.exportExcel()" ${this.visibleAccounts().length ? "" : "disabled"} title="Exportar tabela atual para Excel">
+              <i data-lucide="download" style="width:14px;height:14px;"></i> Excel
+            </button>
+          </div>
+          ${this.error ? `<div style="margin:12px 16px 0;padding:10px 12px;background:#fef2f2;color:#b91c1c;border-radius:8px;font-size:0.82rem;">${this.esc(this.error)}</div>` : ""}
+          ${this.accounts.length ? "" : `<div style="padding:12px 16px 0;">${this.kpiStripHtml(k)}</div>`}
+          <div style="flex:1;min-height:0;overflow:hidden;padding:12px 16px;display:flex;flex-direction:column;">
+            ${this.loading ? `<div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:48px 16px;color:var(--color-text-muted);">
+              <div class="loading-spinner" style="width:32px;height:32px;border:3px solid rgba(16,84,54,0.15);border-top-color:var(--color-primary);border-radius:50%;animation:spin 0.8s linear infinite;"></div>
+              <span style="font-weight:500;">Carregando saldos e movimentos das contas de investimento...</span>
+            </div>` : this.tableHtml()}
+          </div>
+        </div>
+      </div>`;
+    if (window.lucide) lucide.createIcons();
+    this.bindCompanyFilter();
+    if (this.accountDropOpen) {
+      const a = document.getElementById("inv-acc-search");
+      if (a) {
+        a.focus();
+        try { a.setSelectionRange(a.value.length, a.value.length); } catch (e) {}
+      }
+    }
+    if (this.companyDropOpen) {
+      const s = document.getElementById("inv-emp-search");
+      if (s) {
+        s.focus();
+        try { s.setSelectionRange(s.value.length, s.value.length); } catch (e) {}
+      }
+    }
+  },
+
+  tableHtml() {
+    if (!this.accounts.length) {
+      return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:28px;text-align:center;color:#94a3b8;">Informe o período e clique em Consultar.</div>`;
+    }
+    const accounts = this.visibleAccounts();
+    if (!accounts.length) {
+      return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:28px;text-align:center;color:#94a3b8;">Nenhuma conta com esse filtro.</div>`;
+    }
+    const visKpis = this.kpisFromAccounts(accounts);
+    const visFlow = (() => {
+      const keys = this.months;
+      let running = visKpis.opening;
+      return keys.map(mk => {
+        const f = accounts.reduce((acc, r) => {
+          const m = (r.months && r.months[mk]) || this.emptyFlow();
+          acc.aportes += m.aportes || 0;
+          acc.resgates += m.resgates || 0;
+          acc.rendimento += m.rendimento || 0;
+          acc.tarifas += m.tarifas || 0;
+          return acc;
+        }, this.emptyFlow());
+        const opening = running;
+        const net = f.aportes + f.resgates + f.rendimento + f.tarifas;
+        running = opening + net;
+        return { month: mk, opening, ...f, closing: running };
+      });
+    })();
+    const months = this.months;
+    const colConta = 380;
+    const colMov = 132;
+    const stickyConta = `position:sticky;left:0;z-index:2;min-width:${colConta}px;max-width:${colConta}px;width:${colConta}px;overflow:hidden;`;
+    const stickyMov = `position:sticky;left:${colConta}px;z-index:1;min-width:${colMov}px;width:${colMov}px;`;
+    const th = (label, extra) => `<th style="padding:8px 8px;text-align:right;border-bottom:2px solid #d1fae5;background:#105436;color:#fff;font-size:0.72rem;font-weight:700;white-space:nowrap;position:sticky;top:0;z-index:4;${extra || ""}">${label}</th>`;
+    const clickTd = (n, kind, mk, source, opts) => {
+      opts = opts || {};
+      const abs = !!opts.abs;
+      const bold = !!opts.bold;
+      const v = abs ? Math.abs(Number(n) || 0) : (Number(n) || 0);
+      const src = encodeURIComponent(source || "all");
+      const k = encodeURIComponent(kind || "");
+      const m = encodeURIComponent(mk || "");
+      const tip = this.esc(opts.title || "Clique para ver os lançamentos");
+      // Se opts.color é passado explicitamente (ex: linha de Saldo com texto branco), usa direto
+      const color = opts.color && !abs
+        ? opts.color
+        : (abs
+          ? (v ? "#b91c1c" : "#94a3b8")
+          : (n < 0 ? "#b91c1c" : (n > 0 ? "#105436" : "#94a3b8")));
+      const bgStyle = opts.bg ? `background:${opts.bg};` : "";
+      return `<td onclick="event.stopPropagation();InvestimentoApp.openMovimentos('${src}','${k}','${m}')" title="${tip}"
+        style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;${bgStyle}color:${color};font-weight:${bold ? 800 : 600};white-space:nowrap;cursor:pointer;text-decoration:underline;text-decoration-color:rgba(255,255,255,0.3);text-underline-offset:2px;">${this.fmt(v)}</td>`;
+    };
+    const empty = `<td style="padding:6px 8px;text-align:right;color:#cbd5e1;">—</td>`;
+
+    const groupRows = (label, sub, opening, monthFlow, isTotal, opts) => {
+      opts = opts || {};
+      const collapseKey = opts.collapseKey;
+      const source = opts.source || "all";
+      const collapsed = collapseKey && this.collapsedAccounts.has(collapseKey);
+      const bgHead = isTotal ? "#ecfdf5" : "#f8fafc";
+      const chevron = collapseKey
+        ? `<button type="button" onclick="InvestimentoApp.toggleAccountCollapse(decodeURIComponent('${encodeURIComponent(collapseKey)}'))" style="border:none;background:none;cursor:pointer;padding:0;color:#64748b;display:inline-flex;align-items:center;margin-right:4px;">
+             <i data-lucide="${collapsed ? "chevron-right" : "chevron-down"}" style="width:14px;height:14px;"></i>
+           </button>`
+        : "";
+      const labelCell = `
+        <td rowspan="${collapsed ? 1 : 5}" style="padding:8px 10px;vertical-align:top;${stickyConta}background:${bgHead};border-right:1px solid #e2e8f0;box-shadow:2px 0 0 #e2e8f0;overflow:hidden;">
+          <div style="display:flex;align-items:flex-start;gap:2px;max-width:100%;min-width:0;">
+            ${chevron}
+            <div style="min-width:0;flex:1;max-width:100%;overflow:hidden;">
+              <div style="font-weight:800;color:#0f172a;font-size:0.82rem;white-space:normal;overflow-wrap:anywhere;">${this.esc(label)}</div>
+              ${sub ? `<div style="font-size:0.7rem;color:#64748b;margin-top:2px;white-space:normal;overflow-wrap:anywhere;">${this.esc(sub)}</div>` : ""}
+              ${!collapsed ? this.accountPeriodMetaHtml(monthFlow, source) : ""}
+            </div>
+          </div>
+        </td>`;
+      const movTd = (html, color, bg, extra) =>
+        `<td style="padding:6px 10px;font-weight:700;color:${color};white-space:nowrap;${stickyMov}background:${bg};box-shadow:2px 0 0 #e2e8f0;${extra || ""}">${html}</td>`;
+      const saldos = months.map(mk => (monthFlow.find(f => f.month === mk) || {}).closing || 0);
+      // Linha colapsada também usa fundo escuro para Saldo
+      const saldoBgCollapsed = isTotal ? "#475569" : "#64748b";
+      const saldoTextCollapsed = "#ffffff";
+      if (collapsed) {
+        return `<tr style="background:${saldoBgCollapsed};border-top:2px solid #e2e8f0;">
+          ${labelCell}
+          ${movTd("Saldo", saldoTextCollapsed, saldoBgCollapsed, "font-weight:800;")}
+          ${clickTd(opening, "opening", "", source, { bold: true, color: saldoTextCollapsed, bg: saldoBgCollapsed })}
+          ${saldos.map((n, i) => clickTd(n, "saldo", months[i], source, { bold: true, color: saldoTextCollapsed, bg: saldoBgCollapsed })).join("")}
+        </tr>`;
+      }
+      const entradas = months.map(mk => (monthFlow.find(f => f.month === mk) || {}).aportes || 0);
+      const saidas = months.map(mk => (monthFlow.find(f => f.month === mk) || {}).resgates || 0);
+      const impostos = months.map(mk => (monthFlow.find(f => f.month === mk) || {}).tarifas || 0);
+      const rends = months.map(mk => monthFlow.find(f => f.month === mk) || { rendimento: 0, opening: 0, month: mk });
+      // Saldo: fundo escuro (igual ao Excel) com texto branco para alto contraste
+      const saldoBg = isTotal ? "#475569" : "#64748b";
+      const saldoTextColor = "#ffffff";
+      return `
+        <tr style="background:${bgHead};border-top:2px solid #e2e8f0;">
+          ${labelCell}
+          ${movTd("Entrada", "#105436", bgHead)}
+          ${empty}
+          ${entradas.map((n, i) => clickTd(n, "aporte", months[i], source, { color: "#105436" })).join("")}
+        </tr>
+        <tr style="background:#fff;">
+          ${movTd("Saída", "#b91c1c", "#fff")}
+          ${empty}
+          ${saidas.map((n, i) => clickTd(n, "resgate", months[i], source, { abs: true })).join("")}
+        </tr>
+        <tr style="background:#fff;">
+          ${movTd("Rendimento", "#0369a1", "#fff")}
+          ${empty}
+          ${rends.map(f => clickTd(f.rendimento || 0, "rendimento", f.month, source, { color: "#0369a1", title: this.cdiTip(f.rendimento || 0, f.opening || 0, f.month) + " — clique para ver lançamentos" })).join("")}
+        </tr>
+        <tr style="background:#fff7ed;">
+          ${movTd("Imposto retido", "#9a3412", "#fff7ed")}
+          ${empty}
+          ${impostos.map((n, i) => clickTd(n, "tarifas", months[i], source, { abs: true })).join("")}
+        </tr>
+        <tr style="background:${saldoBg};">
+          ${movTd("Saldo", saldoTextColor, saldoBg, "font-weight:800;")}
+          ${clickTd(opening, "opening", "", source, { bold: true, color: saldoTextColor, bg: saldoBg })}
+          ${saldos.map((n, i) => clickTd(n, "saldo", months[i], source, { bold: true, color: saldoTextColor, bg: saldoBg })).join("")}
+        </tr>`;
+    };
+
+    const consolidado = groupRows("Consolidado", "Empresas selecionadas", visKpis.opening, visFlow, true, { source: "all" });
+    let body = consolidado;
+    const showGroup = this.groupByCompany && this.selectedCompanyIds.length > 1;
+    if (showGroup) {
+      const ids = [...new Set(accounts.map(a => String(a.companyId)))];
+      ids.sort((a, b) => this.companyName(a).localeCompare(this.companyName(b), "pt-BR"));
+      ids.forEach(cid => {
+        const accs = this.companyAccounts(cid, accounts);
+        if (!accs.length) return;
+        const agg = this.aggregateFlow(accs);
+        const closed = this.collapsedCompanies.has(String(cid));
+        const colCount = 3 + months.length;
+        body += `<tr style="background:#0f766e;">
+          <td colspan="${colCount}" style="padding:8px 10px;color:#fff;font-weight:800;font-size:0.8rem;">
+            <button type="button" onclick="InvestimentoApp.toggleCompanyCollapse('${cid}')" style="border:none;background:none;color:#fff;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font:inherit;font-weight:800;">
+              <i data-lucide="${closed ? "chevron-right" : "chevron-down"}" style="width:14px;height:14px;"></i>
+              ${this.esc(this.companyName(cid))}
+              <span style="font-weight:600;opacity:.85;">· ${accs.length} conta(s)</span>
+            </button>
+          </td>
+        </tr>`;
+        if (!closed) {
+          body += groupRows("Total da empresa", this.companyName(cid), agg.opening, agg.months, true, { collapseKey: "co-" + cid, source: "co-" + cid });
+          body += accs.map(r =>
+            groupRows(r.accountNumber || r.accountName, r.accountName, r.opening, this.monthFlowOf(r), false, { collapseKey: r.key, source: r.key })
+          ).join("");
+        }
+      });
+    } else {
+      body += accounts.map(r =>
+        groupRows(r.accountNumber || r.accountName, `${r.accountName} · ${r.companyName}`, r.opening, this.monthFlowOf(r), false, { collapseKey: r.key, source: r.key })
+      ).join("");
+    }
+
+    const canGroup = this.selectedCompanyIds.length > 1;
+    const logoSrc = "https://yt3.googleusercontent.com/rx0DOaXFXLF0HHeZtC_xI7vR23Y7Jxmm7gA6o_emTX6qFNIDo3J91z11ASXDNypT57crV1EPOQ=s900-c-k-c0x00ffffff-no-rj";
+    return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;display:flex;flex-direction:column;height:100%;min-height:0;">
+        <div style="padding:12px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid #e2e8f0;flex-shrink:0;">
+          <div style="display:flex;align-items:center;gap:12px;min-width:240px;">
+            <img src="${logoSrc}" alt="Moura Leite" style="width:40px;height:40px;border-radius:50%;object-fit:cover;flex-shrink:0;">
+            <div>
+              <div style="font-size:0.95rem;font-weight:800;color:#0f172a;line-height:1.2;">Kardex — conta × movimento</div>
+              <div style="margin-top:2px;font-size:0.72rem;color:#64748b;">${this.esc(this.periodLabel())} · empresas geridas pelo grupo</div>
+              <div style="margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                ${canGroup ? `<label style="font-size:0.75rem;font-weight:700;color:#334155;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                  <input type="checkbox" ${this.groupByCompany ? "checked" : ""} onchange="InvestimentoApp.toggleGroupByCompany()">
+                  Agrupar por empresa
+                </label>` : ""}
+                <span style="font-size:0.7rem;color:#94a3b8;">Clique em um valor para ver os lançamentos</span>
+              </div>
+            </div>
+          </div>
+          ${this.kpiStripHtml(visKpis)}
+        </div>
+        <div class="crm-scroll-table" style="flex:1;max-height:none;">
+        <table class="custom-table" style="width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:0.78rem;">
+          <thead>
+            <tr>
+              <th style="padding:8px 10px;text-align:left;background:#105436;color:#fff;font-size:0.72rem;white-space:nowrap;position:sticky;top:0;left:0;z-index:6;min-width:${colConta}px;width:${colConta}px;">Conta</th>
+              <th style="padding:8px 10px;text-align:left;background:#105436;color:#fff;font-size:0.72rem;white-space:nowrap;position:sticky;top:0;left:${colConta}px;z-index:5;min-width:${colMov}px;width:${colMov}px;">Movimento</th>
+              ${th("Saldo inicial")}
+              ${months.map(mk => th(this.monthLabel(mk))).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${body}
+          </tbody>
+        </table>
+        </div>
+      </div>`;
+  },
+
+  async ensureExcelJS() {
+    if (window.ExcelJS) return window.ExcelJS;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
+      s.onload = resolve;
+      s.onerror = () => reject(new Error("Falha ao carregar ExcelJS"));
+      document.head.appendChild(s);
+    });
+    return window.ExcelJS;
+  },
+
+  drawLogoDataUrl() {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#105436";
+    ctx.beginPath();
+    ctx.arc(64, 64, 62, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f37021";
+    ctx.beginPath();
+    ctx.arc(92, 92, 28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.moveTo(64, 22);
+    ctx.lineTo(78, 52);
+    ctx.lineTo(50, 52);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(60, 50, 8, 42);
+    ctx.beginPath();
+    ctx.ellipse(48, 58, 16, 10, -0.5, 0, Math.PI * 2);
+    ctx.ellipse(80, 58, 16, 10, 0.5, 0, Math.PI * 2);
+    ctx.ellipse(64, 44, 14, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    return c.toDataURL("image/png");
+  },
+
+  async logoDataUrl() {
+    const urls = [
+      "https://yt3.googleusercontent.com/rx0DOaXFXLF0HHeZtC_xI7vR23Y7Jxmm7gA6o_emTX6qFNIDo3J91z11ASXDNypT57crV1EPOQ=s900-c-k-c0x00ffffff-no-rj",
+      "assets/marca/logo comemorativa.png"
+    ];
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const res = await fetch(urls[i], { mode: "cors" });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        if (!blob || !blob.type || blob.type.indexOf("image") < 0) continue;
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        if (dataUrl) {
+          const jpeg = blob.type.indexOf("jpeg") >= 0 || blob.type.indexOf("jpg") >= 0;
+          return { dataUrl, extension: jpeg ? "jpeg" : "png" };
+        }
+      } catch (e) { /* try next */ }
+    }
+    return { dataUrl: this.drawLogoDataUrl(), extension: "png" };
+  },
+
+  excelFill(argb) {
+    return { type: "pattern", pattern: "solid", fgColor: { argb } };
+  },
+
+  excelFont(opts) {
+    return Object.assign({ name: "Calibri", size: 9, color: { argb: "FF0F172A" } }, opts || {});
+  },
+
+  excelBorder() {
+    const s = { style: "thin", color: { argb: "FFE2E8F0" } };
+    return { top: s, bottom: s, left: s, right: s };
+  },
+
+  excelPaint(cell, opts) {
+    if (opts.font) cell.font = this.excelFont(opts.font);
+    if (opts.fill) cell.fill = this.excelFill(opts.fill);
+    if (opts.align) cell.alignment = opts.align;
+    if (opts.border) cell.border = this.excelBorder();
+    if (opts.numFmt) cell.numFmt = opts.numFmt;
+  },
+
+  generatedAtLabel(d) {
+    const pad = n => String(n).padStart(2, "0");
+    return `Relatório gerado em ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} às ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  },
+
+  excelColLetter(i) {
+    let n = i;
+    let s = "";
+    while (n > 0) {
+      const m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  },
+
+  excelSheetName(companyId, used) {
+    const usual = String(this.companyName(companyId) || "").replace(/[:\\/?*\[\]]/g, " ").replace(/\s+/g, " ").trim();
+    let base = `${companyId}-${usual || "EMPRESA"}`;
+    if (base.length > 31) base = base.slice(0, 31);
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) {
+      const suf = `-${n++}`;
+      name = (base.slice(0, Math.max(1, 31 - suf.length)) + suf).slice(0, 31);
+    }
+    used.add(name.toLowerCase());
+    return name;
+  },
+
+  fillKardexSheet(ws, opts) {
+    const accounts = opts.accounts || [];
+    const months = this.months;
+    const kpis = this.kpisFromAccounts(accounts);
+    const colCount = 3 + months.length;
+    const minCols = Math.max(colCount, 9);
+    const moneyFmt = "#,##0.00";
+    const lastCol = colCount;
+    const lastL = this.excelColLetter(Math.max(lastCol, 9));
+
+    ws.properties.showGridLines = false;
+    ws.views = [{
+      state: "frozen",
+      xSplit: 1,
+      ySplit: 4,
+      topLeftCell: "B5",
+      activeCell: "B5",
+      showGridLines: false
+    }];
+    ws.columns = [
+      { width: 46 },
+      { width: 16 },
+      { width: 14 },
+      ...Array.from({ length: minCols - 3 }, () => ({ width: 14 }))
+    ];
+
+    const logoCm = 1.54;
+    const logoPx = Math.round(logoCm * 96 / 2.54);
+    ws.mergeCells("A1:A2");
+    ws.getRow(1).height = 28;
+    ws.getRow(2).height = 22;
+    const subtitle = opts.subtitle || `${this.periodLabel()} · empresas geridas pelo grupo`;
+    const titleCell = ws.getCell("A1");
+    titleCell.value = {
+      richText: [
+        { font: { name: "Calibri", size: 14, bold: true, color: { argb: "FF475569" } }, text: "Kardex — conta × movimento\n" },
+        { font: { name: "Calibri", size: 9, color: { argb: "FF64748B" } }, text: subtitle }
+      ]
+    };
+    this.excelPaint(titleCell, {
+      fill: "FFFFFFFF",
+      align: { vertical: "middle", horizontal: "left", wrapText: true, indent: 8 }
+    });
+
+    if (opts.imgId != null) {
+      try {
+        ws.addImage(opts.imgId, {
+          tl: { col: 0.04, row: 0.08 },
+          ext: { width: logoPx, height: logoPx }
+        });
+      } catch (e) { /* logo opcional */ }
+    }
+
+    const kpiMeta = [
+      { label: "Saldo inicial", value: kpis.opening, color: "FF0F172A" },
+      { label: "Entradas", value: kpis.aportes, color: "FF105436" },
+      { label: "Saídas", value: Math.abs(kpis.resgates), color: "FFB91C1C" },
+      { label: "Imposto retido", value: Math.abs(kpis.tarifas), color: "FF9A3412" },
+      { label: "Rendimento", value: kpis.rendimento, color: "FF0369A1" },
+      { label: "Saldo acumulado", value: kpis.closing, color: "FF0F172A" }
+    ];
+    kpiMeta.forEach((k, i) => {
+      const col = 4 + i;
+      const cellL = ws.getRow(1).getCell(col);
+      const cellV = ws.getRow(2).getCell(col);
+      cellL.value = k.label;
+      cellV.value = k.value;
+      this.excelPaint(cellL, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 8, color: { argb: "FF94A3B8" } },
+        align: { horizontal: "right", vertical: "bottom" }
+      });
+      this.excelPaint(cellV, {
+        fill: "FFFFFFFF",
+        font: { bold: true, size: 12, color: { argb: k.color } },
+        align: { horizontal: "right", vertical: "middle" },
+        numFmt: moneyFmt
+      });
+    });
+
+    ws.getRow(3).height = 8;
+
+    const headRow = ws.getRow(4);
+    headRow.height = 20;
+    const heads = ["Conta", "Movimento", "Saldo inicial", ...months.map(mk => this.monthLabel(mk))];
+    heads.forEach((h, i) => {
+      const cell = headRow.getCell(i + 1);
+      cell.value = h;
+      this.excelPaint(cell, {
+        fill: "FF334155",
+        font: { bold: true, size: 9, color: { argb: "FFFFFFFF" } },
+        align: { horizontal: i < 2 ? "left" : "right", vertical: "middle" },
+        border: true
+      });
+    });
+
+    let rowIdx = 5;
+    const moneyCell = (cell, n, extra) => {
+      extra = extra || {};
+      cell.value = Number(n) || 0;
+      const zero = !n;
+      const color = extra.color || (n < 0 ? "FFB91C1C" : (zero ? "FF94A3B8" : "FF0F172A"));
+      this.excelPaint(cell, {
+        fill: extra.bg || "FFFFFFFF",
+        font: { bold: !!extra.bold, size: 9, color: { argb: color } },
+        align: { horizontal: "right", vertical: "middle" },
+        border: true,
+        numFmt: moneyFmt
+      });
+    };
+    const labelCell = (cell, text, color, bg) => {
+      cell.value = text;
+      this.excelPaint(cell, {
+        fill: bg,
+        font: { bold: true, size: 9, color: { argb: color } },
+        align: { vertical: "middle", horizontal: "left", wrapText: true },
+        border: true
+      });
+    };
+
+    const pushBlock = (label, sub, opening, monthFlow, kind) => {
+      const find = mk => monthFlow.find(f => f.month === mk) || {};
+      const entradas = months.map(mk => Number(find(mk).aportes) || 0);
+      const saidas = months.map(mk => Math.abs(Number(find(mk).resgates) || 0));
+      const rends = months.map(mk => Number(find(mk).rendimento) || 0);
+      const impostos = months.map(mk => Math.abs(Number(find(mk).tarifas) || 0));
+      const saldos = months.map(mk => Number(find(mk).closing) || 0);
+      const isTotal = kind === "total";
+      const headBg = isTotal ? "FFECFDF5" : "FFF8FAFC";
+      const saldoBg = isTotal ? "FF475569" : "FF64748B";
+      const contaTxt = this.excelAccountCell(label, sub, monthFlow);
+      const r0 = rowIdx;
+      const r1 = rowIdx + 1;
+      const r2 = rowIdx + 2;
+      const r3 = rowIdx + 3;
+      const r4 = rowIdx + 4;
+      const lines = String(contaTxt).split(/\n/).filter(Boolean).length;
+      const hEach = Math.max(18, Math.ceil((Math.max(90, lines * 13 + 12)) / 5));
+      [r0, r1, r2, r3, r4].forEach(r => { ws.getRow(r).height = hEach; });
+
+      ws.mergeCells(r0, 1, r4, 1);
+      const conta = ws.getCell(r0, 1);
+      conta.value = contaTxt;
+      this.excelPaint(conta, {
+        fill: headBg,
+        font: { bold: true, size: 9, color: { argb: "FF0F172A" } },
+        align: { vertical: "top", horizontal: "left", wrapText: true },
+        border: true
+      });
+
+      labelCell(ws.getCell(r0, 2), "Entrada", "FF105436", headBg);
+      labelCell(ws.getCell(r1, 2), "Saída", "FFB91C1C", "FFFFFFFF");
+      labelCell(ws.getCell(r2, 2), "Rendimento", "FF0369A1", "FFFFFFFF");
+      labelCell(ws.getCell(r3, 2), "Imposto retido", "FF9A3412", "FFFFF7ED");
+      labelCell(ws.getCell(r4, 2), "Saldo", "FFFFFFFF", saldoBg);
+
+      moneyCell(ws.getCell(r0, 3), 0, { bg: headBg, color: "FFCBD5E1" });
+      moneyCell(ws.getCell(r1, 3), 0, { color: "FFCBD5E1" });
+      moneyCell(ws.getCell(r2, 3), 0, { color: "FFCBD5E1" });
+      moneyCell(ws.getCell(r3, 3), 0, { bg: "FFFFF7ED", color: "FFCBD5E1" });
+      moneyCell(ws.getCell(r4, 3), opening, { bold: true, bg: saldoBg, color: "FFFFFFFF" });
+
+      months.forEach((_, i) => {
+        const c = 4 + i;
+        moneyCell(ws.getCell(r0, c), entradas[i], { bg: headBg, color: entradas[i] ? "FF105436" : "FF94A3B8" });
+        moneyCell(ws.getCell(r1, c), saidas[i], { color: saidas[i] ? "FFB91C1C" : "FF94A3B8" });
+        moneyCell(ws.getCell(r2, c), rends[i], { color: rends[i] ? "FF0369A1" : "FF94A3B8" });
+        moneyCell(ws.getCell(r3, c), impostos[i], { bg: "FFFFF7ED", color: impostos[i] ? "FF9A3412" : "FF94A3B8" });
+        moneyCell(ws.getCell(r4, c), saldos[i], { bold: true, bg: saldoBg, color: "FFFFFFFF" });
+      });
+      rowIdx += 5;
+    };
+
+    const agg = this.aggregateFlow(accounts);
+    pushBlock("Total da empresa", this.companyName(opts.companyId), agg.opening, agg.months, "total");
+    accounts.forEach(r => {
+      pushBlock(r.accountNumber || r.accountName, r.accountName, r.opening, this.monthFlowOf(r), "acc");
+    });
+
+    rowIdx += 1;
+    ws.mergeCells(rowIdx, 1, rowIdx, Math.max(lastCol, 1));
+    const foot = ws.getCell(rowIdx, 1);
+    foot.value = opts.generatedAt || this.generatedAtLabel(new Date());
+    this.excelPaint(foot, {
+      font: { italic: true, size: 8, color: { argb: "FF64748B" } },
+      align: { vertical: "middle", horizontal: "left" }
+    });
+    ws.getRow(rowIdx).height = 18;
+    return lastL;
+  },
+
+  async exportExcel() {
+    const accounts = this.visibleAccounts();
+    if (!accounts.length) {
+      alert("Consulte o período antes de exportar.");
+      return;
+    }
+    let ExcelJS;
+    try {
+      ExcelJS = await this.ensureExcelJS();
+    } catch (e) {
+      alert("Não foi possível carregar a biblioteca de Excel. Recarregue a página.");
+      return;
+    }
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "CRM Moura Leite";
+    wb.created = new Date();
+
+    let imgId = null;
+    try {
+      const logo = await this.logoDataUrl();
+      imgId = wb.addImage({ base64: logo.dataUrl, extension: logo.extension || "png" });
+    } catch (e) { /* logo opcional */ }
+
+    const ids = [...new Set(accounts.map(a => String(a.companyId)))];
+    ids.sort((a, b) => Number(a) - Number(b));
+    const usedNames = new Set();
+    const generatedAt = this.generatedAtLabel(new Date());
+    const period = this.periodLabel();
+
+    ids.forEach(cid => {
+      const accs = this.companyAccounts(cid, accounts);
+      if (!accs.length) return;
+      const sheetName = this.excelSheetName(cid, usedNames);
+      const ws = wb.addWorksheet(sheetName, {
+        properties: { showGridLines: false }
+      });
+      this.fillKardexSheet(ws, {
+        accounts: accs,
+        companyId: cid,
+        imgId,
+        generatedAt,
+        subtitle: `${period} · ${sheetName}`
+      });
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = URL.createObjectURL(blob);
+    a.download = `investimento_kardex_${stamp}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  }
+};
+
+window.InvestimentoApp = InvestimentoApp;

@@ -17,12 +17,12 @@ echo.
 
 REM --- 1) INCREMENTA VERSAO NO INDEX.HTML ---
 echo [1/5] Incrementando versao no index.html...
-for /f "tokens=*" %%v in ('powershell -NoProfile -ExecutionPolicy Bypass -File "_version_bump.ps1"') do set NEW_VER=%%v
+for /f "tokens=*" %%v in ('powershell -NoProfile -ExecutionPolicy Bypass -File "ferramentas\_version_bump.ps1"') do set NEW_VER=%%v
 
 if "!NEW_VER!"=="" (
     echo.
     echo [ERRO] Nao foi possivel ler a versao do index.html.
-    echo        Verifique se _version_bump.ps1 esta na mesma pasta.
+    echo        Verifique se ferramentas\_version_bump.ps1 existe.
     pause
     exit /b 1
 )
@@ -66,6 +66,45 @@ REM --- 5) ENVIA TAGS PARA O GITHUB ---
 echo [5/5] Enviando tags para o GitHub...
 git push --tags
 echo       OK - Tags enviadas
+echo.
+REM --- 6) ATUALIZA OS AMBIENTES DE TESTE (develop = Dani, Marcelo, lucelia, isabella_garcia, israel) ---
+REM So avanca a branch; se o desenvolvedor tiver algo la que ainda nao entrou na main, nao mexe.
+echo [6/6] Atualizando os ambientes de teste...
+git push origin main:develop >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Dani: a develop tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar develop na main".
+) else (
+    echo       OK - Teste Dani igual a producao
+)
+git push origin main:Marcelo >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Marcelo: a branch Marcelo tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar Marcelo na main".
+) else (
+    echo       OK - Teste Marcelo igual a producao
+)
+git push origin main:lucelia >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Lucelia: a branch lucelia tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar lucelia na main".
+) else (
+    echo       OK - Teste Lucelia igual a producao
+)
+git push origin main:isabella_garcia >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Isabella: a branch isabella_garcia tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar isabella_garcia na main".
+) else (
+    echo       OK - Teste Isabella igual a producao
+)
+git push origin main:israel >nul 2>&1
+if errorlevel 1 (
+    echo       AVISO - Teste Israel: a branch israel tem alteracoes que ainda nao estao na main.
+    echo                Nao foi atualizado. Peca ao Claude: "juntar israel na main".
+) else (
+    echo       OK - Teste Israel igual a producao
+)
 echo.
 
 echo ========================================================
