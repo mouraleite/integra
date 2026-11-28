@@ -112,11 +112,30 @@
     async carregarApoio() {
       if (this.apoio) return this.apoio;
       const ler = async (k, p) => { try { return (await window.OrionStore.ler(k, p)).itens || p; } catch (e) { return p; } };
-      const [curvas, planos, regimes, indices, obras] = await Promise.all([ler("curvas", []), ler("planos_pagamento", []), ler("regimes", []), ler("indices_projetados", []), ler("acompanhamento_obras", [])]);
+      const [curvas, planos, regimes, indices, obrasOrion] = await Promise.all([ler("curvas", []), ler("planos_pagamento", []), ler("regimes", []), ler("indices_projetados", []), ler("acompanhamento_obras", [])]);
+      const obras = await this.obrasDoIntegra(obrasOrion);
       this.apoio = { curvas, planos, regimes, indices, obras, real: {}, focus: [] };
       this.carregarMercado();
       return this.apoio;
     },
+    /** Obras para vincular à viabilidade: os centros de custo do Integra (lista do Sienge, a mesma das outras telas).
+     *  A lista copiada do Órion (orion_config/acompanhamento_obras) só completa o "acompanhar" e entra se o Sienge não responder. */
+    async obrasDoIntegra(obrasOrion) {
+      const orion = Array.isArray(obrasOrion) ? obrasOrion : [];
+      const porCc = {};
+      orion.forEach((o) => { if (o && o.cc != null) porCc[String(o.cc)] = o; });
+      let ccs = [];
+      try {
+        if (window.SiengeApiService && typeof SiengeApiService.getCostCenters === "function") ccs = (await SiengeApiService.getCostCenters()) || [];
+      } catch (e) { ccs = []; }
+      if (!Array.isArray(ccs) || !ccs.length) return orion;
+      return ccs.filter((c) => c && c.id != null).map((c) => {
+        const cc = String(c.id);
+        const o = porCc[cc];
+        return { cc: cc, nome: String(c.name || c.description || (o && o.nome) || ""), acompanhar: !!(o && o.acompanhar) };
+      });
+    },
+
     /** Índices reais do Banco Central (último mês de IPCA e INCC) e projeção Focus do ano (IPCA e IGP-M), como o Órion mostra. */
     async carregarMercado() {
       const C = window.IndicesMercadoCalc, ap = this.apoio;
